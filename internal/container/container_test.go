@@ -152,25 +152,17 @@ func TestBuildContainerInstallsDataPlaneCORSBeforeRouteAuthentication(t *testing
 	}
 }
 
-func TestBuildContainerDoesNotInitializeUnusedRuntimeStore(t *testing.T) {
+func TestBuildContainerRejectsRedisDSNWithSQLite(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
 	t.Setenv("DATABASE_DSN", ":memory:")
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 	t.Setenv("REDIS_DSN", "://invalid-redis-dsn")
 
-	dependencyContainer, err := BuildContainer()
-	if err != nil {
-		t.Fatalf("BuildContainer() must ignore REDIS_DSN, error = %v", err)
-	}
-	err = dependencyContainer.Invoke(func(_ *app.App, db *gorm.DB) {
-		sqlDB, dbErr := db.DB()
-		if dbErr == nil {
-			t.Cleanup(func() { _ = sqlDB.Close() })
-		}
-	})
-	if err != nil {
-		t.Fatalf("resolve database: %v", err)
+	if _, err := BuildContainer(); err == nil {
+		t.Fatal("BuildContainer() error = nil, want REDIS_DSN rejection")
+	} else if !strings.Contains(err.Error(), "REDIS_DSN") {
+		t.Fatalf("BuildContainer() error = %v, want it to name REDIS_DSN", err)
 	}
 }
 

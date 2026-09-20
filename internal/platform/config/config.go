@@ -106,6 +106,15 @@ type DatabaseMetadata struct {
 	Driver DatabaseDriver
 }
 
+// InstanceMode identifies whether the process coordinates with peers through
+// Redis. The values match the management API's instance_mode vocabulary.
+type InstanceMode string
+
+const (
+	InstanceModeSingle      InstanceMode = "single"
+	InstanceModeDistributed InstanceMode = "distributed"
+)
+
 // Config contains static environment configuration for the application process.
 type Config struct {
 	Server                    ServerConfig
@@ -119,6 +128,8 @@ type Config struct {
 	EncryptionKeyMetadata     SecretMetadata
 	Log                       LogConfig
 	ModelsDevAutoSyncOverride *bool
+	InstanceMode              InstanceMode
+	RedisDSN                  string
 }
 
 // Settings is the dynamic settings shape shared by system and group layers.
@@ -211,6 +222,28 @@ func Load() (*Config, error) {
 
 	explicitAuthKey := os.Getenv("AUTH_KEY")
 	explicitEncryptionKey := os.Getenv("ENCRYPTION_KEY")
+
+	// Distributed mode is validated before authkey.Resolve so a rejected
+	// configuration never leaves generated key material in DATA_DIR.
+	instanceMode := InstanceModeSingle
+	redisDSN := ""
+	if rawRedisDSN := strings.TrimSpace(os.Getenv("REDIS_DSN")); rawRedisDSN != "" {
+		redisDSN, err = ParseRedisDSN(rawRedisDSN)
+		if err != nil {
+			return nil, err
+		}
+		if database.Driver == DatabaseDriverSQLite {
+			return nil, fmt.Errorf("REDIS_DSN requires DATABASE_DSN to be a MySQL or PostgreSQL URL")
+		}
+		if explicitAuthKey == "" {
+			return nil, fmt.Errorf("REDIS_DSN requires an explicit AUTH_KEY")
+		}
+		if explicitEncryptionKey == "" {
+			return nil, fmt.Errorf("REDIS_DSN requires an explicit ENCRYPTION_KEY")
+		}
+		instanceMode = InstanceModeDistributed
+	}
+
 	authKey, err := authkey.Resolve(explicitAuthKey, dataDir)
 	if err != nil {
 		return nil, err
@@ -266,7 +299,36 @@ func Load() (*Config, error) {
 			Format: logFormat,
 		},
 		ModelsDevAutoSyncOverride: modelsDevAutoSyncOverride,
+		InstanceMode:              instanceMode,
+		RedisDSN:                  redisDSN,
 	}, nil
+}
+
+// ParseRedisDSN validates the REDIS_DSN shape and returns the trimmed DSN.
+// Validation is deliberately shallow: go-redis owns full parsing when
+// coordination opens the client. Errors never echo the DSN because it may
+// carry a password.
+func ParseRedisDSN(rawDSN string) (string, error) {
+	dsn := strings.TrimSpace(rawDSN)
+	if dsn == "" {
+		return "", fmt.Errorf("REDIS_DSN must not be empty")
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		return "", fmt.Errorf("REDIS_DSN is invalid")
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "redis", "rediss":
+	default:
+		return "", fmt.Errorf("REDIS_DSN uses unsupported scheme")
+	}
+	if parsed.Hostname() == "" {
+		return "", fmt.Errorf("REDIS_DSN must include a host")
+	}
+	if parsed.Fragment != "" {
+		return "", fmt.Errorf("REDIS_DSN must not include a fragment")
+	}
+	return dsn, nil
 }
 
 // ParseDatabaseDSN parses the single DATABASE_DSN configuration format. Bare

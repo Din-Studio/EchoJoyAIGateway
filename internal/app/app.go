@@ -36,6 +36,7 @@ type App struct {
 	startupRecovery   StartupRecovery
 	requestLogs       RequestLogRuntime
 	executionRuntime  ExecutionRuntime
+	coordination      Coordination
 	listen            func(network, address string) (net.Listener, error)
 
 	mu            sync.Mutex
@@ -79,6 +80,13 @@ type ExecutionRuntime interface {
 	BeginShutdown() <-chan struct{}
 }
 
+// Coordination is the distributed-mode coordination backend. It is absent in
+// single-instance mode.
+type Coordination interface {
+	Ping(context.Context) error
+	Close() error
+}
+
 // AppParams defines dependencies injected into App.
 type AppParams struct {
 	dig.In
@@ -94,6 +102,7 @@ type AppParams struct {
 	ControlRuntime    ControlRuntime
 	RequestLogs       RequestLogRuntime
 	ExecutionRuntime  ExecutionRuntime `optional:"true"`
+	Coordination      Coordination     `optional:"true"`
 }
 
 // NewEngine creates the process HTTP engine and global middleware.
@@ -135,6 +144,7 @@ func NewApp(params AppParams) *App {
 		startupRecovery:   params.StartupRecovery,
 		requestLogs:       params.RequestLogs,
 		executionRuntime:  params.ExecutionRuntime,
+		coordination:      params.Coordination,
 		listen:            net.Listen,
 		serveErrors:       make(chan error, 1),
 	}
@@ -275,6 +285,7 @@ func (a *App) Stop(ctx context.Context) error {
 	executionRuntime := a.executionRuntime
 	runtimeCheckpoint := a.runtimeCheckpoint
 	lifecycle := a.lifecycle
+	coordination := a.coordination
 	a.mu.Unlock()
 
 	var errs []error
@@ -365,6 +376,14 @@ func (a *App) Stop(ctx context.Context) error {
 				"event":   "shutdown.execution_runtime",
 				"outcome": "detached",
 			}).Warn("execution runtime is still stopping; process exit will release remaining connections")
+		}
+	}
+	if coordination != nil {
+		if err := coordination.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close redis: %w", err))
+			logrus.WithError(err).WithField("event", "shutdown.redis_close").Warn("redis close failed")
+		} else {
+			logrus.WithField("event", "shutdown.redis_close").Info("redis closed")
 		}
 	}
 	if a.db != nil {

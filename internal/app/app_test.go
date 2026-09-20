@@ -304,7 +304,7 @@ func mustNewEngine(t *testing.T) *gin.Engine {
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
-	registry, err := httproute.NewRegistry(HTTPModule())
+	registry, err := httproute.NewRegistry(HTTPModule(nil))
 	if err != nil {
 		t.Fatalf("NewRegistry(system) error = %v", err)
 	}
@@ -449,6 +449,50 @@ func TestSystemHTTPModuleServesHealth(t *testing.T) {
 	}
 	if body["status"] != "ok" || body["version"] != version.Version {
 		t.Fatalf("health response = %#v", body)
+	}
+	if len(body) != 2 {
+		t.Fatalf("single-instance health response = %#v, want only status and version", body)
+	}
+}
+
+func TestSystemHTTPModuleReportsRedisStatus(t *testing.T) {
+	tests := []struct {
+		name      string
+		pingErr   error
+		wantRedis string
+	}{
+		{name: "reachable", wantRedis: "ok"},
+		{name: "unreachable", pingErr: errors.New("dial tcp: connection refused"), wantRedis: "unavailable"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine, err := NewEngine()
+			if err != nil {
+				t.Fatalf("NewEngine() error = %v", err)
+			}
+			registry, err := httproute.NewRegistry(HTTPModule(&coordinationFake{pingErr: tt.pingErr}))
+			if err != nil {
+				t.Fatalf("NewRegistry(system) error = %v", err)
+			}
+			if err := registry.Bind(engine); err != nil {
+				t.Fatalf("Bind(system) error = %v", err)
+			}
+
+			recorder := httptest.NewRecorder()
+			engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("GET /health status = %d, want 200", recorder.Code)
+			}
+			var body map[string]string
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode health response: %v", err)
+			}
+			if body["status"] != "ok" || body["redis"] != tt.wantRedis {
+				t.Fatalf("health response = %#v, want redis %q", body, tt.wantRedis)
+			}
+		})
 	}
 }
 
@@ -1312,5 +1356,110 @@ func testConfig(t *testing.T) *config.Config {
 			Level:  "info",
 			Format: "text",
 		},
+	}
+}
+
+// coordinationFake is a Coordination whose Ping and Close outcomes the test
+// controls. closeFunc, when set, runs inside Close so a test can observe the
+// process state at that exact point in the shutdown sequence.
+type coordinationFake struct {
+	pingErr   error
+	closeErr  error
+	closeFunc func()
+	closes    atomic.Int64
+}
+
+func (f *coordinationFake) Ping(context.Context) error { return f.pingErr }
+
+func (f *coordinationFake) Close() error {
+	f.closes.Add(1)
+	if f.closeFunc != nil {
+		f.closeFunc()
+	}
+	return f.closeErr
+}
+
+func TestAppStopClosesCoordinationBeforeDatabase(t *testing.T) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("storage.Open() error = %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("db.DB() error = %v", err)
+	}
+
+	var databaseOpenAtRedisClose error
+	coordinationBackend := &coordinationFake{}
+	coordinationBackend.closeFunc = func() {
+		databaseOpenAtRedisClose = sqlDB.Ping()
+	}
+
+	controlRuntime := newControlRuntimeFake(nil, false)
+	application := NewApp(AppParams{
+		Engine:           mustNewEngine(t),
+		Config:           testConfig(t),
+		DB:               db,
+		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		RuntimeState:     runtimeStateLoaderFunc(func(context.Context) error { return nil }),
+		ControlRuntime:   controlRuntime,
+		RequestLogs:      newRequestLogRuntimeFake(nil, nil),
+		Coordination:     coordinationBackend,
+	})
+
+	if err := application.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	receiveTestSignal(t, controlRuntime.started, "control runtime start")
+
+	if err := application.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if got := coordinationBackend.closes.Load(); got != 1 {
+		t.Fatalf("Coordination.Close() calls = %d, want 1", got)
+	}
+	if databaseOpenAtRedisClose != nil {
+		t.Fatalf("database was already closed when redis closed: %v", databaseOpenAtRedisClose)
+	}
+	if pingErr := sqlDB.Ping(); pingErr == nil {
+		t.Fatal("database remained open after Stop() returned")
+	}
+}
+
+func TestAppStopJoinsCoordinationCloseErrorAndClosesDatabase(t *testing.T) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("storage.Open() error = %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("db.DB() error = %v", err)
+	}
+
+	redisCloseErr := errors.New("redis close failed")
+	coordinationBackend := &coordinationFake{closeErr: redisCloseErr}
+	controlRuntime := newControlRuntimeFake(nil, false)
+	application := NewApp(AppParams{
+		Engine:           mustNewEngine(t),
+		Config:           testConfig(t),
+		DB:               db,
+		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		RuntimeState:     runtimeStateLoaderFunc(func(context.Context) error { return nil }),
+		ControlRuntime:   controlRuntime,
+		RequestLogs:      newRequestLogRuntimeFake(nil, nil),
+		Coordination:     coordinationBackend,
+	})
+
+	if err := application.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	receiveTestSignal(t, controlRuntime.started, "control runtime start")
+
+	stopErr := application.Stop(context.Background())
+	if !errors.Is(stopErr, redisCloseErr) || !strings.Contains(stopErr.Error(), "close redis") {
+		t.Fatalf("Stop() error = %v, want joined redis close error", stopErr)
+	}
+	if pingErr := sqlDB.Ping(); pingErr == nil {
+		t.Fatal("database remained open after a failed redis close")
 	}
 }

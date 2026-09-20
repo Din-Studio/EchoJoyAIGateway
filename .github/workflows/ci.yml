@@ -170,6 +170,37 @@ jobs:
           GPT_LOAD_DATABASE_SECONDARY_DSN: ${{ matrix.driver == 'mysql' && format(matrix.dsn, job.services.secondary-mysql.ports['3306']) || '' }}
         run: .github/scripts/ci-database-contract.sh "${{ matrix.driver }}"
 
+  redis-contract:
+    name: Redis contract
+    runs-on: [self-hosted, Linux, ARM64]
+    timeout-minutes: 10
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=10s
+          --health-retries=20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Run external Redis contract
+        env:
+          GPT_LOAD_REDIS_TEST_DSN: redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}/0
+        run: go test -v -count=1 ./internal/coordination -run '^TestExternalRedis'
+
   windows-encryption-acl:
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 15

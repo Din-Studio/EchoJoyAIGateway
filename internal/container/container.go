@@ -2,6 +2,7 @@
 package container
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"gpt-load/internal/catalog"
 	"gpt-load/internal/channel"
 	"gpt-load/internal/control"
+	"gpt-load/internal/coordination"
 	"gpt-load/internal/dialect"
 	"gpt-load/internal/execution"
 	bifrostexecutor "gpt-load/internal/execution/bifrost"
@@ -45,6 +47,10 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// redisOpenTimeout bounds the startup connection attempt to the coordination
+// backend so a black-holed Redis cannot hang process startup.
+const redisOpenTimeout = 5 * time.Second
+
 // BuildContainer creates the 2.0 runtime foundation dependency graph.
 func BuildContainer() (*dig.Container, error) {
 	dependencyContainer := dig.New()
@@ -53,6 +59,22 @@ func BuildContainer() (*dig.Container, error) {
 		config.Load,
 		func(cfg *config.Config) (encryption.Service, error) {
 			return encryption.NewServiceWithKeyFile(cfg.EncryptionKey, cfg.DataDir)
+		},
+		func(cfg *config.Config) (*coordination.Client, error) {
+			if cfg.InstanceMode != config.InstanceModeDistributed {
+				return nil, nil
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), redisOpenTimeout)
+			defer cancel()
+			return coordination.Open(ctx, cfg.RedisDSN)
+		},
+		func(client *coordination.Client) app.Coordination {
+			// A nil *coordination.Client stored in an interface is not a nil
+			// interface value; single-instance mode must hand out a true nil.
+			if client == nil {
+				return nil
+			}
+			return client
 		},
 		func(cfg *config.Config) (*gorm.DB, error) {
 			db, err := storage.OpenConfigured(cfg)
@@ -321,9 +343,10 @@ func newHTTPRegistry(
 	gatewayHandler *gateway.Handler,
 	controlServer *control.Server,
 	webUIServer *webui.Server,
+	coordinationClient app.Coordination,
 ) (*httproute.Registry, error) {
 	return httproute.NewRegistry(
-		app.HTTPModule(),
+		app.HTTPModule(coordinationClient),
 		controlServer.HTTPModule(),
 		gatewayHandler.HTTPModule(),
 		webUIServer.HTTPModule(),

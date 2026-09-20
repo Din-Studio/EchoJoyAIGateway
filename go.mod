@@ -12,6 +12,7 @@ require (
 	github.com/klauspost/compress v1.20.0
 	github.com/maximhq/bifrost/core v1.9.0
 	github.com/nicksnyder/go-i18n/v2 v2.6.1
+	github.com/redis/go-redis/v9 v9.19.0
 	github.com/router-for-me/CLIProxyAPI/v7/gptload-embedded v0.0.0
 	github.com/sirupsen/logrus v1.10.2
 	github.com/tidwall/gjson v1.19.0
@@ -97,7 +98,6 @@ require (
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.1 // indirect
-	github.com/redis/go-redis/v9 v9.19.0 // indirect
 	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/router-for-me/CLIProxyAPI/v7 v7.3.6 // indirect

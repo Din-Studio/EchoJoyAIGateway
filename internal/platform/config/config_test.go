@@ -477,7 +477,184 @@ func clearEnvironment(t *testing.T) {
 		"LOG_LEVEL", "LOG_FORMAT", "GRACEFUL_SHUTDOWN_TIMEOUT",
 		"READ_TIMEOUT", "IDLE_TIMEOUT", "MODELS_DEV_AUTO_SYNC_ENABLED",
 		"DATABASE_MAX_OPEN_CONNECTIONS", "DATABASE_MAX_IDLE_CONNECTIONS",
+		"REDIS_DSN",
 	} {
 		t.Setenv(key, "")
+	}
+}
+
+func TestLoadDefaultsToSingleInstanceMode(t *testing.T) {
+	clearEnvironment(t)
+	t.Setenv("AUTH_KEY", "test-auth-key")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.InstanceMode != InstanceModeSingle {
+		t.Fatalf("InstanceMode = %q, want %q", cfg.InstanceMode, InstanceModeSingle)
+	}
+	if cfg.RedisDSN != "" {
+		t.Fatalf("RedisDSN = %q, want empty", cfg.RedisDSN)
+	}
+}
+
+func TestLoadDistributedModeRejectsInvalidRedisDSNBeforeCreatingSecrets(t *testing.T) {
+	tests := []struct {
+		name     string
+		redisDSN string
+	}{
+		{name: "unsupported scheme", redisDSN: "http://redis.example:6379"},
+		{name: "missing host", redisDSN: "redis:///0"},
+		{name: "unparsable URL", redisDSN: "redis://:s3cret@[bad"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			clearEnvironment(t)
+			t.Setenv("DATA_DIR", dataDir)
+			t.Setenv("DATABASE_DSN", "postgres://user:pw@db.example:5432/gpt_load")
+			t.Setenv("AUTH_KEY", "test-auth-key")
+			t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+			t.Setenv("REDIS_DSN", tt.redisDSN)
+
+			_, err := Load()
+			if err == nil {
+				t.Fatal("Load() error = nil, want REDIS_DSN rejection")
+			}
+			if !strings.Contains(err.Error(), "REDIS_DSN") {
+				t.Fatalf("Load() error = %v, want it to name REDIS_DSN", err)
+			}
+			assertNoGeneratedSecrets(t, dataDir, err)
+		})
+	}
+}
+
+func TestLoadDistributedModeRequiresNetworkDatabase(t *testing.T) {
+	for _, databaseDSN := range []string{"", ":memory:"} {
+		t.Run("database "+databaseDSN, func(t *testing.T) {
+			dataDir := t.TempDir()
+			clearEnvironment(t)
+			t.Setenv("DATA_DIR", dataDir)
+			t.Setenv("DATABASE_DSN", databaseDSN)
+			t.Setenv("AUTH_KEY", "test-auth-key")
+			t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+			t.Setenv("REDIS_DSN", "redis://127.0.0.1:6379/0")
+
+			_, err := Load()
+			if err == nil {
+				t.Fatal("Load() error = nil, want SQLite rejection in distributed mode")
+			}
+			if !strings.Contains(err.Error(), "REDIS_DSN") || !strings.Contains(err.Error(), "DATABASE_DSN") {
+				t.Fatalf("Load() error = %v, want it to name REDIS_DSN and DATABASE_DSN", err)
+			}
+			assertNoGeneratedSecrets(t, dataDir, err)
+		})
+	}
+}
+
+func TestLoadDistributedModeRequiresExplicitSecrets(t *testing.T) {
+	tests := []struct {
+		name        string
+		env         map[string]string
+		wantVarName string
+	}{
+		{name: "missing AUTH_KEY", env: map[string]string{"ENCRYPTION_KEY": "test-master-key-long"}, wantVarName: "AUTH_KEY"},
+		{name: "missing ENCRYPTION_KEY", env: map[string]string{"AUTH_KEY": "test-auth-key"}, wantVarName: "ENCRYPTION_KEY"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			clearEnvironment(t)
+			t.Setenv("DATA_DIR", dataDir)
+			t.Setenv("DATABASE_DSN", "postgres://user:pw@db.example:5432/gpt_load")
+			t.Setenv("REDIS_DSN", "redis://127.0.0.1:6379/0")
+			for key, value := range tt.env {
+				t.Setenv(key, value)
+			}
+
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("Load() error = nil, want %s requirement", tt.wantVarName)
+			}
+			if !strings.Contains(err.Error(), "REDIS_DSN") || !strings.Contains(err.Error(), tt.wantVarName) {
+				t.Fatalf("Load() error = %v, want it to name REDIS_DSN and %s", err, tt.wantVarName)
+			}
+			assertNoGeneratedSecrets(t, dataDir, err)
+		})
+	}
+}
+
+func TestLoadDistributedModeWithNetworkDatabaseAndExplicitSecrets(t *testing.T) {
+	const redisDSN = "redis://127.0.0.1:6379/0"
+	clearEnvironment(t)
+	t.Setenv("DATA_DIR", t.TempDir())
+	t.Setenv("DATABASE_DSN", "postgres://user:pw@db.example:5432/gpt_load")
+	t.Setenv("AUTH_KEY", "test-auth-key")
+	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	t.Setenv("REDIS_DSN", redisDSN)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.InstanceMode != InstanceModeDistributed {
+		t.Fatalf("InstanceMode = %q, want %q", cfg.InstanceMode, InstanceModeDistributed)
+	}
+	if cfg.RedisDSN != redisDSN {
+		t.Fatalf("RedisDSN = %q, want %q", cfg.RedisDSN, redisDSN)
+	}
+	if cfg.AuthKeyMetadata.Source != SecretSourceEnvironment ||
+		cfg.EncryptionKeyMetadata.Source != SecretSourceEnvironment {
+		t.Fatalf("secret metadata = %#v / %#v, want environment sources",
+			cfg.AuthKeyMetadata, cfg.EncryptionKeyMetadata)
+	}
+}
+
+func TestParseRedisDSN(t *testing.T) {
+	for _, dsn := range []string{
+		"redis://h:6379/0",
+		"rediss://h:6380",
+		"redis://s1:26379/0?master_name=m&addr=s2:26379",
+		"redis://user:pw@h:6379/1",
+	} {
+		got, err := ParseRedisDSN(" " + dsn + " ")
+		if err != nil {
+			t.Fatalf("ParseRedisDSN(%q) error = %v", dsn, err)
+		}
+		if got != dsn {
+			t.Fatalf("ParseRedisDSN(%q) = %q, want the trimmed DSN", dsn, got)
+		}
+	}
+
+	for _, dsn := range []string{
+		"",
+		"   ",
+		"http://h",
+		"redis:///0",
+		"redis://h#frag",
+		"://bad",
+		"127.0.0.1:6379",
+	} {
+		if _, err := ParseRedisDSN(dsn); err == nil {
+			t.Fatalf("ParseRedisDSN(%q) error = nil, want validation error", dsn)
+		}
+	}
+
+	if _, err := ParseRedisDSN("redis://:s3cret@[bad"); err == nil {
+		t.Fatal("ParseRedisDSN() error = nil, want invalid URL rejection")
+	} else if strings.Contains(err.Error(), "s3cret") {
+		t.Fatalf("ParseRedisDSN() error leaks the password: %v", err)
+	}
+}
+
+func assertNoGeneratedSecrets(t *testing.T, dataDir string, loadErr error) {
+	t.Helper()
+	for _, fileName := range []string{authkey.FileName, encryption.KeyFileName} {
+		if _, statErr := os.Stat(filepath.Join(dataDir, fileName)); !os.IsNotExist(statErr) {
+			t.Fatalf("%s created despite failed Load(): %v (load error = %v)", fileName, statErr, loadErr)
+		}
 	}
 }
