@@ -199,7 +199,7 @@ jobs:
       - name: Run external Redis contract
         env:
           GPT_LOAD_REDIS_TEST_DSN: redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}/0
-        run: go test -v -count=1 ./internal/coordination -run '^TestExternalRedis'
+        run: go test -v -count=1 ./internal/coordination ./internal/control -run '^TestExternalRedis'
 
   windows-encryption-acl:
     runs-on: [self-hosted, Windows, X64]

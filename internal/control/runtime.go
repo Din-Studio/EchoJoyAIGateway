@@ -69,6 +69,8 @@ type Runtime struct {
 	catalogSync        catalogSyncRuntime
 	oauthCallback      *OAuthCallbackManager
 	manager            *state.Manager
+	configVersion      ConfigVersionSource
+	configReload       configReloadRuntime
 	validationInterval time.Duration
 	validationJitter   func() time.Duration
 	now                func() time.Time
@@ -86,6 +88,7 @@ func NewRuntime(
 	requestLogCleaner RequestLogCleaner,
 	operationRecovery *Service,
 	catalogSync *CatalogSyncCoordinator,
+	configVersion ConfigVersionSource,
 ) *Runtime {
 	runtime := &Runtime{
 		registry:           registry,
@@ -94,6 +97,7 @@ func NewRuntime(
 		operationRecovery:  operationRecovery,
 		catalogSync:        catalogSync,
 		manager:            manager,
+		configVersion:      configVersion,
 		validationInterval: defaultValidationInterval,
 		validationJitter: func() time.Duration {
 			return time.Duration(rand.Int64N(int64(maxValidationJitter) + 1))
@@ -105,6 +109,7 @@ func NewRuntime(
 	}
 	if operationRecovery != nil {
 		runtime.oauthCallback = operationRecovery.oauthCallback
+		runtime.configReload = operationRecovery
 	}
 	runtime.validator = newValidationWorker(
 		manager,
@@ -158,6 +163,14 @@ func (runtime *Runtime) Run(ctx context.Context) {
 		go func() {
 			defer wait.Done()
 			runtime.oauthCallback.Run(ctx)
+		}()
+	}
+	if runtime.configVersion != nil && runtime.configReload != nil {
+		configTicker := runtime.newTicker(configPollInterval)
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			runtime.runConfigWatch(ctx, configTicker)
 		}()
 	}
 	wait.Wait()

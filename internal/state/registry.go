@@ -127,36 +127,51 @@ func ValidateCredentialEntries(entries []CredentialEntry) error {
 	return nil
 }
 
+// ReplaceCredentials rebuilds the entire registry from persisted credential
+// configuration. An entry whose persisted configuration is unchanged keeps its
+// existing *CredentialEntry pointer, so its runtime health — CooldownUntil,
+// Blacklisted, FailureCount, FailureGeneration and model cooldowns — survives
+// the rebuild untouched. This is the same preservation rule ReconcileGroup
+// applies (see samePersistedCredentialConfig) and it is what makes a full
+// reload repeatable: reloading committed configuration after a remote change
+// must not reset credential health that only this process knows about.
+//
+// The full rebuild is retained rather than looping ReconcileGroup per group
+// because only a rebuild can move a credential between groups or drop a group
+// that disappeared entirely.
+//
+// Bucket reuse reads the current buckets, so building them and installing them
+// both happen under r.mu.
 func (r *CredentialRegistry) ReplaceCredentials(entries []CredentialEntry) error {
 	if err := ValidateCredentialEntries(entries); err != nil {
 		return err
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	buckets := make(map[uint]map[uint]*CredentialEntry)
 	credentialGroups := make(map[uint]uint, len(entries))
+	views := make([]CredentialRuntimeView, 0, len(entries))
 	for _, entry := range entries {
 		if buckets[entry.GroupID] == nil {
 			buckets[entry.GroupID] = make(map[uint]*CredentialEntry)
 		}
-		cloned := cloneCredentialEntry(entry)
-		buckets[entry.GroupID][entry.ID] = &cloned
-		credentialGroups[entry.ID] = entry.GroupID
-	}
-
-	r.mu.Lock()
-	for groupID, bucket := range buckets {
-		for id, entry := range bucket {
-			preserveModelCooldowns(entry, r.buckets[groupID][id])
+		previous := r.buckets[entry.GroupID][entry.ID]
+		stored := previous
+		if stored == nil || !samePersistedCredentialConfig(*stored, entry) {
+			cloned := cloneCredentialEntry(entry)
+			preserveModelCooldowns(&cloned, previous)
+			stored = &cloned
 		}
+		buckets[entry.GroupID][entry.ID] = stored
+		credentialGroups[entry.ID] = entry.GroupID
+		// Scheduling must see what the registry actually stores, not the
+		// database-derived entry that preservation may have discarded.
+		views = append(views, runtimeView(stored))
 	}
 	r.buckets = buckets
 	r.credentialGroups = credentialGroups
-	views := make([]CredentialRuntimeView, 0, len(entries))
-	for _, entry := range entries {
-		views = append(views, runtimeView(&entry))
-	}
 	r.scheduling.SyncCredentials(0, views)
-	r.mu.Unlock()
 	return nil
 }
 

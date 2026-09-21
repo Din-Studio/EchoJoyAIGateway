@@ -76,6 +76,8 @@ func BuildContainer() (*dig.Container, error) {
 			}
 			return client
 		},
+		newConfigVersion,
+		newConfigVersionSource,
 		func(cfg *config.Config) (*gorm.DB, error) {
 			db, err := storage.OpenConfigured(cfg)
 			if err == nil {
@@ -250,6 +252,21 @@ func BuildContainer() (*dig.Container, error) {
 			return nil, err
 		}
 	}
+	// The broadcaster is wired after construction, mirroring how the service
+	// receives its other coordination collaborators. Single-instance mode
+	// leaves it unset and never reaches Redis.
+	if err := dependencyContainer.Invoke(func(
+		service *control.Service,
+		version *coordination.ConfigVersion,
+	) error {
+		if version == nil {
+			return nil
+		}
+		service.SetConfigBroadcaster(version.Bump)
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("wire configuration broadcast: %w", err)
+	}
 	if err := dependencyContainer.Invoke(func(
 		engine *gin.Engine,
 		registry *httproute.Registry,
@@ -261,6 +278,25 @@ func BuildContainer() (*dig.Container, error) {
 		return nil, fmt.Errorf("register HTTP routes: %w", err)
 	}
 	return dependencyContainer, nil
+}
+
+// newConfigVersion binds the shared configuration version to the coordination
+// client. Single-instance mode has no client and therefore no version.
+func newConfigVersion(client *coordination.Client) *coordination.ConfigVersion {
+	if client == nil {
+		return nil
+	}
+	return coordination.NewConfigVersion(client)
+}
+
+// newConfigVersionSource hands the control plane a true nil in single-instance
+// mode; a nil *coordination.ConfigVersion stored in an interface is not a nil
+// interface value, and the configuration watch loop is assembled on that test.
+func newConfigVersionSource(version *coordination.ConfigVersion) control.ConfigVersionSource {
+	if version == nil {
+		return nil
+	}
+	return version
 }
 
 func newSystemOutboundProxyProvider(manager *state.Manager) httpclient.OutboundProxyProvider {

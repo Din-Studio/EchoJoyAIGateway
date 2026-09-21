@@ -1344,3 +1344,170 @@ func keyStatus(t *testing.T, registry *CredentialRegistry, credentialID uint) Cr
 	}
 	return registry.buckets[groupID][credentialID].Status
 }
+
+func replaceTestEntry(id, groupID uint, version uint64, cipher string) CredentialEntry {
+	return CredentialEntry{
+		ID: id, GroupID: groupID, Status: CredentialStatusActive,
+		Version: version, IdentityGeneration: 1,
+		Fingerprint: "test-fingerprint", EncryptedValue: cipher,
+	}
+}
+
+func TestReplaceCredentialsPreservesRuntimeHealthOfUnchangedCredentials(t *testing.T) {
+	registry := NewCredentialRegistry()
+	entries := []CredentialEntry{
+		replaceTestEntry(1, 10, 1, "cipher-one"),
+		replaceTestEntry(2, 10, 1, "cipher-two"),
+	}
+	mustReplaceKeyEntries(t, registry, entries)
+
+	cooldown := time.Now().Add(time.Hour).UTC()
+	if !registry.SetCooldown(1, cooldown) {
+		t.Fatal("SetCooldown(1) = false")
+	}
+	if _, ok := registry.IncrFailure(1); !ok {
+		t.Fatal("IncrFailure(1) = false")
+	}
+	if !registry.SetBlacklisted(2) {
+		t.Fatal("SetBlacklisted(2) = false")
+	}
+	preserved := registryEntry(t, registry, 1)
+
+	mustReplaceKeyEntries(t, registry, entries)
+
+	got := registryEntry(t, registry, 1)
+	if !got.CooldownUntil.Equal(cooldown) || got.FailureCount != 1 {
+		t.Fatalf("reload reset unchanged credential health: %#v", got)
+	}
+	if got.FailureGeneration != preserved.FailureGeneration {
+		t.Fatalf("FailureGeneration = %d, want %d", got.FailureGeneration, preserved.FailureGeneration)
+	}
+	if blacklisted := registryEntry(t, registry, 2); !blacklisted.Blacklisted {
+		t.Fatalf("reload cleared blacklist: %#v", blacklisted)
+	}
+}
+
+func TestReplaceCredentialsRebuildsChangedCredentialFromDatabaseBaseline(t *testing.T) {
+	registry := NewCredentialRegistry()
+	mustReplaceKeyEntries(t, registry, []CredentialEntry{replaceTestEntry(1, 10, 1, "cipher-one")})
+	reference, ok := registry.CredentialRef(1)
+	if !ok {
+		t.Fatal("CredentialRef(1) = false")
+	}
+	now := time.Now()
+	if accepted, _ := registry.SetModelCooldown(reference, "model-a", now.Add(time.Hour), now); !accepted {
+		t.Fatal("SetModelCooldown() accepted = false")
+	}
+	if !registry.SetCooldown(1, now.Add(time.Hour)) {
+		t.Fatal("SetCooldown(1) = false")
+	}
+	if _, ok := registry.IncrFailure(1); !ok {
+		t.Fatal("IncrFailure(1) = false")
+	}
+
+	// A rotated secret changes the persisted configuration, so the entry is
+	// rebuilt from the database baseline.
+	mustReplaceKeyEntries(t, registry, []CredentialEntry{replaceTestEntry(1, 10, 2, "cipher-rotated")})
+
+	got := registryEntry(t, registry, 1)
+	if !got.CooldownUntil.IsZero() || got.FailureCount != 0 || got.Blacklisted {
+		t.Fatalf("changed credential kept stale health: %#v", got)
+	}
+	if got.EncryptedValue != "cipher-rotated" || got.Version != 2 {
+		t.Fatalf("changed credential was not rebuilt from database truth: %#v", got)
+	}
+	// preserveModelCooldowns keeps model cooldowns while ID, GroupID and
+	// IdentityGeneration are unchanged.
+	if len(registry.ModelCooldowns(1, now)) != 1 {
+		t.Fatalf("model cooldowns = %#v, want the identity-preserving carry-over", registry.ModelCooldowns(1, now))
+	}
+
+	mustReplaceKeyEntries(t, registry, []CredentialEntry{func() CredentialEntry {
+		entry := replaceTestEntry(1, 10, 3, "cipher-reidentified")
+		entry.IdentityGeneration = 2
+		return entry
+	}()})
+	if len(registry.ModelCooldowns(1, now)) != 0 {
+		t.Fatal("new identity inherited the old model cooldowns")
+	}
+}
+
+func TestReplaceCredentialsMovesCredentialBetweenGroups(t *testing.T) {
+	registry := NewCredentialRegistry()
+	mustReplaceKeyEntries(t, registry, []CredentialEntry{
+		replaceTestEntry(1, 10, 1, "cipher-one"),
+		replaceTestEntry(2, 10, 1, "cipher-two"),
+	})
+	if !registry.SetCooldown(2, time.Now().Add(time.Hour)) {
+		t.Fatal("SetCooldown(2) = false")
+	}
+
+	moved := replaceTestEntry(1, 20, 1, "cipher-one")
+	mustReplaceKeyEntries(t, registry, []CredentialEntry{
+		moved,
+		replaceTestEntry(2, 10, 1, "cipher-two"),
+	})
+
+	registry.mu.RLock()
+	groupID := registry.credentialGroups[1]
+	_, staleBucketEntry := registry.buckets[10][1]
+	registry.mu.RUnlock()
+	if groupID != 20 {
+		t.Fatalf("credentialGroups[1] = %d, want 20", groupID)
+	}
+	if staleBucketEntry {
+		t.Fatal("credential 1 still present in its previous group bucket")
+	}
+	// A cross-group move changes the persisted configuration, so the moved
+	// credential is rebuilt while its former group peer is preserved.
+	if got := registryEntry(t, registry, 2); got.CooldownUntil.IsZero() {
+		t.Fatalf("unrelated credential lost its cooldown: %#v", got)
+	}
+}
+
+func TestReplaceCredentialsDropsVanishedGroup(t *testing.T) {
+	registry := NewCredentialRegistry()
+	mustReplaceKeyEntries(t, registry, []CredentialEntry{
+		replaceTestEntry(1, 10, 1, "cipher-one"),
+		replaceTestEntry(2, 20, 1, "cipher-two"),
+	})
+
+	mustReplaceKeyEntries(t, registry, []CredentialEntry{replaceTestEntry(1, 10, 1, "cipher-one")})
+
+	registry.mu.RLock()
+	_, groupPresent := registry.buckets[20]
+	_, reversePresent := registry.credentialGroups[2]
+	registry.mu.RUnlock()
+	if groupPresent || reversePresent {
+		t.Fatal("vanished group survived the rebuild")
+	}
+	var member *SchedulingMember
+	registry.SchedulingState().WithLock(func(ledger *SchedulingLedger) {
+		member = ledger.Members[2]
+	})
+	if member != nil {
+		t.Fatalf("scheduling still holds the removed credential: %#v", member)
+	}
+}
+
+func TestReplaceCredentialsSyncsSchedulingWithPreservedEntries(t *testing.T) {
+	registry := NewCredentialRegistry()
+	entries := []CredentialEntry{replaceTestEntry(1, 10, 1, "cipher-one")}
+	mustReplaceKeyEntries(t, registry, entries)
+	cooldown := time.Now().Add(time.Hour).UTC()
+	if !registry.SetCooldown(1, cooldown) {
+		t.Fatal("SetCooldown(1) = false")
+	}
+
+	mustReplaceKeyEntries(t, registry, entries)
+
+	var member SchedulingMember
+	registry.SchedulingState().WithLock(func(ledger *SchedulingLedger) {
+		if stored := ledger.Members[1]; stored != nil {
+			member = *stored
+		}
+	})
+	if !member.suspended || !member.cooldownUntil.Equal(cooldown) {
+		t.Fatalf("scheduling view was built from the discarded database entry: %#v", member)
+	}
+}

@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 
 	"gpt-load/internal/accessquota"
@@ -35,6 +37,9 @@ const (
 	defaultModelDiscoveryTimeout      = 30 * time.Second
 	defaultSubscriptionControlTimeout = 30 * time.Second
 	controlTransactionCleanupTimeout  = time.Second
+	// configBroadcastTimeout bounds the post-commit doorbell so an
+	// unreachable Redis cannot hold the control-plane write lock.
+	configBroadcastTimeout = 2 * time.Second
 )
 
 type Service struct {
@@ -85,6 +90,8 @@ type Service struct {
 		*models.ControlOperation,
 		operationStage,
 	) error
+	configBroadcast       func(context.Context) (int64, error)
+	broadcastPending      atomic.Bool
 	operationRecoveryWake chan struct{}
 	writeMu               sync.RWMutex
 	observationMu         sync.Mutex
@@ -496,6 +503,42 @@ func (s *Service) writeCredentialConfig(
 	return result
 }
 
+// ReloadCommittedConfiguration rebuilds this process's runtime configuration
+// from committed database state. It is the receiving half of cross-instance
+// configuration propagation: another instance committed a change, and this
+// instance reapplies it without a restart.
+//
+// The call is repeatable and leaves no observable trace when nothing changed.
+// Credentials whose persisted configuration is unchanged keep their registry
+// entry pointer, so cooldown, blacklist and failure counters survive; the
+// snapshot is published only when it differs from the current one.
+//
+// It deliberately does not run the operation-recovery barrier: a reload is not
+// a write, and operation recovery already serializes against it through
+// writeMu.
+//
+// writeMu is held across the database reads on purpose. recoverCommittedRuntime
+// issues several independent, non-transactional queries against s.db, and their
+// mutual consistency comes only from excluding concurrent control-plane writes.
+// Moving those reads outside the lock would silently introduce torn reads.
+func (s *Service) ReloadCommittedConfiguration(ctx context.Context) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	var credentialIDs []uint
+	if err := s.db.WithContext(ctx).Model(&models.Credential{}).
+		Order("id ASC").Pluck("id", &credentialIDs).Error; err != nil {
+		return app_errors.ParseDBError(err)
+	}
+	var result error
+	apply := func() {
+		result = s.recoverCommittedRuntime(ctx, true)
+	}
+	if err := s.doCredentialMutations(credentialIDs, apply); err != nil {
+		return err
+	}
+	return result
+}
+
 func (s *Service) recoverCommittedRuntime(ctx context.Context, includePrices bool) error {
 	input, err := stateloader.BuildCompileInputWithProxy(
 		ctx, s.db, s.encryption, s.environmentProxy, s.channelRegistry,
@@ -524,6 +567,22 @@ func (s *Service) recoverCommittedRuntime(ctx context.Context, includePrices boo
 			return fmt.Errorf("restore committed credential quota observations: %w", err)
 		}
 	}
+	// Publishing is gated on a difference so a reload that changed nothing
+	// produces no observable churn: no snapshot revision bump and no wakeup
+	// of the validation loop or of live WebSocket sessions.
+	//
+	// Matches only gates the snapshot. Prices, the credential registry and
+	// quota observations are refreshed unconditionally because
+	// CompileInput.Credentials carries no credential proxy identity, so a
+	// proxy-only change is invisible to the comparison. Those steps are
+	// themselves free of side effects when nothing changed.
+	matches, err := s.manager.Matches(input)
+	if err != nil {
+		return fmt.Errorf("compare committed configuration: %w", err)
+	}
+	if matches {
+		return nil
+	}
 	if _, err := s.manager.Publish(input); err != nil {
 		return fmt.Errorf("publish committed configuration: %w", err)
 	}
@@ -548,6 +607,26 @@ func joinCommittedRuntimeRecovery(operationErr, recoveryErr error) error {
 	return errors.Join(operationErr, recoveryErr)
 }
 
+// SetConfigBroadcaster installs the cross-instance doorbell rung after every
+// committed control transaction. Single-instance deployments leave it unset,
+// and every broadcast path then becomes a no-op.
+func (s *Service) SetConfigBroadcaster(broadcast func(context.Context) (int64, error)) {
+	s.configBroadcast = broadcast
+}
+
+// withControlTransaction is the single entry point for control-plane writes,
+// which is why the cross-instance doorbell is rung here and not next to the
+// local snapshot publication. The commit is the point of no return: a change
+// that committed but then failed to publish locally still has to reach the
+// other instances, and hanging the broadcast off publication would miss
+// exactly that window.
+//
+// Every control transaction rings, including those that write no
+// configuration at all, such as operation recovery and bootstrap. Telling them
+// apart would mean maintaining a "is this a configuration write" judgement at
+// every call site — the very thing this placement avoids. An extra ring costs
+// receivers one idempotent reload with no observable effect; a missed ring
+// costs permanent divergence.
 func (s *Service) withControlTransaction(
 	ctx context.Context,
 	mutate func(*gorm.DB) error,
@@ -560,7 +639,70 @@ func (s *Service) withControlTransaction(
 	if dbtx.IsInfrastructure(err) {
 		return fmt.Errorf("%v: %w", err, app_errors.ErrDatabase)
 	}
+	if err == nil {
+		s.broadcastCommittedConfig()
+	}
 	return err
+}
+
+// broadcastCommittedConfig announces a committed change to the other
+// instances. A failure never changes the control-plane result: the change is
+// already committed, and reporting an error would tell the operator their
+// write failed when it did not.
+func (s *Service) broadcastCommittedConfig() {
+	if s.configBroadcast == nil {
+		return
+	}
+	// The request context may already be cancelled — an operator's connection
+	// can drop the instant after the commit — but the committed change still
+	// has to be announced, so the broadcast gets its own bounded context.
+	ctx, cancel := context.WithTimeout(context.Background(), configBroadcastTimeout)
+	defer cancel()
+	version, err := s.configBroadcast(ctx)
+	if err != nil {
+		s.broadcastPending.Store(true)
+		logConfigEvent(
+			logrus.WarnLevel,
+			logrus.Fields{"event": "config.broadcast_failed"},
+			"Configuration broadcast failed; retry is pending",
+		)
+		return
+	}
+	logConfigEvent(
+		logrus.DebugLevel,
+		logrus.Fields{"event": "config.broadcast", "config_version": version},
+		"Configuration change broadcast",
+	)
+}
+
+// RetryPendingBroadcast re-announces a committed change whose doorbell failed.
+// This is not defensive: while Redis was unreachable the shared version never
+// advanced, so no amount of polling on the other instances can discover that
+// commit. Re-ringing is that change's only route to the rest of the fleet.
+func (s *Service) RetryPendingBroadcast(ctx context.Context) {
+	if s.configBroadcast == nil {
+		return
+	}
+	// Claim the pending mark before broadcasting so a broadcast that fails
+	// concurrently can re-arm it without this success erasing it.
+	if !s.broadcastPending.CompareAndSwap(true, false) {
+		return
+	}
+	version, err := s.configBroadcast(ctx)
+	if err != nil {
+		s.broadcastPending.Store(true)
+		logConfigEvent(
+			logrus.WarnLevel,
+			logrus.Fields{"event": "config.broadcast_failed"},
+			"Configuration broadcast retry failed; retry remains pending",
+		)
+		return
+	}
+	logConfigEvent(
+		logrus.InfoLevel,
+		logrus.Fields{"event": "config.broadcast_retried", "config_version": version},
+		"Pending configuration broadcast delivered",
+	)
 }
 
 func (s *Service) withReadSnapshot(
