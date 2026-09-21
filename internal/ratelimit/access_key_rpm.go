@@ -5,9 +5,34 @@ import (
 	"time"
 )
 
+// Window is the span an access key's RPM limit is counted over. Both the
+// in-process limiter and the shared one measure the same window, so a limit
+// configured once means the same thing whichever implementation enforces it.
+const Window = time.Minute
+
 type LimitDecision struct {
 	Allowed    bool
 	RetryAfter time.Duration
+	// Unavailable marks a rejection the limiter could not decide rather than
+	// one it decided against. A shared limiter that cannot reach its backend
+	// must refuse the request, and the caller has to be able to tell that
+	// refusal apart from a real limit so it reports a coordination outage
+	// instead of blaming the client's rate.
+	Unavailable bool
+}
+
+// RetryAfterFor converts the timestamp of the request that must age out of the
+// window into the delay the client is told to wait. Both limiters answer a
+// rejection with this function so their advice cannot drift apart.
+func RetryAfterFor(target, now time.Time) time.Duration {
+	retryAfter := ceilToSecond(target.Add(Window).Sub(now))
+	if retryAfter < time.Second {
+		retryAfter = time.Second
+	}
+	if retryAfter > Window {
+		retryAfter = Window
+	}
+	return retryAfter
 }
 
 type timestampDeque struct {
@@ -63,19 +88,12 @@ func (limiter *AccessKeyRPM) Allow(accessKeyID uint, limit int64) LimitDecision 
 	}
 
 	window := limiter.windows[accessKeyID]
-	window.dropThrough(now.Add(-time.Minute))
+	window.dropThrough(now.Add(-Window))
 	count := window.len()
 	if int64(count) >= limit {
 		target := window.at(count - int(limit))
-		retryAfter := ceilToSecond(target.Add(time.Minute).Sub(now))
-		if retryAfter < time.Second {
-			retryAfter = time.Second
-		}
-		if retryAfter > time.Minute {
-			retryAfter = time.Minute
-		}
 		limiter.windows[accessKeyID] = window
-		return LimitDecision{Allowed: false, RetryAfter: retryAfter}
+		return LimitDecision{Allowed: false, RetryAfter: RetryAfterFor(target, now)}
 	}
 	window.push(now)
 	limiter.windows[accessKeyID] = window
@@ -83,11 +101,11 @@ func (limiter *AccessKeyRPM) Allow(accessKeyID uint, limit int64) LimitDecision 
 }
 
 func (limiter *AccessKeyRPM) cleanup(now time.Time) {
-	if !limiter.lastCleanup.IsZero() && now.Sub(limiter.lastCleanup) < time.Minute {
+	if !limiter.lastCleanup.IsZero() && now.Sub(limiter.lastCleanup) < Window {
 		return
 	}
 
-	cutoff := now.Add(-time.Minute)
+	cutoff := now.Add(-Window)
 	for accessKeyID, window := range limiter.windows {
 		window.dropThrough(cutoff)
 		if window.len() == 0 {

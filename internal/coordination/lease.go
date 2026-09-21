@@ -2,10 +2,7 @@ package coordination
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
-	"io"
 	"time"
 )
 
@@ -44,19 +41,11 @@ type Lease struct {
 // cannot identify itself cannot claim a period, and starting it in that state
 // would silently restore the duplicated sweeps this type exists to remove.
 func NewLease(client *Client) (*Lease, error) {
-	holder, err := newLeaseHolder(rand.Reader)
+	holder, err := NewInstanceIdentity()
 	if err != nil {
 		return nil, err
 	}
 	return &Lease{client: client, holder: holder}, nil
-}
-
-func newLeaseHolder(random io.Reader) (string, error) {
-	value := make([]byte, 16)
-	if _, err := io.ReadFull(random, value); err != nil {
-		return "", fmt.Errorf("generate lease holder: %w", err)
-	}
-	return hex.EncodeToString(value), nil
 }
 
 // Holder reports this process's lease identity.

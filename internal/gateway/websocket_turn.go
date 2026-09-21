@@ -154,12 +154,12 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 			return
 		}
 		if !decision.Allowed {
-			reject(reasonAccessKeyCostLimitExceeded)
+			reject(accessQuotaReason(decision))
 			return
 		}
 	}
-	if !h.limiter.Allow(key.ID, key.RPMLimit).Allowed {
-		reject(reasonAccessKeyRateLimited)
+	if limitDecision := h.limiter.Allow(key.ID, key.RPMLimit); !limitDecision.Allowed {
+		reject(accessKeyRateLimitReason(limitDecision))
 		return
 	}
 	original, err := inspectWebsocketRequest(turn.body)
@@ -398,7 +398,7 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 				return
 			}
 			if !decision.Allowed {
-				reject(reasonAccessKeyCostLimitExceeded)
+				reject(accessQuotaReason(decision))
 				return
 			}
 			admission.admitted = true

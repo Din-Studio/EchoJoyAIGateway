@@ -13,12 +13,24 @@ import (
 	"gpt-load/internal/accessquota"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/pricing"
+	"gpt-load/internal/ratelimit"
 )
 
 type reason struct {
 	Status  int
 	Code    string
 	Message string
+}
+
+// accessKeyRateLimitReason keeps a limiter that could not reach its shared
+// window from being reported as a client that sent too many requests. The
+// client's rate is unknown in that case, and telling it to slow down would be
+// an invented fact.
+func accessKeyRateLimitReason(decision ratelimit.LimitDecision) reason {
+	if decision.Unavailable {
+		return reasonCoordinationUnavailable
+	}
+	return reasonAccessKeyRateLimited
 }
 
 func providerErrorReason(result UpstreamResult) reason {
@@ -103,11 +115,25 @@ type accessKeyCostLimitClientError struct {
 	ResetsAt *int64 `json:"resets_at,omitempty"`
 }
 
+// accessQuotaReason keeps a ledger that could not be reached from being
+// reported as a budget that ran out. The remaining budget is unknown in that
+// case, and naming an amount the client has spent would be an invented fact.
+func accessQuotaReason(decision accessquota.Decision) reason {
+	if decision.Unavailable {
+		return reasonCoordinationUnavailable
+	}
+	return reasonAccessKeyCostLimitExceeded
+}
+
 func (handler *Handler) completeAccessQuotaReason(
 	context *gin.Context,
 	recorder *requestRecorder,
 	decision accessquota.Decision,
 ) {
+	if decision.Unavailable {
+		handler.completeReason(context, recorder, reasonCoordinationUnavailable)
+		return
+	}
 	recorder.completeReason(reasonAccessKeyCostLimitExceeded)
 	if err := handler.writeAccessQuotaReason(context, decision); err != nil {
 		handler.completeWriteTerminal(context, recorder, reasonAccessKeyCostLimitExceeded.Status)

@@ -70,6 +70,7 @@ type Runtime struct {
 	oauthCallback      *OAuthCallbackManager
 	manager            *state.Manager
 	configVersion      ConfigVersionSource
+	credentialHealth   CredentialHealthCoordinator
 	configReload       configReloadRuntime
 	taskLease          TaskLease
 	validationInterval time.Duration
@@ -90,6 +91,7 @@ func NewRuntime(
 	operationRecovery *Service,
 	catalogSync *CatalogSyncCoordinator,
 	configVersion ConfigVersionSource,
+	credentialHealth CredentialHealthCoordinator,
 	taskLease TaskLease,
 ) *Runtime {
 	runtime := &Runtime{
@@ -100,6 +102,7 @@ func NewRuntime(
 		catalogSync:        catalogSync,
 		manager:            manager,
 		configVersion:      configVersion,
+		credentialHealth:   credentialHealth,
 		taskLease:          taskLease,
 		validationInterval: defaultValidationInterval,
 		validationJitter: func() time.Duration {
@@ -174,6 +177,14 @@ func (runtime *Runtime) Run(ctx context.Context) {
 		go func() {
 			defer wait.Done()
 			runtime.runConfigWatch(ctx, configTicker)
+		}()
+	}
+	if runtime.credentialHealth != nil && runtime.registry != nil {
+		healthTicker := runtime.newTicker(credentialHealthPollInterval)
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			runtime.runCredentialHealthWatch(ctx, healthTicker)
 		}()
 	}
 	wait.Wait()

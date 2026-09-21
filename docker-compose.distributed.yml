@@ -1,0 +1,130 @@
+# Two gateway instances sharing one PostgreSQL and one Redis Sentinel set.
+#
+# This is the topology the distributed mode is built for, in the smallest form
+# that still exercises every shared component: configuration propagation, the
+# global RPM window and cost ledger, credential health, background task leases
+# and response ownership all run through the services below.
+#
+# Start it with:
+#   docker compose -f docker-compose.distributed.yml up -d --build
+#
+# Both instances are published so you can drive either one directly while
+# testing. In production, put a load balancer in front of them and publish only
+# the balancer; WebSocket connections need connection-level stickiness, which
+# is the one thing this mode does not move between instances.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: gptload
+      POSTGRES_PASSWORD: gptload
+      POSTGRES_DB: gptload
+    volumes:
+      - distributed-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gptload -d gptload"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis-master:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - distributed-redis-master:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis-replica:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--replicaof", "redis-master", "6379"]
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    volumes:
+      - distributed-redis-replica:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Three sentinels so a failover needs a real quorum. A single sentinel would
+  # start and look healthy while being unable to promote anything.
+  sentinel-a: &sentinel
+    image: redis:7-alpine
+    depends_on:
+      redis-replica:
+        condition: service_healthy
+    # The config file is generated at start-up because Sentinel rewrites it in
+    # place, and a bind-mounted read-only file would make it fail on failover.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        cat > /tmp/sentinel.conf <<EOF
+        port 26379
+        sentinel resolve-hostnames yes
+        sentinel announce-hostnames yes
+        sentinel monitor gptload redis-master 6379 2
+        sentinel down-after-milliseconds gptload 5000
+        sentinel failover-timeout gptload 10000
+        sentinel parallel-syncs gptload 1
+        EOF
+        exec redis-server /tmp/sentinel.conf --sentinel
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  sentinel-b:
+    <<: *sentinel
+
+  sentinel-c:
+    <<: *sentinel
+
+  gateway-a: &gateway
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3001
+      DATA_DIR: /app/data
+      DATABASE_DSN: postgres://gptload:gptload@postgres:5432/gptload?sslmode=disable
+      REDIS_DSN: redis://sentinel-a:26379,sentinel-b:26379,sentinel-c:26379?master_name=gptload
+      # Distributed mode refuses to start without these. Both instances must
+      # carry the identical ENCRYPTION_KEY or one of them cannot read the
+      # credentials the other wrote. Replace both before any real use.
+      AUTH_KEY: ${AUTH_KEY:?set AUTH_KEY before starting the distributed stack}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY before starting the distributed stack}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      sentinel-a:
+        condition: service_healthy
+    restart: always
+    stop_grace_period: ${CONTAINER_STOP_GRACE_PERIOD:-15s}
+    ports:
+      - "127.0.0.1:3001:3001"
+    healthcheck:
+      test: wget -q --spider -T 10 -O /dev/null http://localhost:3001/health
+      interval: 10s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  gateway-b:
+    <<: *gateway
+    ports:
+      - "127.0.0.1:3002:3001"
+
+volumes:
+  distributed-postgres:
+  distributed-redis-master:
+  distributed-redis-replica:

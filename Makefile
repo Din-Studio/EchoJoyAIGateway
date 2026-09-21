@@ -29,6 +29,18 @@ build: _web-build ## Build the Web UI and application binary
 test: ## Run Go unit tests
 	$(GO) test -count=1 . ./internal/...
 
+# REDIS_TEST_DSN points the opt-in cross-instance suite at a live Redis. The
+# suite skips without it, which is what keeps `make test` hermetic.
+REDIS_TEST_DSN ?= redis://127.0.0.1:16379/0
+
+.PHONY: test-distributed
+test-distributed: ## Run the cross-instance tests against a live Redis
+	docker run --rm -d --name gpt-load-redis-test -p 16379:6379 redis:7-alpine >/dev/null
+	@trap 'docker rm -f gpt-load-redis-test >/dev/null' EXIT; \
+	GPT_LOAD_REDIS_TEST_DSN=$(REDIS_TEST_DSN) \
+	$(GO) test -count=1 -run '^TestExternalRedis' \
+		./internal/coordination ./internal/control ./internal/gateway
+
 .PHONY: check
 check: _web-deps ## Run source checks and build
 	@go_root="$$($(GO) env GOROOT)"; formatted_files="$$("$${go_root}/bin/gofmt" -l .)"; test -z "$${formatted_files}"

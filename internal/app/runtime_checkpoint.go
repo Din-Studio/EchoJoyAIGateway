@@ -21,6 +21,15 @@ type RuntimeStateCheckpoint interface {
 	Save(context.Context) error
 }
 
+// NoRuntimeStateCheckpoint keeps nothing between runs. It is what distributed
+// mode uses: the state worth carrying across a restart is shared state, and a
+// file that also carried it would be a second, stale source for it.
+type NoRuntimeStateCheckpoint struct{}
+
+func (NoRuntimeStateCheckpoint) Restore(ctx context.Context) error { return contextError(ctx) }
+
+func (NoRuntimeStateCheckpoint) Save(ctx context.Context) error { return contextError(ctx) }
+
 type runtimeStateCheckpointDocument struct {
 	Credentials []state.CredentialRuntimeCheckpoint `json:"credentials,omitempty"`
 	Stats       []health.StatsRuntimeCheckpoint     `json:"stats,omitempty"`

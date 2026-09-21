@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -45,13 +46,16 @@ func TestResponseBindingStoreFollowsTheInstanceMode(t *testing.T) {
 
 // Distributed mode keeps ownership in Redis, so the restart checkpoint must
 // stop carrying it rather than persist an index nobody reads.
-func TestRuntimeStateCheckpointCarriesOwnershipOnlyWhenThisProcessOwnsIt(t *testing.T) {
+// Distributed mode keeps nothing on disk: credential health and response
+// ownership are shared, and a file restoring either of them at startup would
+// overwrite what the fleet already agreed on with what this process last saw.
+func TestRuntimeStateCheckpointWritesNothingInDistributedMode(t *testing.T) {
 	for name, test := range map[string]struct {
-		mode      config.InstanceMode
-		wantSaved bool
+		mode           config.InstanceMode
+		wantCheckpoint bool
 	}{
-		"single":      {mode: config.InstanceModeSingle, wantSaved: true},
-		"distributed": {mode: config.InstanceModeDistributed, wantSaved: false},
+		"single":      {mode: config.InstanceModeSingle, wantCheckpoint: true},
+		"distributed": {mode: config.InstanceModeDistributed, wantCheckpoint: false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dataDir := t.TempDir()
@@ -68,6 +72,16 @@ func TestRuntimeStateCheckpointCarriesOwnershipOnlyWhenThisProcessOwnsIt(t *test
 			}
 
 			raw, err := os.ReadFile(filepath.Join(dataDir, "runtime-state.checkpoint.json"))
+			if !test.wantCheckpoint {
+				if !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("read checkpoint = (%s, %v), want no file at all", raw, err)
+				}
+				// Restoring must be just as silent, not a missing-file error.
+				if err := checkpoint.Restore(context.Background()); err != nil {
+					t.Fatalf("Restore() error = %v", err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("read checkpoint: %v", err)
 			}
@@ -77,8 +91,8 @@ func TestRuntimeStateCheckpointCarriesOwnershipOnlyWhenThisProcessOwnsIt(t *test
 			if err := json.Unmarshal(raw, &document); err != nil {
 				t.Fatalf("decode checkpoint: %v", err)
 			}
-			if saved := len(document.Responses) > 0; saved != test.wantSaved {
-				t.Fatalf("checkpoint carried ownership = %t, want %t; file = %s", saved, test.wantSaved, raw)
+			if len(document.Responses) == 0 {
+				t.Fatalf("checkpoint carried no ownership; file = %s", raw)
 			}
 		})
 	}

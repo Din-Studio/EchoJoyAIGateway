@@ -502,6 +502,10 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 	}
 	limitDecision := handler.limiter.Allow(accessKey.ID, accessKey.RPMLimit)
 	if !limitDecision.Allowed {
+		if limitDecision.Unavailable {
+			handler.completeReason(ginContext, recorder, reasonCoordinationUnavailable)
+			return
+		}
 		ginContext.Writer.Header().Set(
 			"Retry-After",
 			strconv.Itoa(retryAfterSeconds(limitDecision.RetryAfter)),

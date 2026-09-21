@@ -76,6 +76,11 @@ type Decision struct {
 	Recoverable       bool
 	NextAvailableAtMS *int64
 	BlockingRules     []RuleView
+	// Unavailable marks a refusal the runtime could not decide rather than one
+	// it decided against. Only a shared ledger can produce it, and the caller
+	// has to be able to tell it apart from an exhausted budget so it reports a
+	// coordination outage instead of telling the client it is out of money.
+	Unavailable bool
 }
 
 type View struct {
@@ -107,6 +112,7 @@ type Runtime struct {
 	restored       map[uint]RestoredState
 	restorePending bool
 	dirtyNotifier  func()
+	shared         SharedLedger
 
 	overflowFaultTotal atomic.Uint64
 }
@@ -238,6 +244,9 @@ func (runtime *Runtime) Check(accessKeyID uint, now time.Time) Decision {
 }
 
 func (runtime *Runtime) Admit(accessKeyID uint, now time.Time) (Ticket, Decision) {
+	if ledger := runtime.sharedLedger(); ledger != nil {
+		return runtime.admitShared(ledger, accessKeyID, now)
+	}
 	entry := runtime.lockEntry(accessKeyID)
 	if entry == nil {
 		return Ticket{AccessKeyID: accessKeyID}, allowedDecision()
@@ -266,13 +275,7 @@ func (runtime *Runtime) Admit(accessKeyID uint, now time.Time) (Ticket, Decision
 		dirty = true
 	}
 
-	ticket := Ticket{AccessKeyID: accessKeyID, Rules: make([]TicketRule, 0, len(entry.rules))}
-	for _, rule := range entry.rules {
-		ticket.Rules = append(ticket.Rules, TicketRule{
-			RuleID: rule.definition.ID, RuleRevision: rule.definition.Revision,
-			WindowGeneration: rule.windowGeneration,
-		})
-	}
+	ticket := Ticket{AccessKeyID: accessKeyID, Rules: ticketRulesLocked(entry)}
 	entry.mu.Unlock()
 	if dirty {
 		runtime.notifyDirty()
@@ -283,6 +286,9 @@ func (runtime *Runtime) Admit(accessKeyID uint, now time.Time) (Ticket, Decision
 func (runtime *Runtime) Complete(ticket Ticket, costNanoUSD int64) CompletionResult {
 	if runtime == nil || ticket.AccessKeyID == 0 || len(ticket.Rules) == 0 {
 		return CompletionResult{}
+	}
+	if ledger := runtime.sharedLedger(); ledger != nil {
+		return runtime.completeShared(ledger, ticket, costNanoUSD)
 	}
 	entry := runtime.lockEntry(ticket.AccessKeyID)
 	if entry == nil {
@@ -333,6 +339,11 @@ func (runtime *Runtime) Complete(ticket Ticket, costNanoUSD int64) CompletionRes
 
 func (runtime *Runtime) Snapshot(accessKeyID uint, now time.Time) View {
 	view := View{ObservedAtMS: now.UnixMilli(), Allowed: true, Recoverable: true, Rules: []RuleView{}}
+	// The management plane reports money, so it reads the shared counter
+	// rather than whatever this instance last happened to charge. A failure
+	// falls back to the local value: a stale number is a better answer for a
+	// display than no answer, and admission is gated elsewhere.
+	runtime.syncSharedForDisplay(accessKeyID, now)
 	entry := runtime.lockEntry(accessKeyID)
 	if entry == nil {
 		return view

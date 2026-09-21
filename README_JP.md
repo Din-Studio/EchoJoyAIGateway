@@ -184,6 +184,52 @@ docker compose stop         # サービスを停止
 公式 Compose は `ghcr.io/tbphp/gpt-load:2` を使用します。GA 前の `2` は検証済みの 2.0 Beta / RC を追跡し、GA 後は安定版 2.x のみを追跡します。イメージの完全なタグからは Git tag の `v` 接頭辞を除き（例：`2.0.0-beta.25`）、`2.0-beta` は 2.0 Beta チャネルとして残します。`latest` は引き続き 1.x を指します。
 
 <details>
+<summary>複数インスタンスで動かす（分散モード）</summary>
+
+`REDIS_DSN` を設定するとインスタンスは分散モードに切り替わり、同じ Redis を指す
+他のすべてのインスタンスとランタイム状態を共有します。設定しなければ挙動は
+従来どおりで、状態はそのインスタンスだけのものです。
+
+分散モードは、共有できない構成のままでは起動を拒否し、不足している箇所を示します。
+
+- `DATABASE_DSN` は MySQL または PostgreSQL の URL である必要があります。SQLite ファイルは共有できません。
+- `AUTH_KEY` と `ENCRYPTION_KEY` は明示的に設定し、すべてのインスタンスで**同一**である
+  必要があります。インスタンスごとに生成された鍵では、他のインスタンスが書き込んだ
+  認証情報を読めません。
+
+```text
+REDIS_DSN=redis://redis.example:6379/0
+REDIS_DSN=rediss://user:password@redis.example:6379/0
+REDIS_DSN=redis://sentinel-a:26379,sentinel-b:26379,sentinel-c:26379?master_name=gptload
+```
+
+`master_name` クエリパラメータがあれば Redis Sentinel を、なければ単一ノードを使います。
+Redis Cluster には対応していません。
+
+共有されるもの：任意のインスタンスの管理画面で行った設定変更、AccessKey の RPM 制限と
+コスト上限、認証情報のクールダウン・ブラックリスト・モデルクールダウン、
+`previous_response_id` の帰属、そして定期バックグラウンド処理（クラスタ全体で
+1 周期あたり 1 回だけ実行されます）。
+
+インスタンスごとに残るもの：確立済みの WebSocket 接続と、認証情報間にトラフィックを
+配分するスケジューリング台帳。前段にロードバランサーを置き、接続単位で固定してください。
+インスタンスが落ちると進行中のストリームだけが失われ、クライアントは再接続します。
+
+Redis に到達できない場合、共有判定を必要とするデータプレーンのリクエストは
+`503` と `error.code=coordination_unavailable` を返し、上限が不明なまま通すことはしません。
+`/health` と管理 API は利用可能なままなので、障害は可視化され対処できます。
+
+[`docker-compose.distributed.yml`](docker-compose.distributed.yml) は、ゲートウェイ 2 台、
+PostgreSQL、Redis のマスター・レプリカとセンチネル 3 台からなる構成一式をそのまま起動できます。
+
+```bash
+AUTH_KEY=change-me ENCRYPTION_KEY=change-me-too \
+  docker compose -f docker-compose.distributed.yml up -d --build
+```
+
+</details>
+
+<details>
 <summary>ネイティブバイナリを使う</summary>
 
 [GitHub Releases](https://github.com/tbphp/gpt-load/releases) からプラットフォームに合ったファイルをダウンロードし、同梱の `SHA256SUMS` で検証してから使用してください：
@@ -223,6 +269,7 @@ Windows の一般ユーザーは代わりに `gpt-load-windows-setup.exe` を利
 | `DATABASE_DSN` | 空、`${DATA_DIR}/gpt-load.db` を使用 | 空の場合はアプリケーション管理の SQLite を使用します。空でない場合は SQLite のパスまたは URL、MySQL URL、PostgreSQL URL に対応し、運用者管理の外部データベースとして扱います。コンテナ内のファイルパスはマウント済みディレクトリ内である必要があります。 |
 | `DATABASE_MAX_OPEN_CONNECTIONS` | `10` | MySQL と PostgreSQL の最大オープン接続数。正の整数である必要があります。SQLite は常に単一接続を使用します。 |
 | `DATABASE_MAX_IDLE_CONNECTIONS` | `5` | MySQL と PostgreSQL の最大アイドル接続数。正の整数かつ `DATABASE_MAX_OPEN_CONNECTIONS` 以下である必要があります。SQLite は常に単一接続を使用します。 |
+| `REDIS_DSN` | 空、単一インスタンス | 非空にすると分散モードが有効になり、同じ Redis 上のすべてのインスタンスとランタイム状態を共有します。`redis://` と `rediss://` に対応し、`master_name` クエリパラメータで Redis Sentinel を選択します。MySQL または PostgreSQL の `DATABASE_DSN` と、明示的かつ同一の `AUTH_KEY`・`ENCRYPTION_KEY` が必要です。Redis Cluster には対応していません。 |
 | `AUTH_KEY` | 空、`${DATA_DIR}/auth.key` を読み込むか生成 | 管理画面と `/api` 管理 API の Bearer キー。データプレーンの AccessKey とは異なります。 |
 | `ENCRYPTION_KEY` | 空、`${DATA_DIR}/encryption.key` を読み込むか生成 | チャネル認証情報を暗号化します。変更または紛失すると既存の認証情報を復号できないため、データベースと一緒にバックアップしてください。 |
 | `HTTP_PROXY` | 空 | HTTP アップストリームリクエストの環境プロキシ。 |
@@ -240,11 +287,11 @@ Windows の一般ユーザーは代わりに `gpt-load-windows-setup.exe` を利
 
 - 既定では `127.0.0.1` のみを待ち受けます。リモートアクセスが必要な場合は、管理されたネットワークまたは TLS 対応のリバースプロキシ経由で公開し、ACL とファイアウォールを設定してください。
 - `AUTH_KEY` と `ENCRYPTION_KEY` は厳重に管理し、実際のキーをリポジトリ、ログ、スクリーンショット、公開 Issue に含めないでください。
-- 2.0 は**単一アプリケーションインスタンス**を前提に設計されています。インスタンス間で状態を共有しないため、そのままの水平スケールには対応していません。
+- `REDIS_DSN` を設定しない場合、ランタイム状態はそのインスタンスだけのものになるため、1 台だけで運用してください。水平スケールには分散モードが必要です。共有 Redis、共有の MySQL または PostgreSQL、そしてすべてのインスタンスで同一の `AUTH_KEY` と `ENCRYPTION_KEY` を用意してください。
 - 使用量とコストはアップストリームの応答に基づく**概算**です。運用分析やリソース評価には使えますが、プロバイダーの請求書や会計上の照合結果とは一致しません。
 - サブスクリプションチャネルはアップストリームの OAuth と互換プロトコルに依存し、アップストリームの変更に伴って調整が必要になる場合があります。利用権限のあるアカウントのみを接続し、各プロバイダーの規約に従ってください。
 - Responses の `previous_response_id` による継続は、ネイティブ Responses と上流での状態管理を宣言した経路に自動で適用されます。現在は `openai`、`gpt_load`、`xai`、`newapi`、`cliproxyapi`、`sub2api` が該当します。帰属を AccessKey ごとに分離し、現在のルーティングで許可される元の認証情報へ固定します。ソフトアフィニティ設定には依存せず、状態が実際に利用できるかは上流に依存します。ステートレス応答と変換された応答は登録せず、Codex サブスクリプションの WebSocket 継続はまだ接続していません。アップグレード前やゲートウェイ外で作成されたものを含め、不明な ID は拒否されます。Group のパラメータ上書きでこのフィールドを変更することはできません。
-- 応答の帰属はメモリに最大 30 日間保持され、上限は 100,000 件および ID テキスト合計 16 MiB です。容量に達すると古い記録を削除します。通常終了時に checkpoint の保存が成功すれば、同じデータディレクトリから復元できます。クラッシュからの復元や、アップストリームの履歴が引き続き有効であることは保証しません。
+- 応答の帰属はメモリに最大 30 日間保持され、上限は 100,000 件および ID テキスト合計 16 MiB です。容量に達すると古い記録を削除します。通常終了時に checkpoint の保存が成功すれば、同じデータディレクトリから復元できます。クラッシュからの復元や、アップストリームの履歴が引き続き有効であることは保証しません。分散モードでは帰属を Redis に保存するため、継続リクエストがどのインスタンスに届いても元の認証情報に戻り、checkpoint ファイルは書き出しません。
 - `conversation` とその他の既存リソース ID はこの帰属ルーティングの対象外であり、単一の認証情報またはアップストリームでの認証情報間のリソース共有が引き続き必要です。
 
 ## 1.x からの移行

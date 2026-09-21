@@ -33,7 +33,8 @@ func (handler *Handler) admitAutoQuota(snapshot *state.ConfigSnapshot, admission
 		return &reasonConfigurationChanged
 	}
 	if !decision.Allowed {
-		return &reasonAccessKeyCostLimitExceeded
+		value := accessQuotaReason(decision)
+		return &value
 	}
 	admission.admitted = true
 	return nil

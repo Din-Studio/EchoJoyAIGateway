@@ -2,6 +2,7 @@ package coordination
 
 import (
 	"context"
+	"crypto/rand"
 	"slices"
 	"strings"
 	"testing"
@@ -79,5 +80,28 @@ func TestParseDSNSelectsTopologyFromMasterName(t *testing.T) {
 	if standalone.standalone.Addr != "127.0.0.1:6379" || standalone.standalone.DB != 3 {
 		t.Fatalf("standalone options = %q/%d, want 127.0.0.1:6379 db 3",
 			standalone.standalone.Addr, standalone.standalone.DB)
+	}
+}
+
+func TestInstanceIdentityIsRandomHex(t *testing.T) {
+	first, err := newIdentity(rand.Reader)
+	if err != nil {
+		t.Fatalf("newIdentity() error = %v", err)
+	}
+	if len(first) != 32 || strings.Trim(first, "0123456789abcdef") != "" {
+		t.Fatalf("holder = %q, want 32 lowercase hex characters", first)
+	}
+	second, err := newIdentity(rand.Reader)
+	if err != nil {
+		t.Fatalf("newIdentity() error = %v", err)
+	}
+	if first == second {
+		t.Fatal("two lease holders share an identity; instances would be indistinguishable")
+	}
+}
+
+func TestInstanceIdentityFailsWithoutRandomness(t *testing.T) {
+	if _, err := newIdentity(strings.NewReader("too short")); err == nil {
+		t.Fatal("newIdentity() error = nil, want a failure for an exhausted random source")
 	}
 }

@@ -1,8 +1,6 @@
 package coordination
 
 import (
-	"crypto/rand"
-	"strings"
 	"testing"
 )
 
@@ -18,28 +16,5 @@ func TestLeaseKeyNamesAreStable(t *testing.T) {
 		if got := leaseKey(task); got != want {
 			t.Errorf("leaseKey(%q) = %q, want %q", task, got, want)
 		}
-	}
-}
-
-func TestLeaseHolderIsRandomHex(t *testing.T) {
-	first, err := newLeaseHolder(rand.Reader)
-	if err != nil {
-		t.Fatalf("newLeaseHolder() error = %v", err)
-	}
-	if len(first) != 32 || strings.Trim(first, "0123456789abcdef") != "" {
-		t.Fatalf("holder = %q, want 32 lowercase hex characters", first)
-	}
-	second, err := newLeaseHolder(rand.Reader)
-	if err != nil {
-		t.Fatalf("newLeaseHolder() error = %v", err)
-	}
-	if first == second {
-		t.Fatal("two lease holders share an identity; instances would be indistinguishable")
-	}
-}
-
-func TestLeaseHolderFailsWithoutRandomness(t *testing.T) {
-	if _, err := newLeaseHolder(strings.NewReader("too short")); err == nil {
-		t.Fatal("newLeaseHolder() error = nil, want a failure for an exhausted random source")
 	}
 }

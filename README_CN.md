@@ -184,6 +184,47 @@ docker compose stop         # 停止服务
 官方 Compose 使用 `ghcr.io/tbphp/gpt-load:2`。GA 前，`2` 跟随已验证的 2.0 Beta 和 RC；GA 后只跟随稳定的 2.x。镜像精确标签会去掉 Git tag 的 `v` 前缀（例如 `2.0.0-beta.25`），`2.0-beta` 则保留为 2.0 Beta 通道；`latest` 继续留在 1.x。
 
 <details>
+<summary>运行多个实例（分布式模式）</summary>
+
+设置 `REDIS_DSN` 即把实例切换为分布式模式：它会与指向同一个 Redis 的其他实例
+共享运行态。不设置时行为完全不变，实例的状态只属于它自己。
+
+分布式模式在部署本身无法共享时拒绝启动，并说明缺的是哪一项：
+
+- `DATABASE_DSN` 必须是 MySQL 或 PostgreSQL URL，SQLite 文件无法共享。
+- `AUTH_KEY` 与 `ENCRYPTION_KEY` 必须显式设置，且每个实例**完全一致**。各自生成
+  的密钥会让实例读不出其他实例写入的凭据。
+
+```text
+REDIS_DSN=redis://redis.example:6379/0
+REDIS_DSN=rediss://user:password@redis.example:6379/0
+REDIS_DSN=redis://sentinel-a:26379,sentinel-b:26379,sentinel-c:26379?master_name=gptload
+```
+
+带 `master_name` 查询参数即走 Redis Sentinel；不带则按单节点处理。不支持 Redis Cluster。
+
+共享的部分：任一实例管理面做出的配置变更、AccessKey 的 RPM 限流与成本额度、凭据
+冷却/拉黑/模型冷却、`previous_response_id` 的归属，以及后台周期任务——每个周期
+全集群只执行一次，而不是每实例一次。
+
+仍属于单实例的部分：已建立的 WebSocket 连接，以及在凭据之间分摊流量的调度账本。
+前面放负载均衡器并保持连接级粘性即可；实例下线只损失它正在处理的流，客户端重连。
+
+Redis 不可达时，需要共享判定的数据面请求会返回 `503` 与
+`error.code=coordination_unavailable`，而不是在限额未知的情况下放行。`/health`
+与管理接口仍然可用，故障因此可见也可处理。
+
+[`docker-compose.distributed.yml`](docker-compose.distributed.yml) 提供可直接运行的
+完整拓扑——两个网关、PostgreSQL，以及一主一从加三个哨兵的 Redis：
+
+```bash
+AUTH_KEY=change-me ENCRYPTION_KEY=change-me-too \
+  docker compose -f docker-compose.distributed.yml up -d --build
+```
+
+</details>
+
+<details>
 <summary>使用原生二进制</summary>
 
 从 [GitHub Releases](https://github.com/tbphp/gpt-load/releases) 下载对应平台的文件，建议先用随附的 `SHA256SUMS` 校验：
@@ -223,6 +264,7 @@ Windows 普通用户可改为下载 `gpt-load-windows-setup.exe`。双击并确�
 | `DATABASE_DSN`                  | 空，使用 `${DATA_DIR}/gpt-load.db`          | 空值使用应用托管的 SQLite；非空值支持 SQLite 路径或 URL、MySQL URL、PostgreSQL URL，并视为运维方管理的外部数据库。容器内文件路径必须位于已挂载目录。     |
 | `DATABASE_MAX_OPEN_CONNECTIONS` | `10`                                        | MySQL 和 PostgreSQL 的最大打开连接数，必须为正整数；SQLite 始终使用单连接。                                                                              |
 | `DATABASE_MAX_IDLE_CONNECTIONS` | `5`                                         | MySQL 和 PostgreSQL 的最大空闲连接数，必须为正整数且不大于 `DATABASE_MAX_OPEN_CONNECTIONS`；SQLite 始终使用单连接。                                      |
+| `REDIS_DSN`                     | 空，单实例                                  | 非空即开启分布式模式，运行态与同一 Redis 上的所有实例共享。支持 `redis://` 与 `rediss://`；带 `master_name` 查询参数即走 Redis Sentinel。要求 `DATABASE_DSN` 为 MySQL 或 PostgreSQL，且显式设置一致的 `AUTH_KEY` 与 `ENCRYPTION_KEY`。不支持 Redis Cluster。 |
 | `AUTH_KEY`                      | 空，读取或生成 `${DATA_DIR}/auth.key`       | 管理界面和 `/api` 管理接口的 Bearer 密钥，不是数据面 AccessKey。                                                                                         |
 | `ENCRYPTION_KEY`                | 空，读取或生成 `${DATA_DIR}/encryption.key` | 用于加密渠道凭据；更换或丢失后无法解密已有凭据，必须与数据库一起备份。                                                                                   |
 | `HTTP_PROXY`                    | 空                                          | HTTP 上游请求的环境代理。                                                                                                                                |
@@ -240,14 +282,14 @@ Windows 普通用户可改为下载 `gpt-load-windows-setup.exe`。双击并确�
 
 - 默认只监听 `127.0.0.1`。需要远程访问时，应通过受控网络或带 TLS 的反向代理暴露，并配置 ACL 与防火墙。
 - 妥善管理 `AUTH_KEY` 与 `ENCRYPTION_KEY`，不要把真实密钥提交到仓库、日志、截图或公开 Issue。
-- 2.0 按**单应用实例**设计，多个实例之间不共享状态，不支持直接横向扩容。
+- 不设置 `REDIS_DSN` 时，实例的运行态只属于自己，只能部署一个。横向扩容需要分布式模式：共享 Redis、共享 MySQL 或 PostgreSQL，以及每个实例相同的 `AUTH_KEY` 与 `ENCRYPTION_KEY`。
 - 用量与成本是基于上游返回数据的**估算**，用于运行分析和资源评估，不等同于服务商账单或财务对账结果。
 - 订阅渠道依赖上游 OAuth 与兼容协议，可能随上游变化调整。请只接入自己有权使用的账号，并遵守对应服务商条款。
 - HTTP Responses 的 `previous_response_id` 续接按协议及现有存储能力自动接入：原生 Responses 且声明由上游管理状态的渠道目前包括 `openai`、`gpt_load`、`xai`、`newapi`、`cliproxyapi`、`sub2api`。按 AccessKey 隔离归属，在当前路由允许时固定原凭据，不受软亲和开关影响；实际状态可用性由上游决定。无状态及转换响应不登记为持久状态。未知 ID（包括升级前或网关外创建的 ID）直接拒绝；Group 参数覆盖不能改写该字段。
 - 原生 Responses WebSocket 使用同端口 `GET /v1/responses`，按渠道声明的实际能力准入，支持 OpenAI、xAI、Codex 及符合原生合同的 CPA/sub2api、GPT-Load 端点。兼容客户端携带布尔参数 `stream:true/false`，两者均按 WS 事件流返回。每轮独立检查权限、限流、额度与当前路由，并记录用量及成本。同一连接固定上游身份；不回退 HTTP、不缓存或重放聊天历史。
 - `responses_websocket_enabled` 默认开启，分组显式设置优先于全局，未覆盖时继承全局。关闭会立即断开受影响的 WS 连接并中断生成；HTTP/SSE 不受影响。重新开启不会恢复旧连接的临时状态。
 - 完整 `stream_id` 多流与分叉用于 OpenAI 和满足端到端条件的 GPT-Load 级联；其余上述渠道串行执行并明确拒绝命名流。预热实际发送 `generate:false`。Codex 只支持原连接内续接，不能使用 `store:true` 或凭旧 ID 跨连接恢复；其他渠道的持久续接仍取决于存储能力与有效归属。[Codex SDK 的代理、读取和关闭边界](third_party/cpaembedded/README.md#codex-websocket-session)继续适用。
-- 响应归属保存在内存中，默认保留 30 天，最多 100,000 条，ID 文本合计最多 16 MiB，达到容量时淘汰旧记录。正常停机成功保存 checkpoint 后可在同一数据目录恢复；不保证崩溃恢复或上游历史仍有效。
+- 响应归属保存在内存中，默认保留 30 天，最多 100,000 条，ID 文本合计最多 16 MiB，达到容量时淘汰旧记录。正常停机成功保存 checkpoint 后可在同一数据目录恢复；不保证崩溃恢复或上游历史仍有效。分布式模式下归属改存 Redis，续接请求落到任一实例都能找回原凭据，也不再写 checkpoint 文件。
 - `conversation` 与其他既有资源 ID 不在上述归属路由范围内，仍依赖单凭据或上游跨凭据共享资源。
 
 ## 从 1.x 切换

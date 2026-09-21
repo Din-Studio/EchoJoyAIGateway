@@ -184,6 +184,57 @@ docker compose stop         # stop the service
 The official Compose file uses `ghcr.io/tbphp/gpt-load:2`. Before GA, `2` tracks verified 2.0 Beta and RC releases; after GA, it tracks stable 2.x releases only. Exact image tags omit the Git tag's `v` prefix (for example, `2.0.0-beta.25`), while `2.0-beta` remains the 2.0 Beta channel. `latest` remains on 1.x.
 
 <details>
+<summary>Running several instances (distributed mode)</summary>
+
+Setting `REDIS_DSN` switches an instance into distributed mode, where it shares
+its runtime state with every other instance pointed at the same Redis. Without
+it, nothing changes and the instance keeps all state to itself.
+
+Distributed mode refuses to start unless the rest of the deployment can
+actually be shared, and says which part is missing:
+
+- `DATABASE_DSN` must be a MySQL or PostgreSQL URL. A SQLite file cannot be shared.
+- `AUTH_KEY` and `ENCRYPTION_KEY` must be set explicitly, and must be **identical**
+  on every instance. Generated per-instance keys would leave each instance unable
+  to read the credentials the others wrote.
+
+```text
+REDIS_DSN=redis://redis.example:6379/0
+REDIS_DSN=rediss://user:password@redis.example:6379/0
+REDIS_DSN=redis://sentinel-a:26379,sentinel-b:26379,sentinel-c:26379?master_name=gptload
+```
+
+A `master_name` query parameter selects Redis Sentinel; without it the DSN is a
+single node. Redis Cluster is not supported.
+
+What becomes shared: configuration changes made through any instance's
+management plane, access key RPM limits and cost budgets, credential cooldowns,
+blacklisting and model cooldowns, `previous_response_id` ownership, and the
+periodic background sweeps, which run once per period across the fleet rather
+than once per instance.
+
+What stays per instance: open WebSocket connections and the scheduling ledger
+that spreads traffic across credentials. Put a load balancer in front and keep
+it sticky at the connection level; an instance going away costs its in-flight
+streams, and clients reconnect.
+
+If Redis becomes unreachable, data-plane requests that need a shared decision
+are refused with `503` and `error.code=coordination_unavailable` rather than
+being admitted against unknown limits. `/health` and the management API stay
+available so the outage is visible and fixable.
+
+[`docker-compose.distributed.yml`](docker-compose.distributed.yml) brings up the
+whole topology — two gateways, PostgreSQL, and a Redis master, replica and three
+sentinels — as a working reference:
+
+```bash
+AUTH_KEY=change-me ENCRYPTION_KEY=change-me-too \
+  docker compose -f docker-compose.distributed.yml up -d --build
+```
+
+</details>
+
+<details>
 <summary>Using a native binary</summary>
 
 Download the build for your platform from [GitHub Releases](https://github.com/tbphp/gpt-load/releases), and verify it against the bundled `SHA256SUMS` first:
@@ -223,6 +274,7 @@ At startup, the application reads `.env` in the current directory; existing proc
 | `DATABASE_DSN` | Empty, uses `${DATA_DIR}/gpt-load.db` | Empty uses application-managed SQLite; non-empty values support SQLite paths or URLs, MySQL URLs, and PostgreSQL URLs, and are treated as operator-managed external databases. Container file paths must be inside a mounted directory. |
 | `DATABASE_MAX_OPEN_CONNECTIONS` | `10` | Maximum open connections for MySQL and PostgreSQL, positive integer. SQLite always uses one connection. |
 | `DATABASE_MAX_IDLE_CONNECTIONS` | `5` | Maximum idle connections for MySQL and PostgreSQL, positive integer and no greater than `DATABASE_MAX_OPEN_CONNECTIONS`. SQLite always uses one connection. |
+| `REDIS_DSN` | Empty, single instance | Non-empty turns on distributed mode and makes runtime state shared with every instance on the same Redis. Accepts `redis://` and `rediss://`; a `master_name` query parameter selects Redis Sentinel. Requires a MySQL or PostgreSQL `DATABASE_DSN` and explicit, identical `AUTH_KEY` and `ENCRYPTION_KEY`. Redis Cluster is not supported. |
 | `AUTH_KEY` | Empty, reads or generates `${DATA_DIR}/auth.key` | Bearer key for the management UI and `/api` management API, not a data-plane AccessKey. |
 | `ENCRYPTION_KEY` | Empty, reads or generates `${DATA_DIR}/encryption.key` | Encrypts channel credentials; changing or losing it makes existing credentials undecryptable, so back it up with the database. |
 | `HTTP_PROXY` | Empty | Environment proxy for HTTP upstream requests. |
@@ -240,14 +292,14 @@ Environment proxies apply only when no proxy is specified on the credential, gro
 
 - The service listens on `127.0.0.1` only by default. For remote access, expose it through a controlled network or a TLS reverse proxy, and configure ACLs and firewall rules.
 - Manage `AUTH_KEY` and `ENCRYPTION_KEY` carefully. Never commit real keys to a repository, log, screenshot, or public issue.
-- 2.0 is designed for a **single application instance**. Instances do not share state, so horizontal scaling is not supported.
+- Without `REDIS_DSN`, an instance keeps all runtime state to itself, so run exactly one. Horizontal scaling requires distributed mode: a shared Redis, a shared MySQL or PostgreSQL database, and the same `AUTH_KEY` and `ENCRYPTION_KEY` on every instance.
 - Usage and cost are **estimates** derived from upstream responses. They support operational analysis and capacity planning, and do not equal a provider invoice or a financial reconciliation.
 - Subscription channels depend on upstream OAuth and compatibility protocols and may change as upstreams change. Only connect accounts you are entitled to use, and follow each provider's terms.
 - HTTP Responses continuation with `previous_response_id` automatically uses native Responses routes that declare upstream-managed storage: currently `openai`, `gpt_load`, `xai`, `newapi`, `cliproxyapi`, and `sub2api`. Ownership is isolated by AccessKey and pins the original credential when current routing permits, independently of soft affinity; actual state availability depends on the upstream. Stateless and converted responses are not registered as persistent state. Unknown IDs, including IDs created before upgrading or outside this gateway, are rejected. Group parameter overrides cannot change this field.
 - Native Responses WebSocket uses `GET /v1/responses` on the same port. Admission follows declared upstream capabilities for OpenAI, xAI, Codex, and compatible native CPA/sub2api and GPT-Load endpoints. Clients may include the boolean `stream:true/false`; both values still use the WS event stream. Each turn checks current permissions, rate and cost limits, and routing, with separate usage and cost records. One connection keeps one upstream identity; there is no HTTP fallback or conversation-history replay.
 - `responses_websocket_enabled` defaults to enabled. An explicit group setting overrides the global value; otherwise the group inherits it. Disabling immediately closes affected WS connections and interrupts generation without affecting HTTP/SSE. Re-enabling does not restore the old connection's temporary state.
 - Full `stream_id` multiplexing and forks are enabled for OpenAI and GPT-Load cascades that support them end to end. The other channels above run serially and reject named streams. Prewarming sends `generate:false` upstream. Codex continuation requires the original live connection: `store:true` and restoration by an old ID on a new connection are unsupported. Persistent continuation on other channels depends on storage capabilities and valid ownership. Existing [Codex SDK proxy, reading, and shutdown limits](third_party/cpaembedded/README.md#codex-websocket-session) still apply.
-- Response bindings stay in memory for up to 30 days, with limits of 100,000 entries and 16 MiB of ID text; older entries are evicted when capacity is reached. A successful checkpoint during normal shutdown allows restoration from the same data directory. Crash recovery and continued upstream state availability are not guaranteed.
+- Response bindings stay in memory for up to 30 days, with limits of 100,000 entries and 16 MiB of ID text; older entries are evicted when capacity is reached. A successful checkpoint during normal shutdown allows restoration from the same data directory. Crash recovery and continued upstream state availability are not guaranteed. In distributed mode the bindings live in Redis instead, so a continuation reaches its original credential from any instance and no checkpoint file is written.
 - `conversation` and other existing resource IDs are outside this ownership routing scope and still depend on a single credential or upstream resource sharing across credentials.
 
 ## Moving from 1.x

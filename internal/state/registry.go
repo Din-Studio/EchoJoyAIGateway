@@ -76,6 +76,10 @@ type CredentialRegistry struct {
 	mu               sync.RWMutex
 	buckets          map[uint]map[uint]*CredentialEntry
 	credentialGroups map[uint]uint
+	// healthDirty and healthNotifier carry locally decided health out to the
+	// other instances. The notifier stays nil when this instance has no peers.
+	healthDirty    map[uint]struct{}
+	healthNotifier func()
 }
 
 func NewCredentialRegistry() *CredentialRegistry {
@@ -842,6 +846,7 @@ func (r *CredentialRegistry) ClearCooldownIfMatch(credentialID uint, expected ti
 		return false
 	}
 	entry.CooldownUntil = time.Time{}
+	r.markHealthDirtyLocked(credentialID)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true
 }
@@ -857,6 +862,7 @@ func (r *CredentialRegistry) SetCooldownWithChange(credentialID uint, until time
 		return true, false
 	}
 	entry.CooldownUntil = until
+	r.markHealthDirtyLocked(credentialID)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true, true
 }
@@ -878,6 +884,7 @@ func (r *CredentialRegistry) SetCooldownWithChangeIfVersion(
 		return true, false
 	}
 	entry.CooldownUntil = until
+	r.markHealthDirtyLocked(credentialID)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true, true
 }
@@ -894,6 +901,7 @@ func (r *CredentialRegistry) SetBlacklistedWithChange(credentialID uint) (bool, 
 	}
 	entry.Blacklisted = true
 	entry.FailureGeneration++
+	r.markHealthDirtyLocked(credentialID)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true, true
 }
@@ -909,6 +917,7 @@ func (r *CredentialRegistry) RestoreRuntimeState(credentialID uint) bool {
 	entry.Blacklisted = false
 	entry.FailureCount = 0
 	entry.FailureGeneration++
+	r.markHealthDirtyLocked(credentialID)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true
 }
@@ -927,6 +936,7 @@ func (r *CredentialRegistry) IncrFailure(credentialID uint) (int, bool) {
 	}
 	entry.FailureCount++
 	entry.FailureGeneration++
+	r.markHealthDirtyLocked(credentialID)
 	return entry.FailureCount, true
 }
 
@@ -940,6 +950,7 @@ func (r *CredentialRegistry) ClearFailure(credentialID uint) bool {
 	if entry.FailureCount != 0 {
 		entry.FailureCount = 0
 		entry.FailureGeneration++
+		r.markHealthDirtyLocked(credentialID)
 	}
 	return true
 }
@@ -955,6 +966,7 @@ func (r *CredentialRegistry) Recover(credentialID uint) bool {
 		entry.Blacklisted = false
 		entry.FailureCount = 0
 		entry.FailureGeneration++
+		r.markHealthDirtyLocked(credentialID)
 	}
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true
@@ -999,6 +1011,7 @@ func (r *CredentialRegistry) restoreRuntimeStateIfMatch(
 	entry.Blacklisted = false
 	entry.FailureCount = 0
 	entry.FailureGeneration++
+	r.markHealthDirtyLocked(ref.ID)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true
 }

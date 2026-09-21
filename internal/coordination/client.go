@@ -5,7 +5,10 @@ package coordination
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 
@@ -24,6 +27,32 @@ const (
 // Key builds a namespaced Redis key from its colon-separated parts.
 func Key(parts ...string) string {
 	return KeyPrefix + strings.Join(parts, ":")
+}
+
+// hashTag wraps the part of a key that decides its slot. Only scripts that
+// touch several keys at once need it, and they need every one of those keys to
+// carry the same tag; a single-key operation uses it purely so the two key
+// families stay readable side by side.
+func hashTag(value string) string {
+	return "{" + value + "}"
+}
+
+// NewInstanceIdentity returns a random identity for this process. It exists so
+// coordinated state can tell instances apart — which one holds a period, which
+// one wrote a window entry — and never to authorize anything.
+//
+// A failing random source is returned rather than swallowed: an instance that
+// cannot identify itself would write entries indistinguishable from a peer's.
+func NewInstanceIdentity() (string, error) {
+	return newIdentity(rand.Reader)
+}
+
+func newIdentity(random io.Reader) (string, error) {
+	value := make([]byte, 16)
+	if _, err := io.ReadFull(random, value); err != nil {
+		return "", fmt.Errorf("generate instance identity: %w", err)
+	}
+	return hex.EncodeToString(value), nil
 }
 
 // Client is a connected Redis client whose reachability was verified when it

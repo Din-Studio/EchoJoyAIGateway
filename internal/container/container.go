@@ -78,6 +78,7 @@ func BuildContainer() (*dig.Container, error) {
 		},
 		newConfigVersion,
 		newConfigVersionSource,
+		newCredentialHealthCoordinator,
 		newTaskLease,
 		newControlTaskLease,
 		newResponseBindingStore,
@@ -101,9 +102,8 @@ func BuildContainer() (*dig.Container, error) {
 		health.NewStatsStore,
 		health.NewMutationCoordinator,
 		ratelimit.NewAccessKeyRPM,
-		func(limiter *ratelimit.AccessKeyRPM) gateway.AccessKeyRPMLimiter {
-			return limiter
-		},
+		newInstanceIdentity,
+		newAccessKeyRPMLimiter,
 		func(manager *state.Manager) requestlog.RetentionPolicyProvider {
 			return retentionSnapshotProvider{manager: manager}
 		},
@@ -255,12 +255,17 @@ func BuildContainer() (*dig.Container, error) {
 		service *control.Service,
 		version *coordination.ConfigVersion,
 		lease *coordination.Lease,
+		client *coordination.Client,
+		quotaRuntime *accessquota.Runtime,
 	) error {
 		if version != nil {
 			service.SetConfigBroadcaster(version.Bump)
 		}
 		if lease != nil {
 			service.SetTaskLease(lease)
+		}
+		if client != nil {
+			quotaRuntime.SetSharedLedger(coordination.NewQuotaLedger(client))
 		}
 		return nil
 	}); err != nil {
@@ -298,9 +303,26 @@ func newConfigVersionSource(version *coordination.ConfigVersion) control.ConfigV
 	return version
 }
 
+// newCredentialHealthCoordinator hands the control plane a true nil in
+// single-instance mode; a nil *coordination.CredentialHealth stored in an
+// interface is not a nil interface value, and the watch loop is assembled on
+// that test.
+func newCredentialHealthCoordinator(client *coordination.Client) control.CredentialHealthCoordinator {
+	if client == nil {
+		return nil
+	}
+	return coordination.NewCredentialHealth(client)
+}
+
 // newRuntimeStateCheckpoint assembles the best-effort restart checkpoint.
-// Distributed mode leaves response ownership out of it: Redis is the source of
-// truth there, so the file would capture and restore an index nobody reads.
+//
+// Distributed mode has no file checkpoint at all. Everything the file carries
+// is either shared — response ownership and credential health both live in
+// Redis, and a restarting instance reads them back from there — or a local
+// warm-up that a fleet member does not need. Restoring it would be actively
+// wrong for health: the file records a cooldown as it stood at shutdown, and
+// writing that back over the shared state would resurrect decisions the other
+// instances have already retired.
 func newRuntimeStateCheckpoint(
 	cfg *config.Config,
 	registry *state.CredentialRegistry,
@@ -308,9 +330,39 @@ func newRuntimeStateCheckpoint(
 	responseBindings *state.ResponseBindings,
 ) app.RuntimeStateCheckpoint {
 	if cfg.InstanceMode == config.InstanceModeDistributed {
-		responseBindings = nil
+		return app.NoRuntimeStateCheckpoint{}
 	}
 	return app.NewFileRuntimeStateCheckpoint(cfg.DataDir, registry, stats, responseBindings)
+}
+
+// instanceIdentity distinguishes this process from its peers in shared state.
+// It is a named type because dig resolves by type and a bare string would
+// collide with every other string in the graph.
+type instanceIdentity string
+
+// newInstanceIdentity mints the identity once per process. Single-instance
+// mode has no peers to be distinguished from and mints nothing.
+func newInstanceIdentity(client *coordination.Client) (instanceIdentity, error) {
+	if client == nil {
+		return "", nil
+	}
+	identity, err := coordination.NewInstanceIdentity()
+	return instanceIdentity(identity), err
+}
+
+// newAccessKeyRPMLimiter picks where an access key's minute is counted: the
+// shared window when this instance coordinates with peers, the in-process one
+// when it stands alone. The in-process limiter is provided either way so the
+// choice is a wiring decision rather than a conditional construction.
+func newAccessKeyRPMLimiter(
+	client *coordination.Client,
+	identity instanceIdentity,
+	local *ratelimit.AccessKeyRPM,
+) gateway.AccessKeyRPMLimiter {
+	if client == nil {
+		return local
+	}
+	return coordination.NewAccessKeyRPM(client, string(identity))
 }
 
 // newTaskLease binds periodic task claims to the coordination client.

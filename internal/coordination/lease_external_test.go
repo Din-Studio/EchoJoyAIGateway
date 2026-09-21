@@ -94,15 +94,22 @@ func TestExternalRedisLeaseHealsAfterThePeriodExpires(t *testing.T) {
 	}
 }
 
-func externalLeaseClient(t *testing.T) *Client {
+// redisTestDSN skips the caller unless an operator pointed the suite at a live
+// Redis, so ordinary unit tests stay hermetic.
+func redisTestDSN(t *testing.T) string {
 	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv("GPT_LOAD_REDIS_TEST_DSN"))
 	if dsn == "" {
 		t.Skip("GPT_LOAD_REDIS_TEST_DSN is not set")
 	}
+	return dsn
+}
+
+func externalLeaseClient(t *testing.T) *Client {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	client, err := Open(ctx, dsn)
+	client, err := Open(ctx, redisTestDSN(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
