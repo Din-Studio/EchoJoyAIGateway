@@ -92,7 +92,7 @@ func TestResponsesContinuationUsesNativeStorageCapabilities(t *testing.T) {
 				}
 			}
 			assertAffinityHits(t, sink.snapshot(), []bool{false, true, true})
-			if _, ok := handler.responseBindings.Lookup(1, "response-3"); ok {
+			if _, ok := lookupTestBinding(t, handler, 1, "response-3"); ok {
 				t.Fatal("store:false registered a new continuation ID")
 			}
 		})
@@ -291,13 +291,13 @@ func TestResponsesContinuationResumesFromRuntimeCheckpoint(t *testing.T) {
 	before, engine, _ := newContinuationFixture(t, &scriptedForwarder{results: []UpstreamResult{storedResponse("before-restart")}})
 	serveContinuation(t, engine, "gl-client", `{"model":"gpt-4o","input":"initial"}`, http.StatusOK)
 	dir := t.TempDir()
-	checkpoint := app.NewFileRuntimeStateCheckpoint(dir, nil, nil, before.responseBindings)
+	checkpoint := app.NewFileRuntimeStateCheckpoint(dir, nil, nil, handlerLocalBindings(t, before))
 	if err := checkpoint.Save(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	forwarder := &scriptedForwarder{results: []UpstreamResult{storedResponse("new-root"), storedResponse("continued")}}
 	after, restarted, _ := newContinuationFixture(t, forwarder)
-	if err := app.NewFileRuntimeStateCheckpoint(dir, nil, nil, after.responseBindings).Restore(context.Background()); err != nil {
+	if err := app.NewFileRuntimeStateCheckpoint(dir, nil, nil, handlerLocalBindings(t, after)).Restore(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	serveContinuation(t, restarted, "gl-client", `{"model":"gpt-4o","input":"another root"}`, http.StatusOK)

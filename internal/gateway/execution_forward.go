@@ -948,7 +948,10 @@ func executionStreamProtocolFailure(cause error) error {
 	}
 	return &streamFailure{
 		kind: streamFailureProtocol,
-		err:  fmt.Errorf("%w: %v", ErrUpstreamProtocol, cause),
+		// The cause is wrapped rather than formatted: an ownership recording
+		// that failed on coordination carries that identity, and flattening it
+		// here would leave the stream path reporting a protocol error.
+		err: fmt.Errorf("%w: %w", ErrUpstreamProtocol, cause),
 	}
 }
 

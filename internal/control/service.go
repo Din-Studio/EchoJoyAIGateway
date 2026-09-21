@@ -91,6 +91,7 @@ type Service struct {
 		operationStage,
 	) error
 	configBroadcast       func(context.Context) (int64, error)
+	taskLease             TaskLease
 	broadcastPending      atomic.Bool
 	operationRecoveryWake chan struct{}
 	writeMu               sync.RWMutex
@@ -612,6 +613,13 @@ func joinCommittedRuntimeRecovery(operationErr, recoveryErr error) error {
 // and every broadcast path then becomes a no-op.
 func (s *Service) SetConfigBroadcaster(broadcast func(context.Context) (int64, error)) {
 	s.configBroadcast = broadcast
+}
+
+// SetTaskLease installs the cross-instance claim used by the globally
+// scheduled sweeps this service owns. Single-instance deployments leave it
+// unset, and every period is then claimed locally without reaching Redis.
+func (s *Service) SetTaskLease(lease TaskLease) {
+	s.taskLease = lease
 }
 
 // withControlTransaction is the single entry point for control-plane writes,

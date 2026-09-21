@@ -198,17 +198,28 @@ func (s *Service) RunOperationRecovery(ctx context.Context) {
 			retry = nil
 			drain()
 		case now := <-compactionTicker.C:
-			if _, err := s.CompactCompletedOperations(ctx, now); err != nil &&
-				ctx.Err() == nil {
-				utils.LogPlaneBestEffort(
-					logrus.StandardLogger(),
-					logrus.WarnLevel,
-					utils.LogPlaneControl,
-					nil,
-					"Operation result compaction failed",
-				)
-			}
+			s.compactOnSchedule(ctx, now)
 		}
+	}
+}
+
+// compactOnSchedule runs the periodic compaction, which is the only globally
+// scheduled work in this loop and therefore the only branch that claims a
+// period. The two drain paths repair post-commit state this instance itself
+// wrote, under this instance's write lock, so a lost claim there would leave
+// that state unrepaired with no other instance able to fix it.
+func (s *Service) compactOnSchedule(ctx context.Context, now time.Time) {
+	if !claimTask(ctx, s.taskLease, taskOperationCompaction, operationCompactionInterval) {
+		return
+	}
+	if _, err := s.CompactCompletedOperations(ctx, now); err != nil && ctx.Err() == nil {
+		utils.LogPlaneBestEffort(
+			logrus.StandardLogger(),
+			logrus.WarnLevel,
+			utils.LogPlaneControl,
+			nil,
+			"Operation result compaction failed",
+		)
 	}
 }
 

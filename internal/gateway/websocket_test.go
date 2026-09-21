@@ -271,7 +271,7 @@ func TestWebsocketStoredAndTemporaryOwnershipRemainSeparate(t *testing.T) {
 		t.Fatal("prewarm flag lost")
 	}
 	waitWebsocketLogs(t, sink, 1)
-	if _, ok := h.responseBindings.Lookup(1, "resp_1"); !ok {
+	if _, ok := lookupTestBinding(t, h, 1, "resp_1"); !ok {
 		t.Fatal("omitted store did not use native storage contract")
 	}
 	_ = first.Close()
@@ -284,7 +284,7 @@ func TestWebsocketStoredAndTemporaryOwnershipRemainSeparate(t *testing.T) {
 		t.Fatal("persistent parent or child store changed")
 	}
 	waitWebsocketLogs(t, sink, 2)
-	if _, ok := h.responseBindings.Lookup(1, "resp_2"); ok {
+	if _, ok := lookupTestBinding(t, h, 1, "resp_2"); ok {
 		t.Fatal("store:false escaped into persistent index")
 	}
 	_ = second.Close()

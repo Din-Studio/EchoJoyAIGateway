@@ -71,6 +71,7 @@ type Runtime struct {
 	manager            *state.Manager
 	configVersion      ConfigVersionSource
 	configReload       configReloadRuntime
+	taskLease          TaskLease
 	validationInterval time.Duration
 	validationJitter   func() time.Duration
 	now                func() time.Time
@@ -89,6 +90,7 @@ func NewRuntime(
 	operationRecovery *Service,
 	catalogSync *CatalogSyncCoordinator,
 	configVersion ConfigVersionSource,
+	taskLease TaskLease,
 ) *Runtime {
 	runtime := &Runtime{
 		registry:           registry,
@@ -98,6 +100,7 @@ func NewRuntime(
 		catalogSync:        catalogSync,
 		manager:            manager,
 		configVersion:      configVersion,
+		taskLease:          taskLease,
 		validationInterval: defaultValidationInterval,
 		validationJitter: func() time.Duration {
 			return time.Duration(rand.Int64N(int64(maxValidationJitter) + 1))
@@ -252,14 +255,25 @@ func (runtime *Runtime) runRetention(ctx context.Context, ticker runtimeTicker) 
 	}
 }
 
+// sweepRetention runs one retention period. The three steps share a ticker but
+// not an owner: model cooldown expiry is this process's own memory and runs on
+// every instance unconditionally, while the two database sweeps are global and
+// each claims the period first.
+//
+// The two sweeps claim separately rather than sharing one key: this loop
+// starts when either cleaner is configured, so one shared key would let the
+// presence of one sweep gate the other, and they belong to different data
+// owners whose claims have to stay individually visible.
 func (runtime *Runtime) sweepRetention(ctx context.Context, now time.Time) {
 	if runtime.registry != nil {
 		runtime.registry.ExpireModelCooldowns(now)
 	}
-	if runtime.requestLogCleaner != nil {
+	if runtime.requestLogCleaner != nil &&
+		claimTask(ctx, runtime.taskLease, taskRequestLogRetention, retentionInterval) {
 		runtime.requestLogCleaner.Sweep(ctx, now)
 	}
-	if runtime.stageCleaner != nil {
+	if runtime.stageCleaner != nil &&
+		claimTask(ctx, runtime.taskLease, taskCredentialStageCleanup, retentionInterval) {
 		if err := runtime.stageCleaner.CleanupCredentialStages(ctx, now); err != nil {
 			logrus.WithError(err).WithField("event", "control.credential_stage_cleanup_failed").Warn("credential stage cleanup failed")
 		}

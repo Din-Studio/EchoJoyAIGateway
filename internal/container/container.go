@@ -78,6 +78,9 @@ func BuildContainer() (*dig.Container, error) {
 		},
 		newConfigVersion,
 		newConfigVersionSource,
+		newTaskLease,
+		newControlTaskLease,
+		newResponseBindingStore,
 		func(cfg *config.Config) (*gorm.DB, error) {
 			db, err := storage.OpenConfigured(cfg)
 			if err == nil {
@@ -139,14 +142,7 @@ func BuildContainer() (*dig.Container, error) {
 		func(service *requestlog.Service) app.RequestLogRuntime {
 			return service
 		},
-		func(
-			cfg *config.Config,
-			registry *state.CredentialRegistry,
-			stats *health.StatsStore,
-			responseBindings *state.ResponseBindings,
-		) app.RuntimeStateCheckpoint {
-			return app.NewFileRuntimeStateCheckpoint(cfg.DataDir, registry, stats, responseBindings)
-		},
+		newRuntimeStateCheckpoint,
 		control.NewRuntime,
 		func(runtime *control.Runtime) app.ControlRuntime { return runtime },
 		httpclient.NewHTTPClientManager,
@@ -258,14 +254,17 @@ func BuildContainer() (*dig.Container, error) {
 	if err := dependencyContainer.Invoke(func(
 		service *control.Service,
 		version *coordination.ConfigVersion,
+		lease *coordination.Lease,
 	) error {
-		if version == nil {
-			return nil
+		if version != nil {
+			service.SetConfigBroadcaster(version.Bump)
 		}
-		service.SetConfigBroadcaster(version.Bump)
+		if lease != nil {
+			service.SetTaskLease(lease)
+		}
 		return nil
 	}); err != nil {
-		return nil, fmt.Errorf("wire configuration broadcast: %w", err)
+		return nil, fmt.Errorf("wire coordination collaborators: %w", err)
 	}
 	if err := dependencyContainer.Invoke(func(
 		engine *gin.Engine,
@@ -297,6 +296,54 @@ func newConfigVersionSource(version *coordination.ConfigVersion) control.ConfigV
 		return nil
 	}
 	return version
+}
+
+// newRuntimeStateCheckpoint assembles the best-effort restart checkpoint.
+// Distributed mode leaves response ownership out of it: Redis is the source of
+// truth there, so the file would capture and restore an index nobody reads.
+func newRuntimeStateCheckpoint(
+	cfg *config.Config,
+	registry *state.CredentialRegistry,
+	stats *health.StatsStore,
+	responseBindings *state.ResponseBindings,
+) app.RuntimeStateCheckpoint {
+	if cfg.InstanceMode == config.InstanceModeDistributed {
+		responseBindings = nil
+	}
+	return app.NewFileRuntimeStateCheckpoint(cfg.DataDir, registry, stats, responseBindings)
+}
+
+// newTaskLease binds periodic task claims to the coordination client.
+// Single-instance mode has no client and therefore claims nothing.
+func newTaskLease(client *coordination.Client) (*coordination.Lease, error) {
+	if client == nil {
+		return nil, nil
+	}
+	return coordination.NewLease(client)
+}
+
+// newControlTaskLease hands the control plane a true nil in single-instance
+// mode; a nil *coordination.Lease stored in an interface is not a nil
+// interface value, and every claim is decided on that test.
+func newControlTaskLease(lease *coordination.Lease) control.TaskLease {
+	if lease == nil {
+		return nil
+	}
+	return lease
+}
+
+// newResponseBindingStore picks where response ownership lives: the shared
+// index when this instance coordinates with peers, the in-process one when it
+// stands alone. The in-process index is provided either way because
+// single-instance mode still checkpoints it to disk.
+func newResponseBindingStore(
+	client *coordination.Client,
+	local *state.ResponseBindings,
+) gateway.ResponseBindingStore {
+	if client == nil {
+		return gateway.NewLocalResponseBindings(local)
+	}
+	return coordination.NewResponseBindings(client)
 }
 
 func newSystemOutboundProxyProvider(manager *state.Manager) httpclient.OutboundProxyProvider {

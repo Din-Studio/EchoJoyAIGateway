@@ -214,7 +214,11 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 			}
 			boundAuto = parent.autoSelection
 		} else {
-			stored, found := h.responseBindings.Lookup(key.ID, original.previous)
+			stored, found, err := h.responseBindings.Lookup(s.ctx, key.ID, original.previous)
+			if err != nil {
+				reject(reasonCoordinationUnavailable)
+				return
+			}
 			if !found {
 				reject(reasonResponseBindingNotFound)
 				return
@@ -640,7 +644,7 @@ func (s *websocketConnection) runWebsocketAttempt(ctx context.Context, cancel co
 			idle.stop()
 		}
 	}()
-	onResponse := s.handler.responseBindingObserver(s.keyID, selection, ref, input.Request, recorder.autoSelection())
+	onResponse := s.handler.responseBindingObserver(ctx, s.keyID, selection, ref, input.Request, recorder.autoSelection())
 	wsResult := binding.session.ExecuteTurn(ctx, input.Request.Body, func(ctx context.Context, body []byte) error {
 		var event struct {
 			Type       string          `json:"type"`

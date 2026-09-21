@@ -299,7 +299,7 @@ func TestAutoModelResponsesContinuationReusesFrozenSelection(t *testing.T) {
 	handler.dialects = dialect.NewSet(dialect.NewOpenAI(), dialect.NewOpenAIResponses())
 	configureAutoModelTest(t, handler, manager, state.FilterSet{})
 	selection := &automodel.Selection{EntryID: "auto-probe", EntryName: "auto-probe", PresetID: "old-preset", PresetName: "old preset", TargetModel: "gpt-4o", ParameterOverrides: json.RawMessage(`[{"match":{"protocol":"openai-responses"},"set":{"reasoning":{"effort":"high"}}}]`), ConfigRevision: 1}
-	if !handler.responseBindings.Record(1, "resp-before", state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}, selection) {
+	if !recordTestBinding(t, handler, 1, "resp-before", state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}, selection) {
 		t.Fatal("cannot store binding")
 	}
 	handler.decisionClient = autoDecisionClient(func(*http.Request) (*http.Response, error) {
@@ -334,7 +334,7 @@ func TestAutoModelResponsesFullHistoryToolContinuationReusesMatchingTask(t *test
 		t.Fatalf("initial view=%#v reason=%q", view, reason)
 	}
 	selection := &automodel.Selection{EntryID: "auto-probe", EntryName: "auto-probe", PresetID: "balanced", PresetName: "balanced", TargetModel: "gpt-4o", ParameterOverrides: json.RawMessage(`[]`), ConfigRevision: manager.Current().Revision, TaskFingerprint: view.TaskFingerprint}
-	if !handler.responseBindings.Record(1, "resp-before", state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}, selection) {
+	if !recordTestBinding(t, handler, 1, "resp-before", state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}, selection) {
 		t.Fatal("cannot store binding")
 	}
 	handler.decisionClient = autoDecisionClient(func(*http.Request) (*http.Response, error) {
@@ -368,7 +368,7 @@ func TestAutoModelResponsesFullHistoryToolContinuationReclassifiesDifferentTask(
 		t.Fatalf("initial view=%#v reason=%q", view, reason)
 	}
 	selection := &automodel.Selection{EntryID: "auto-probe", EntryName: "auto-probe", PresetID: "balanced", PresetName: "balanced", TargetModel: "gpt-4o", ParameterOverrides: json.RawMessage(`[]`), ConfigRevision: manager.Current().Revision, TaskFingerprint: view.TaskFingerprint}
-	if !handler.responseBindings.Record(1, "resp-before", state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}, selection) {
+	if !recordTestBinding(t, handler, 1, "resp-before", state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}, selection) {
 		t.Fatal("cannot store binding")
 	}
 	calls := 0
@@ -428,7 +428,7 @@ func TestAutoModelResponsesNewTaskCanChangeModelOnBoundCredential(t *testing.T) 
 	handler.dialects = dialect.NewSet(dialect.NewOpenAI(), dialect.NewOpenAIResponses())
 	configureAutoModelTest(t, handler, manager, state.FilterSet{})
 	selection := &automodel.Selection{EntryID: "auto-probe", EntryName: "auto-probe", PresetID: "balanced", PresetName: "balanced", TargetModel: "gpt-4o", ParameterOverrides: json.RawMessage(`[]`), ConfigRevision: 1}
-	if !handler.responseBindings.Record(1, "resp-before", state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}, selection) {
+	if !recordTestBinding(t, handler, 1, "resp-before", state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}, selection) {
 		t.Fatal("cannot store binding")
 	}
 	calls := 0
@@ -449,7 +449,7 @@ func TestAutoModelResponsesNewTaskCanChangeModelOnBoundCredential(t *testing.T) 
 	if input.Credential.ID != 1 || input.UpstreamModelID != "gpt-4.1" || !strings.Contains(string(input.Request.Body), `"effort":"high"`) || !strings.Contains(string(input.Request.Body), `"previous_response_id":"resp-before"`) || !strings.Contains(string(input.Request.Body), `"keep":true`) {
 		t.Fatalf("continuation input=%#v body=%s", input, input.Request.Body)
 	}
-	binding, found := handler.responseBindings.Lookup(1, "resp-next")
+	binding, found := lookupTestBinding(t, handler, 1, "resp-next")
 	if !found || binding.AutoSelection == nil || binding.AutoSelection.TargetModel != "gpt-4.1" || binding.CredentialID != 1 {
 		t.Fatalf("new response binding=%#v found=%v", binding, found)
 	}
@@ -474,7 +474,7 @@ func TestAutoModelContinuationDecisionExcludesOtherGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 普通模型的响应也可以续接到自动入口，绑定仅限制凭据。
-	if !handler.responseBindings.Record(1, "resp-before", state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}) {
+	if !recordTestBinding(t, handler, 1, "resp-before", state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}, nil) {
 		t.Fatal("cannot store ordinary response binding")
 	}
 	calls := 0
@@ -542,7 +542,7 @@ func TestAutoModelBindingDoesNotInterceptOrdinaryResponse(t *testing.T) {
 			handler.dialects = dialect.NewSet(dialect.NewOpenAI(), dialect.NewOpenAIResponses())
 			configureAutoModelTest(t, handler, manager, state.FilterSet{})
 			selection := &automodel.Selection{EntryID: "auto-probe", EntryName: "auto-probe", PresetID: "balanced", TargetModel: "gpt-4o", ParameterOverrides: json.RawMessage(`[]`)}
-			if !handler.responseBindings.Record(1, "resp-before", state.CredentialRef{ID: 2, GroupID: 1, IdentityGeneration: 2}, selection) {
+			if !recordTestBinding(t, handler, 1, "resp-before", state.CredentialRef{ID: 2, GroupID: 1, IdentityGeneration: 2}, selection) {
 				t.Fatal("cannot store binding")
 			}
 			if disabled {

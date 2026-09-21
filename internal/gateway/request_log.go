@@ -739,6 +739,10 @@ func upstreamErrorCode(result UpstreamResult, category health.FailureCategory) s
 	switch {
 	case errors.Is(result.Err, context.Canceled):
 		return "client_canceled"
+	// Ahead of the protocol branch, so a coordination outage stays separable
+	// from an upstream fault in the request log.
+	case errors.Is(result.Err, errCoordinationUnavailable):
+		return reasonCoordinationUnavailable.Code
 	case errors.Is(result.Err, ErrUpstreamProtocol):
 		return "upstream_protocol_error"
 	case isTimeoutError(result.Err):

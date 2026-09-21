@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,11 +16,12 @@ import (
 )
 
 func (handler *Handler) responseBindingObserver(
+	ctx context.Context,
 	accessKeyID uint,
 	selection scheduler.Selection,
 	ref state.CredentialRef,
 	request *dialect.ParsedRequest,
-	autoSelections ...*automodel.Selection,
+	auto *automodel.Selection,
 ) func([]byte) error {
 	if request == nil || request.Method != http.MethodPost || request.Path != "/v1/responses" ||
 		selection.RouteMode != execution.RouteNative || selection.ResponsesStoreDowngraded ||
@@ -34,6 +36,11 @@ func (handler *Handler) responseBindingObserver(
 	if json.Unmarshal(request.Body, &options) != nil || (options.Store != nil && !*options.Store) {
 		return nil
 	}
+	// A streaming attempt carries the same response object through several
+	// events, so without this the identical ownership would be recorded three
+	// or more times. Recording it once also keeps the only possible failure on
+	// the first response event, before any byte has reached the client.
+	var recorded string
 	return func(payload []byte) error {
 		var response struct {
 			ID     string `json:"id"`
@@ -44,9 +51,17 @@ func (handler *Handler) responseBindingObserver(
 			response.ID == "" || (response.Store != nil && !*response.Store) {
 			return nil
 		}
-		if !handler.responseBindings.Record(accessKeyID, response.ID, ref, autoSelections...) {
+		if response.ID == recorded {
+			return nil
+		}
+		stored, err := handler.responseBindings.Record(ctx, accessKeyID, response.ID, ref, auto)
+		if err != nil {
+			return fmt.Errorf("%w: %w", errCoordinationUnavailable, err)
+		}
+		if !stored {
 			return fmt.Errorf("%w: response ownership could not be recorded", ErrUpstreamProtocol)
 		}
+		recorded = response.ID
 		return nil
 	}
 }

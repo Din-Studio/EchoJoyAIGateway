@@ -119,7 +119,7 @@ type Handler struct {
 	routeNotFoundEvents *utils.RateLimitedEventCounter
 	lifecycle           *httplifecycle.Coordinator
 	affinityCache       *affinity.Cache
-	responseBindings    *state.ResponseBindings
+	responseBindings    ResponseBindingStore
 	websocketLimits     websocketLimits
 	websocketBudget     websocketBudget
 }
@@ -178,7 +178,7 @@ func NewHandler(
 		forwarder: forwarder, dialects: dialects, stats: stats, mutations: mutations,
 		limiter: limiter, requestLogSink: requestLogSink, priceTables: priceTables,
 		affinityCache:    affinity.NewCache(),
-		responseBindings: state.NewResponseBindings(),
+		responseBindings: NewLocalResponseBindings(state.NewResponseBindings()),
 		websocketLimits:  defaultWebsocketLimits(),
 		newRequestID:     newRequestID,
 		requestNow:       time.Now,
@@ -222,7 +222,7 @@ func NewHandlerWithLifecycle(
 	priceTables PriceTableProvider,
 	accessQuota *accessquota.Runtime,
 	lifecycle *httplifecycle.Coordinator,
-	responseBindings *state.ResponseBindings,
+	responseBindings ResponseBindingStore,
 ) *Handler {
 	handler := NewHandler(
 		manager,
@@ -244,7 +244,9 @@ func NewHandlerWithLifecycle(
 		handler.subscriptions = subscriptions
 	}
 	handler.lifecycle = lifecycle
-	handler.responseBindings = responseBindings
+	if responseBindings != nil {
+		handler.responseBindings = responseBindings
+	}
 	return handler
 }
 
@@ -604,12 +606,23 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 	recorder.setClientModel(model)
 	var boundAuto *automodel.Selection
 	autoQuery := scheduler.Query{}
+	// Ownership is resolved once per request and reused below. The store can
+	// be a remote one, so asking it the same question twice would be a second
+	// round trip for an answer already in hand.
+	var bound *state.ResponseBinding
 	if metadata.PreviousResponseID != "" {
-		binding, found := handler.responseBindings.Lookup(accessKey.ID, metadata.PreviousResponseID)
+		binding, found, err := handler.responseBindings.Lookup(
+			ginContext.Request.Context(), accessKey.ID, metadata.PreviousResponseID,
+		)
+		if err != nil {
+			handler.completeReason(ginContext, recorder, reasonCoordinationUnavailable)
+			return
+		}
 		if !found {
 			handler.completeReason(ginContext, recorder, reasonResponseBindingNotFound)
 			return
 		}
+		bound = &binding
 		boundAuto = binding.AutoSelection
 		autoQuery.AllowedCredentialRefs = map[uint]state.CredentialRef{binding.CredentialID: {
 			ID: binding.CredentialID, GroupID: binding.GroupID, IdentityGeneration: binding.IdentityGeneration,
@@ -658,17 +671,12 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 	query.AllowedCredentialIDs = allowedCredentialIDs
 	query.AllowedCredentialRefs = allowedCredentialRefs
 	var requestAffinity requestAffinity
-	if metadata.PreviousResponseID != "" {
-		binding, found := handler.responseBindings.Lookup(accessKey.ID, metadata.PreviousResponseID)
-		if !found {
-			handler.completeReason(ginContext, recorder, reasonResponseBindingNotFound)
-			return
-		}
-		query.AllowedCredentialIDs = map[uint]struct{}{binding.CredentialID: {}}
+	if bound != nil {
+		query.AllowedCredentialIDs = map[uint]struct{}{bound.CredentialID: {}}
 		query.AllowedCredentialRefs = map[uint]state.CredentialRef{
-			binding.CredentialID: {
-				ID: binding.CredentialID, GroupID: binding.GroupID,
-				IdentityGeneration: binding.IdentityGeneration,
+			bound.CredentialID: {
+				ID: bound.CredentialID, GroupID: bound.GroupID,
+				IdentityGeneration: bound.IdentityGeneration,
 			},
 		}
 	} else {
@@ -1235,7 +1243,10 @@ func (handler *Handler) executeAttempts(
 			ProxyFingerprint:       proxyFingerprint,
 			ForceCredentialRefresh: forceCredentialRefresh,
 			ContinuityKey:          requestAffinity.continuityKey,
-			OnResponse:             handler.responseBindingObserver(recorder.accessKeyID, selection, ref, prepared.request, recorder.autoSelection()),
+			OnResponse: handler.responseBindingObserver(
+				ginContext.Request.Context(), recorder.accessKeyID, selection, ref,
+				prepared.request, recorder.autoSelection(),
+			),
 			OnFirstResponse: func() {
 				recorder.recordFirstResponse()
 			},
@@ -1264,9 +1275,16 @@ func (handler *Handler) executeAttempts(
 			if input.OnResponse != nil {
 				if err := input.OnResponse(result.Body); err != nil {
 					result.Err = err
+					// The evidence shape stays internal in either case: a
+					// coordination outage is the gateway's own failure and
+					// must not be charged to the credential's health.
+					code := "response_binding_conflict"
+					if errors.Is(err, errCoordinationUnavailable) {
+						code = reasonCoordinationUnavailable.Code
+					}
 					result.ExecutionError = &execution.ErrorEvidence{
 						Kind: execution.ErrorKindInternal, OriginHint: execution.ErrorOriginInternal,
-						ScopeHint: execution.ErrorScopeRequest, Code: "response_binding_conflict",
+						ScopeHint: execution.ErrorScopeRequest, Code: code,
 						Summary: "Response ownership could not be recorded.", ReplaySafety: execution.ReplaySafetyUnknown,
 					}
 				}
@@ -1528,6 +1546,10 @@ func transportReason(result UpstreamResult) reason {
 	case result.DispatchState == execution.DispatchNotSent && result.ExecutionError != nil &&
 		result.ExecutionError.Kind == execution.ErrorKindInvalidRequest:
 		return reasonInvalidProtocolRequest
+	// Ahead of the protocol branch: a failed ownership recording wraps both
+	// identities, and the coordination one is the accurate cause.
+	case errors.Is(result.Err, errCoordinationUnavailable):
+		return reasonCoordinationUnavailable
 	case errors.Is(result.Err, ErrUpstreamProtocol):
 		return reasonUpstreamProtocol
 	case isTimeoutError(result.Err):
