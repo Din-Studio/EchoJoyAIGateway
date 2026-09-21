@@ -62,9 +62,22 @@ return sequence
 // with the sequence each carries, so the caller can resume from exactly where
 // it stopped. Reading the index and the payloads in one script is what keeps a
 // change from being skipped by a write that lands between the two reads.
+//
+// The first element of the reply is the sequence the read actually resumed
+// from, which is the caller's cursor except when the store has restarted its
+// counter. A store that lost its data issues sequence 1 again, so a cursor
+// above anything it has ever issued would match nothing for the rest of this
+// process's life. Comparing against the counter inside the script costs no
+// round trip and reconverges by re-reading everything, which is what the
+// configuration version watch does when its counter falls back.
 var readCredentialHealth = redis.NewScript(`
-local changed = redis.call('ZRANGEBYSCORE', KEYS[2], '(' .. ARGV[1], '+inf', 'WITHSCORES')
-local out = {}
+local after = tonumber(ARGV[1])
+local issued = tonumber(redis.call('GET', KEYS[3]) or '0')
+if issued < after then
+  after = 0
+end
+local changed = redis.call('ZRANGEBYSCORE', KEYS[2], '(' .. after, '+inf', 'WITHSCORES')
+local out = {tostring(after)}
 for index = 1, #changed, 2 do
   local payload = redis.call('HGET', KEYS[1], changed[index])
   if payload then
@@ -134,6 +147,10 @@ func (health *CredentialHealth) Publish(ctx context.Context, changes []state.Cre
 // the sequence the caller should resume from. Starting from zero returns
 // everything, which is how an instance that just started learns the cooldowns
 // its peers decided while it was down.
+//
+// The returned sequence can be lower than the one passed in. That means the
+// store restarted its counter and this read re-hydrated from the beginning;
+// the caller has to adopt it rather than keep its own, or it stays deaf.
 func (health *CredentialHealth) Changed(
 	ctx context.Context,
 	after int64,
@@ -141,7 +158,7 @@ func (health *CredentialHealth) Changed(
 	ctx, cancel := context.WithTimeout(ctx, health.timeout)
 	defer cancel()
 	reply, err := readCredentialHealth.Run(ctx, health.client.Redis(),
-		[]string{health.storeKey, health.indexKey}, after,
+		[]string{health.storeKey, health.indexKey, health.sequence}, after,
 	).Slice()
 	if err != nil {
 		return nil, after, fmt.Errorf("read credential health: %w", err)
@@ -188,13 +205,19 @@ func (health *CredentialHealth) Subscribe(ctx context.Context) (<-chan struct{},
 // parseCredentialHealthReply reads the script's flat (id, sequence, payload)
 // triples. The credential id comes from the index member rather than the
 // payload: one identity in the reply cannot then disagree with another.
+// The reply leads with the sequence the read resumed from, so resume starts
+// there rather than at the caller's cursor: keeping the caller's cursor is
+// exactly what would make a restarted counter permanent.
 func parseCredentialHealthReply(reply []any, after int64) ([]state.CredentialHealth, int64, error) {
-	if len(reply)%3 != 0 {
+	if len(reply) == 0 || len(reply)%3 != 1 {
 		return nil, after, fmt.Errorf("read credential health: unexpected reply shape")
 	}
-	resume := after
+	resume, err := parseHealthSequence(reply[0])
+	if err != nil {
+		return nil, after, err
+	}
 	changes := make([]state.CredentialHealth, 0, len(reply)/3)
-	for index := 0; index < len(reply); index += 3 {
+	for index := 1; index < len(reply); index += 3 {
 		member, ok := reply[index].(string)
 		if !ok {
 			return nil, after, fmt.Errorf("read credential health: unexpected id type")

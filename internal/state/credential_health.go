@@ -116,6 +116,16 @@ func (r *CredentialRegistry) ApplyRemoteHealth(health CredentialHealth) bool {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// A credential that is still dirty changed locally after the drain that
+	// produced this read, so what arrives here is at best this instance's own
+	// echo and at worst a peer's older decision. Either way the local value is
+	// newer, and it is already queued for the next publish, which is how the
+	// fleet converges on it. Without this the echo wins, and because the local
+	// change was marked dirty the next drain republishes the reverted value to
+	// every instance.
+	if _, pending := r.healthDirty[health.CredentialID]; pending {
+		return false
+	}
 	entry, ok := r.entryLocked(health.CredentialID)
 	if !ok || entry.GroupID != health.GroupID ||
 		entry.IdentityGeneration != health.IdentityGeneration {

@@ -108,6 +108,52 @@ func TestExternalRedisCredentialHealthHydratesAJoiningInstance(t *testing.T) {
 	})
 }
 
+// A Redis that lost its data issues sequence 1 again, below the cursor every
+// running instance already holds. Without a fall-back that cursor matches
+// nothing for the rest of the process's life and the instance goes silently
+// deaf to its peers, so this is the counterpart of the configuration version
+// watch's TestConfigWatchReloadsWhenTheVersionFallsBack.
+func TestExternalRedisCredentialHealthReconvergesAfterTheSequenceFallsBack(t *testing.T) {
+	client := healthRedisClient(t)
+	deciding := startHealthInstance(t, client)
+	observing := startHealthInstance(t, client)
+
+	// Two decisions first, so the observing instance's cursor is above the
+	// sequence a rebuilt store would hand out next.
+	if exists, _ := deciding.registry.SetBlacklistedWithChange(1); !exists {
+		t.Fatal("SetBlacklistedWithChange() = false")
+	}
+	waitFor(t, "the peer adopts the blacklist", func() bool {
+		health, ok := observing.registry.CredentialHealthSnapshot(1)
+		return ok && health.Blacklisted
+	})
+	if exists, _ := deciding.registry.SetCooldownWithChange(2, time.Now().Add(time.Minute)); !exists {
+		t.Fatal("SetCooldownWithChange() = false")
+	}
+	waitFor(t, "the peer adopts the cooldown", func() bool {
+		health, ok := observing.registry.CredentialHealthSnapshot(2)
+		return ok && !health.CooldownUntil.IsZero()
+	})
+
+	// The store loses everything: a restart without persistence, a FLUSHDB, or
+	// the sequence key falling to an eviction policy.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Redis().FlushDB(ctx).Err(); err != nil {
+		t.Fatalf("flush the shared health store: %v", err)
+	}
+
+	// The operator clears the blacklist on the instance that set it. That
+	// decision is published at sequence 1, under both instances' cursors.
+	if !deciding.registry.RestoreRuntimeState(1) {
+		t.Fatal("RestoreRuntimeState() = false")
+	}
+	waitFor(t, "the peer adopts a decision published after the store restarted", func() bool {
+		health, ok := observing.registry.CredentialHealthSnapshot(1)
+		return ok && !health.Blacklisted
+	})
+}
+
 func newHealthPair(t *testing.T) (*healthInstance, *healthInstance) {
 	t.Helper()
 	client := healthRedisClient(t)

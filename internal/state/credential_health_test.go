@@ -201,3 +201,50 @@ func TestApplyRemoteHealthIsIdempotent(t *testing.T) {
 		t.Fatal("second ApplyRemoteHealth() = true; an unchanged value reported a change")
 	}
 }
+
+// The watch loop drains, publishes, then reads its own entries back, and the
+// two round trips in between are wide enough for the request path to decide
+// something new. That decision has to survive its own echo, or the next drain
+// publishes the reverted value to every other instance.
+func TestApplyRemoteHealthDoesNotRevertAChangeMadeSinceTheDrain(t *testing.T) {
+	registry, _ := healthRegistry(t)
+	registry.IncrFailure(1)
+	published := registry.DrainHealthChanges()
+	if len(published) != 1 {
+		t.Fatalf("DrainHealthChanges() returned %d changes, want 1", len(published))
+	}
+	registry.ClearFailure(1)
+
+	if registry.ApplyRemoteHealth(published[0]) {
+		t.Fatal("this instance's own echo was adopted over a newer local decision")
+	}
+	if snapshot, _ := registry.CredentialHealthSnapshot(1); snapshot.FailureCount != 0 {
+		t.Fatalf("failure count = %d after the echo, want 0", snapshot.FailureCount)
+	}
+
+	// The half that makes it a fleet-wide problem rather than a local one.
+	next := registry.DrainHealthChanges()
+	if len(next) != 1 {
+		t.Fatalf("DrainHealthChanges() returned %d changes, want the local decision", len(next))
+	}
+	if next[0].FailureCount != 0 {
+		t.Fatalf("republished failure count = %d, want 0", next[0].FailureCount)
+	}
+}
+
+// A peer's decision must still land once this instance has nothing pending for
+// that credential, or the guard above would turn into a permanent refusal.
+func TestApplyRemoteHealthResumesAfterThePendingChangeIsDrained(t *testing.T) {
+	registry, _ := healthRegistry(t)
+	registry.IncrFailure(1)
+	registry.DrainHealthChanges()
+
+	if !registry.ApplyRemoteHealth(CredentialHealth{
+		CredentialID: 1, GroupID: 9, IdentityGeneration: 1, Blacklisted: true, FailureCount: 1,
+	}) {
+		t.Fatal("ApplyRemoteHealth() = false with nothing pending; a peer's decision was lost")
+	}
+	if snapshot, _ := registry.CredentialHealthSnapshot(1); !snapshot.Blacklisted {
+		t.Fatal("the peer's blacklist did not reach the credential")
+	}
+}

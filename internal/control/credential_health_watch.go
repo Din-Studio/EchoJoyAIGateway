@@ -28,10 +28,12 @@ type CredentialHealthCoordinator interface {
 // runCredentialHealthWatch is both halves of health replication in one loop:
 // it pushes what this instance decided and pulls what its peers decided.
 //
-// One loop rather than two because the two halves are not independent. A push
-// makes peers ring this instance's doorbell, and serving both from the same
-// goroutine means a burst of local decisions cannot race its own echo back in
-// — the drain always runs before the read that would re-apply it.
+// One loop rather than two because the two halves are not independent: a push
+// makes peers ring this instance's doorbell, so ordering them here is what
+// keeps a burst of local decisions from arriving before the peers that caused
+// it. Ordering is not what protects a local decision from its own echo — the
+// window between the drain and the read back is two round trips wide, and the
+// registry refuses a change for a credential it still holds dirty.
 //
 // Failures leave this instance on its own health decisions, which are still
 // correct for the traffic it is serving; they are just not yet shared. The
@@ -106,16 +108,27 @@ func (runtime *Runtime) publishCredentialHealth(ctx context.Context) {
 // instance has consumed. The sequence advances only on success, so a failed
 // read is retried from the same point instead of skipping changes.
 //
-// This instance's own changes come back through here too. Applying them is a
-// no-op — the registry already holds those values — and letting them through
-// is what keeps the sequence honest: skipping them would require knowing which
-// entries were ours, and peers' writes interleave with them.
+// This instance's own changes come back through here too, because skipping
+// them would require knowing which entries were ours and peers' writes
+// interleave with them. Letting them through is safe: the registry holds the
+// same values, and for the ones it does not — a local decision made since the
+// drain — it refuses the change rather than taking the older echo.
+//
+// The sequence can also come back lower than it went in, which means the
+// shared store restarted its counter. Adopting the lower value re-reads every
+// credential; keeping the old one would leave this instance deaf to its peers
+// for the rest of its life.
 func (runtime *Runtime) applyCredentialHealth(ctx context.Context, applied int64) int64 {
 	changes, resume, err := runtime.credentialHealth.Changed(ctx, applied)
 	if err != nil {
 		logCredentialHealthEvent(logrus.WarnLevel, "credential_health.watch_degraded", err,
 			"Credential health read failed")
 		return applied
+	}
+	if resume < applied {
+		logCredentialHealthEvent(logrus.WarnLevel, "credential_health.watch_degraded", nil,
+			"Shared credential health restarted its sequence; re-reading every credential",
+			logrus.Fields{"applied": applied, "resume": resume})
 	}
 	adopted := 0
 	for _, change := range changes {
