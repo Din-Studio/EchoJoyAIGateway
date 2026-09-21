@@ -236,7 +236,8 @@ func TestKeyRegistryRecoverIfMatchRestoresMatchingBlacklistedActiveKey(t *testin
 	}
 	if got, want := registryEntry(t, registry, 1), (CredentialEntry{
 		ID: 1, GroupID: 10, Status: CredentialStatusActive,
-		FailureGeneration: 1, Version: 1, IdentityGeneration: 1, Fingerprint: "test-fingerprint", EncryptedValue: "cipher-one",
+		FailureGeneration: 1, ResetGen: 1,
+		Version: 1, IdentityGeneration: 1, Fingerprint: "test-fingerprint", EncryptedValue: "cipher-one",
 	}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("entry after RecoverIfMatch() = %#v, want %#v", got, want)
 	}
@@ -306,7 +307,8 @@ func TestKeyRegistryRecoverIfMatchRejectsStaleGeneration(t *testing.T) {
 	}
 	if got, want := registryEntry(t, registry, 1), (CredentialEntry{
 		ID: 1, GroupID: 10, Status: CredentialStatusActive,
-		FailureGeneration: 2, Version: 1, IdentityGeneration: 1, Fingerprint: "test-fingerprint", EncryptedValue: "cipher-one",
+		FailureGeneration: 2, ResetGen: 1,
+		Version: 1, IdentityGeneration: 1, Fingerprint: "test-fingerprint", EncryptedValue: "cipher-one",
 	}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("entry after fresh RecoverIfMatch() = %#v, want %#v", got, want)
 	}

@@ -154,6 +154,93 @@ func TestExternalRedisCredentialHealthReconvergesAfterTheSequenceFallsBack(t *te
 	})
 }
 
+// A record reaches the registry one or two round trips after it was written,
+// so the request path always has room to decide something the record could not
+// have known about. The goal is that a credential taken out of selection stays
+// out: no record, from a peer or from this instance's own echo, may put it
+// back.
+//
+// The loop's two halves are driven by hand here. The window is exactly the one
+// a running loop closes at a time no test controls.
+func TestExternalRedisCredentialHealthKeepsDecisionsMadeWhileRecordsWereInFlight(t *testing.T) {
+	t.Run("this instance's own echo cannot shorten a cooldown set since", func(t *testing.T) {
+		client := healthRedisClient(t)
+		ctx, cancel := context.WithTimeout(context.Background(), propagationTimeout)
+		defer cancel()
+
+		registry := newHealthRegistry(t)
+		runtime := newHealthRuntime(registry, client)
+		soon := time.Now().Add(time.Minute).Truncate(time.Millisecond)
+		registry.SetCooldownWithChange(1, soon)
+		runtime.publishCredentialHealth(ctx)
+
+		// The upstream rate-limited this credential again, harder, while the
+		// read that carries the first cooldown was in flight.
+		later := soon.Add(time.Hour)
+		registry.SetCooldownWithChange(1, later)
+		runtime.applyCredentialHealth(ctx, 0)
+
+		snapshot, _ := registry.CredentialHealthSnapshot(1)
+		if !snapshot.CooldownUntil.Equal(later) {
+			t.Fatalf("cooldown = %v, want the later %v; the echo shortened it", snapshot.CooldownUntil, later)
+		}
+	})
+
+	t.Run("a peer's decision lands without erasing one made since", func(t *testing.T) {
+		client := healthRedisClient(t)
+		ctx, cancel := context.WithTimeout(context.Background(), propagationTimeout)
+		defer cancel()
+
+		peerRegistry := newHealthRegistry(t)
+		peerRegistry.SetBlacklistedWithChange(1)
+		peer := coordination.NewCredentialHealth(client)
+		if _, err := peer.Publish(ctx, peerRegistry.DrainHealthChanges()); err != nil {
+			t.Fatalf("Publish() error = %v", err)
+		}
+
+		registry := newHealthRegistry(t)
+		runtime := newHealthRuntime(registry, client)
+		until := time.Now().Add(time.Minute).Truncate(time.Millisecond)
+		registry.SetCooldownWithChange(1, until)
+		runtime.applyCredentialHealth(ctx, 0)
+
+		snapshot, _ := registry.CredentialHealthSnapshot(1)
+		if !snapshot.Blacklisted {
+			t.Fatal("the peer's blacklist was lost")
+		}
+		if !snapshot.CooldownUntil.Equal(until) {
+			t.Fatalf("cooldown = %v, want the local %v; the peer's record erased it", snapshot.CooldownUntil, until)
+		}
+		// Both reasons are what this instance publishes onward, so neither is
+		// erased on the peer either.
+		if next := registry.DrainHealthChanges(); len(next) != 1 ||
+			!next[0].Blacklisted || !next[0].CooldownUntil.Equal(until) {
+			t.Fatalf("republished %#v, want both reasons", next)
+		}
+	})
+
+	t.Run("an operator reset survives the record it is undoing", func(t *testing.T) {
+		client := healthRedisClient(t)
+		ctx, cancel := context.WithTimeout(context.Background(), propagationTimeout)
+		defer cancel()
+
+		registry := newHealthRegistry(t)
+		runtime := newHealthRuntime(registry, client)
+		registry.SetBlacklistedWithChange(1)
+		runtime.publishCredentialHealth(ctx)
+
+		// The operator clears it while the blacklist record is on its way back.
+		if !registry.RestoreRuntimeState(1) {
+			t.Fatal("RestoreRuntimeState() = false")
+		}
+		runtime.applyCredentialHealth(ctx, 0)
+
+		if snapshot, _ := registry.CredentialHealthSnapshot(1); snapshot.Blacklisted {
+			t.Fatal("the reset was undone by the record that predates it")
+		}
+	})
+}
+
 func newHealthPair(t *testing.T) (*healthInstance, *healthInstance) {
 	t.Helper()
 	client := healthRedisClient(t)
@@ -186,20 +273,8 @@ func healthRedisClient(t *testing.T) *coordination.Client {
 // the production interval is credentialHealthPollInterval.
 func startHealthInstance(t *testing.T, client *coordination.Client) *healthInstance {
 	t.Helper()
-	registry := state.NewCredentialRegistry()
-	if err := registry.ReplaceCredentials([]state.CredentialEntry{{
-		ID: 1, GroupID: 9, Version: 1, IdentityGeneration: 1, Fingerprint: "fp-1",
-		Status: state.CredentialStatusActive, AuthState: state.CredentialAuthStateReady,
-		EncryptedValue: "enc-1",
-	}, {
-		ID: 2, GroupID: 9, Version: 1, IdentityGeneration: 1, Fingerprint: "fp-2",
-		Status: state.CredentialStatusActive, AuthState: state.CredentialAuthStateReady,
-		EncryptedValue: "enc-2",
-	}}); err != nil {
-		t.Fatalf("ReplaceCredentials() error = %v", err)
-	}
-
-	runtime := &Runtime{registry: registry, credentialHealth: coordination.NewCredentialHealth(client)}
+	registry := newHealthRegistry(t)
+	runtime := newHealthRuntime(registry, client)
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
 	go func() {
@@ -217,4 +292,27 @@ func startHealthInstance(t *testing.T, client *coordination.Client) *healthInsta
 		}
 	})
 	return &healthInstance{registry: registry}
+}
+
+func newHealthRuntime(registry *state.CredentialRegistry, client *coordination.Client) *Runtime {
+	return &Runtime{registry: registry, credentialHealth: coordination.NewCredentialHealth(client)}
+}
+
+// newHealthRegistry is the two-credential group every health test decides
+// about.
+func newHealthRegistry(t *testing.T) *state.CredentialRegistry {
+	t.Helper()
+	registry := state.NewCredentialRegistry()
+	if err := registry.ReplaceCredentials([]state.CredentialEntry{{
+		ID: 1, GroupID: 9, Version: 1, IdentityGeneration: 1, Fingerprint: "fp-1",
+		Status: state.CredentialStatusActive, AuthState: state.CredentialAuthStateReady,
+		EncryptedValue: "enc-1",
+	}, {
+		ID: 2, GroupID: 9, Version: 1, IdentityGeneration: 1, Fingerprint: "fp-2",
+		Status: state.CredentialStatusActive, AuthState: state.CredentialAuthStateReady,
+		EncryptedValue: "enc-2",
+	}}); err != nil {
+		t.Fatalf("ReplaceCredentials() error = %v", err)
+	}
+	return registry
 }

@@ -92,12 +92,17 @@ return out
 // credentialHealthPayload is the wire form of one credential's health. Times
 // are milliseconds rather than RFC 3339 so two instances with different
 // locales or clock formatting still produce comparable bytes.
+//
+// The payload carries reasons to avoid a credential and the reset counter that
+// orders them, and nothing else. An older build's payload decodes with
+// ResetGen zero, which is the generation every credential starts at, so a
+// rolling upgrade merges as it always did.
 type credentialHealthPayload struct {
 	GroupID            uint             `json:"group_id"`
 	IdentityGeneration uint64           `json:"identity_generation"`
+	ResetGen           uint64           `json:"reset_gen,omitempty"`
 	CooldownUntilMS    int64            `json:"cooldown_until_ms,omitempty"`
 	Blacklisted        bool             `json:"blacklisted,omitempty"`
-	FailureCount       int              `json:"failure_count,omitempty"`
 	ModelCooldowns     map[string]int64 `json:"model_cooldowns,omitempty"`
 }
 
@@ -250,8 +255,8 @@ func encodeCredentialHealth(change state.CredentialHealth) credentialHealthPaylo
 	payload := credentialHealthPayload{
 		GroupID:            change.GroupID,
 		IdentityGeneration: change.IdentityGeneration,
+		ResetGen:           change.ResetGen,
 		Blacklisted:        change.Blacklisted,
-		FailureCount:       change.FailureCount,
 	}
 	if !change.CooldownUntil.IsZero() {
 		payload.CooldownUntilMS = change.CooldownUntil.UnixMilli()
@@ -274,8 +279,8 @@ func decodeCredentialHealth(credentialID uint, encoded string) (state.Credential
 		CredentialID:       credentialID,
 		GroupID:            payload.GroupID,
 		IdentityGeneration: payload.IdentityGeneration,
+		ResetGen:           payload.ResetGen,
 		Blacklisted:        payload.Blacklisted,
-		FailureCount:       payload.FailureCount,
 	}
 	if payload.CooldownUntilMS != 0 {
 		change.CooldownUntil = time.UnixMilli(payload.CooldownUntilMS)

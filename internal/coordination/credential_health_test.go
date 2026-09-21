@@ -1,7 +1,13 @@
 package coordination
 
 import (
+	"bytes"
+	"encoding/json"
+	"reflect"
 	"testing"
+	"time"
+
+	"gpt-load/internal/state"
 )
 
 // The store, its change index, its sequence and its doorbell are a
@@ -21,6 +27,47 @@ func TestCredentialHealthKeyNamesAreStable(t *testing.T) {
 		if pair[0] != pair[1] {
 			t.Errorf("%s key = %q, want %q", name, pair[0], pair[1])
 		}
+	}
+}
+
+// The payload is the contract two builds have to agree on. It carries the
+// reasons to avoid a credential and the reset counter that orders them against
+// each other, and it must not carry the instance's own failure count: a
+// success on one instance would then reset every instance's progress toward
+// the blacklist threshold.
+func TestCredentialHealthPayloadCarriesReasonsAndTheResetCounter(t *testing.T) {
+	until := time.Now().Add(time.Minute).Truncate(time.Millisecond)
+	change := state.CredentialHealth{
+		CredentialID: 7, GroupID: 9, IdentityGeneration: 3, ResetGen: 4,
+		CooldownUntil: until, Blacklisted: true,
+		ModelCooldowns: map[string]time.Time{"gpt-4o": until},
+	}
+
+	encoded, err := json.Marshal(encodeCredentialHealth(change))
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if bytes.Contains(encoded, []byte("failure_count")) {
+		t.Fatalf("payload = %s, want no failure count on the wire", encoded)
+	}
+
+	decoded, err := decodeCredentialHealth(7, string(encoded))
+	if err != nil {
+		t.Fatalf("decodeCredentialHealth() error = %v", err)
+	}
+	if !reflect.DeepEqual(decoded, change) {
+		t.Fatalf("round trip = %#v, want %#v", decoded, change)
+	}
+
+	// A build from before the reset counter existed decodes at generation
+	// zero, which is where every credential starts, so a rolling upgrade
+	// merges the way it always did.
+	older, err := decodeCredentialHealth(7, `{"group_id":9,"identity_generation":3,"blacklisted":true}`)
+	if err != nil {
+		t.Fatalf("decodeCredentialHealth(older build) error = %v", err)
+	}
+	if older.ResetGen != 0 || !older.Blacklisted {
+		t.Fatalf("older payload = %#v, want generation zero and the blacklist", older)
 	}
 }
 

@@ -27,15 +27,14 @@ func healthRegistry(t *testing.T) (*CredentialRegistry, chan struct{}) {
 	return registry, woken
 }
 
-// Every health decision has to reach the other instances, so every mutation
-// that changes health has to reach the drain.
+// Every decision that takes a credential out of selection has to reach the
+// other instances, so every mutation that makes one has to reach the drain.
 func TestHealthChangesAreDrainedForEveryMutation(t *testing.T) {
 	cooldown := time.Now().Add(time.Minute).UTC()
 	for name, mutate := range map[string]func(*CredentialRegistry){
 		"cooldown":         func(r *CredentialRegistry) { r.SetCooldownWithChange(1, cooldown) },
 		"cooldown version": func(r *CredentialRegistry) { r.SetCooldownWithChangeIfVersion(1, 1, cooldown) },
 		"blacklist":        func(r *CredentialRegistry) { r.SetBlacklistedWithChange(1) },
-		"failure":          func(r *CredentialRegistry) { r.IncrFailure(1) },
 		"restore":          func(r *CredentialRegistry) { r.RestoreRuntimeState(1) },
 		"model cooldown": func(r *CredentialRegistry) {
 			ref, _ := r.CredentialRef(1)
@@ -46,11 +45,6 @@ func TestHealthChangesAreDrainedForEveryMutation(t *testing.T) {
 			r.SetCooldown(1, cooldown)
 			r.DrainHealthChanges()
 			r.ClearCooldownIfMatch(1, cooldown)
-		},
-		"clear failure": func(r *CredentialRegistry) {
-			r.IncrFailure(1)
-			r.DrainHealthChanges()
-			r.ClearFailure(1)
 		},
 		"recover": func(r *CredentialRegistry) {
 			r.SetBlacklistedWithChange(1)
@@ -77,20 +71,52 @@ func TestHealthChangesAreDrainedForEveryMutation(t *testing.T) {
 	}
 }
 
+// The failure count is this instance's own progress toward the threshold, not
+// a decision about the credential. Sharing it would let a success on any
+// instance reset every instance's progress, so a credential failing steadily
+// across a busy fleet might never reach the threshold at all.
+func TestFailureCountingStaysOnThisInstance(t *testing.T) {
+	registry, woken := healthRegistry(t)
+
+	if _, ok := registry.IncrFailure(1); !ok {
+		t.Fatal("IncrFailure(1) = false")
+	}
+	if !registry.ClearFailure(1) {
+		t.Fatal("ClearFailure(1) = false")
+	}
+	select {
+	case <-woken:
+		t.Fatal("counting a failure woke the drain; the count does not cross instances")
+	default:
+	}
+	if changes := registry.DrainHealthChanges(); changes != nil {
+		t.Fatalf("DrainHealthChanges() = %#v, want nothing to publish", changes)
+	}
+
+	// Crossing the threshold is a decision, and that one travels.
+	if _, changed := registry.SetBlacklistedWithChange(1); !changed {
+		t.Fatal("SetBlacklistedWithChange() reported no change")
+	}
+	if changes := registry.DrainHealthChanges(); len(changes) != 1 || !changes[0].Blacklisted {
+		t.Fatalf("DrainHealthChanges() = %#v, want the blacklist", changes)
+	}
+}
+
 // The drain reports the outcome, not the history: peers need where a
 // credential ended up, and replaying every step would only slow that down.
 func TestDrainHealthChangesCollapsesRepeatedDecisions(t *testing.T) {
 	registry, _ := healthRegistry(t)
-	registry.IncrFailure(1)
-	registry.IncrFailure(1)
-	registry.IncrFailure(2)
+	now := time.Now()
+	registry.SetCooldownWithChange(1, now.Add(time.Minute))
+	registry.SetCooldownWithChange(1, now.Add(2*time.Minute))
+	registry.SetCooldownWithChange(2, now.Add(time.Minute))
 
 	changes := registry.DrainHealthChanges()
 	if len(changes) != 2 {
 		t.Fatalf("DrainHealthChanges() = %d entries, want one per credential", len(changes))
 	}
-	if changes[0].CredentialID != 1 || changes[0].FailureCount != 2 {
-		t.Fatalf("first change = %#v, want credential 1 at 2 failures", changes[0])
+	if changes[0].CredentialID != 1 || !changes[0].CooldownUntil.Equal(now.Add(2*time.Minute)) {
+		t.Fatalf("first change = %#v, want credential 1 at the later cooldown", changes[0])
 	}
 	if drained := registry.DrainHealthChanges(); drained != nil {
 		t.Fatalf("second DrainHealthChanges() = %#v, want nothing left", drained)
@@ -107,11 +133,11 @@ func TestHealthChangesAreTrackedBeforeANotifierExists(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("ReplaceCredentials() error = %v", err)
 	}
-	registry.IncrFailure(1)
+	registry.SetBlacklistedWithChange(1)
 
 	registry.SetHealthChangeNotifier(func() {})
 	changes := registry.DrainHealthChanges()
-	if len(changes) != 1 || changes[0].FailureCount != 1 {
+	if len(changes) != 1 || !changes[0].Blacklisted {
 		t.Fatalf("DrainHealthChanges() = %#v, want the decision made before the notifier", changes)
 	}
 }
@@ -191,8 +217,8 @@ func TestApplyRemoteHealthAdvancesTheFailureGeneration(t *testing.T) {
 func TestApplyRemoteHealthIsIdempotent(t *testing.T) {
 	registry, _ := healthRegistry(t)
 	health := CredentialHealth{
-		CredentialID: 1, GroupID: 9, IdentityGeneration: 1,
-		FailureCount: 3, ModelCooldowns: map[string]time.Time{"gpt-4o": time.Now().Add(time.Minute)},
+		CredentialID: 1, GroupID: 9, IdentityGeneration: 1, Blacklisted: true,
+		ModelCooldowns: map[string]time.Time{"gpt-4o": time.Now().Add(time.Minute)},
 	}
 	if !registry.ApplyRemoteHealth(health) {
 		t.Fatal("first ApplyRemoteHealth() = false")
@@ -202,49 +228,154 @@ func TestApplyRemoteHealthIsIdempotent(t *testing.T) {
 	}
 }
 
-// The watch loop drains, publishes, then reads its own entries back, and the
-// two round trips in between are wide enough for the request path to decide
-// something new. That decision has to survive its own echo, or the next drain
-// publishes the reverted value to every other instance.
-func TestApplyRemoteHealthDoesNotRevertAChangeMadeSinceTheDrain(t *testing.T) {
-	registry, _ := healthRegistry(t)
-	registry.IncrFailure(1)
-	published := registry.DrainHealthChanges()
-	if len(published) != 1 {
-		t.Fatalf("DrainHealthChanges() returned %d changes, want 1", len(published))
-	}
-	registry.ClearFailure(1)
+// A record is read one or two round trips after it was written, so it always
+// describes a moment that may already be stale. It must never take a reason to
+// avoid the credential away — that is the whole job: once a credential is out
+// of selection somewhere, it stays out everywhere until a reset says otherwise.
+func TestApplyRemoteHealthNeverUndoesAReasonToAvoidTheCredential(t *testing.T) {
+	now := time.Now()
+	later := now.Add(time.Minute)
 
-	if registry.ApplyRemoteHealth(published[0]) {
-		t.Fatal("this instance's own echo was adopted over a newer local decision")
-	}
-	if snapshot, _ := registry.CredentialHealthSnapshot(1); snapshot.FailureCount != 0 {
-		t.Fatalf("failure count = %d after the echo, want 0", snapshot.FailureCount)
-	}
+	for name, check := range map[string]struct {
+		local  func(*CredentialRegistry)
+		remote CredentialHealth
+		want   func(*testing.T, CredentialRuntimeState, CredentialHealth)
+	}{
+		"a record with no cooldown cannot shorten one": {
+			local:  func(r *CredentialRegistry) { r.SetCooldownWithChange(1, later) },
+			remote: CredentialHealth{CredentialID: 1, GroupID: 9, IdentityGeneration: 1},
+			want: func(t *testing.T, gotState CredentialRuntimeState, got CredentialHealth) {
+				if gotState != CredentialRuntimeCooldown || !got.CooldownUntil.Equal(later) {
+					t.Fatalf("state = %v, cooldown = %v; the live cooldown was dropped", gotState, got.CooldownUntil)
+				}
+			},
+		},
+		"a record without the blacklist cannot lift one": {
+			local:  func(r *CredentialRegistry) { r.SetBlacklistedWithChange(1) },
+			remote: CredentialHealth{CredentialID: 1, GroupID: 9, IdentityGeneration: 1},
+			want: func(t *testing.T, gotState CredentialRuntimeState, _ CredentialHealth) {
+				if gotState != CredentialRuntimeBlacklisted {
+					t.Fatalf("state = %v, want the credential still blacklisted", gotState)
+				}
+			},
+		},
+		"a record without a model cannot lift its cooldown": {
+			local: func(r *CredentialRegistry) {
+				ref, _ := r.CredentialRef(1)
+				r.SetModelCooldown(ref, "gpt-4o", later, now)
+			},
+			remote: CredentialHealth{
+				CredentialID: 1, GroupID: 9, IdentityGeneration: 1,
+				ModelCooldowns: map[string]time.Time{"claude": later},
+			},
+			want: func(t *testing.T, _ CredentialRuntimeState, got CredentialHealth) {
+				if len(got.ModelCooldowns) != 2 || !got.ModelCooldowns["gpt-4o"].Equal(later) {
+					t.Fatalf("model cooldowns = %v, want both models refused", got.ModelCooldowns)
+				}
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			registry, _ := healthRegistry(t)
+			check.local(registry)
+			registry.ApplyRemoteHealth(check.remote)
 
-	// The half that makes it a fleet-wide problem rather than a local one.
-	next := registry.DrainHealthChanges()
-	if len(next) != 1 {
-		t.Fatalf("DrainHealthChanges() returned %d changes, want the local decision", len(next))
-	}
-	if next[0].FailureCount != 0 {
-		t.Fatalf("republished failure count = %d, want 0", next[0].FailureCount)
+			got, ok := registry.CredentialHealthSnapshot(1)
+			if !ok {
+				t.Fatal("CredentialHealthSnapshot() = false")
+			}
+			candidates := registry.CollectCredentialCandidates([]uint{9}, nil, now)
+			state := CredentialRuntimeAvailable
+			if len(candidates) == 1 && candidates[0].ID == 2 {
+				if got.Blacklisted {
+					state = CredentialRuntimeBlacklisted
+				} else {
+					state = CredentialRuntimeCooldown
+				}
+			}
+			check.want(t, state, got)
+		})
 	}
 }
 
-// A peer's decision must still land once this instance has nothing pending for
-// that credential, or the guard above would turn into a permanent refusal.
-func TestApplyRemoteHealthResumesAfterThePendingChangeIsDrained(t *testing.T) {
-	registry, _ := healthRegistry(t)
-	registry.IncrFailure(1)
-	registry.DrainHealthChanges()
+// Merging has to be order-independent, because the order two records reach a
+// third instance in says nothing about the order they were decided in.
+func TestApplyRemoteHealthMergesInEitherOrder(t *testing.T) {
+	now := time.Now()
+	first := CredentialHealth{
+		CredentialID: 1, GroupID: 9, IdentityGeneration: 1,
+		CooldownUntil:  now.Add(time.Minute),
+		ModelCooldowns: map[string]time.Time{"gpt-4o": now.Add(time.Minute)},
+	}
+	second := CredentialHealth{
+		CredentialID: 1, GroupID: 9, IdentityGeneration: 1,
+		Blacklisted:    true,
+		ModelCooldowns: map[string]time.Time{"claude": now.Add(2 * time.Minute)},
+	}
 
-	if !registry.ApplyRemoteHealth(CredentialHealth{
-		CredentialID: 1, GroupID: 9, IdentityGeneration: 1, Blacklisted: true, FailureCount: 1,
-	}) {
-		t.Fatal("ApplyRemoteHealth() = false with nothing pending; a peer's decision was lost")
+	snapshots := make([]CredentialHealth, 0, 2)
+	for _, order := range [][]CredentialHealth{{first, second}, {second, first}} {
+		registry, _ := healthRegistry(t)
+		for _, change := range order {
+			registry.ApplyRemoteHealth(change)
+		}
+		got, _ := registry.CredentialHealthSnapshot(1)
+		snapshots = append(snapshots, got)
 	}
-	if snapshot, _ := registry.CredentialHealthSnapshot(1); !snapshot.Blacklisted {
-		t.Fatal("the peer's blacklist did not reach the credential")
+
+	left, right := snapshots[0], snapshots[1]
+	if !left.Blacklisted || !right.Blacklisted ||
+		!left.CooldownUntil.Equal(right.CooldownUntil) ||
+		!sameModelCooldowns(left.ModelCooldowns, right.ModelCooldowns) ||
+		len(left.ModelCooldowns) != 2 {
+		t.Fatalf("order changed the result:\n first→second = %#v\n second→first = %#v", left, right)
 	}
+}
+
+// A reset is the only decision that takes reasons away, so it is the only one
+// that needs to be ordered against them. A record decided before the reset
+// must not resurrect what the reset cleared.
+func TestApplyRemoteHealthOrdersResetsAgainstOlderRecords(t *testing.T) {
+	t.Run("a record from before the reset is ignored", func(t *testing.T) {
+		registry, _ := healthRegistry(t)
+		registry.SetBlacklistedWithChange(1)
+		if !registry.RestoreRuntimeState(1) {
+			t.Fatal("RestoreRuntimeState() = false")
+		}
+		stale := CredentialHealth{
+			CredentialID: 1, GroupID: 9, IdentityGeneration: 1, Blacklisted: true,
+		}
+		if registry.ApplyRemoteHealth(stale) {
+			t.Fatal("a record decided before the reset was applied over it")
+		}
+		if got, _ := registry.CredentialHealthSnapshot(1); got.Blacklisted {
+			t.Fatal("the reset was undone by a record that predates it")
+		}
+	})
+
+	t.Run("a peer's reset clears what this instance decided before it", func(t *testing.T) {
+		registry, _ := healthRegistry(t)
+		registry.SetBlacklistedWithChange(1)
+		reset := CredentialHealth{
+			CredentialID: 1, GroupID: 9, IdentityGeneration: 1, ResetGen: 1,
+		}
+		if !registry.ApplyRemoteHealth(reset) {
+			t.Fatal("ApplyRemoteHealth() = false; the peer's reset did not land")
+		}
+		if got, _ := registry.CredentialHealthSnapshot(1); got.Blacklisted {
+			t.Fatal("the credential is still blacklisted after a peer reset it")
+		}
+	})
+
+	t.Run("a decision made after the reset survives", func(t *testing.T) {
+		registry, _ := healthRegistry(t)
+		registry.SetBlacklistedWithChange(1)
+		fresh := CredentialHealth{
+			CredentialID: 1, GroupID: 9, IdentityGeneration: 1, ResetGen: 1, Blacklisted: true,
+		}
+		registry.ApplyRemoteHealth(fresh)
+		if got, _ := registry.CredentialHealthSnapshot(1); !got.Blacklisted {
+			t.Fatal("a blacklist decided after the reset was dropped with it")
+		}
+	})
 }

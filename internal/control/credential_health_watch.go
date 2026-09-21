@@ -31,9 +31,10 @@ type CredentialHealthCoordinator interface {
 // One loop rather than two because the two halves are not independent: a push
 // makes peers ring this instance's doorbell, so ordering them here is what
 // keeps a burst of local decisions from arriving before the peers that caused
-// it. Ordering is not what protects a local decision from its own echo — the
-// window between the drain and the read back is two round trips wide, and the
-// registry refuses a change for a credential it still holds dirty.
+// it. Ordering is not what keeps the loop correct — the window between the
+// drain and the read back is two round trips wide, so a record always arrives
+// after decisions it could not have seen. The registry merges rather than
+// overwrites, which is what makes the arrival order stop mattering.
 //
 // Failures leave this instance on its own health decisions, which are still
 // correct for the traffic it is serving; they are just not yet shared. The
@@ -50,7 +51,13 @@ func (runtime *Runtime) runCredentialHealthWatch(ctx context.Context, ticker run
 	// Starting from zero pulls every credential's current health, which is how
 	// an instance that just started learns the cooldowns its peers decided
 	// while it was down.
-	applied := int64(0)
+	//
+	// Reading before the first publish rather than after it, because the reset
+	// counter a record carries only means anything next to the fleet's. An
+	// instance that published first would stamp its decisions with the zero
+	// every credential starts at, and every peer that had seen a reset would
+	// correctly ignore them as older than its own.
+	applied := runtime.applyCredentialHealth(ctx, 0)
 	local := make(chan struct{}, 1)
 	runtime.registry.SetHealthChangeNotifier(func() {
 		select {
@@ -110,9 +117,9 @@ func (runtime *Runtime) publishCredentialHealth(ctx context.Context) {
 //
 // This instance's own changes come back through here too, because skipping
 // them would require knowing which entries were ours and peers' writes
-// interleave with them. Letting them through is safe: the registry holds the
-// same values, and for the ones it does not — a local decision made since the
-// drain — it refuses the change rather than taking the older echo.
+// interleave with them. Letting them through costs nothing: an echo carries
+// reasons this instance already holds, and merging a reason twice is the same
+// as merging it once.
 //
 // The sequence can also come back lower than it went in, which means the
 // shared store restarted its counter. Adopting the lower value re-reads every

@@ -42,11 +42,17 @@ type CredentialEntry struct {
 	Blacklisted             bool
 	FailureCount            int
 	FailureGeneration       uint64
-	EncryptedValue          string
-	EncryptedProxy          string
-	ProxyFingerprint        string
-	quotaRemaining          *float64
-	quotaResetAt            time.Time
+	// ResetGen counts the times this credential was explicitly made available
+	// again. Cooldowns and blacklists only ever accumulate, so they need no
+	// ordering between instances; a reset is the one decision that takes them
+	// away, and this is how a peer tells a reset apart from an older record
+	// that simply had not heard about it yet.
+	ResetGen         uint64
+	EncryptedValue   string
+	EncryptedProxy   string
+	ProxyFingerprint string
+	quotaRemaining   *float64
+	quotaResetAt     time.Time
 }
 
 type CredentialMeta struct {
@@ -134,8 +140,11 @@ func ValidateCredentialEntries(entries []CredentialEntry) error {
 // ReplaceCredentials rebuilds the entire registry from persisted credential
 // configuration. An entry whose persisted configuration is unchanged keeps its
 // existing *CredentialEntry pointer, so its runtime health — CooldownUntil,
-// Blacklisted, FailureCount, FailureGeneration and model cooldowns — survives
-// the rebuild untouched. This is the same preservation rule ReconcileGroup
+// Blacklisted, FailureCount, FailureGeneration, ResetGen and model cooldowns —
+// survives the rebuild untouched. ResetGen has to survive it for the same
+// reason the rest does, and for one more: a reset counter that restarted would
+// make this instance's records look older than a peer's, and its decisions
+// would be ignored until the counter climbed back. This is the same preservation rule ReconcileGroup
 // applies (see samePersistedCredentialConfig) and it is what makes a full
 // reload repeatable: reloading committed configuration after a remote change
 // must not reset credential health that only this process knows about.
@@ -917,6 +926,7 @@ func (r *CredentialRegistry) RestoreRuntimeState(credentialID uint) bool {
 	entry.Blacklisted = false
 	entry.FailureCount = 0
 	entry.FailureGeneration++
+	entry.ResetGen++
 	r.markHealthDirtyLocked(credentialID)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true
@@ -927,6 +937,13 @@ func (r *CredentialRegistry) SetBlacklisted(credentialID uint) bool {
 	return exists
 }
 
+// IncrFailure counts this instance's own failures toward the blacklist
+// threshold. The count stays on this instance: it never decides whether a
+// credential is selected — only crossing the threshold does, and the blacklist
+// that follows is what travels. Sharing the count instead would have every
+// success anywhere reset every instance's progress toward the threshold, so a
+// credential failing steadily across a busy fleet might never be blacklisted
+// at all.
 func (r *CredentialRegistry) IncrFailure(credentialID uint) (int, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -936,10 +953,12 @@ func (r *CredentialRegistry) IncrFailure(credentialID uint) (int, bool) {
 	}
 	entry.FailureCount++
 	entry.FailureGeneration++
-	r.markHealthDirtyLocked(credentialID)
 	return entry.FailureCount, true
 }
 
+// ClearFailure forgets this instance's progress toward the threshold after a
+// success. Like the count itself it stays local; a success is not evidence
+// that a peer's blacklist was wrong.
 func (r *CredentialRegistry) ClearFailure(credentialID uint) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -950,7 +969,6 @@ func (r *CredentialRegistry) ClearFailure(credentialID uint) bool {
 	if entry.FailureCount != 0 {
 		entry.FailureCount = 0
 		entry.FailureGeneration++
-		r.markHealthDirtyLocked(credentialID)
 	}
 	return true
 }
@@ -966,6 +984,7 @@ func (r *CredentialRegistry) Recover(credentialID uint) bool {
 		entry.Blacklisted = false
 		entry.FailureCount = 0
 		entry.FailureGeneration++
+		entry.ResetGen++
 		r.markHealthDirtyLocked(credentialID)
 	}
 	r.scheduling.SyncCredential(runtimeView(entry))
@@ -1011,6 +1030,7 @@ func (r *CredentialRegistry) restoreRuntimeStateIfMatch(
 	entry.Blacklisted = false
 	entry.FailureCount = 0
 	entry.FailureGeneration++
+	entry.ResetGen++
 	r.markHealthDirtyLocked(ref.ID)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true
