@@ -205,7 +205,9 @@ REDIS_DSN=redis://sentinel-a:26379,sentinel-b:26379,sentinel-c:26379?master_name
 ```
 
 A `master_name` query parameter selects Redis Sentinel; without it the DSN is a
-single node. Redis Cluster is not supported.
+single node. List every sentinel, comma-separated — a client that knows only one
+of them loses the master whenever that one is the sentinel that is down. A
+sentinel address without a port means `26379`. Redis Cluster is not supported.
 
 What becomes shared: configuration changes made through any instance's
 management plane, access key RPM limits and cost budgets, credential cooldowns,

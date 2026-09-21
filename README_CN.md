@@ -201,7 +201,9 @@ REDIS_DSN=rediss://user:password@redis.example:6379/0
 REDIS_DSN=redis://sentinel-a:26379,sentinel-b:26379,sentinel-c:26379?master_name=gptload
 ```
 
-带 `master_name` 查询参数即走 Redis Sentinel；不带则按单节点处理。不支持 Redis Cluster。
+带 `master_name` 查询参数即走 Redis Sentinel；不带则按单节点处理。哨兵地址要用逗号
+全部列出——只知道一个哨兵的客户端，会在那个哨兵恰好宕机时丢掉主节点。不带端口的
+哨兵地址按 `26379` 处理。不支持 Redis Cluster。
 
 共享的部分：任一实例管理面做出的配置变更、AccessKey 的 RPM 限流与成本额度、凭据
 冷却/拉黑/模型冷却、`previous_response_id` 的归属，以及后台周期任务——每个周期

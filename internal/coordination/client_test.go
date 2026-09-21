@@ -105,3 +105,54 @@ func TestInstanceIdentityFailsWithoutRandomness(t *testing.T) {
 		t.Fatal("newIdentity() error = nil, want a failure for an exhausted random source")
 	}
 }
+
+// A sentinel set is normally written as a comma-separated host list, which is
+// what every Sentinel client and every operator's runbook uses. go-redis reads
+// only one host out of a failover URL, so without splitting it here the whole
+// list is dialled as a single hostname and the instance never starts — which is
+// exactly what happened the first time the Compose topology was brought up.
+func TestParseDSNSplitsCommaSeparatedSentinels(t *testing.T) {
+	sentinel, err := parseDSN(
+		"redis://sentinel-a:26379,sentinel-b:26379,sentinel-c:26379?master_name=gptload")
+	if err != nil {
+		t.Fatalf("parseDSN() error = %v", err)
+	}
+	want := []string{"sentinel-a:26379", "sentinel-b:26379", "sentinel-c:26379"}
+	if !slices.Equal(sentinel.failover.SentinelAddrs, want) {
+		t.Fatalf("SentinelAddrs = %v, want %v", sentinel.failover.SentinelAddrs, want)
+	}
+	if sentinel.masterName != "gptload" {
+		t.Fatalf("masterName = %q, want gptload", sentinel.masterName)
+	}
+}
+
+// A sentinel address without a port means Sentinel's port, not the data node's.
+// Defaulting to 6379 would connect to the master and then fail every sentinel
+// command, which reads as a broken cluster rather than a misconfigured DSN.
+func TestParseDSNDefaultsSentinelPorts(t *testing.T) {
+	sentinel, err := parseDSN("redis://sentinel-a,sentinel-b:26380?master_name=gptload")
+	if err != nil {
+		t.Fatalf("parseDSN() error = %v", err)
+	}
+	want := []string{"sentinel-a:26379", "sentinel-b:26380"}
+	if !slices.Equal(sentinel.failover.SentinelAddrs, want) {
+		t.Fatalf("SentinelAddrs = %v, want %v", sentinel.failover.SentinelAddrs, want)
+	}
+}
+
+// Both spellings of "more sentinels" have to survive together, or an operator
+// who mixes them silently loses half the set.
+func TestParseDSNKeepsCommaHostsAndAddrParameters(t *testing.T) {
+	sentinel, err := parseDSN(
+		"redis://s1:26379,s2:26379/0?master_name=m&addr=s3:26379")
+	if err != nil {
+		t.Fatalf("parseDSN() error = %v", err)
+	}
+	want := []string{"s1:26379", "s2:26379", "s3:26379"}
+	if !slices.Equal(sentinel.failover.SentinelAddrs, want) {
+		t.Fatalf("SentinelAddrs = %v, want %v", sentinel.failover.SentinelAddrs, want)
+	}
+	if sentinel.failover.DB != 0 {
+		t.Fatalf("DB = %d, want 0", sentinel.failover.DB)
+	}
+}

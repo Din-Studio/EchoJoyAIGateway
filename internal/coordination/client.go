@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"strings"
 
@@ -79,6 +80,13 @@ func (t topology) open() *redis.Client {
 	return redis.NewClient(t.standalone)
 }
 
+// defaultSentinelPort is the port a sentinel address without one means. It is
+// Sentinel's own convention, and it is not go-redis's URL default of 6379:
+// that default belongs to a data node, and silently pointing a sentinel
+// address at the master's port produces a connection that answers and then
+// fails every sentinel command.
+const defaultSentinelPort = "26379"
+
 // parseDSN dispatches between a single node and a Sentinel topology. A
 // master_name query parameter is what distinguishes them, matching go-redis's
 // own failover URL convention.
@@ -88,18 +96,58 @@ func parseDSN(dsn string) (topology, error) {
 		// url.Error embeds the whole DSN, which may carry a password.
 		return topology{}, fmt.Errorf("REDIS_DSN is invalid")
 	}
-	if parsed.Query().Get("master_name") != "" {
-		options, err := redis.ParseFailoverURL(dsn)
+	if parsed.Query().Get("master_name") == "" {
+		options, err := redis.ParseURL(dsn)
 		if err != nil {
 			return topology{}, fmt.Errorf("parse REDIS_DSN: %w", err)
 		}
-		return topology{mode: modeSentinel, masterName: options.MasterName, failover: options}, nil
+		return topology{mode: modeStandalone, standalone: options}, nil
 	}
-	options, err := redis.ParseURL(dsn)
+
+	addrs, err := sentinelAddrs(parsed.Host)
+	if err != nil {
+		return topology{}, err
+	}
+	// go-redis takes exactly one sentinel from the URL host, so a DSN listing
+	// several of them there would be dialled as one absurd hostname. Handing it
+	// the first keeps it deriving everything else — scheme, TLS, credentials,
+	// database, master name and any `addr` parameters — from the real DSN.
+	single := *parsed
+	single.Host = addrs[0]
+	options, err := redis.ParseFailoverURL(single.String())
 	if err != nil {
 		return topology{}, fmt.Errorf("parse REDIS_DSN: %w", err)
 	}
-	return topology{mode: modeStandalone, standalone: options}, nil
+	// The host go-redis produced is the first entry; the rest came from `addr`
+	// parameters and are kept. Both spellings of "more sentinels" therefore
+	// work, and an operator using both does not lose half of them.
+	options.SentinelAddrs = append(addrs, options.SentinelAddrs[1:]...)
+	return topology{mode: modeSentinel, masterName: options.MasterName, failover: options}, nil
+}
+
+// sentinelAddrs splits a comma-separated sentinel list into dialable
+// addresses. Listing every sentinel is the point of the topology: a client
+// that knows only one of them loses the master whenever that one is the
+// sentinel that happens to be down.
+//
+// Splitting on commas is safe for IPv6 literals, which separate their groups
+// with colons and are already bracketed inside a URL host.
+func sentinelAddrs(host string) ([]string, error) {
+	addrs := make([]string, 0, strings.Count(host, ",")+1)
+	for _, entry := range strings.Split(host, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if _, _, err := net.SplitHostPort(entry); err != nil {
+			entry = net.JoinHostPort(entry, defaultSentinelPort)
+		}
+		addrs = append(addrs, entry)
+	}
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("REDIS_DSN must list at least one sentinel address")
+	}
+	return addrs, nil
 }
 
 // Open connects to Redis and verifies reachability with a PING. A failure here
