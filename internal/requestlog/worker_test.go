@@ -39,14 +39,17 @@ func TestUsageStatUpsertUsesDialectSpecificGORMConflictSQL(t *testing.T) {
 	tests := []struct {
 		name           string
 		dialector      gorm.Dialector
-		mustContain    string
-		mustNotContain string
+		mustContain    []string
+		mustNotContain []string
 	}{
 		{
-			name:           "sqlite",
-			dialector:      gormsqlite.Open(":memory:"),
-			mustContain:    "ON CONFLICT",
-			mustNotContain: "ON DUPLICATE KEY UPDATE",
+			name:      "sqlite",
+			dialector: gormsqlite.Open(":memory:"),
+			mustContain: []string{
+				"ON CONFLICT",
+				"`request_count`=CASE WHEN `usage_stats`.`request_count` > 9223372036854775806 THEN -1 ELSE `usage_stats`.`request_count` + 1 END",
+			},
+			mustNotContain: []string{"ON DUPLICATE KEY UPDATE", "excluded"},
 		},
 		{
 			name: "mysql",
@@ -54,8 +57,11 @@ func TestUsageStatUpsertUsesDialectSpecificGORMConflictSQL(t *testing.T) {
 				DSN:                       "user:password@tcp(127.0.0.1:3306)/gpt_load",
 				SkipInitializeWithVersion: true,
 			}),
-			mustContain:    "ON DUPLICATE KEY UPDATE",
-			mustNotContain: "ON CONFLICT",
+			mustContain: []string{
+				"ON DUPLICATE KEY UPDATE",
+				"`request_count`=CASE WHEN `usage_stats`.`request_count` > 9223372036854775806 THEN -1 ELSE `usage_stats`.`request_count` + 1 END",
+			},
+			mustNotContain: []string{"ON CONFLICT", "VALUES(`request_count`)"},
 		},
 		{
 			name: "postgres",
@@ -63,8 +69,11 @@ func TestUsageStatUpsertUsesDialectSpecificGORMConflictSQL(t *testing.T) {
 				DSN:                  "host=127.0.0.1 user=user password=password dbname=gpt_load sslmode=disable",
 				PreferSimpleProtocol: true,
 			}),
-			mustContain:    "ON CONFLICT",
-			mustNotContain: "ON DUPLICATE KEY UPDATE",
+			mustContain: []string{
+				"ON CONFLICT",
+				`"request_count"=CASE WHEN "usage_stats"."request_count" > 9223372036854775806 THEN -1 ELSE "usage_stats"."request_count" + 1 END`,
+			},
+			mustNotContain: []string{"ON DUPLICATE KEY UPDATE", "excluded"},
 		},
 	}
 	for _, test := range tests {
@@ -78,16 +87,20 @@ func TestUsageStatUpsertUsesDialectSpecificGORMConflictSQL(t *testing.T) {
 			if err != nil {
 				t.Fatalf("gorm.Open() error = %v", err)
 			}
-			result := db.Clauses(usageStatUpsertClause()).Create(&stat)
+			result := db.Clauses(usageStatUpsertClause(usageStatDelta{RequestCount: 1, SuccessCount: 1})).Create(&stat)
 			if result.Error != nil {
 				t.Fatalf("Create() error = %v", result.Error)
 			}
-			sql := result.Statement.SQL.String()
-			if !strings.Contains(sql, test.mustContain) {
-				t.Fatalf("generated SQL = %q, want %q", sql, test.mustContain)
+			sql := db.Dialector.Explain(result.Statement.SQL.String(), result.Statement.Vars...)
+			for _, want := range test.mustContain {
+				if !strings.Contains(sql, want) {
+					t.Fatalf("generated SQL = %q, want %q", sql, want)
+				}
 			}
-			if strings.Contains(sql, test.mustNotContain) {
-				t.Fatalf("generated SQL = %q, must not contain %q", sql, test.mustNotContain)
+			for _, forbidden := range test.mustNotContain {
+				if strings.Contains(strings.ToLower(sql), strings.ToLower(forbidden)) {
+					t.Fatalf("generated SQL = %q, must not contain %q", sql, forbidden)
+				}
 			}
 		})
 	}
@@ -495,8 +508,9 @@ func TestWriteBatchInsertsOnlyNewRequestLogsAndAggregatesUsage(t *testing.T) {
 	if err := (&gormBatchWriter{db: db}).WriteBatch(context.Background(), rows); err != nil {
 		t.Fatalf("WriteBatch() error = %v", err)
 	}
-	if requestLogQueries != 1 || usageStatQueries != 1 {
-		t.Fatalf("existing queries = request_logs:%d usage_stats:%d, want one each", requestLogQueries, usageStatQueries)
+	// 统计行在数据库内增量累加，写入路径不再读取 usage_stats 现值。
+	if requestLogQueries != 1 || usageStatQueries != 0 {
+		t.Fatalf("existing queries = request_logs:%d usage_stats:%d, want 1/0", requestLogQueries, usageStatQueries)
 	}
 	countQueries = false
 
@@ -550,6 +564,49 @@ func TestWriteBatchInsertsOnlyNewRequestLogsAndAggregatesUsage(t *testing.T) {
 	}
 	if !reflect.DeepEqual(replayedStat, stat) {
 		t.Fatalf("replay changed UsageStat: got %+v want %+v", replayedStat, stat)
+	}
+}
+
+func TestWriteBatchAccumulatesSeparateBatchesIntoOneBucket(t *testing.T) {
+	db := openRequestLogQueryDB(t)
+	hour := time.Date(2026, time.July, 24, 12, 0, 0, 0, time.UTC)
+	writer := &gormBatchWriter{db: db}
+	for index := 0; index < 3; index++ {
+		row := aggregationRow(aggregationRequestID(300+index), hour.Add(time.Duration(index)*time.Minute), 7, "accumulate-model")
+		row.ChannelID = "openai"
+		row.CredentialID = 21
+		row.UncachedInputTokens = int64(10 * (index + 1))
+		row.OutputTokens = int64(index + 1)
+		row.EstimatedCostNanoUSD = int64(100 * (index + 1))
+		row.AttemptRows = []models.RequestLogAttempt{{
+			RequestID: row.ID, Sequence: 1, CompletedAtMS: row.CompletedAtMS,
+			GroupID: 7, GroupName: "accumulate", ChannelID: "openai", CredentialID: 21,
+			StatusCode: 200, FailureCategory: string(telemetry.FailureCategoryOK),
+			Action: string(telemetry.ActionTerminate),
+		}}
+		if err := writer.WriteBatch(context.Background(), []models.RequestLog{row}); err != nil {
+			t.Fatalf("WriteBatch(%d) error = %v", index, err)
+		}
+	}
+
+	var stats []models.UsageStat
+	if err := db.Where("model = ?", "accumulate-model").Find(&stats).Error; err != nil {
+		t.Fatalf("query UsageStats: %v", err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("UsageStat rows = %+v, want one accumulated bucket", stats)
+	}
+	if stats[0].RequestCount != 3 || stats[0].SuccessCount != 3 || stats[0].FailureCount != 0 ||
+		stats[0].UncachedInputTokens != 60 || stats[0].OutputTokens != 6 ||
+		stats[0].EstimatedCostNanoUSD != 600 {
+		t.Fatalf("UsageStat = %+v, want sums of three batches", stats[0])
+	}
+	var attemptStats []models.CredentialAttemptStat
+	if err := db.Where("credential_id = ?", 21).Find(&attemptStats).Error; err != nil {
+		t.Fatalf("query CredentialAttemptStats: %v", err)
+	}
+	if len(attemptStats) != 1 || attemptStats[0].SuccessCount != 3 || attemptStats[0].FailureCount != 0 {
+		t.Fatalf("CredentialAttemptStat rows = %+v, want one bucket with three successes", attemptStats)
 	}
 }
 
@@ -899,24 +956,8 @@ func TestWriteBatchRollsBackRequestLogsAndStatsOnFailure(t *testing.T) {
 		assertUsageJournalCount(t, db, 0)
 	})
 
-	t.Run("existing UsageStat query", func(t *testing.T) {
-		db := openRequestLogQueryDB(t)
-		const callbackName = "test:reject_existing_usage_stat_query"
-		if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
-			if tx.Statement.Table == "usage_stats" {
-				tx.AddError(errors.New("forced existing UsageStat query failure"))
-			}
-		}); err != nil {
-			t.Fatalf("register callback: %v", err)
-		}
-		if err := (&gormBatchWriter{db: db}).WriteBatch(context.Background(), []models.RequestLog{newRow()}); err == nil {
-			t.Fatal("WriteBatch() error = nil, want UsageStat query failure")
-		}
-		assertRequestLogAndUsageStatCounts(t, db, 0, 0)
-		assertUsageJournalCount(t, db, 0)
-	})
-
-	t.Run("existing UsageStat scan conversion", func(t *testing.T) {
+	// 写入路径不再读取现有统计行；不兼容的现有列值由数据库在增量 upsert 时拒绝。
+	t.Run("existing UsageStat incompatible column", func(t *testing.T) {
 		db := openRequestLogQueryDB(t)
 		row := newRow()
 		hourMS := row.CompletedAtMS - row.CompletedAtMS%3_600_000
@@ -948,8 +989,8 @@ func TestWriteBatchRollsBackRequestLogsAndStatsOnFailure(t *testing.T) {
 			context.Background(),
 			[]models.RequestLog{row},
 		)
-		if err == nil || !strings.Contains(err.Error(), "query existing usage stats") {
-			t.Fatalf("WriteBatch() error = %v, want UsageStat scan failure", err)
+		if err == nil || !strings.Contains(err.Error(), "upsert usage stat") {
+			t.Fatalf("WriteBatch() error = %v, want UsageStat upsert rejection", err)
 		}
 		assertRequestLogAndUsageStatCounts(t, db, 0, 1)
 		assertUsageJournalCount(t, db, 0)
@@ -974,7 +1015,7 @@ func TestWriteBatchRollsBackRequestLogsAndStatsOnFailure(t *testing.T) {
 		if persisted.RequestCount != invalidRequestCount ||
 			persisted.SuccessCount != 7 ||
 			persisted.EstimatedCostNanoUSD != 3_500_000_000 {
-			t.Fatalf("existing UsageStat changed after scan failure: %+v", persisted)
+			t.Fatalf("existing UsageStat changed after upsert rejection: %+v", persisted)
 		}
 	})
 
@@ -1102,19 +1143,6 @@ func TestWriteBatchRejectsIntegerAndCostOverflow(t *testing.T) {
 		}
 		row := aggregationRow(aggregationRequestID(52), hour, 12, "overflow-model")
 		row.PricingCompleteness = string(pricing.CompletenessPartial)
-		assertBatchWriterRejectsRowsWithoutChanges(t, db, &existing, []models.RequestLog{row})
-	})
-
-	t.Run("negative existing integer", func(t *testing.T) {
-		db := openRequestLogQueryDB(t)
-		existing := models.UsageStat{
-			BucketStartMS: 1_784_905_200_000,
-			AccessKeyID:   1,
-			GroupID:       12,
-			Model:         "overflow-model",
-			FailureCount:  -1,
-		}
-		row := aggregationRow(aggregationRequestID(47), hour, 12, "overflow-model")
 		assertBatchWriterRejectsRowsWithoutChanges(t, db, &existing, []models.RequestLog{row})
 	})
 

@@ -209,59 +209,31 @@ func applyCredentialAttemptStats(tx *gorm.DB, attempts []models.RequestLogAttemp
 		return nil
 	}
 	keys := make([]credentialAttemptStatKey, 0, len(deltas))
-	credentialSet := make(map[uint]struct{})
-	bucketSet := make(map[int64]struct{})
 	for key := range deltas {
 		keys = append(keys, key)
-		credentialSet[key.CredentialID] = struct{}{}
-		bucketSet[key.BucketStartMS] = struct{}{}
 	}
+	// 固定的行访问顺序是跨实例一致的行锁获取顺序，避免共享数据库上的死锁。
 	sort.Slice(keys, func(left, right int) bool {
 		if keys[left].CredentialID != keys[right].CredentialID {
 			return keys[left].CredentialID < keys[right].CredentialID
 		}
 		return keys[left].BucketStartMS < keys[right].BucketStartMS
 	})
-	credentialIDs := make([]uint, 0, len(credentialSet))
-	for credentialID := range credentialSet {
-		credentialIDs = append(credentialIDs, credentialID)
-	}
-	bucketStarts := make([]int64, 0, len(bucketSet))
-	for bucketStartMS := range bucketSet {
-		bucketStarts = append(bucketStarts, bucketStartMS)
-	}
-
-	var existingRows []models.CredentialAttemptStat
-	if err := tx.Where("credential_id IN ? AND bucket_start_ms IN ?", credentialIDs, bucketStarts).
-		Find(&existingRows).Error; err != nil {
-		return fmt.Errorf("query credential attempt stats: %w", err)
-	}
-	existing := make(map[credentialAttemptStatKey]models.CredentialAttemptStat, len(existingRows))
-	for _, row := range existingRows {
-		if row.SuccessCount < 0 || row.FailureCount < 0 {
-			return fmt.Errorf("query credential attempt stats: corrupt row")
-		}
-		existing[credentialAttemptStatKey{
-			CredentialID: row.CredentialID, BucketStartMS: row.BucketStartMS,
-		}] = row
-	}
 
 	for _, key := range keys {
-		row := existing[key]
-		row.CredentialID = key.CredentialID
-		row.BucketStartMS = key.BucketStartMS
 		delta := deltas[key]
-		if err := checkedInt64Add(&row.SuccessCount, delta.SuccessCount, "credential attempt success_count"); err != nil {
-			return err
-		}
-		if err := checkedInt64Add(&row.FailureCount, delta.FailureCount, "credential attempt failure_count"); err != nil {
-			return err
+		row := models.CredentialAttemptStat{
+			CredentialID:  key.CredentialID,
+			BucketStartMS: key.BucketStartMS,
+			SuccessCount:  delta.SuccessCount,
+			FailureCount:  delta.FailureCount,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "credential_id"}, {Name: "bucket_start_ms"}},
-			DoUpdates: clause.AssignmentColumns([]string{
-				"success_count", "failure_count",
-			}),
+			DoUpdates: clause.Assignments(incrementAssignments(map[string]int64{
+				"success_count": delta.SuccessCount,
+				"failure_count": delta.FailureCount,
+			})),
 		}).Create(&row).Error; err != nil {
 			return fmt.Errorf("upsert credential attempt stat: %w", err)
 		}
@@ -332,30 +304,11 @@ func applyUsageJournalBatch(
 	if err != nil {
 		return err
 	}
-	keys := sortedUsageStatKeys(deltas)
-	existingStats, err := queryExistingUsageStats(tx, keys)
-	if err != nil {
-		return err
-	}
-
-	absolute := make([]models.UsageStat, 0, len(keys))
-	for _, key := range keys {
-		stat := existingStats[key]
-		stat.BucketStartMS = key.BucketStartMS
-		stat.AccessKeyID = key.AccessKeyID
-		stat.ChannelID = key.ChannelID
-		stat.GroupID = key.GroupID
-		stat.CredentialID = key.CredentialID
-		stat.Model = key.Model
-		total, err := checkedUsageStatTotal(stat, deltas[key])
-		if err != nil {
-			return err
-		}
-		absolute = append(absolute, total)
-	}
-
-	for _, stat := range absolute {
-		if err := tx.Clauses(usageStatUpsertClause()).Create(&stat).Error; err != nil {
+	// 固定的行访问顺序是跨实例一致的行锁获取顺序，避免共享数据库上的死锁。
+	for _, key := range sortedUsageStatKeys(deltas) {
+		delta := deltas[key]
+		stat := newUsageStat(key, delta)
+		if err := tx.Clauses(usageStatUpsertClause(delta)).Create(&stat).Error; err != nil {
 			return fmt.Errorf("upsert usage stat: %w", err)
 		}
 	}
@@ -379,7 +332,53 @@ func applyUsageJournalBatch(
 	return nil
 }
 
-func usageStatUpsertClause() clause.OnConflict {
+// newUsageStat is the row inserted when the bucket does not exist yet; on
+// conflict the same delta is added to the existing row by usageStatUpsertClause.
+func newUsageStat(key usageStatKey, delta usageStatDelta) models.UsageStat {
+	return models.UsageStat{
+		BucketStartMS:           key.BucketStartMS,
+		AccessKeyID:             key.AccessKeyID,
+		ChannelID:               key.ChannelID,
+		GroupID:                 key.GroupID,
+		CredentialID:            key.CredentialID,
+		Model:                   key.Model,
+		RequestCount:            delta.RequestCount,
+		SuccessCount:            delta.SuccessCount,
+		FailureCount:            delta.FailureCount,
+		UncachedInputTokens:     delta.UncachedInputTokens,
+		OutputTokens:            delta.OutputTokens,
+		CacheReadTokens:         delta.CacheReadTokens,
+		CacheWrite5MTokens:      delta.CacheWrite5MTokens,
+		CacheWrite1HTokens:      delta.CacheWrite1HTokens,
+		CacheWriteUnknownTokens: delta.CacheWriteUnknownTokens,
+		EstimatedCostNanoUSD:    delta.EstimatedCostNanoUSD,
+		UsageMissingCount:       delta.UsageMissingCount,
+		PartialCount:            delta.PartialCount,
+		UnpricedRequestCount:    delta.UnpricedRequestCount,
+		PricingPartialCount:     delta.PricingPartialCount,
+	}
+}
+
+func (delta usageStatDelta) columnAmounts() map[string]int64 {
+	return map[string]int64{
+		"request_count":              delta.RequestCount,
+		"success_count":              delta.SuccessCount,
+		"failure_count":              delta.FailureCount,
+		"uncached_input_tokens":      delta.UncachedInputTokens,
+		"output_tokens":              delta.OutputTokens,
+		"cache_read_tokens":          delta.CacheReadTokens,
+		"cache_write_5m_tokens":      delta.CacheWrite5MTokens,
+		"cache_write_1h_tokens":      delta.CacheWrite1HTokens,
+		"cache_write_unknown_tokens": delta.CacheWriteUnknownTokens,
+		"estimated_cost_nano_usd":    delta.EstimatedCostNanoUSD,
+		"usage_missing_count":        delta.UsageMissingCount,
+		"partial_count":              delta.PartialCount,
+		"unpriced_request_count":     delta.UnpricedRequestCount,
+		"pricing_partial_count":      delta.PricingPartialCount,
+	}
+}
+
+func usageStatUpsertClause(delta usageStatDelta) clause.OnConflict {
 	return clause.OnConflict{
 		Columns: []clause.Column{
 			{Name: "bucket_start_ms"},
@@ -389,22 +388,7 @@ func usageStatUpsertClause() clause.OnConflict {
 			{Name: "credential_id"},
 			{Name: "model"},
 		},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"request_count",
-			"success_count",
-			"failure_count",
-			"uncached_input_tokens",
-			"output_tokens",
-			"cache_read_tokens",
-			"cache_write_5m_tokens",
-			"cache_write_1h_tokens",
-			"cache_write_unknown_tokens",
-			"estimated_cost_nano_usd",
-			"usage_missing_count",
-			"partial_count",
-			"unpriced_request_count",
-			"pricing_partial_count",
-		}),
+		DoUpdates: clause.Assignments(incrementAssignments(delta.columnAmounts())),
 	}
 }
 
@@ -679,100 +663,6 @@ func sortedUsageStatKeys(deltas map[usageStatKey]usageStatDelta) []usageStatKey 
 		return keys[left].Model < keys[right].Model
 	})
 	return keys
-}
-
-func queryExistingUsageStats(
-	tx *gorm.DB,
-	keys []usageStatKey,
-) (map[usageStatKey]models.UsageStat, error) {
-	query := tx.Model(&models.UsageStat{})
-	for index, key := range keys {
-		if index == 0 {
-			query = query.Where(
-				"bucket_start_ms = ? AND access_key_id = ? AND channel_id = ? AND group_id = ? AND credential_id = ? AND model = ?",
-				key.BucketStartMS,
-				key.AccessKeyID,
-				key.ChannelID,
-				key.GroupID,
-				key.CredentialID,
-				key.Model,
-			)
-			continue
-		}
-		query = query.Or(
-			"bucket_start_ms = ? AND access_key_id = ? AND channel_id = ? AND group_id = ? AND credential_id = ? AND model = ?",
-			key.BucketStartMS,
-			key.AccessKeyID,
-			key.ChannelID,
-			key.GroupID,
-			key.CredentialID,
-			key.Model,
-		)
-	}
-	var rows []models.UsageStat
-	if err := query.Find(&rows).Error; err != nil {
-		return nil, fmt.Errorf("query existing usage stats: %w", err)
-	}
-	existing := make(map[usageStatKey]models.UsageStat, len(rows))
-	for _, row := range rows {
-		key := usageStatKey{
-			BucketStartMS: row.BucketStartMS,
-			AccessKeyID:   row.AccessKeyID,
-			ChannelID:     row.ChannelID,
-			GroupID:       row.GroupID,
-			CredentialID:  row.CredentialID,
-			Model:         row.Model,
-		}
-		existing[key] = row
-	}
-	return existing, nil
-}
-
-func checkedUsageStatTotal(
-	existing models.UsageStat,
-	delta usageStatDelta,
-) (models.UsageStat, error) {
-	total := existing
-	for _, field := range []struct {
-		name  string
-		left  int64
-		right int64
-		set   func(int64)
-	}{
-		{name: "request_count", left: existing.RequestCount, right: delta.RequestCount, set: func(value int64) { total.RequestCount = value }},
-		{name: "success_count", left: existing.SuccessCount, right: delta.SuccessCount, set: func(value int64) { total.SuccessCount = value }},
-		{name: "failure_count", left: existing.FailureCount, right: delta.FailureCount, set: func(value int64) { total.FailureCount = value }},
-		{name: "uncached_input_tokens", left: existing.UncachedInputTokens, right: delta.UncachedInputTokens, set: func(value int64) { total.UncachedInputTokens = value }},
-		{name: "output_tokens", left: existing.OutputTokens, right: delta.OutputTokens, set: func(value int64) { total.OutputTokens = value }},
-		{name: "cache_read_tokens", left: existing.CacheReadTokens, right: delta.CacheReadTokens, set: func(value int64) { total.CacheReadTokens = value }},
-		{name: "cache_write_5m_tokens", left: existing.CacheWrite5MTokens, right: delta.CacheWrite5MTokens, set: func(value int64) { total.CacheWrite5MTokens = value }},
-		{name: "cache_write_1h_tokens", left: existing.CacheWrite1HTokens, right: delta.CacheWrite1HTokens, set: func(value int64) { total.CacheWrite1HTokens = value }},
-		{name: "cache_write_unknown_tokens", left: existing.CacheWriteUnknownTokens, right: delta.CacheWriteUnknownTokens, set: func(value int64) { total.CacheWriteUnknownTokens = value }},
-		{name: "usage_missing_count", left: existing.UsageMissingCount, right: delta.UsageMissingCount, set: func(value int64) { total.UsageMissingCount = value }},
-		{name: "partial_count", left: existing.PartialCount, right: delta.PartialCount, set: func(value int64) { total.PartialCount = value }},
-		{name: "unpriced_request_count", left: existing.UnpricedRequestCount, right: delta.UnpricedRequestCount, set: func(value int64) { total.UnpricedRequestCount = value }},
-		{name: "pricing_partial_count", left: existing.PricingPartialCount, right: delta.PricingPartialCount, set: func(value int64) { total.PricingPartialCount = value }},
-	} {
-		value, ok := usage.CheckedAdd(field.left, field.right)
-		if !ok {
-			return models.UsageStat{}, fmt.Errorf(
-				"calculate absolute usage stat %s: checked addition failed",
-				field.name,
-			)
-		}
-		field.set(value)
-	}
-	cost, ok := pricing.CheckedAddNanoUSD(
-		pricing.NanoUSD(existing.EstimatedCostNanoUSD),
-		pricing.NanoUSD(delta.EstimatedCostNanoUSD),
-	)
-	if !ok {
-		return models.UsageStat{}, fmt.Errorf(
-			"calculate absolute usage stat estimated_cost_nano_usd: checked addition failed",
-		)
-	}
-	total.EstimatedCostNanoUSD = int64(cost)
-	return total, nil
 }
 
 func (service *Service) runWorker(ctx context.Context, done chan<- struct{}) {

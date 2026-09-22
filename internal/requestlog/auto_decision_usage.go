@@ -2,7 +2,6 @@ package requestlog
 
 import (
 	"fmt"
-	"math"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -23,11 +22,7 @@ func writeAutoDecisionUsage(tx *gorm.DB, rows []models.RequestLog) error {
 		if row.DecisionPricingCompleteness == "partial" && row.PricingCompleteness != "partial" {
 			stat.PricingPartialCount = 1
 		}
-		updates := map[string]any{}
-		for name, amount := range map[string]int64{"estimated_cost_nano_usd": stat.EstimatedCostNanoUSD, "unpriced_request_count": stat.UnpricedRequestCount, "pricing_partial_count": stat.PricingPartialCount} {
-			column := clause.Column{Name: name, Table: clause.CurrentTable}
-			updates[name] = gorm.Expr("CASE WHEN ? > ? THEN -1 ELSE ? + ? END", column, math.MaxInt64-amount, column, amount)
-		}
+		updates := incrementAssignments(map[string]int64{"estimated_cost_nano_usd": stat.EstimatedCostNanoUSD, "unpriced_request_count": stat.UnpricedRequestCount, "pricing_partial_count": stat.PricingPartialCount})
 		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "bucket_start_ms"}, {Name: "access_key_id"}, {Name: "model"}}, DoUpdates: clause.Assignments(updates)}).Create(&stat).Error; err != nil {
 			return fmt.Errorf("save automatic decision usage: %w", err)
 		}
