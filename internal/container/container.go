@@ -14,6 +14,7 @@ import (
 	"gpt-load/internal/app"
 	"gpt-load/internal/catalog"
 	"gpt-load/internal/channel"
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/control"
 	"gpt-load/internal/dialect"
 	"gpt-load/internal/execution"
@@ -61,6 +62,10 @@ func BuildContainer() (*dig.Container, error) {
 			}
 			return db, err
 		},
+		cluster.NewClient,
+		cluster.NewConfigEventBus,
+		control.NewClusterConfigSync,
+		app.NewReadinessProbe,
 		httplifecycle.NewCoordinator,
 		app.NewEngineWithLifecycle,
 		webui.NewServer,
@@ -321,9 +326,10 @@ func newHTTPRegistry(
 	gatewayHandler *gateway.Handler,
 	controlServer *control.Server,
 	webUIServer *webui.Server,
+	probe app.ReadinessProbe,
 ) (*httproute.Registry, error) {
 	return httproute.NewRegistry(
-		app.HTTPModule(),
+		app.HTTPModule(probe),
 		controlServer.HTTPModule(),
 		gatewayHandler.HTTPModule(),
 		webUIServer.HTTPModule(),

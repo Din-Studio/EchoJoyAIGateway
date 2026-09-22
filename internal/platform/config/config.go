@@ -2,6 +2,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
@@ -24,6 +26,7 @@ const (
 	defaultIdleTimeoutSeconds      = 120
 	defaultDatabaseMaxOpenConns    = 10
 	defaultDatabaseMaxIdleConns    = 5
+	defaultRedisKeyPrefix          = "gl"
 )
 
 // ServerConfig contains process-level HTTP server settings.
@@ -106,6 +109,22 @@ type DatabaseMetadata struct {
 	Driver DatabaseDriver
 }
 
+// ClusterConfig contains the optional multi-instance (cluster) mode settings.
+// Cluster mode is enabled by REDIS_ADDRS; every other field is only meaningful
+// when Enabled reports true.
+type ClusterConfig struct {
+	RedisAddrs     []string
+	RedisPassword  string
+	RedisTLS       bool
+	RedisKeyPrefix string
+	InstanceID     string
+}
+
+// Enabled reports whether the operator selected cluster mode.
+func (c ClusterConfig) Enabled() bool {
+	return len(c.RedisAddrs) > 0
+}
+
 // Config contains static environment configuration for the application process.
 type Config struct {
 	Server                    ServerConfig
@@ -119,6 +138,7 @@ type Config struct {
 	EncryptionKeyMetadata     SecretMetadata
 	Log                       LogConfig
 	ModelsDevAutoSyncOverride *bool
+	Cluster                   ClusterConfig
 }
 
 // Settings is the dynamic settings shape shared by system and group layers.
@@ -233,6 +253,22 @@ func Load() (*Config, error) {
 		}
 	}
 
+	cluster, err := parseClusterConfig()
+	if err != nil {
+		return nil, err
+	}
+	if cluster.Enabled() {
+		if databaseSource != DatabaseSourceExternal || database.Driver != DatabaseDriverPostgreSQL {
+			return nil, fmt.Errorf("REDIS_ADDRS requires a PostgreSQL DATABASE_DSN")
+		}
+		if explicitAuthKey == "" {
+			return nil, fmt.Errorf("REDIS_ADDRS requires AUTH_KEY to be set explicitly")
+		}
+		if explicitEncryptionKey == "" {
+			return nil, fmt.Errorf("REDIS_ADDRS requires ENCRYPTION_KEY to be set explicitly")
+		}
+	}
+
 	logFormat := valueOrDefault("LOG_FORMAT", "text")
 	if logFormat != "text" && logFormat != "json" {
 		return nil, fmt.Errorf("LOG_FORMAT must be text or json")
@@ -266,7 +302,59 @@ func Load() (*Config, error) {
 			Format: logFormat,
 		},
 		ModelsDevAutoSyncOverride: modelsDevAutoSyncOverride,
+		Cluster:                   cluster,
 	}, nil
+}
+
+// parseClusterConfig reads the cluster-mode variables. REDIS_DSN is a 1.x
+// variable and is intentionally never read.
+func parseClusterConfig() (ClusterConfig, error) {
+	var addrs []string
+	for _, raw := range strings.Split(os.Getenv("REDIS_ADDRS"), ",") {
+		addr := strings.TrimSpace(raw)
+		if addr != "" {
+			addrs = append(addrs, addr)
+		}
+	}
+	if len(addrs) == 0 {
+		return ClusterConfig{}, nil
+	}
+
+	redisTLS, err := parseOptionalBool("REDIS_TLS")
+	if err != nil {
+		return ClusterConfig{}, err
+	}
+	keyPrefix := valueOrDefault("REDIS_KEY_PREFIX", defaultRedisKeyPrefix)
+	if strings.ContainsFunc(keyPrefix, func(r rune) bool { return r == ' ' || r == '\t' || r == '\n' || r == '\r' }) ||
+		strings.HasSuffix(keyPrefix, ":") {
+		return ClusterConfig{}, fmt.Errorf("REDIS_KEY_PREFIX must not contain whitespace or end with a colon")
+	}
+	instanceID := strings.TrimSpace(os.Getenv("INSTANCE_ID"))
+	if instanceID == "" {
+		instanceID, err = defaultInstanceID()
+		if err != nil {
+			return ClusterConfig{}, err
+		}
+	}
+	return ClusterConfig{
+		RedisAddrs:     addrs,
+		RedisPassword:  os.Getenv("REDIS_PASSWORD"),
+		RedisTLS:       redisTLS != nil && *redisTLS,
+		RedisKeyPrefix: keyPrefix,
+		InstanceID:     instanceID,
+	}, nil
+}
+
+func defaultInstanceID() (string, error) {
+	hostname, err := os.Hostname()
+	if err != nil || strings.TrimSpace(hostname) == "" {
+		hostname = "gpt-load"
+	}
+	var suffix [3]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", fmt.Errorf("generate INSTANCE_ID: %w", err)
+	}
+	return hostname + "-" + hex.EncodeToString(suffix[:]), nil
 }
 
 // ParseDatabaseDSN parses the single DATABASE_DSN configuration format. Bare

@@ -15,6 +15,7 @@ import (
 	"gpt-load/internal/automodel"
 	"gpt-load/internal/catalog"
 	"gpt-load/internal/channel"
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/health"
 	"gpt-load/internal/outboundproxy"
@@ -29,12 +30,15 @@ import (
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/subscription"
 	subscriptionruntime "gpt-load/internal/subscription/runtime"
+
+	"github.com/sirupsen/logrus"
 )
 
 const (
 	defaultModelDiscoveryTimeout      = 30 * time.Second
 	defaultSubscriptionControlTimeout = 30 * time.Second
 	controlTransactionCleanupTimeout  = time.Second
+	clusterPublishTimeout             = 2 * time.Second
 )
 
 type Service struct {
@@ -61,6 +65,7 @@ type Service struct {
 	mutations                         credentialMutationCoordinator
 	requestLogStats                   RequestLogStatsReader
 	accessQuota                       *accessquota.Runtime
+	clusterEvents                     configEventPublisher
 	modelDiscoveryTimeout             time.Duration
 	random                            io.Reader
 	operationRandom                   io.Reader
@@ -152,6 +157,7 @@ func NewService(
 	priceRuntime *PriceRuntime,
 	catalogRuntime *catalog.Runtime,
 	cfg *config.Config,
+	clusterEvents *cluster.ConfigEventBus,
 	encryptionService encryption.Service,
 	executor execution.Executor,
 	subscriptionCredentials *subscription.CredentialManager,
@@ -255,6 +261,9 @@ func NewService(
 	}
 	if cfg != nil {
 		service.environmentProxy = outboundproxy.Environment()
+	}
+	if clusterEvents != nil {
+		service.clusterEvents = clusterEvents
 	}
 	if subscriptionCredentials != nil {
 		service.prepareSubscriptionCredential = subscriptionCredentials.PrepareForControl
@@ -548,19 +557,52 @@ func joinCommittedRuntimeRecovery(operationErr, recoveryErr error) error {
 	return errors.Join(operationErr, recoveryErr)
 }
 
+// withControlTransaction is the single write-transaction entry point for
+// persisted configuration. In cluster mode the configuration revision is
+// bumped inside the same transaction and, once committed, announced to peers.
 func (s *Service) withControlTransaction(
 	ctx context.Context,
 	mutate func(*gorm.DB) error,
 ) error {
+	var revision uint64
+	callback := mutate
+	if s.clusterEvents != nil {
+		callback = func(tx *gorm.DB) error {
+			if err := mutate(tx); err != nil {
+				return err
+			}
+			var err error
+			revision, err = bumpClusterConfigRevision(tx, s.now().UnixMilli())
+			return err
+		}
+	}
 	err := dbtx.Run(ctx, s.db, dbtx.Options{
 		Mode:           dbtx.Write,
 		CleanupTimeout: controlTransactionCleanupTimeout,
 		Operation:      "control transaction",
-	}, mutate)
+	}, callback)
 	if dbtx.IsInfrastructure(err) {
 		return fmt.Errorf("%v: %w", err, app_errors.ErrDatabase)
 	}
+	if err == nil && s.clusterEvents != nil {
+		s.publishClusterConfigChange(revision)
+	}
 	return err
+}
+
+// publishClusterConfigChange notifies peers after a committed transaction.
+// A fresh context keeps a disconnected management client from suppressing the
+// notification; failures only cost latency because peers poll the revision.
+func (s *Service) publishClusterConfigChange(revision uint64) {
+	ctx, cancel := context.WithTimeout(context.Background(), clusterPublishTimeout)
+	defer cancel()
+	change := cluster.ConfigChange{Revision: revision, Origin: s.clusterEvents.InstanceID()}
+	if err := s.clusterEvents.Publish(ctx, change); err != nil {
+		logrus.WithError(err).WithFields(logrus.Fields{
+			"event":    "control.cluster_publish_failed",
+			"revision": revision,
+		}).Warn("cluster config change publish failed; peers will catch up by polling")
+	}
 }
 
 func (s *Service) withReadSnapshot(

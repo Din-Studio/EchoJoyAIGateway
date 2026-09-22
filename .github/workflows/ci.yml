@@ -138,6 +138,16 @@ jobs:
           --health-interval=5s
           --health-timeout=10s
           --health-retries=20
+      # PostgreSQL 矩阵项附带 Redis，覆盖集群模式的双实例配置广播合同。
+      redis:
+        image: ${{ matrix.driver == 'postgres' && 'redis:7' || '' }}
+        ports:
+          - 6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=10s
+          --health-retries=20
       # MySQL 两组使用独立实例，避免不同测试数据库争用同名 GET_LOCK。
       secondary-mysql:
         image: ${{ matrix.driver == 'mysql' && 'mysql:8.4' || '' }}
@@ -168,6 +178,7 @@ jobs:
         env:
           GPT_LOAD_DATABASE_TEST_DSN: ${{ format(matrix.dsn, job.services.database.ports[format('{0}', matrix.port)]) }}
           GPT_LOAD_DATABASE_SECONDARY_DSN: ${{ matrix.driver == 'mysql' && format(matrix.dsn, job.services.secondary-mysql.ports['3306']) || '' }}
+          GPT_LOAD_REDIS_TEST_ADDR: ${{ matrix.driver == 'postgres' && format('127.0.0.1:{0}', job.services.redis.ports['6379']) || '' }}
         run: .github/scripts/ci-database-contract.sh "${{ matrix.driver }}"
 
   windows-encryption-acl:

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/httplifecycle"
 	"gpt-load/internal/platform/config"
 	"gpt-load/internal/platform/i18n"
@@ -36,6 +37,7 @@ type App struct {
 	startupRecovery   StartupRecovery
 	requestLogs       RequestLogRuntime
 	executionRuntime  ExecutionRuntime
+	clusterClient     *cluster.Client
 	listen            func(network, address string) (net.Listener, error)
 
 	mu            sync.Mutex
@@ -94,6 +96,7 @@ type AppParams struct {
 	ControlRuntime    ControlRuntime
 	RequestLogs       RequestLogRuntime
 	ExecutionRuntime  ExecutionRuntime `optional:"true"`
+	ClusterClient     *cluster.Client  `optional:"true"`
 }
 
 // NewEngine creates the process HTTP engine and global middleware.
@@ -135,6 +138,7 @@ func NewApp(params AppParams) *App {
 		startupRecovery:   params.StartupRecovery,
 		requestLogs:       params.RequestLogs,
 		executionRuntime:  params.ExecutionRuntime,
+		clusterClient:     params.ClusterClient,
 		listen:            net.Listen,
 		serveErrors:       make(chan error, 1),
 	}
@@ -365,6 +369,14 @@ func (a *App) Stop(ctx context.Context) error {
 				"event":   "shutdown.execution_runtime",
 				"outcome": "detached",
 			}).Warn("execution runtime is still stopping; process exit will release remaining connections")
+		}
+	}
+	if a.clusterClient != nil {
+		if err := a.clusterClient.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close Redis client: %w", err))
+			logrus.WithError(err).WithField("event", "shutdown.redis_close").Warn("Redis client close failed")
+		} else {
+			logrus.WithField("event", "shutdown.redis_close").Info("Redis client closed")
 		}
 	}
 	if a.db != nil {

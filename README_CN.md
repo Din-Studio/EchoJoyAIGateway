@@ -231,6 +231,11 @@ Windows 普通用户可改为下载 `gpt-load-windows-setup.exe`。双击并确�
 | `LOG_LEVEL`                     | `info`                                      | 支持 `panic`、`fatal`、`error`、`warn`、`warning`、`info`、`debug`、`trace`；无效值会告警并回退到 `info`。                                               |
 | `LOG_FORMAT`                    | `text`                                      | 支持 `text`、`json`；其他值会导致启动失败。                                                                                                              |
 | `MODELS_DEV_AUTO_SYNC_ENABLED`  | 未设置，初始默认 `true`                     | 未设置时使用管理界面的持久化设置；设置后强制开启或关闭 Models.dev 自动同步，并使管理界面中的同名选项变为只读。                                           |
+| `REDIS_ADDRS`                   | 空，不启用集群模式                          | 逗号分隔的 Redis 地址。设置后启用实验性集群模式，要求 `DATABASE_DSN` 为 PostgreSQL 且显式设置 `AUTH_KEY`、`ENCRYPTION_KEY`；启动时 Redis 必须可达。Redis Cluster 需列出全部节点地址。 |
+| `REDIS_PASSWORD`                | 空                                          | 集群模式使用的 Redis 密码。                                                                                                                              |
+| `REDIS_TLS`                     | `false`                                     | 集群模式下是否通过 TLS 连接 Redis。                                                                                                                      |
+| `REDIS_KEY_PREFIX`              | `gl`                                        | 集群模式下所有 Redis 键与频道的前缀；不能包含空白，也不能以 `:` 结尾。                                                                                   |
+| `INSTANCE_ID`                   | `<主机名>-<随机串>`                         | 本进程在集群事件中的标识，每个实例必须唯一。                                                                                                             |
 
 环境代理仅在凭据、Group 和全局设置都未指定代理时生效。
 
@@ -240,7 +245,7 @@ Windows 普通用户可改为下载 `gpt-load-windows-setup.exe`。双击并确�
 
 - 默认只监听 `127.0.0.1`。需要远程访问时，应通过受控网络或带 TLS 的反向代理暴露，并配置 ACL 与防火墙。
 - 妥善管理 `AUTH_KEY` 与 `ENCRYPTION_KEY`，不要把真实密钥提交到仓库、日志、截图或公开 Issue。
-- 2.0 按**单应用实例**设计，多个实例之间不共享状态，不支持直接横向扩容。
+- 2.0 默认以**单应用实例**运行。设置 `REDIS_ADDRS` 可启用实验性集群模式（需 PostgreSQL、显式 `AUTH_KEY`/`ENCRYPTION_KEY`）；当前版本在实例间共享配置变更，AccessKey 限流/额度、凭据健康、Responses 续接仍为实例本地，订阅渠道暂不支持多实例。
 - 用量与成本是基于上游返回数据的**估算**，用于运行分析和资源评估，不等同于服务商账单或财务对账结果。
 - 订阅渠道依赖上游 OAuth 与兼容协议，可能随上游变化调整。请只接入自己有权使用的账号，并遵守对应服务商条款。
 - HTTP Responses 的 `previous_response_id` 续接按协议及现有存储能力自动接入：原生 Responses 且声明由上游管理状态的渠道目前包括 `openai`、`gpt_load`、`xai`、`newapi`、`cliproxyapi`、`sub2api`。按 AccessKey 隔离归属，在当前路由允许时固定原凭据，不受软亲和开关影响；实际状态可用性由上游决定。无状态及转换响应不登记为持久状态。未知 ID（包括升级前或网关外创建的 ID）直接拒绝；Group 参数覆盖不能改写该字段。

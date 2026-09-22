@@ -215,6 +215,7 @@ func newServiceFixtureWithDatabase(t *testing.T, db *gorm.DB) serviceFixture {
 		priceRuntime,
 		catalogRuntime,
 		nil,
+		nil,
 		keyService,
 		controlHTTPExecutor{},
 		subscriptionCredentials,

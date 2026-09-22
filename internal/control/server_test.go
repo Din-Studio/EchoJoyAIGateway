@@ -2447,6 +2447,7 @@ func TestSettingsHTTPFiltersPrivateRowsAndDoesNotLogValues(t *testing.T) {
 		fixture.priceRuntime,
 		fixture.catalogRuntime,
 		nil,
+		nil,
 		fixture.encryption,
 		fixture.service.executor,
 		nil,

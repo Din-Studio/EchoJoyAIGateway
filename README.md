@@ -231,6 +231,11 @@ At startup, the application reads `.env` in the current directory; existing proc
 | `LOG_LEVEL` | `info` | Supports `panic`, `fatal`, `error`, `warn`, `warning`, `info`, `debug`, and `trace`; invalid values warn and fall back to `info`. |
 | `LOG_FORMAT` | `text` | Supports `text` and `json`; any other value fails startup. |
 | `MODELS_DEV_AUTO_SYNC_ENABLED` | Unset, initial default `true` | When unset, uses the persisted management UI setting; when set, forces Models.dev auto-sync on or off and makes the same UI option read-only. |
+| `REDIS_ADDRS` | Empty, cluster mode disabled | Comma-separated Redis addresses. Setting it enables the experimental cluster mode, which requires a PostgreSQL `DATABASE_DSN` and explicit `AUTH_KEY` and `ENCRYPTION_KEY`; Redis must be reachable at startup. List every node address for Redis Cluster. |
+| `REDIS_PASSWORD` | Empty | Redis password used in cluster mode. |
+| `REDIS_TLS` | `false` | Connects to Redis over TLS in cluster mode. |
+| `REDIS_KEY_PREFIX` | `gl` | Prefix for every Redis key and channel in cluster mode; must not contain whitespace or end with `:`. |
+| `INSTANCE_ID` | `<hostname>-<random>` | Identifies this process in cluster events; must be unique per instance. |
 
 Environment proxies apply only when no proxy is specified on the credential, group, or global settings.
 
@@ -240,7 +245,7 @@ Environment proxies apply only when no proxy is specified on the credential, gro
 
 - The service listens on `127.0.0.1` only by default. For remote access, expose it through a controlled network or a TLS reverse proxy, and configure ACLs and firewall rules.
 - Manage `AUTH_KEY` and `ENCRYPTION_KEY` carefully. Never commit real keys to a repository, log, screenshot, or public issue.
-- 2.0 is designed for a **single application instance**. Instances do not share state, so horizontal scaling is not supported.
+- 2.0 runs as a **single application instance** by default. Setting `REDIS_ADDRS` enables the experimental cluster mode (requires PostgreSQL and explicit `AUTH_KEY`/`ENCRYPTION_KEY`); the current version shares configuration changes across instances, while AccessKey rate limits and quotas, credential health, and Responses continuation remain instance-local, and subscription channels do not support multiple instances yet.
 - Usage and cost are **estimates** derived from upstream responses. They support operational analysis and capacity planning, and do not equal a provider invoice or a financial reconciliation.
 - Subscription channels depend on upstream OAuth and compatibility protocols and may change as upstreams change. Only connect accounts you are entitled to use, and follow each provider's terms.
 - HTTP Responses continuation with `previous_response_id` automatically uses native Responses routes that declare upstream-managed storage: currently `openai`, `gpt_load`, `xai`, `newapi`, `cliproxyapi`, and `sub2api`. Ownership is isolated by AccessKey and pins the original credential when current routing permits, independently of soft affinity; actual state availability depends on the upstream. Stateless and converted responses are not registered as persistent state. Unknown IDs, including IDs created before upgrading or outside this gateway, are rejected. Group parameter overrides cannot change this field.

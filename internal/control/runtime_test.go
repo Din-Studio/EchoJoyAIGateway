@@ -498,3 +498,30 @@ func newTestRuntime(validator validationSweep, validationTicker *fakeRuntimeTick
 		},
 	}
 }
+
+type fakeConfigSyncRuntime struct {
+	started chan struct{}
+	stopped chan struct{}
+}
+
+func (fake *fakeConfigSyncRuntime) Run(ctx context.Context) {
+	close(fake.started)
+	<-ctx.Done()
+	close(fake.stopped)
+}
+
+func TestRuntimeRunsConfigSyncUntilCancel(t *testing.T) {
+	fake := &fakeConfigSyncRuntime{started: make(chan struct{}), stopped: make(chan struct{})}
+	runtime, _, _ := newRuntimeHarness(nil, time.Now)
+	runtime.configSync = fake
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runtime.Run(ctx)
+	}()
+	awaitSignal(t, fake.started)
+	cancel()
+	awaitSignal(t, fake.stopped)
+	awaitSignal(t, done)
+}
