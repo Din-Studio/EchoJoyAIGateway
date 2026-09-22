@@ -243,7 +243,7 @@ func (s *Service) executeIdempotentOperation(
 		mutate()
 	}
 	if err != nil {
-		return idempotentOperationResult{}, err
+		return s.replayAfterFailedCommitLocked(ctx, input, err)
 	}
 
 	if err := s.recoverOperationLocked(ctx, &operation); err != nil {
@@ -256,6 +256,30 @@ func (s *Service) executeIdempotentOperation(
 		CanonicalResult:  append([]byte(nil), operation.CanonicalResult...),
 		Ephemeral:        mutationResult.Ephemeral,
 	}, nil
+}
+
+// replayAfterFailedCommitLocked resolves a failed idempotent commit against the
+// durable operation row. Another instance sharing the database may have
+// committed the same key between this instance's lookup and its transaction;
+// the failure then surfaced as a unique-key or resource conflict inside the
+// mutation and the stored result is the correct answer. Without such a row the
+// original error stands.
+func (s *Service) replayAfterFailedCommitLocked(
+	ctx context.Context,
+	input idempotentOperationInput,
+	cause error,
+) (idempotentOperationResult, error) {
+	var existing models.ControlOperation
+	query := s.db.WithContext(ctx).
+		Where("idempotency_key = ?", input.IdempotencyKey).
+		Take(&existing)
+	if query.Error != nil {
+		if errors.Is(query.Error, gorm.ErrRecordNotFound) {
+			return idempotentOperationResult{}, cause
+		}
+		return idempotentOperationResult{}, app_errors.ParseDBError(query.Error)
+	}
+	return s.replayIdempotentOperationLocked(ctx, &existing, input)
 }
 
 func (s *Service) replayIdempotentOperationLocked(
@@ -339,17 +363,13 @@ func (s *Service) recoverOperationLocked(
 		!sameOperationStages(storedStages, wantStages) {
 		return fmt.Errorf("invalid durable operation stage plan")
 	}
-	currentIndex := -1
-	for index, stage := range storedStages {
-		if string(stage) == operation.LastCompletedStage {
-			currentIndex = index
-			break
-		}
-	}
+	currentIndex := operationStageIndex(storedStages, operation.LastCompletedStage)
 	if currentIndex < 0 {
 		return fmt.Errorf("invalid durable operation current stage")
 	}
 
+	// 本实例从自己观察到的阶段起执行全部剩余的本地副作用；另一实例可能已把
+	// 持久化阶段推进得更远，advanceOperationStageLocked 只负责让行记录集群最大进度。
 	for index := currentIndex + 1; index < len(storedStages); index++ {
 		stage := storedStages[index]
 		var stageErr error
@@ -383,12 +403,21 @@ func (s *Service) recoverOperationLocked(
 			_ = s.recordOperationFailureLocked(ctx, operation, stage)
 			return fmt.Errorf("recover operation stage %s", stage)
 		}
-		if err := s.advanceOperationStageLocked(ctx, operation, stage); err != nil {
+		if err := s.advanceOperationStageLocked(ctx, operation, stage, storedStages); err != nil {
 			_ = s.recordOperationFailureLocked(ctx, operation, stage)
 			return err
 		}
 	}
 	return nil
+}
+
+func operationStageIndex(stages []operationStage, name string) int {
+	for index, stage := range stages {
+		if string(stage) == name {
+			return index
+		}
+	}
+	return -1
 }
 
 func (s *Service) recoverRegistryOperation(
@@ -422,11 +451,22 @@ func (s *Service) recoverRegistryOperation(
 	return reconcileErr
 }
 
+// advanceOperationStageLocked records stage completion with a compare-and-swap
+// on the durable row. Stage side effects are executed by every instance for
+// its own runtime, but the row only tracks the furthest completed stage across
+// the cluster: when another instance already advanced the same operation at
+// least this far, its progress is adopted instead of being overwritten. A row
+// that moved backwards or to an unknown stage remains an error.
 func (s *Service) advanceOperationStageLocked(
 	ctx context.Context,
 	operation *models.ControlOperation,
 	stage operationStage,
+	stages []operationStage,
 ) error {
+	if operationStageIndex(stages, operation.LastCompletedStage) >=
+		operationStageIndex(stages, string(stage)) {
+		return nil
+	}
 	if s.beforeAdvanceOperationStage != nil {
 		if err := s.beforeAdvanceOperationStage(ctx, operation, stage); err != nil {
 			return err
@@ -445,6 +485,7 @@ func (s *Service) advanceOperationStageLocked(
 	if stage == operationStageCompleted {
 		updates["completed_at_ms"] = nowMS
 	}
+	var adopted *models.ControlOperation
 	err := s.withControlTransaction(ctx, func(tx *gorm.DB) error {
 		result := tx.Model(&models.ControlOperation{}).
 			Where(
@@ -456,13 +497,30 @@ func (s *Service) advanceOperationStageLocked(
 		if result.Error != nil {
 			return app_errors.ParseDBError(result.Error)
 		}
-		if result.RowsAffected != 1 {
+		if result.RowsAffected == 1 {
+			return nil
+		}
+		var persisted models.ControlOperation
+		if err := tx.Where("commit_sequence = ?", operation.CommitSequence).
+			Take(&persisted).Error; err != nil {
 			return fmt.Errorf("advance operation stage: durable stage changed")
 		}
+		if operationStageIndex(stages, persisted.LastCompletedStage) <
+			operationStageIndex(stages, string(stage)) {
+			return fmt.Errorf("advance operation stage: durable stage changed")
+		}
+		adopted = &persisted
 		return nil
 	})
 	if err != nil {
 		return err
+	}
+	if adopted != nil {
+		operation.LastCompletedStage = adopted.LastCompletedStage
+		operation.FailedStage = adopted.FailedStage
+		operation.UpdatedAtMS = adopted.UpdatedAtMS
+		operation.CompletedAtMS = adopted.CompletedAtMS
+		return nil
 	}
 	operation.LastCompletedStage = string(stage)
 	operation.FailedStage = ""
