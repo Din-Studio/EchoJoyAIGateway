@@ -18,9 +18,15 @@ import (
 	"gpt-load/internal/state"
 )
 
-// completeTimeout bounds cost settlement, which runs after the response and
-// so is not on the client-visible latency path.
-const completeTimeout = 2 * time.Second
+const (
+	// completeTimeout bounds cost settlement, which runs after the response
+	// and so is not on the client-visible latency path.
+	completeTimeout = 2 * time.Second
+	// quotaStateTTL is the sliding lifetime of a rule's Redis state. It is
+	// far longer than the checkpoint interval, so expiry never loses usage
+	// that the database does not already hold.
+	quotaStateTTL = 7 * 24 * time.Hour
+)
 
 // AccessQuotaStateReader reads persisted rule checkpoints. A rule without a
 // checkpoint row is omitted from the result.
@@ -134,8 +140,8 @@ func (quota *AccessQuota) Complete(
 	if costNanoUSD > 0 {
 		headroom -= costNanoUSD
 	}
-	args := make([]any, 0, 2+len(ticket.Rules)*2)
-	args = append(args, strconv.FormatInt(costNanoUSD, 10), strconv.FormatInt(headroom, 10))
+	args := make([]any, 0, 3+len(ticket.Rules)*2)
+	args = append(args, strconv.FormatInt(costNanoUSD, 10), strconv.FormatInt(headroom, 10), quotaStateTTLArg())
 	for _, rule := range ticket.Rules {
 		keys = append(keys, quota.ruleKey(ticket.AccessKeyID, rule.RuleID))
 		args = append(args, strconv.FormatUint(rule.RuleRevision, 10), strconv.FormatUint(rule.WindowGeneration, 10))
@@ -326,9 +332,9 @@ func (quota *AccessQuota) evaluate(
 	now time.Time,
 ) (quotaEvaluation, error) {
 	keys := make([]string, 0, len(rules))
-	args := make([]any, 0, 2+len(rules)*4)
+	args := make([]any, 0, 3+len(rules)*4)
 	nowMS := now.UnixMilli()
-	args = append(args, mode, strconv.FormatInt(nowMS, 10))
+	args = append(args, mode, strconv.FormatInt(nowMS, 10), quotaStateTTLArg())
 	for _, rule := range rules {
 		keys = append(keys, quota.ruleKey(accessKeyID, rule.ID))
 		windowEnd := nowMS + rule.PeriodSeconds*int64(time.Second/time.Millisecond)
@@ -393,7 +399,8 @@ func (quota *AccessQuota) hydrate(
 		byRule[checkpoint.RuleID] = checkpoint
 	}
 	keys := make([]string, 0, len(targets))
-	args := make([]any, 0, len(targets)*6)
+	args := make([]any, 0, 1+len(targets)*6)
+	args = append(args, quotaStateTTLArg())
 	for _, rule := range targets {
 		checkpoint, exists := byRule[rule.ID]
 		switch {
@@ -440,6 +447,10 @@ func (quota *AccessQuota) unavailable(accessKeyID uint, err error) error {
 // script can touch all of an AccessKey's keys in Redis Cluster.
 func (quota *AccessQuota) ruleKey(accessKeyID, ruleID uint) string {
 	return quota.client.Key(accessKeyHashTag(accessKeyID), "quota", strconv.FormatUint(uint64(ruleID), 10))
+}
+
+func quotaStateTTLArg() string {
+	return strconv.FormatInt(quotaStateTTL.Milliseconds(), 10)
 }
 
 func accessKeyHashTag(accessKeyID uint) string {

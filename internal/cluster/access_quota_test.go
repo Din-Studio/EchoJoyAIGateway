@@ -434,3 +434,45 @@ func TestAccessQuotaDirtyTrackingSurvivesConcurrentChanges(t *testing.T) {
 		t.Fatal("Complete() with Redis down error = nil")
 	}
 }
+
+func TestAccessQuotaStateUsesSlidingTTL(t *testing.T) {
+	server, client := newTestClient(t)
+	rules := []accessquota.Rule{{ID: 70, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 1_000}}
+	states := newFakeQuotaStates(accessquota.RestoredState{AccessKeyID: 9, RuleID: 70, RuleRevision: 1, UsedNanoUSD: 40, SnapshotVersion: 3})
+	quota := NewAccessQuota(client, states)
+	snapshot := quotaSnapshot(9, rules)
+	key := client.Key(accessKeyHashTag(9), "quota", "70")
+	now := time.Unix(30_000, 0)
+	assertFullTTL := func(step string) {
+		t.Helper()
+		if ttl := server.TTL(key); ttl != quotaStateTTL {
+			t.Fatalf("%s: TTL = %v, want %v", step, ttl, quotaStateTTL)
+		}
+	}
+
+	if _, err := quota.Check(t.Context(), snapshot, 9, now); err != nil {
+		t.Fatal(err)
+	}
+	assertFullTTL("hydrate + check")
+	server.FastForward(24 * time.Hour)
+	ticket, _, err := quota.Admit(t.Context(), snapshot, 9, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFullTTL("admit")
+	server.FastForward(24 * time.Hour)
+	if _, err := quota.Complete(t.Context(), ticket, 5); err != nil {
+		t.Fatal(err)
+	}
+	assertFullTTL("complete")
+
+	// An idle key expires and is rebuilt from the checkpoint on next use.
+	server.FastForward(quotaStateTTL + time.Second)
+	if server.Exists(key) {
+		t.Fatal("idle quota state did not expire")
+	}
+	view, err := quota.View(t.Context(), snapshot, 9, now)
+	if err != nil || view.Rules[0].UsedNanoUSD != 40 || states.readCount() != 2 {
+		t.Fatalf("View() after expiry = %#v, %v, checkpoint reads %d", view, err, states.readCount())
+	}
+}

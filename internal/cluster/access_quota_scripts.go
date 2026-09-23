@@ -8,13 +8,15 @@ import "github.com/redis/go-redis/v9"
 // Amounts are nano-USD int64 values that exceed Lua's exact double range, so
 // they are compared as canonical decimal strings and only added through
 // HINCRBY after an overflow check. Timestamps and revisions stay far below
-// 2^53.
+// 2^53. Every script that touches a key renews its sliding TTL, so keys of
+// deleted rules or AccessKeys expire on their own; an expired live key is
+// rebuilt from the database checkpoint like any missing key.
 
 // quotaScript evaluates (and in admit mode, opens periodic windows for) all
 // rules of one AccessKey.
 //
-// KEYS: one Hash per rule. ARGV: mode ("check"|"admit"), nowMS, then per rule
-// rev, kind, limit, windowEndMS (nowMS + period for periodic rules).
+// KEYS: one Hash per rule. ARGV: mode ("check"|"admit"), nowMS, ttlMS, then
+// per rule rev, kind, limit, windowEndMS (nowMS + period for periodic rules).
 // Returns {"STALE"} when any stored revision is newer than the caller's,
 // {"NEED_INIT", i...} with the 1-based indexes of missing or older rules, or
 // {"OK", allowed, then per rule used, ws, we, gen, ver, opened}.
@@ -31,11 +33,12 @@ end
 
 local mode = ARGV[1]
 local now = tonumber(ARGV[2])
+local ttl = ARGV[3]
 local stale = false
 local missing = {}
 local rows = {}
 for i = 1, #KEYS do
-  local rev = tonumber(ARGV[2 + (i - 1) * 4 + 1])
+  local rev = tonumber(ARGV[3 + (i - 1) * 4 + 1])
   local row = redis.call('HMGET', KEYS[i], 'rev', 'used', 'ws', 'we', 'gen', 'ver')
   if not row[1] then
     missing[#missing + 1] = tostring(i)
@@ -58,7 +61,7 @@ end
 local allowed = true
 local inactive = {}
 for i = 1, #KEYS do
-  local base = 2 + (i - 1) * 4
+  local base = 3 + (i - 1) * 4
   local row = rows[i]
   local periodic = ARGV[base + 2] == 'periodic'
   inactive[i] = periodic and (row[3] == '' or row[4] == '' or now >= tonumber(row[4]))
@@ -69,7 +72,7 @@ end
 
 local result = {'OK', allowed and '1' or '0'}
 for i = 1, #KEYS do
-  local base = 2 + (i - 1) * 4
+  local base = 3 + (i - 1) * 4
   local row = rows[i]
   local opened = '0'
   if mode == 'admit' and allowed and inactive[i] then
@@ -79,6 +82,7 @@ for i = 1, #KEYS do
     row[6] = tostring(redis.call('HINCRBY', KEYS[i], 'ver', 1))
     opened = '1'
   end
+  redis.call('PEXPIRE', KEYS[i], ttl)
   for field = 2, 6 do result[#result + 1] = row[field] end
   result[#result + 1] = opened
 end
@@ -89,15 +93,17 @@ return result
 // current revision. A key already at the same or a newer revision is kept,
 // so concurrent hydrations and live updates are never overwritten.
 //
-// KEYS: one Hash per rule. ARGV per rule: rev, used, ws, we, gen, ver.
+// KEYS: one Hash per rule. ARGV: ttlMS, then per rule rev, used, ws, we,
+// gen, ver.
 var initScript = redis.NewScript(`
 for i = 1, #KEYS do
-  local base = (i - 1) * 6
+  local base = 1 + (i - 1) * 6
   local stored = redis.call('HGET', KEYS[i], 'rev')
   if not stored or tonumber(stored) < tonumber(ARGV[base + 1]) then
     redis.call('HSET', KEYS[i], 'rev', ARGV[base + 1], 'used', ARGV[base + 2],
       'ws', ARGV[base + 3], 'we', ARGV[base + 4], 'gen', ARGV[base + 5], 'ver', ARGV[base + 6])
   end
+  redis.call('PEXPIRE', KEYS[i], ARGV[1])
 end
 return {'OK'}
 `)
@@ -107,7 +113,8 @@ return {'OK'}
 // saturates at MaxInt64, detected as used > headroom (MaxInt64 - cost); a
 // negative cost saturates immediately.
 //
-// KEYS: one Hash per ticket rule. ARGV: cost, headroom, then per rule rev, gen.
+// KEYS: one Hash per ticket rule. ARGV: cost, headroom, ttlMS, then per rule
+// rev, gen.
 // Returns {fault, then per changed rule index, rev, ver}.
 var completeScript = redis.NewScript(`
 local function cmp(a, b)
@@ -123,11 +130,12 @@ end
 local maxUsed = '9223372036854775807'
 local cost = ARGV[1]
 local headroom = ARGV[2]
+local ttl = ARGV[3]
 local negative = string.sub(cost, 1, 1) == '-'
 local fault = ''
 local changed = {}
 for i = 1, #KEYS do
-  local base = 2 + (i - 1) * 2
+  local base = 3 + (i - 1) * 2
   local row = redis.call('HMGET', KEYS[i], 'rev', 'gen', 'used')
   if row[1] and tonumber(row[1]) == tonumber(ARGV[base + 1]) and row[2] == ARGV[base + 2] then
     local updated = true
@@ -147,6 +155,7 @@ for i = 1, #KEYS do
       changed[#changed + 1] = row[1]
       changed[#changed + 1] = tostring(redis.call('HINCRBY', KEYS[i], 'ver', 1))
     end
+    redis.call('PEXPIRE', KEYS[i], ttl)
   end
 end
 table.insert(changed, 1, fault)
