@@ -93,6 +93,16 @@ func (s *Service) ListAccessKeyCollection(
 	if err != nil {
 		return AccessKeyCollectionResponse{}, err
 	}
+	snapshot := s.manager.Current()
+	for index := range records {
+		view, ok, err := s.accessQuotaView(ctx, snapshot, records[index].ID, observedAt)
+		if err != nil {
+			return AccessKeyCollectionResponse{}, err
+		}
+		if status := mapAccessKeyCostLimitStatus(view); ok && len(status.Rules) > 0 {
+			records[index].CostLimitStatus = &status
+		}
+	}
 	result := queryAccessKeyCollectionRecords(records, query)
 	result.UsageWindow = &AccessKeyUsageWindow{ObservedAtMS: observedAtMS, Range: "7d", FromMS: usageQuery.FromMS, ToMS: usageQuery.ToMS}
 	return result, nil
@@ -174,12 +184,6 @@ func (s *Service) captureAccessKeyCollectionRecords(
 			return nil, err
 		}
 		metadata.CostLimitRules = mapAccessKeyCostLimitRules(rulesByAccessKey[row.ID])
-		if s.accessQuota != nil {
-			status := mapAccessKeyCostLimitStatus(s.accessQuota.Snapshot(row.ID, observedAt))
-			if len(status.Rules) > 0 {
-				metadata.CostLimitStatus = &status
-			}
-		}
 		aggregate, err := mapUsageAggregate(usageByKey[row.ID])
 		if err != nil {
 			return nil, err

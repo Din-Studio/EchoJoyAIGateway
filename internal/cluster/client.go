@@ -21,6 +21,10 @@ const (
 	commandTimeout = 2 * time.Second
 	startupPing    = 5 * time.Second
 	maxRetries     = 3
+
+	// stateTimeout bounds each data-plane round trip for shared request state,
+	// so an unavailable Redis fails the request fast instead of stalling it.
+	stateTimeout = 200 * time.Millisecond
 )
 
 // Client wraps the Redis connection shared by every cluster primitive. It is
@@ -44,6 +48,8 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		ReadTimeout:  commandTimeout,
 		WriteTimeout: commandTimeout,
 		MaxRetries:   maxRetries,
+		// Honor per-call context deadlines such as stateTimeout.
+		ContextTimeoutEnabled: true,
 	}
 	if cfg.Cluster.RedisTLS {
 		options.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}

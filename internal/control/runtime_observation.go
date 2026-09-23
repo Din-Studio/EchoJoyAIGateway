@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -59,7 +60,52 @@ func (service *Service) captureRuntimeObservation() (runtimeObservation, error) 
 	}, nil
 }
 
+// accessQuotaView reads one AccessKey's cost-limit state from the shared
+// cluster store, or from the in-process runtime in single-instance mode. ok is
+// false when neither exists. Callers must not hold writeMu: the cluster store
+// performs network I/O.
+func (service *Service) accessQuotaView(
+	ctx context.Context,
+	snapshot *state.ConfigSnapshot,
+	accessKeyID uint,
+	now time.Time,
+) (accessquota.View, bool, error) {
+	switch {
+	case service.clusterQuota != nil:
+		view, err := service.clusterQuota.View(ctx, snapshot, accessKeyID, now)
+		if err != nil {
+			return accessquota.View{}, false, fmt.Errorf(
+				"read access key %d cost limit state: %v: %w", accessKeyID, err, app_errors.ErrInternalServer,
+			)
+		}
+		return view, true, nil
+	case service.accessQuota != nil:
+		return service.accessQuota.Snapshot(accessKeyID, now), true, nil
+	}
+	return accessquota.View{}, false, nil
+}
+
 func (service *Service) captureRuntimeHealthObservation() (
+	runtimeHealthObservation,
+	error,
+) {
+	observation, err := service.captureRuntimeHealthState()
+	if err != nil || (service.accessQuota == nil && service.clusterQuota == nil) {
+		return observation, err
+	}
+	views := make(map[uint]accessquota.View, len(observation.snapshot.AccessKeysByID))
+	for accessKeyID := range observation.snapshot.AccessKeysByID {
+		view, _, err := service.accessQuotaView(context.Background(), observation.snapshot, accessKeyID, observation.observedAt)
+		if err != nil {
+			return runtimeHealthObservation{}, err
+		}
+		views[accessKeyID] = view
+	}
+	observation.accessQuotaViews = views
+	return observation, nil
+}
+
+func (service *Service) captureRuntimeHealthState() (
 	runtimeHealthObservation,
 	error,
 ) {
@@ -83,13 +129,6 @@ func (service *Service) captureRuntimeHealthObservation() (
 	}
 	keys := service.registry.Snapshot()
 	observedAt := service.now().UTC()
-	var accessQuotaViews map[uint]accessquota.View
-	if service.accessQuota != nil {
-		accessQuotaViews = make(map[uint]accessquota.View, len(snapshot.AccessKeysByID))
-		for accessKeyID := range snapshot.AccessKeysByID {
-			accessQuotaViews[accessKeyID] = service.accessQuota.Snapshot(accessKeyID, observedAt)
-		}
-	}
 	credentialCiphertexts := make(map[uint]string)
 	for _, key := range keys {
 		group, exists := snapshot.GroupCatalog[key.GroupID]
@@ -123,6 +162,5 @@ func (service *Service) captureRuntimeHealthObservation() (
 			keys:       keys,
 		},
 		credentialCiphertexts: credentialCiphertexts,
-		accessQuotaViews:      accessQuotaViews,
 	}, nil
 }

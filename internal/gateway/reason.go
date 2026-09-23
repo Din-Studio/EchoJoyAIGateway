@@ -73,6 +73,11 @@ var (
 		Code:    "configuration_changed",
 		Message: "Configuration changed; retry the request.",
 	}
+	reasonClusterStateUnavailable = reason{
+		Status:  http.StatusServiceUnavailable,
+		Code:    "cluster_state_unavailable",
+		Message: "Shared rate limit state is unavailable.",
+	}
 	reasonParameterOverrideUnavailable = reason{
 		Status:  http.StatusServiceUnavailable,
 		Code:    "parameter_override_unavailable",

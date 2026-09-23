@@ -65,6 +65,7 @@ type Service struct {
 	mutations                         credentialMutationCoordinator
 	requestLogStats                   RequestLogStatsReader
 	accessQuota                       *accessquota.Runtime
+	clusterQuota                      *cluster.AccessQuota
 	clusterEvents                     configEventPublisher
 	modelDiscoveryTimeout             time.Duration
 	random                            io.Reader
@@ -168,6 +169,7 @@ func NewService(
 	mutations *health.MutationCoordinator,
 	requestLogStats RequestLogStatsReader,
 	accessQuota *accessquota.Runtime,
+	clusterQuota *cluster.AccessQuota,
 	channelRegistries ...*channel.Registry,
 ) *Service {
 	channelRegistry := channel.NewRegistry()
@@ -264,6 +266,9 @@ func NewService(
 	}
 	if clusterEvents != nil {
 		service.clusterEvents = clusterEvents
+	}
+	if clusterQuota != nil {
+		service.clusterQuota = clusterQuota
 	}
 	if subscriptionCredentials != nil {
 		service.prepareSubscriptionCredential = subscriptionCredentials.PrepareForControl

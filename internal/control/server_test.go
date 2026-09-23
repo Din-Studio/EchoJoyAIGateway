@@ -2458,6 +2458,7 @@ func TestSettingsHTTPFiltersPrivateRowsAndDoesNotLogValues(t *testing.T) {
 		fixture.mutations,
 		fixture.requestLogStats,
 		nil,
+		nil,
 	)
 	brokenEngine := gin.New()
 	NewServer(&config.Config{AuthKey: authKey}, brokenService).RegisterRoutes(brokenEngine)

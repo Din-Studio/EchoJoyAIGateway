@@ -746,7 +746,7 @@ func (service *Service) drain(ctx context.Context, batch []queuedEvent) {
 				}
 			}
 			for service.accessQuota != nil && service.quotaWriter != nil &&
-				len(service.accessQuota.DirtySnapshots(1)) > 0 {
+				service.accessQuota.HasDirty() {
 				if ctx.Err() != nil {
 					return
 				}
@@ -831,9 +831,20 @@ func (service *Service) flushAccessQuotaCheckpoints(ctx context.Context) error {
 	if service == nil || service.accessQuota == nil || service.quotaWriter == nil {
 		return nil
 	}
-	snapshots := service.accessQuota.DirtySnapshots(batchSize)
+	snapshots, err := service.accessQuota.DirtySnapshots(ctx, batchSize)
+	if err != nil {
+		service.accessQuotaCheckpointDegraded.Store(true)
+		service.recordAccessQuotaCheckpointFailure()
+		service.wakeAccessQuotaCheckpoint()
+		return err
+	}
 	if len(snapshots) == 0 {
-		service.accessQuotaCheckpointDegraded.Store(false)
+		// A shared source may drop superseded entries without returning them.
+		if service.accessQuota.HasDirty() {
+			service.wakeAccessQuotaCheckpoint()
+		} else {
+			service.accessQuotaCheckpointDegraded.Store(false)
+		}
 		return nil
 	}
 	if err := service.quotaWriter.WriteSnapshots(ctx, snapshots); err != nil {
@@ -850,7 +861,7 @@ func (service *Service) flushAccessQuotaCheckpoints(ctx context.Context) error {
 			snapshot.SnapshotVersion,
 		)
 	}
-	if len(service.accessQuota.DirtySnapshots(1)) > 0 {
+	if service.accessQuota.HasDirty() {
 		service.wakeAccessQuotaCheckpoint()
 	} else {
 		service.accessQuotaCheckpointDegraded.Store(false)

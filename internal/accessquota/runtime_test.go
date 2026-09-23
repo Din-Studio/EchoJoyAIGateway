@@ -2,6 +2,7 @@ package accessquota
 
 import (
 	"math"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -412,3 +413,87 @@ func ruleViewByID(t *testing.T, rules []RuleView, id uint) RuleView {
 }
 
 func ptrInt64(value int64) *int64 { return &value }
+
+func runtimeStates(t *testing.T, runtime *Runtime, accessKeyID uint) map[uint]RestoredState {
+	t.Helper()
+	entry := runtime.lockEntry(accessKeyID)
+	if entry == nil {
+		t.Fatalf("access key %d has no runtime entry", accessKeyID)
+	}
+	defer entry.mu.Unlock()
+	states := make(map[uint]RestoredState, len(entry.rules))
+	for _, rule := range entry.rules {
+		states[rule.definition.ID] = restoredState(accessKeyID, rule)
+	}
+	return states
+}
+
+func TestDecisionForAndViewForMatchRuntime(t *testing.T) {
+	// Rules are deliberately unsorted: the pure functions must order them like the runtime.
+	rules := []Rule{
+		{ID: 12, Revision: 1, Kind: KindPeriodic, LimitNanoUSD: 30, PeriodSeconds: 24 * 60 * 60},
+		{ID: 11, Revision: 1, Kind: KindPeriodic, LimitNanoUSD: 20, PeriodSeconds: 5 * 60 * 60},
+		{ID: 10, Revision: 1, Kind: KindTotal, LimitNanoUSD: 100},
+	}
+	runtime := NewRuntime()
+	if err := runtime.Reconcile(map[uint][]Rule{1: rules}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	started := time.Date(2026, time.August, 20, 10, 37, 0, 0, time.UTC)
+	assertSame := func(label string, now time.Time) {
+		t.Helper()
+		states := runtimeStates(t, runtime, 1)
+		if got, want := DecisionFor(rules, states, now.UnixMilli()), runtime.Check(1, now); !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: DecisionFor() = %#v, want %#v", label, got, want)
+		}
+		if got, want := ViewFor(rules, states, now), runtime.Snapshot(1, now); !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: ViewFor() = %#v, want %#v", label, got, want)
+		}
+	}
+
+	assertSame("inactive", started)
+	ticket, _ := runtime.Admit(1, started)
+	runtime.Complete(ticket, 25)
+	assertSame("both periodic windows exhausted in progress", started.Add(time.Hour))
+	assertSame("5h window expired", started.Add(5*time.Hour))
+	assertSame("all periodic windows expired", started.Add(25*time.Hour))
+	ticket, _ = runtime.Admit(1, started.Add(25*time.Hour))
+	runtime.Complete(ticket, 100)
+	assertSame("total exhausted", started.Add(26*time.Hour))
+
+	if got := DecisionFor(rules, nil, started.UnixMilli()); !got.Allowed || len(got.BlockingRules) != 0 {
+		t.Fatalf("DecisionFor(no state) = %#v, want allowed", got)
+	}
+	if got := ViewFor(nil, nil, started); !got.Allowed || len(got.Rules) != 0 {
+		t.Fatalf("ViewFor(no rules) = %#v, want empty allowed view", got)
+	}
+}
+
+func TestValidateRestoredStateMatchesRestoreRules(t *testing.T) {
+	periodic := Rule{ID: 11, Revision: 2, Kind: KindPeriodic, LimitNanoUSD: 20, PeriodSeconds: 60}
+	start, end, wrongEnd := int64(1000), int64(61000), int64(2000)
+	valid := RestoredState{
+		AccessKeyID: 1, RuleID: 11, RuleRevision: 2, UsedNanoUSD: 5,
+		WindowStartedAtMS: &start, WindowEndsAtMS: &end, WindowGeneration: 1, SnapshotVersion: 3,
+	}
+	if err := ValidateRestoredState(periodic, valid); err != nil {
+		t.Fatalf("ValidateRestoredState(valid) error = %v", err)
+	}
+	invalid := map[string]RestoredState{
+		"revision mismatch": func() RestoredState { s := valid; s.RuleRevision = 1; return s }(),
+		"rule mismatch":     func() RestoredState { s := valid; s.RuleID = 12; return s }(),
+		"zero version":      func() RestoredState { s := valid; s.SnapshotVersion = 0; return s }(),
+		"wrong duration":    func() RestoredState { s := valid; s.WindowEndsAtMS = &wrongEnd; return s }(),
+		"no generation":     func() RestoredState { s := valid; s.WindowGeneration = 0; return s }(),
+	}
+	for name, state := range invalid {
+		if err := ValidateRestoredState(periodic, state); err == nil {
+			t.Fatalf("ValidateRestoredState(%s) error = nil", name)
+		}
+	}
+	total := Rule{ID: 10, Revision: 1, Kind: KindTotal, LimitNanoUSD: 100}
+	windowed := RestoredState{AccessKeyID: 1, RuleID: 10, RuleRevision: 1, SnapshotVersion: 1, WindowStartedAtMS: &start, WindowEndsAtMS: &end}
+	if err := ValidateRestoredState(total, windowed); err == nil {
+		t.Fatal("ValidateRestoredState(total with window) error = nil")
+	}
+}

@@ -103,6 +103,27 @@ func (s *Service) readHomeBase(
 	nowMS int64,
 	accessKeyID *uint,
 ) (HomeBase, error) {
+	result, err := s.captureHomeBase(ctx, nowMS, accessKeyID)
+	if err != nil || result.CurrentAccessKey == nil {
+		return result, err
+	}
+	view, ok, err := s.accessQuotaView(ctx, s.manager.Current(), *accessKeyID, time.UnixMilli(nowMS))
+	if err != nil {
+		return HomeBase{}, err
+	}
+	if status := mapAccessKeyCostLimitStatus(view); ok && len(status.Rules) > 0 {
+		result.CurrentAccessKey.CostLimitStatus = &status
+		result.CurrentAccessKey.CostLimitRules = costLimitDefinitionsFromStatus(status)
+	}
+	return result, nil
+}
+
+// captureHomeBase reads everything except live cost-limit state under writeMu.
+func (s *Service) captureHomeBase(
+	ctx context.Context,
+	nowMS int64,
+	accessKeyID *uint,
+) (HomeBase, error) {
 	if s == nil || s.db == nil || s.manager == nil || s.registrySnapshot == nil {
 		return HomeBase{}, fmt.Errorf(
 			"read home base: dependencies unavailable: %w",
@@ -193,13 +214,6 @@ func (s *Service) readHomeBase(
 		current, err := mapHomeCurrentAccessKey(accessKeyRows[0], nowMS)
 		if err != nil {
 			return HomeBase{}, err
-		}
-		if s.accessQuota != nil {
-			status := mapAccessKeyCostLimitStatus(s.accessQuota.Snapshot(*accessKeyID, now))
-			if len(status.Rules) > 0 {
-				current.CostLimitStatus = &status
-				current.CostLimitRules = costLimitDefinitionsFromStatus(status)
-			}
 		}
 		result.CurrentAccessKey = &current
 	}

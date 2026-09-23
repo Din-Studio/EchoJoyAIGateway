@@ -114,7 +114,7 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 	finish := func() {
 		finishOnce.Do(func() {
 			if admission.admitted && h.accessQuota != nil {
-				h.logAccessQuotaCompletionFault(s.keyID, h.accessQuota.Complete(admission.ticket, recorder.estimatedCostNanoUSD()))
+				h.completeAccessQuota(s.ctx, s.keyID, admission.ticket, recorder.estimatedCostNanoUSD())
 			}
 			recorder.emit()
 		})
@@ -148,9 +148,9 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 	}
 	recorder.accessKeyMultiplier = key.PriceMultiplier
 	if h.accessQuota != nil {
-		decision, current := h.checkAccessQuotaForSnapshot(snapshot, key.ID, h.quotaNow())
-		if !current {
-			reject(reasonConfigurationChanged)
+		decision, err := h.accessQuota.Check(s.ctx, snapshot, key.ID, h.quotaNow())
+		if err != nil {
+			reject(limitStateFailureReason(err))
 			return
 		}
 		if !decision.Allowed {
@@ -158,7 +158,10 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 			return
 		}
 	}
-	if !h.limiter.Allow(key.ID, key.RPMLimit).Allowed {
+	if limitDecision, err := h.limiter.Allow(s.ctx, key.ID, key.RPMLimit); err != nil {
+		reject(limitStateFailureReason(err))
+		return
+	} else if !limitDecision.Allowed {
 		reject(reasonAccessKeyRateLimited)
 		return
 	}
@@ -240,7 +243,7 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		parsed := &dialect.ParsedRequest{Method: http.MethodPost, Path: "/v1/responses", Body: turn.body}
 		var failure *reason
 		parsed, _, recorder.autoDecision, failure = h.prepareAutoModel(requestCtx, snapshot, key, dialect.NewOpenAIResponses(), parsed, original.metadata, boundAuto, func() *reason {
-			return h.admitAutoQuota(snapshot, &admission)
+			return h.admitAutoQuota(requestCtx, snapshot, &admission)
 		}, autoQuery)
 		if failure != nil {
 			reject(*failure)
@@ -387,10 +390,10 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		}
 		if !admission.admitted && h.accessQuota != nil {
 			var decision accessquota.Decision
-			var current bool
-			admission.ticket, decision, current = h.admitAccessQuotaForSnapshot(snapshot, key.ID, h.quotaNow())
-			if !current {
-				reject(reasonConfigurationChanged)
+			var err error
+			admission.ticket, decision, err = h.accessQuota.Admit(s.ctx, snapshot, key.ID, h.quotaNow())
+			if err != nil {
+				reject(limitStateFailureReason(err))
 				return
 			}
 			if !decision.Allowed {

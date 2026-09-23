@@ -118,13 +118,15 @@ type recordingAccessKeyRPMLimiter struct {
 	mu        sync.Mutex
 	calls     []rpmLimiterCall
 	decisions []ratelimit.LimitDecision
+	err       error
 	onAllow   func(rpmLimiterCall)
 }
 
 func (limiter *recordingAccessKeyRPMLimiter) Allow(
+	_ context.Context,
 	accessKeyID uint,
 	limit int64,
-) ratelimit.LimitDecision {
+) (ratelimit.LimitDecision, error) {
 	limiter.mu.Lock()
 	call := rpmLimiterCall{accessKeyID: accessKeyID, limit: limit}
 	limiter.calls = append(limiter.calls, call)
@@ -134,11 +136,12 @@ func (limiter *recordingAccessKeyRPMLimiter) Allow(
 		decision = limiter.decisions[min(index, len(limiter.decisions)-1)]
 	}
 	onAllow := limiter.onAllow
+	err := limiter.err
 	limiter.mu.Unlock()
 	if onAllow != nil {
 		onAllow(call)
 	}
-	return decision
+	return decision, err
 }
 
 func (limiter *recordingAccessKeyRPMLimiter) snapshot() []rpmLimiterCall {

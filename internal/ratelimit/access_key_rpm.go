@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -48,10 +49,17 @@ type AccessKeyRPM struct {
 }
 
 func NewAccessKeyRPM() *AccessKeyRPM {
-	return &AccessKeyRPM{windows: make(map[uint]timestampDeque), now: time.Now}
+	return NewAccessKeyRPMWithClock(time.Now)
 }
 
-func (limiter *AccessKeyRPM) Allow(accessKeyID uint, limit int64) LimitDecision {
+// NewAccessKeyRPMWithClock builds a limiter driven by now, for contract tests
+// that compare it with other limiter implementations.
+func NewAccessKeyRPMWithClock(now func() time.Time) *AccessKeyRPM {
+	return &AccessKeyRPM{windows: make(map[uint]timestampDeque), now: now}
+}
+
+// Allow never fails; the error result satisfies limiters backed by shared state.
+func (limiter *AccessKeyRPM) Allow(_ context.Context, accessKeyID uint, limit int64) (LimitDecision, error) {
 	limiter.mu.Lock()
 	defer limiter.mu.Unlock()
 
@@ -59,27 +67,32 @@ func (limiter *AccessKeyRPM) Allow(accessKeyID uint, limit int64) LimitDecision 
 	limiter.cleanup(now)
 	if limit <= 0 {
 		delete(limiter.windows, accessKeyID)
-		return LimitDecision{Allowed: true}
+		return LimitDecision{Allowed: true}, nil
 	}
 
 	window := limiter.windows[accessKeyID]
 	window.dropThrough(now.Add(-time.Minute))
 	count := window.len()
 	if int64(count) >= limit {
-		target := window.at(count - int(limit))
-		retryAfter := ceilToSecond(target.Add(time.Minute).Sub(now))
-		if retryAfter < time.Second {
-			retryAfter = time.Second
-		}
-		if retryAfter > time.Minute {
-			retryAfter = time.Minute
-		}
 		limiter.windows[accessKeyID] = window
-		return LimitDecision{Allowed: false, RetryAfter: retryAfter}
+		return LimitDecision{Allowed: false, RetryAfter: RetryAfter(window.at(count-int(limit)), now)}, nil
 	}
 	window.push(now)
 	limiter.windows[accessKeyID] = window
-	return LimitDecision{Allowed: true}
+	return LimitDecision{Allowed: true}, nil
+}
+
+// RetryAfter returns when a request rejected at now may retry, given the
+// admission time of the window entry that must expire first.
+func RetryAfter(target, now time.Time) time.Duration {
+	retryAfter := ceilToSecond(target.Add(time.Minute).Sub(now))
+	if retryAfter < time.Second {
+		retryAfter = time.Second
+	}
+	if retryAfter > time.Minute {
+		retryAfter = time.Minute
+	}
+	return retryAfter
 }
 
 func (limiter *AccessKeyRPM) cleanup(now time.Time) {

@@ -38,7 +38,7 @@ func TestAutoModelDecisionCostSettlesWhenAnswerFails(t *testing.T) {
 	if err := runtime.Reconcile(map[uint][]accessquota.Rule{1: {{ID: 1, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 84000}}}); err != nil {
 		t.Fatal(err)
 	}
-	handler.accessQuota = runtime
+	handler.accessQuota = NewLocalAccessQuotaGate(handler.manager, runtime)
 	calls := 0
 	handler.decisionClient = autoDecisionClient(func(*http.Request) (*http.Response, error) {
 		calls++

@@ -147,7 +147,7 @@ func TestWebsocketQuotaCountsConcurrentTurnsOnceWithoutReservation(t *testing.T)
 	limiter := &recordingAccessKeyRPMLimiter{}
 	h.limiter = limiter
 	runtime := accessquota.NewRuntime()
-	h.accessQuota = runtime
+	h.accessQuota = NewLocalAccessQuotaGate(h.manager, runtime)
 	if err := runtime.Reconcile(map[uint][]accessquota.Rule{1: {{ID: 1, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 4}}}); err != nil {
 		t.Fatal(err)
 	}

@@ -245,7 +245,7 @@ Windows 普通用户可改为下载 `gpt-load-windows-setup.exe`。双击并确�
 
 - 默认只监听 `127.0.0.1`。需要远程访问时，应通过受控网络或带 TLS 的反向代理暴露，并配置 ACL 与防火墙。
 - 妥善管理 `AUTH_KEY` 与 `ENCRYPTION_KEY`，不要把真实密钥提交到仓库、日志、截图或公开 Issue。
-- 2.0 默认以**单应用实例**运行。设置 `REDIS_ADDRS` 可启用实验性集群模式（需 PostgreSQL、显式 `AUTH_KEY`/`ENCRYPTION_KEY`）；当前版本在实例间共享配置变更，AccessKey 限流/额度、凭据健康、Responses 续接仍为实例本地，订阅渠道暂不支持多实例。
+- 2.0 默认以**单应用实例**运行。设置 `REDIS_ADDRS` 可启用实验性集群模式（需 PostgreSQL、显式 `AUTH_KEY`/`ENCRYPTION_KEY`）；当前版本在实例间共享配置变更与 AccessKey 的 RPM 限流和成本额度，凭据健康、Responses 续接仍为实例本地，订阅渠道暂不支持多实例。Redis 不可用时，设置了 RPM 或成本额度的 AccessKey 请求返回 503 `cluster_state_unavailable`，不会转发上游。Redis 须配置 `maxmemory-policy noeviction`，并建议开启 AOF 持久化；Redis 丢数据时，已用额度回退到最后一次数据库检查点（约 1 秒前）。各实例需要通过 NTP 校时。
 - 用量与成本是基于上游返回数据的**估算**，用于运行分析和资源评估，不等同于服务商账单或财务对账结果。
 - 订阅渠道依赖上游 OAuth 与兼容协议，可能随上游变化调整。请只接入自己有权使用的账号，并遵守对应服务商条款。
 - HTTP Responses 的 `previous_response_id` 续接按协议及现有存储能力自动接入：原生 Responses 且声明由上游管理状态的渠道目前包括 `openai`、`gpt_load`、`xai`、`newapi`、`cliproxyapi`、`sub2api`。按 AccessKey 隔离归属，在当前路由允许时固定原凭据，不受软亲和开关影响；实际状态可用性由上游决定。无状态及转换响应不登记为持久状态。未知 ID（包括升级前或网关外创建的 ID）直接拒绝；Group 参数覆盖不能改写该字段。

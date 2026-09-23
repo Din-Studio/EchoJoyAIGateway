@@ -22,15 +22,16 @@ var reasonAutoModelUnavailable = reason{http.StatusServiceUnavailable, "auto_mod
 var reasonAutoModelForbidden = reason{http.StatusForbidden, "auto_model_target_forbidden", "Automatic model entry or fallback target is not permitted for this request."}
 var reasonAutoModelUnsupported = reason{http.StatusBadRequest, "auto_model_operation_unsupported", "Automatic model selection is unsupported for this operation."}
 
-func (handler *Handler) admitAutoQuota(snapshot *state.ConfigSnapshot, admission *requestAccessQuotaAdmission) *reason {
+func (handler *Handler) admitAutoQuota(ctx context.Context, snapshot *state.ConfigSnapshot, admission *requestAccessQuotaAdmission) *reason {
 	if admission == nil || admission.admitted || handler.accessQuota == nil {
 		return nil
 	}
 	var decision accessquota.Decision
-	var current bool
-	admission.ticket, decision, current = handler.admitAccessQuotaForSnapshot(snapshot, admission.accessKeyID, handler.quotaNow())
-	if !current {
-		return &reasonConfigurationChanged
+	var err error
+	admission.ticket, decision, err = handler.accessQuota.Admit(ctx, snapshot, admission.accessKeyID, handler.quotaNow())
+	if err != nil {
+		failure := limitStateFailureReason(err)
+		return &failure
 	}
 	if !decision.Allowed {
 		return &reasonAccessKeyCostLimitExceeded

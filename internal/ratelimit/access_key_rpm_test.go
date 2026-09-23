@@ -30,11 +30,11 @@ func TestAccessKeyRPMAllowsExactSlidingWindow(t *testing.T) {
 	limiter.now = clock.current
 
 	for request := 1; request <= 3; request++ {
-		if got := limiter.Allow(7, 3); !got.Allowed {
+		if got := allow(t, limiter, 7, 3); !got.Allowed {
 			t.Fatalf("request %d rejected: %#v", request, got)
 		}
 	}
-	got := limiter.Allow(7, 3)
+	got := allow(t, limiter, 7, 3)
 	if got.Allowed || got.RetryAfter != time.Minute {
 		t.Fatalf("fourth request = %#v, want rejected for 60s", got)
 	}
@@ -45,10 +45,10 @@ func TestAccessKeyRPMExpiresAtExactSixtySecondBoundary(t *testing.T) {
 	clock := &fakeClock{now: base}
 	limiter := NewAccessKeyRPM()
 	limiter.now = clock.current
-	_ = limiter.Allow(7, 1)
+	_ = allow(t, limiter, 7, 1)
 
 	clock.set(base.Add(time.Minute))
-	if got := limiter.Allow(7, 1); !got.Allowed {
+	if got := allow(t, limiter, 7, 1); !got.Allowed {
 		t.Fatalf("request at exact boundary = %#v, want allowed", got)
 	}
 }
@@ -58,12 +58,12 @@ func TestAccessKeyRPMRejectDoesNotExtendWindow(t *testing.T) {
 	clock := &fakeClock{now: base}
 	limiter := NewAccessKeyRPM()
 	limiter.now = clock.current
-	_ = limiter.Allow(7, 1)
+	_ = allow(t, limiter, 7, 1)
 
 	clock.set(base.Add(30 * time.Second))
-	firstReject := limiter.Allow(7, 1)
+	firstReject := allow(t, limiter, 7, 1)
 	clock.set(base.Add(59 * time.Second))
-	secondReject := limiter.Allow(7, 1)
+	secondReject := allow(t, limiter, 7, 1)
 	if firstReject.Allowed || secondReject.Allowed || secondReject.RetryAfter != time.Second {
 		t.Fatalf("reject decisions = %#v / %#v", firstReject, secondReject)
 	}
@@ -76,12 +76,12 @@ func TestAccessKeyRPMComputesRetryAfterAfterLimitDecrease(t *testing.T) {
 	limiter.now = clock.current
 	for offset := 0; offset < 5; offset++ {
 		clock.set(base.Add(time.Duration(offset) * time.Second))
-		if !limiter.Allow(7, 5).Allowed {
+		if !allow(t, limiter, 7, 5).Allowed {
 			t.Fatal("warmup request rejected")
 		}
 	}
 	clock.set(base.Add(10 * time.Second))
-	got := limiter.Allow(7, 3)
+	got := allow(t, limiter, 7, 3)
 	if got.Allowed || got.RetryAfter != 52*time.Second {
 		t.Fatalf("decreased limit decision = %#v, want 52s", got)
 	}
@@ -89,13 +89,13 @@ func TestAccessKeyRPMComputesRetryAfterAfterLimitDecrease(t *testing.T) {
 
 func TestAccessKeyRPMZeroClearsObservedWindow(t *testing.T) {
 	limiter := NewAccessKeyRPM()
-	if !limiter.Allow(7, 1).Allowed {
+	if !allow(t, limiter, 7, 1).Allowed {
 		t.Fatal("initial request rejected")
 	}
-	if !limiter.Allow(7, 0).Allowed {
+	if !allow(t, limiter, 7, 0).Allowed {
 		t.Fatal("zero limit request rejected")
 	}
-	if got := limiter.Allow(7, 1); !got.Allowed {
+	if got := allow(t, limiter, 7, 1); !got.Allowed {
 		t.Fatalf("request after zero limit = %#v, want allowed", got)
 	}
 }
@@ -105,10 +105,10 @@ func TestAccessKeyRPMConservativeZeroTransitionWithoutTraffic(t *testing.T) {
 	clock := &fakeClock{now: base}
 	limiter := NewAccessKeyRPM()
 	limiter.now = clock.current
-	_ = limiter.Allow(7, 1)
+	_ = allow(t, limiter, 7, 1)
 
 	clock.set(base.Add(30 * time.Second))
-	if got := limiter.Allow(7, 1); got.Allowed {
+	if got := allow(t, limiter, 7, 1); got.Allowed {
 		t.Fatalf("request after unobserved zero transition = %#v, want rejected", got)
 	}
 }
@@ -118,10 +118,10 @@ func TestAccessKeyRPMRemovesStaleEntriesOpportunistically(t *testing.T) {
 	clock := &fakeClock{now: base}
 	limiter := NewAccessKeyRPM()
 	limiter.now = clock.current
-	_ = limiter.Allow(7, 1)
+	_ = allow(t, limiter, 7, 1)
 
 	clock.set(base.Add(2 * time.Minute))
-	_ = limiter.Allow(8, 1)
+	_ = allow(t, limiter, 8, 1)
 	if _, exists := limiter.windows[7]; exists {
 		t.Fatal("stale access key window still retained")
 	}
@@ -139,7 +139,7 @@ func TestAccessKeyRPMConcurrentLimit(t *testing.T) {
 		go func() {
 			defer group.Done()
 			<-start
-			if limiter.Allow(7, 7).Allowed {
+			if allow(t, limiter, 7, 7).Allowed {
 				count.Lock()
 				allowed++
 				count.Unlock()
@@ -151,4 +151,13 @@ func TestAccessKeyRPMConcurrentLimit(t *testing.T) {
 	if allowed != 7 {
 		t.Fatalf("allowed = %d, want 7", allowed)
 	}
+}
+
+func allow(t *testing.T, limiter *AccessKeyRPM, accessKeyID uint, limit int64) LimitDecision {
+	t.Helper()
+	decision, err := limiter.Allow(t.Context(), accessKeyID, limit)
+	if err != nil {
+		t.Fatalf("Allow() error = %v", err)
+	}
+	return decision
 }

@@ -38,6 +38,39 @@ type passiveQuotaFlusher interface {
 	SetPassiveQuotaDirtyNotifier(notifier func())
 }
 
+// accessQuotaCheckpointSource is the dirty-rule view the worker persists:
+// the in-memory runtime in single-instance mode, or the shared Redis state
+// this instance changed in cluster mode.
+type accessQuotaCheckpointSource interface {
+	HasDirty() bool
+	DirtySnapshots(ctx context.Context, limit int) ([]accessquota.RestoredState, error)
+	Ack(accessKeyID, ruleID uint, revision, snapshotVersion uint64)
+	SetDirtyNotifier(notifier func())
+}
+
+type localAccessQuotaCheckpoints struct {
+	runtime *accessquota.Runtime
+}
+
+func (source localAccessQuotaCheckpoints) HasDirty() bool {
+	return len(source.runtime.DirtySnapshots(1)) > 0
+}
+
+func (source localAccessQuotaCheckpoints) DirtySnapshots(
+	_ context.Context,
+	limit int,
+) ([]accessquota.RestoredState, error) {
+	return source.runtime.DirtySnapshots(limit), nil
+}
+
+func (source localAccessQuotaCheckpoints) Ack(accessKeyID, ruleID uint, revision, snapshotVersion uint64) {
+	source.runtime.Ack(accessKeyID, ruleID, revision, snapshotVersion)
+}
+
+func (source localAccessQuotaCheckpoints) SetDirtyNotifier(notifier func()) {
+	source.runtime.SetDirtyNotifier(notifier)
+}
+
 type workerTimer interface {
 	C() <-chan time.Time
 	Stop() bool
@@ -57,7 +90,7 @@ type Service struct {
 	logger          *logrus.Logger
 	now             func() time.Time
 	startErr        error
-	accessQuota     *accessquota.Runtime
+	accessQuota     accessQuotaCheckpointSource
 	quotaWriter     accessQuotaCheckpointWriter
 	quotaWake       chan struct{}
 	passiveQuota    passiveQuotaFlusher
@@ -111,10 +144,7 @@ func NewService(
 	service.retentionPolicy = retentionPolicy
 	for _, runtime := range accessQuotas {
 		if runtime != nil {
-			service.accessQuota = runtime
-			service.quotaWriter = &gormAccessQuotaCheckpointWriter{db: db}
-			service.quotaWake = make(chan struct{}, 1)
-			runtime.SetDirtyNotifier(service.wakeAccessQuotaCheckpoint)
+			service.SetAccessQuotaCheckpointSource(localAccessQuotaCheckpoints{runtime: runtime})
 			break
 		}
 	}
@@ -134,6 +164,20 @@ func (service *Service) wakeAccessQuotaCheckpoint() {
 	case service.quotaWake <- struct{}{}:
 	default:
 	}
+}
+
+// SetAccessQuotaCheckpointSource installs the dirty AccessQuota state this
+// worker checkpoints to the database. Call it before Start; nil is a no-op.
+func (service *Service) SetAccessQuotaCheckpointSource(source accessQuotaCheckpointSource) {
+	if service == nil || source == nil {
+		return
+	}
+	service.accessQuota = source
+	service.quotaWriter = &gormAccessQuotaCheckpointWriter{db: service.db}
+	if service.quotaWake == nil {
+		service.quotaWake = make(chan struct{}, 1)
+	}
+	source.SetDirtyNotifier(service.wakeAccessQuotaCheckpoint)
 }
 
 // SetPassiveQuotaFlusher installs the passive credential-quota observation
@@ -218,7 +262,7 @@ func (service *Service) Start() error {
 	service.workerDone = make(chan struct{})
 	service.state = lifecycleRunning
 	go service.runWorker(workerContext, service.workerDone)
-	if service.accessQuota != nil && len(service.accessQuota.DirtySnapshots(1)) > 0 {
+	if service.accessQuota != nil && service.accessQuota.HasDirty() {
 		service.wakeAccessQuotaCheckpoint()
 	}
 	return nil

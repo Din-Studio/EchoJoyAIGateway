@@ -63,8 +63,10 @@ type AttemptForwarder interface {
 	ForwardStream(context.Context, ForwardInput, http.ResponseWriter) UpstreamResult
 }
 
+// AccessKeyRPMLimiter decides per-AccessKey RPM admission. An error means the
+// limiter state is unavailable and the request must not be forwarded.
 type AccessKeyRPMLimiter interface {
-	Allow(accessKeyID uint, limit int64) ratelimit.LimitDecision
+	Allow(ctx context.Context, accessKeyID uint, limit int64) (ratelimit.LimitDecision, error)
 }
 
 // PriceTableProvider exposes the currently published immutable price table.
@@ -108,7 +110,7 @@ type Handler struct {
 	limiter             AccessKeyRPMLimiter
 	requestLogSink      telemetry.RequestLogSink
 	priceTables         PriceTableProvider
-	accessQuota         *accessquota.Runtime
+	accessQuota         AccessQuotaGate
 	newRequestID        func() (string, error)
 	requestNow          func() time.Time
 	now                 func() time.Time
@@ -197,7 +199,7 @@ func NewHandler(
 	}
 	for _, runtime := range accessQuotas {
 		if runtime != nil {
-			handler.accessQuota = runtime
+			handler.accessQuota = NewLocalAccessQuotaGate(manager, runtime)
 			break
 		}
 	}
@@ -220,7 +222,7 @@ func NewHandlerWithLifecycle(
 	limiter AccessKeyRPMLimiter,
 	requestLogSink telemetry.RequestLogSink,
 	priceTables PriceTableProvider,
-	accessQuota *accessquota.Runtime,
+	accessQuota AccessQuotaGate,
 	lifecycle *httplifecycle.Coordinator,
 	responseBindings *state.ResponseBindings,
 ) *Handler {
@@ -235,8 +237,10 @@ func NewHandlerWithLifecycle(
 		limiter,
 		requestLogSink,
 		priceTables,
-		accessQuota,
 	)
+	if accessQuota != nil {
+		handler.accessQuota = accessQuota
+	}
 	if channelRegistry != nil {
 		handler.channels = channelRegistry
 	}
@@ -250,8 +254,8 @@ func NewHandlerWithLifecycle(
 
 type unlimitedAccessKeyRPMLimiter struct{}
 
-func (unlimitedAccessKeyRPMLimiter) Allow(uint, int64) ratelimit.LimitDecision {
-	return ratelimit.LimitDecision{Allowed: true}
+func (unlimitedAccessKeyRPMLimiter) Allow(context.Context, uint, int64) (ratelimit.LimitDecision, error) {
+	return ratelimit.LimitDecision{Allowed: true}, nil
 }
 
 type requestAccessQuotaAdmission struct {
@@ -467,38 +471,38 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 				ginContext.Writer.Status(),
 			)
 			if quotaAdmission != nil && quotaAdmission.admitted && handler.accessQuota != nil {
-				completion := handler.accessQuota.Complete(
+				handler.completeAccessQuota(
+					ginContext.Request.Context(),
+					accessKey.ID,
 					quotaAdmission.ticket,
 					recorder.estimatedCostNanoUSD(),
 				)
-				handler.logAccessQuotaCompletionFault(accessKey.ID, completion)
 			}
 			recorder.emit()
 		}()
 	}
 
 	if quotaAdmission != nil && handler.accessQuota != nil {
-		quotaDecision := accessquota.Decision{}
-		if quotaAdmission.snapshot == nil {
-			quotaDecision = handler.accessQuota.Check(accessKey.ID, handler.quotaNow())
-		} else {
-			var current bool
-			quotaDecision, current = handler.checkAccessQuotaForSnapshot(
-				quotaAdmission.snapshot,
-				accessKey.ID,
-				handler.quotaNow(),
-			)
-			if !current {
-				handler.completeConfigurationChanged(ginContext, recorder)
-				return
-			}
+		quotaDecision, err := handler.accessQuota.Check(
+			ginContext.Request.Context(),
+			quotaAdmission.snapshot,
+			accessKey.ID,
+			handler.quotaNow(),
+		)
+		if err != nil {
+			handler.completeLimitStateFailure(ginContext, recorder, err)
+			return
 		}
 		if !quotaDecision.Allowed {
 			handler.completeAccessQuotaReason(ginContext, recorder, quotaDecision)
 			return
 		}
 	}
-	limitDecision := handler.limiter.Allow(accessKey.ID, accessKey.RPMLimit)
+	limitDecision, err := handler.limiter.Allow(ginContext.Request.Context(), accessKey.ID, accessKey.RPMLimit)
+	if err != nil {
+		handler.completeLimitStateFailure(ginContext, recorder, err)
+		return
+	}
 	if !limitDecision.Allowed {
 		ginContext.Writer.Header().Set(
 			"Retry-After",
@@ -619,7 +623,7 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 		ctx := ginContext.Request.Context()
 		var failure *reason
 		parsed, metadata, recorder.autoDecision, failure = handler.prepareAutoModel(ctx, snapshot, accessKey, selectedDialect, parsed, metadata, boundAuto, func() *reason {
-			return handler.admitAutoQuota(snapshot, quotaAdmission)
+			return handler.admitAutoQuota(ctx, snapshot, quotaAdmission)
 		}, autoQuery)
 		if failure != nil {
 			handler.completeReason(ginContext, recorder, *failure)
@@ -698,45 +702,6 @@ func (handler *Handler) quotaNow() time.Time {
 		return handler.now()
 	}
 	return time.Now()
-}
-
-func (handler *Handler) checkAccessQuotaForSnapshot(
-	snapshot *state.ConfigSnapshot,
-	accessKeyID uint,
-	now time.Time,
-) (accessquota.Decision, bool) {
-	var decision accessquota.Decision
-	if handler == nil || handler.manager == nil || handler.accessQuota == nil || snapshot == nil {
-		return decision, false
-	}
-	current := handler.manager.WithCurrentSnapshotRead(func(currentSnapshot *state.ConfigSnapshot) bool {
-		if currentSnapshot != snapshot {
-			return false
-		}
-		decision = handler.accessQuota.Check(accessKeyID, now)
-		return true
-	})
-	return decision, current
-}
-
-func (handler *Handler) admitAccessQuotaForSnapshot(
-	snapshot *state.ConfigSnapshot,
-	accessKeyID uint,
-	now time.Time,
-) (accessquota.Ticket, accessquota.Decision, bool) {
-	var ticket accessquota.Ticket
-	var decision accessquota.Decision
-	if handler == nil || handler.manager == nil || handler.accessQuota == nil || snapshot == nil {
-		return ticket, decision, false
-	}
-	current := handler.manager.WithCurrentSnapshotRead(func(currentSnapshot *state.ConfigSnapshot) bool {
-		if currentSnapshot != snapshot {
-			return false
-		}
-		ticket, decision = handler.accessQuota.Admit(accessKeyID, now)
-		return true
-	})
-	return ticket, decision, current
 }
 
 func (handler *Handler) logAccessQuotaCompletionFault(
@@ -1166,24 +1131,15 @@ func (handler *Handler) executeAttempts(
 			continue
 		}
 		if quotaAdmission != nil && !quotaAdmission.admitted && handler.accessQuota != nil {
-			var ticket accessquota.Ticket
-			var decision accessquota.Decision
-			if quotaAdmission.snapshot == nil {
-				ticket, decision = handler.accessQuota.Admit(
-					quotaAdmission.accessKeyID,
-					handler.quotaNow(),
-				)
-			} else {
-				var current bool
-				ticket, decision, current = handler.admitAccessQuotaForSnapshot(
-					quotaAdmission.snapshot,
-					quotaAdmission.accessKeyID,
-					handler.quotaNow(),
-				)
-				if !current {
-					handler.completeConfigurationChanged(ginContext, recorder)
-					return
-				}
+			ticket, decision, err := handler.accessQuota.Admit(
+				ginContext.Request.Context(),
+				quotaAdmission.snapshot,
+				quotaAdmission.accessKeyID,
+				handler.quotaNow(),
+			)
+			if err != nil {
+				handler.completeLimitStateFailure(ginContext, recorder, err)
+				return
 			}
 			if !decision.Allowed {
 				handler.completeAccessQuotaReason(ginContext, recorder, decision)

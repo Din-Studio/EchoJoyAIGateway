@@ -71,7 +71,11 @@ func BuildContainer() (*dig.Container, error) {
 		webui.NewServer,
 		state.NewCredentialRegistry,
 		state.NewResponseBindings,
-		accessquota.NewRuntime,
+		newAccessQuotaRuntime,
+		func(client *cluster.Client, db *gorm.DB) *cluster.AccessQuota {
+			return cluster.NewAccessQuota(client, requestlog.AccessQuotaStateReader{DB: db})
+		},
+		newAccessQuotaGate,
 		channel.CompileRegistry,
 		control.NewPriceRuntime,
 		control.NewCatalogBootstrap,
@@ -79,9 +83,7 @@ func BuildContainer() (*dig.Container, error) {
 		health.NewStatsStore,
 		health.NewMutationCoordinator,
 		ratelimit.NewAccessKeyRPM,
-		func(limiter *ratelimit.AccessKeyRPM) gateway.AccessKeyRPMLimiter {
-			return limiter
-		},
+		newAccessKeyRPMLimiter,
 		func(manager *state.Manager) requestlog.RetentionPolicyProvider {
 			return retentionSnapshotProvider{manager: manager}
 		},
@@ -93,9 +95,13 @@ func BuildContainer() (*dig.Container, error) {
 			redactor *redact.Redactor,
 			retention requestlog.RetentionPolicyProvider,
 			quotaRuntime *accessquota.Runtime,
+			sharedQuota *cluster.AccessQuota,
 			subscriptionCredentials *subscription.CredentialManager,
 		) *requestlog.Service {
 			service := requestlog.NewService(db, redactor, retention, quotaRuntime)
+			if sharedQuota != nil {
+				service.SetAccessQuotaCheckpointSource(sharedQuota)
+			}
 			service.SetPassiveQuotaFlusher(subscriptionCredentials)
 			return service
 		},
@@ -264,6 +270,37 @@ func newSystemOutboundProxyProvider(manager *state.Manager) httpclient.OutboundP
 	}
 }
 
+// newAccessQuotaRuntime owns in-process quota state only in single-instance
+// mode; cluster mode keeps it in Redis, so loaders and checkpoints skip it.
+func newAccessQuotaRuntime(client *cluster.Client) *accessquota.Runtime {
+	if client != nil {
+		return nil
+	}
+	return accessquota.NewRuntime()
+}
+
+// newAccessQuotaGate selects the shared Redis gate in cluster mode and the
+// snapshot-pinned in-process gate otherwise, never boxing a nil pointer.
+func newAccessQuotaGate(
+	shared *cluster.AccessQuota,
+	manager *state.Manager,
+	runtime *accessquota.Runtime,
+) gateway.AccessQuotaGate {
+	if shared != nil {
+		return shared
+	}
+	return gateway.NewLocalAccessQuotaGate(manager, runtime)
+}
+
+// newAccessKeyRPMLimiter selects the shared Redis window in cluster mode and
+// the in-process window otherwise.
+func newAccessKeyRPMLimiter(client *cluster.Client, local *ratelimit.AccessKeyRPM) gateway.AccessKeyRPMLimiter {
+	if shared := cluster.NewAccessKeyRPM(client); shared != nil {
+		return shared
+	}
+	return local
+}
+
 type runtimeSnapshotReconciler struct {
 	adapters    *provideradapter.Registry
 	accessQuota *accessquota.Runtime
@@ -303,9 +340,6 @@ func (reconciler runtimeSnapshotReconciler) ReconcileConfigSnapshot(snapshot *st
 	if reconciler.adapters == nil {
 		return fmt.Errorf("reconcile provider runtimes: adapter registry is unavailable")
 	}
-	if reconciler.accessQuota == nil {
-		return fmt.Errorf("reconcile access key cost limits: runtime is unavailable")
-	}
 	targets := make([]provideradapter.RuntimeTarget, 0)
 	if snapshot != nil {
 		targets = make([]provideradapter.RuntimeTarget, 0, len(snapshot.Groups))
@@ -318,6 +352,11 @@ func (reconciler runtimeSnapshotReconciler) ReconcileConfigSnapshot(snapshot *st
 	}
 	if err := reconciler.adapters.ReconcileTargets(targets); err != nil {
 		return err
+	}
+	if reconciler.accessQuota == nil {
+		// Cluster mode keeps quota state in Redis; state.Compile has already
+		// validated the rule definitions.
+		return nil
 	}
 	return reconciler.accessQuota.Reconcile(snapshot.AccessQuotaDefinitions())
 }

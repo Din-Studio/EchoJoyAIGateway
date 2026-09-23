@@ -3,7 +3,9 @@ package requestlog
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -191,7 +193,7 @@ func TestRequestLogWorkerDrainsEveryQuotaCheckpointBatchOnStop(t *testing.T) {
 		redact.New(),
 		timers.New,
 	)
-	service.accessQuota = runtime
+	service.accessQuota = localAccessQuotaCheckpoints{runtime: runtime}
 	service.quotaWake = make(chan struct{}, 1)
 	service.quotaWriter = accessQuotaCheckpointWriterFunc(func(
 		_ context.Context,
@@ -230,7 +232,7 @@ func TestRequestLogWorkerReportsFinalQuotaCheckpointFailureOnStop(t *testing.T) 
 		redact.New(),
 		newManualTimerFactory().New,
 	)
-	service.accessQuota = runtime
+	service.accessQuota = localAccessQuotaCheckpoints{runtime: runtime}
 	service.quotaWake = make(chan struct{}, 1)
 	service.quotaWriter = accessQuotaCheckpointWriterFunc(func(
 		context.Context,
@@ -265,7 +267,7 @@ func TestRequestLogWorkerRetriesQuotaCheckpointWithoutClearingDirtyVersion(t *te
 		redact.New(),
 		timers.New,
 	)
-	service.accessQuota = runtime
+	service.accessQuota = localAccessQuotaCheckpoints{runtime: runtime}
 	service.quotaWake = make(chan struct{}, 1)
 	service.quotaWriter = accessQuotaCheckpointWriterFunc(func(
 		_ context.Context,
@@ -368,5 +370,112 @@ func waitForCheckpointCost(t *testing.T, db *gorm.DB, ruleID uint, want int64) {
 			t.Fatalf("checkpoint cost = %d, want %d", state.UsedNanoUSD, want)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestAccessQuotaStateReaderReturnsCheckpointsWithAccessKey(t *testing.T) {
+	db := sqlitetest.OpenMigrated(t)
+	accessKey, rule := createCheckpointRule(t, db)
+	startedAt := int64(1_787_184_000_000)
+	endsAt := startedAt + 300_000
+	written := accessquota.RestoredState{
+		AccessKeyID: accessKey.ID, RuleID: rule.ID, RuleRevision: 1,
+		UsedNanoUSD: 42, WindowStartedAtMS: &startedAt, WindowEndsAtMS: &endsAt,
+		WindowGeneration: 3, SnapshotVersion: 7,
+	}
+	if err := (&gormAccessQuotaCheckpointWriter{db: db}).WriteSnapshots(t.Context(), []accessquota.RestoredState{written}); err != nil {
+		t.Fatal(err)
+	}
+
+	states, err := AccessQuotaStateReader{DB: db}.ReadAccessQuotaStates(t.Context(), []uint{rule.ID, rule.ID + 100})
+	if err != nil {
+		t.Fatalf("ReadAccessQuotaStates() error = %v", err)
+	}
+	if !reflect.DeepEqual(states, []accessquota.RestoredState{written}) {
+		t.Fatalf("ReadAccessQuotaStates() = %#v, want %#v", states, written)
+	}
+}
+
+// scriptedCheckpointSource stands in for the cluster-mode shared quota state.
+type scriptedCheckpointSource struct {
+	mu       sync.Mutex
+	pending  []accessquota.RestoredState
+	readErr  error
+	acked    []accessquota.RestoredState
+	notifier func()
+}
+
+func (source *scriptedCheckpointSource) HasDirty() bool {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	return len(source.pending) > 0
+}
+
+func (source *scriptedCheckpointSource) DirtySnapshots(
+	context.Context,
+	int,
+) ([]accessquota.RestoredState, error) {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	if source.readErr != nil {
+		return nil, source.readErr
+	}
+	return append([]accessquota.RestoredState(nil), source.pending...), nil
+}
+
+func (source *scriptedCheckpointSource) Ack(accessKeyID, ruleID uint, revision, snapshotVersion uint64) {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	source.acked = append(source.acked, accessquota.RestoredState{
+		AccessKeyID: accessKeyID, RuleID: ruleID, RuleRevision: revision, SnapshotVersion: snapshotVersion,
+	})
+	source.pending = nil
+}
+
+func (source *scriptedCheckpointSource) SetDirtyNotifier(notifier func()) {
+	source.mu.Lock()
+	source.notifier = notifier
+	source.mu.Unlock()
+}
+
+func TestRequestLogServiceCheckpointsSharedQuotaSource(t *testing.T) {
+	db := sqlitetest.OpenMigrated(t)
+	accessKey, rule := createCheckpointRule(t, db)
+	service := NewService(db, redact.New(), staticRetentionPolicy{days: 7})
+	source := &scriptedCheckpointSource{
+		pending: []accessquota.RestoredState{{
+			AccessKeyID: accessKey.ID, RuleID: rule.ID, RuleRevision: 1, UsedNanoUSD: 33, SnapshotVersion: 5,
+		}},
+		readErr: errors.New("redis: connection refused"),
+	}
+	service.SetAccessQuotaCheckpointSource(source)
+	if source.notifier == nil {
+		t.Fatal("SetAccessQuotaCheckpointSource() did not install the dirty notifier")
+	}
+
+	if err := service.writeBatch(t.Context(), nil); err == nil {
+		t.Fatal("writeBatch() with unreadable source error = nil")
+	}
+	if stats := service.Stats(); !stats.AccessQuotaCheckpointDegraded || stats.AccessQuotaCheckpointWriteFailureTotal != 1 {
+		t.Fatalf("stats after read failure = %#v", stats)
+	}
+	select {
+	case <-service.quotaWake:
+	default:
+		t.Fatal("read failure did not schedule a retry")
+	}
+
+	source.mu.Lock()
+	source.readErr = nil
+	source.mu.Unlock()
+	if err := service.writeBatch(t.Context(), nil); err != nil {
+		t.Fatalf("writeBatch() retry error = %v", err)
+	}
+	waitForCheckpointCost(t, db, rule.ID, 33)
+	if len(source.acked) != 1 || source.acked[0].SnapshotVersion != 5 || source.HasDirty() {
+		t.Fatalf("acked = %#v dirty=%v", source.acked, source.HasDirty())
+	}
+	if stats := service.Stats(); stats.AccessQuotaCheckpointDegraded {
+		t.Fatalf("stats after recovery = %#v", stats)
 	}
 }
