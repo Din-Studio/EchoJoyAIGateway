@@ -1,8 +1,13 @@
-import type {
-  AccessKeyCostLimitRuleInput,
-  CreateAccessKeyRequest,
-  UpdateAccessKeyRequest,
+import {
+  createAccessKeyCostLimitRule,
+  deleteAccessKeyCostLimitRule,
+  updateAccessKeyCostLimitRule,
+  type AccessKeyCostLimitRuleDefinition,
+  type AccessKeyCostLimitRuleInput,
+  type CreateAccessKeyRequest,
+  type UpdateAccessKeyRequest,
 } from '@/app/resources/access-keys'
+import type { ApiClient } from '@shared/http/client'
 import type { AccessKeyDto, AccessKeyFiltersDto } from '@/api/control/types'
 import { createUUID } from '@/lib/uuid'
 import { isValidPriceMultiplier, normalizePriceMultiplier } from '@/lib/price-multiplier'
@@ -118,7 +123,7 @@ export function createAccessKeyDraftFromUpdate(
     expires_at_ms: expiresAt,
     rpm_limit: patch.rpm_limit ?? base.rpm_limit,
     price_multiplier: patch.price_multiplier ?? base.price_multiplier,
-    costLimitRules: (patch.cost_limit_rules ?? base.cost_limit_rules).map(costLimitRuleDraft),
+    costLimitRules: base.cost_limit_rules.map(costLimitRuleDraft),
   }
 }
 
@@ -279,7 +284,12 @@ export function isAccessKeyDraftDirty(draft: AccessKeyDraft, base?: AccessKeyDto
   if (draft.sourceMode !== initial.sourceMode || draft.expirationMode !== initial.expirationMode) {
     return true
   }
-  if (base) return Object.keys(buildAccessKeyUpdatePatch(base, draft)).length > 0
+  if (base) {
+    return (
+      Object.keys(buildAccessKeyUpdatePatch(base, draft)).length > 0 ||
+      !isAccessKeyCostLimitRulePlanEmpty(buildAccessKeyCostLimitRulePlan(base, draft))
+    )
+  }
   return (
     draft.name !== initial.name ||
     draft.key !== initial.key ||
@@ -298,7 +308,6 @@ export function isAccessKeyDraftDirty(draft: AccessKeyDraft, base?: AccessKeyDto
 export function accessKeyMatchesUpdatePatch(
   accessKey: AccessKeyDto,
   patch: UpdateAccessKeyRequest,
-  base: AccessKeyDto,
 ): boolean {
   return (
     !patch.key &&
@@ -308,13 +317,7 @@ export function accessKeyMatchesUpdatePatch(
     (patch.expires_at_ms === undefined || patch.expires_at_ms === accessKey.expires_at_ms) &&
     (patch.rpm_limit === undefined || patch.rpm_limit === accessKey.rpm_limit) &&
     (patch.price_multiplier === undefined ||
-      normalizePriceMultiplier(patch.price_multiplier) === accessKey.price_multiplier) &&
-    (patch.cost_limit_rules === undefined ||
-      costLimitRulesMatchReconciliation(
-        accessKey.cost_limit_rules,
-        patch.cost_limit_rules,
-        base.cost_limit_rules,
-      ))
+      normalizePriceMultiplier(patch.price_multiplier) === accessKey.price_multiplier)
   )
 }
 
@@ -335,41 +338,6 @@ function sameCostLimitRuleValue(
   )
 }
 
-function costLimitRulesMatchReconciliation(
-  latest: readonly AccessKeyCostLimitRuleInput[],
-  desired: readonly AccessKeyCostLimitRuleInput[],
-  base: readonly AccessKeyCostLimitRuleInput[],
-): boolean {
-  if (latest.length !== desired.length || latest.some((rule) => rule.id === undefined)) return false
-
-  const latestByID = new Map(latest.map((rule) => [rule.id!, rule]))
-  const baseIDs = new Set(base.flatMap((rule) => (rule.id === undefined ? [] : [rule.id])))
-  const matchedIDs = new Set<number>()
-  for (const desiredRule of desired) {
-    let matched: AccessKeyCostLimitRuleInput | undefined
-    if (desiredRule.id !== undefined) {
-      matched = latestByID.get(desiredRule.id)
-    } else {
-      matched = latest.find(
-        (candidate) =>
-          candidate.id !== undefined &&
-          !baseIDs.has(candidate.id) &&
-          !matchedIDs.has(candidate.id) &&
-          sameCostLimitRuleValue(candidate, desiredRule),
-      )
-    }
-    if (
-      matched?.id === undefined ||
-      matchedIDs.has(matched.id) ||
-      !sameCostLimitRuleValue(matched, desiredRule)
-    ) {
-      return false
-    }
-    matchedIDs.add(matched.id)
-  }
-  return matchedIDs.size === latest.length
-}
-
 export function buildAccessKeyUpdatePatch(
   base: AccessKeyDto,
   draft: AccessKeyDraft,
@@ -386,9 +354,101 @@ export function buildAccessKeyUpdatePatch(
   if (draft.rpm_limit !== base.rpm_limit) patch.rpm_limit = draft.rpm_limit
   const priceMultiplier = normalizePriceMultiplier(draft.price_multiplier)
   if (priceMultiplier !== base.price_multiplier) patch.price_multiplier = priceMultiplier
-  const desiredCostLimits = costLimitInputs(draft.costLimitRules, true)
-  if (!equalCostLimitRules(desiredCostLimits, base.cost_limit_rules)) {
-    patch.cost_limit_rules = desiredCostLimits
-  }
   return patch
+}
+
+/** One rule endpoint call per changed rule; see applyAccessKeyCostLimitRulePlan. */
+export interface AccessKeyCostLimitRulePlan {
+  deletes: number[]
+  updates: { id: number; rule: AccessKeyCostLimitRuleDefinition }[]
+  creates: AccessKeyCostLimitRuleDefinition[]
+}
+
+function ruleDefinition(rule: AccessKeyCostLimitRuleInput): AccessKeyCostLimitRuleDefinition {
+  return {
+    kind: rule.kind,
+    limit_usd: rule.limit_usd,
+    ...(rule.kind === 'periodic' ? { period_seconds: rule.period_seconds } : {}),
+  }
+}
+
+export function buildAccessKeyCostLimitRulePlan(
+  base: AccessKeyDto,
+  draft: AccessKeyDraft,
+): AccessKeyCostLimitRulePlan {
+  const desired = costLimitInputs(draft.costLimitRules, true)
+  const baseByID = new Map(base.cost_limit_rules.map((rule) => [rule.id!, rule]))
+  const keptIDs = new Set(desired.flatMap((rule) => (rule.id === undefined ? [] : [rule.id])))
+  const plan: AccessKeyCostLimitRulePlan = {
+    deletes: base.cost_limit_rules.flatMap((rule) => (keptIDs.has(rule.id!) ? [] : [rule.id!])),
+    updates: [],
+    creates: [],
+  }
+  for (const rule of desired) {
+    const current = rule.id === undefined ? undefined : baseByID.get(rule.id)
+    if (!current) plan.creates.push(ruleDefinition(rule))
+    else if (!sameCostLimitRuleValue(current, rule))
+      plan.updates.push({ id: current.id!, rule: ruleDefinition(rule) })
+  }
+  return plan
+}
+
+export function isAccessKeyCostLimitRulePlanEmpty(plan: AccessKeyCostLimitRulePlan): boolean {
+  return plan.deletes.length + plan.updates.length + plan.creates.length === 0
+}
+
+/**
+ * Applies a rule plan one rule at a time: deletes first free their total or
+ * period slot, then updates, then creates. It stops at the first failure and
+ * returns the AccessKey as committed by the last successful call.
+ */
+export async function applyAccessKeyCostLimitRulePlan(
+  client: ApiClient,
+  base: AccessKeyDto,
+  plan: AccessKeyCostLimitRulePlan,
+  signal?: AbortSignal,
+): Promise<AccessKeyDto> {
+  let latest = base
+  for (const ruleID of plan.deletes) {
+    latest = await deleteAccessKeyCostLimitRule(client, base.id, ruleID, signal)
+  }
+  for (const { id, rule } of plan.updates) {
+    latest = await updateAccessKeyCostLimitRule(client, base.id, id, rule, signal)
+  }
+  for (const rule of plan.creates) {
+    latest = await createAccessKeyCostLimitRule(client, base.id, rule, signal)
+  }
+  return latest
+}
+
+/**
+ * Aligns draft rules with a newer server state after a partially applied
+ * plan: an unsaved draft rule adopts the ID of a server rule with the same
+ * kind and period that no other draft rule claims, so the next save updates
+ * it instead of creating a duplicate.
+ */
+export function rebaseAccessKeyCostLimitRuleDrafts(
+  rules: readonly AccessKeyCostLimitRuleDraft[],
+  latest: AccessKeyDto,
+): AccessKeyCostLimitRuleDraft[] {
+  const latestIDs = new Set(latest.cost_limit_rules.map((rule) => rule.id!))
+  const claimed = new Set(
+    rules.flatMap((rule) => (rule.id !== undefined && latestIDs.has(rule.id) ? [rule.id] : [])),
+  )
+  return rules.map((rule) => {
+    if (rule.id !== undefined && latestIDs.has(rule.id)) return rule
+    const match = latest.cost_limit_rules.find(
+      (candidate) =>
+        !claimed.has(candidate.id!) &&
+        candidate.kind === rule.kind &&
+        (candidate.period_seconds ?? 0) === (rule.period_seconds ?? 0),
+    )
+    if (!match) {
+      const unsaved = { ...rule }
+      delete unsaved.id
+      return unsaved
+    }
+    claimed.add(match.id!)
+    return { ...rule, id: match.id }
+  })
 }

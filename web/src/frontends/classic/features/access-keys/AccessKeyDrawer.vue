@@ -52,15 +52,19 @@ import {
   type GroupCatalogState,
 } from './access-key-scope'
 import {
+  applyAccessKeyCostLimitRulePlan,
   areAccessKeyCostLimitRulesValid,
   accessKeyMatchesUpdatePatch,
+  buildAccessKeyCostLimitRulePlan,
   buildAccessKeyUpdatePatch,
   buildCreateAccessKeyInput,
   createAccessKeyDraft,
   createAccessKeyDraftFromCreateInput,
   createAccessKeyDraftFromUpdate,
   isAccessKeyDraftDirty,
+  isAccessKeyCostLimitRulePlanEmpty,
   isAccessKeyDraftValid,
+  rebaseAccessKeyCostLimitRuleDrafts,
   type AccessKeyDraft,
 } from './access-key-patch'
 
@@ -509,10 +513,17 @@ async function save(): Promise<void> {
   if (!createOperationActive.value && (!valid.value || !dirty.value)) return
   const currentBase = base.value
   const updateBody = currentBase ? buildAccessKeyUpdatePatch(currentBase, draft.value) : null
+  const rulePlan = currentBase ? buildAccessKeyCostLimitRulePlan(currentBase, draft.value) : null
   const activeCreatePayload = currentBase
     ? null
     : (createPayload.value ?? buildCreateAccessKeyInput(draft.value))
-  if (updateBody && Object.keys(updateBody).length === 0) return
+  if (
+    updateBody &&
+    Object.keys(updateBody).length === 0 &&
+    rulePlan &&
+    isAccessKeyCostLimitRulePlanEmpty(rulePlan)
+  )
+    return
 
   if (activeCreatePayload && !createPayload.value) {
     createPayload.value = cloneAccessKeyCreatePayload(activeCreatePayload)
@@ -531,13 +542,26 @@ async function save(): Promise<void> {
   let createdAccessKey: AccessKeyDto | null = null
   try {
     if (currentBase) {
-      const saved = await updateAccessKey(
-        client,
-        currentBase.id,
-        updateBody!,
-        activeController.signal,
-        updateBody?.key ? activeOperationID : undefined,
-      )
+      // 规则逐条提交且先于密钥字段；任一步失败即停止并以服务器最新状态为基准。
+      if (rulePlan && !isAccessKeyCostLimitRulePlanEmpty(rulePlan)) {
+        const ruled = await applyRulePlan(currentBase, rulePlan, activeController)
+        if (!ruled) return
+        base.value = ruled
+        draft.value = {
+          ...draft.value,
+          costLimitRules: rebaseAccessKeyCostLimitRuleDrafts(draft.value.costLimitRules, ruled),
+        }
+      }
+      const saved =
+        Object.keys(updateBody!).length === 0
+          ? base.value!
+          : await updateAccessKey(
+              client,
+              currentBase.id,
+              updateBody!,
+              activeController.signal,
+              updateBody?.key ? activeOperationID : undefined,
+            )
       if (
         controller !== activeController ||
         !props.open ||
@@ -647,6 +671,41 @@ async function save(): Promise<void> {
   if (savedKind) emit('saved', savedKind, savedName, base.value ?? undefined)
 }
 
+/**
+ * Runs the rule plan. On failure it adopts the server's latest state as the
+ * new base, keeps the user's draft, and reports the failure; the next save
+ * submits only what is still different.
+ */
+async function applyRulePlan(
+  currentBase: AccessKeyDto,
+  plan: ReturnType<typeof buildAccessKeyCostLimitRulePlan>,
+  activeController: AbortController,
+): Promise<AccessKeyDto | null> {
+  try {
+    return await applyAccessKeyCostLimitRulePlan(client, currentBase, plan, activeController.signal)
+  } catch (error: unknown) {
+    if (controller !== activeController || !props.open || error instanceof RequestCancelledError) {
+      return null
+    }
+    const latest = await findAccessKeyForReconciliation(
+      client,
+      currentBase.id,
+      activeController.signal,
+    ).catch(() => undefined)
+    if (controller !== activeController || !props.open) return null
+    if (latest) {
+      base.value = latest
+      draft.value = {
+        ...draft.value,
+        costLimitRules: rebaseAccessKeyCostLimitRuleDrafts(draft.value.costLimitRules, latest),
+      }
+      await applyInvalidationPlan(queryClient, mutationInvalidationPlans.accessKey.update)
+    }
+    failed.value = true
+    return null
+  }
+}
+
 async function reconcileEdit(): Promise<void> {
   const attempt = editReconciliation.value
   if (!attempt || pending.value) return
@@ -709,10 +768,7 @@ async function reconcileEdit(): Promise<void> {
       failed.value = true
       return
     }
-    if (
-      attempt.idempotencyKey ||
-      accessKeyMatchesUpdatePatch(latest, attempt.patch, attempt.base)
-    ) {
+    if (attempt.idempotencyKey || accessKeyMatchesUpdatePatch(latest, attempt.patch)) {
       base.value = latest
       draft.value = createAccessKeyDraft(latest)
       editReconciliation.value = null

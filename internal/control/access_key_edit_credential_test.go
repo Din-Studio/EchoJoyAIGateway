@@ -28,9 +28,6 @@ func TestEditAccessKeyReplaysNormalizedFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	totalID, periodicID := created.CostLimitRules[0].ID, created.CostLimitRules[1].ID
-	totalRule := fmt.Sprintf(`{"id":%d,"kind":"total","limit_usd":"10"}`, totalID)
-	periodicRule := fmt.Sprintf(`{"id":%d,"kind":"periodic","limit_usd":"2","period_seconds":3600}`, periodicID)
 	engine := newAccessKeyLifecycleEngine(t, fixture)
 	path := fmt.Sprintf("/api/access-keys/%d", created.ID)
 	for index, test := range []struct {
@@ -39,19 +36,6 @@ func TestEditAccessKeyReplaysNormalizedFields(t *testing.T) {
 		{"name", `"name":" client "`, `"name":"client"`, `"name":"other"`},
 		{"default multiplier", `"price_multiplier":"1.0"`, `"price_multiplier":"1"`, `"price_multiplier":"2"`},
 		{"fractional multiplier", `"price_multiplier":"1.50"`, `"price_multiplier":"1.5"`, `"price_multiplier":"1.6"`},
-		{
-			"cost amount",
-			fmt.Sprintf(`"cost_limit_rules":[{"id":%d,"kind":"total","limit_usd":"10.00"},%s]`, totalID, periodicRule),
-			fmt.Sprintf(`"cost_limit_rules":[%s,%s]`, totalRule, periodicRule),
-			fmt.Sprintf(`"cost_limit_rules":[{"id":%d,"kind":"total","limit_usd":"11"},%s]`, totalID, periodicRule),
-		},
-		{
-			"cost rule order and identity",
-			fmt.Sprintf(`"cost_limit_rules":[%s,%s]`, totalRule, periodicRule),
-			fmt.Sprintf(`"cost_limit_rules":[%s,%s]`, periodicRule, totalRule),
-			fmt.Sprintf(`"cost_limit_rules":[{"kind":"total","limit_usd":"10"},%s]`, periodicRule),
-		},
-		{"empty cost rules", `"cost_limit_rules":[]`, `"cost_limit_rules":[]`, `"cost_limit_rules":[{"kind":"total","limit_usd":"10"}]`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			operationID := fmt.Sprintf("00000000-0000-4000-8000-%012d", 8621+index)

@@ -489,6 +489,39 @@ func (s *Server) HTTPModule() httproute.Module {
 				s.handleUpdateAccessKey,
 			),
 			controlRoute(
+				"control.access-keys.cost-limits.create",
+				http.MethodPost,
+				"/access-keys/:id/cost-limits",
+				s.auditMutation(newMutationDescriptor(
+					"access_key_cost_limit_create",
+					"access_key",
+					accessKeyMutationLocator,
+				)),
+				s.handleCreateAccessKeyCostLimitRule,
+			),
+			controlRoute(
+				"control.access-keys.cost-limits.update",
+				http.MethodPut,
+				"/access-keys/:id/cost-limits/:rule_id",
+				s.auditMutation(newMutationDescriptor(
+					"access_key_cost_limit_update",
+					"access_key",
+					accessKeyMutationLocator,
+				)),
+				s.handleUpdateAccessKeyCostLimitRule,
+			),
+			controlRoute(
+				"control.access-keys.cost-limits.delete",
+				http.MethodDelete,
+				"/access-keys/:id/cost-limits/:rule_id",
+				s.auditMutation(newMutationDescriptor(
+					"access_key_cost_limit_delete",
+					"access_key",
+					accessKeyMutationLocator,
+				)),
+				s.handleDeleteAccessKeyCostLimitRule,
+			),
+			controlRoute(
 				"control.access-keys.cost-limits.reset",
 				http.MethodPost,
 				"/access-keys/:id/cost-limits/reset",

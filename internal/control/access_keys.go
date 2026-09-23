@@ -62,8 +62,9 @@ func (value *OptionalNullableEpochMS) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// AccessKeyCostLimitRuleRequest defines one rule: an initial rule of a new
+// AccessKey, or the body of the cost-limit rule sub-resource endpoints.
 type AccessKeyCostLimitRuleRequest struct {
-	ID            uint             `json:"id,omitempty"`
 	Kind          accessquota.Kind `json:"kind"`
 	LimitUSD      string           `json:"limit_usd"`
 	PeriodSeconds int64            `json:"period_seconds,omitempty"`
@@ -148,14 +149,13 @@ type AccessKeyCreateRequest struct {
 }
 
 type AccessKeyUpdateRequest struct {
-	Key             string                          `json:"key"`
-	PriceMultiplier optionalField[string]           `json:"price_multiplier"`
-	Name            *string                         `json:"name"`
-	Status          *state.AccessKeyStatus          `json:"status"`
-	Filters         *AccessKeyFilters               `json:"filters"`
-	RPMLimit        OptionalRPMLimit                `json:"rpm_limit"`
-	CostLimitRules  OptionalAccessKeyCostLimitRules `json:"cost_limit_rules"`
-	ExpiresAtMS     OptionalNullableEpochMS         `json:"expires_at_ms"`
+	Key             string                  `json:"key"`
+	PriceMultiplier optionalField[string]   `json:"price_multiplier"`
+	Name            *string                 `json:"name"`
+	Status          *state.AccessKeyStatus  `json:"status"`
+	Filters         *AccessKeyFilters       `json:"filters"`
+	RPMLimit        OptionalRPMLimit        `json:"rpm_limit"`
+	ExpiresAtMS     OptionalNullableEpochMS `json:"expires_at_ms"`
 }
 
 type AccessKeyCostLimitResetRequest struct {
@@ -299,7 +299,7 @@ func (s *Service) CreateAccessKey(
 	if err != nil {
 		return AccessKeyCreateResult{}, err
 	}
-	costLimitRules, err := normalizeAccessKeyCostLimitRules(request.CostLimitRules, false)
+	costLimitRules, err := normalizeAccessKeyCostLimitRules(request.CostLimitRules)
 	if err != nil {
 		return AccessKeyCreateResult{}, err
 	}
@@ -389,7 +389,7 @@ func (s *Service) accessKeyUpdateMutation(
 	request AccessKeyUpdateRequest,
 ) (func(*gorm.DB) (AccessKeyMetadata, error), error) {
 	if id == 0 || (request.Key == "" && request.Name == nil && request.Status == nil && request.Filters == nil &&
-		!request.RPMLimit.Set && !request.CostLimitRules.Set && !request.ExpiresAtMS.Set && !request.PriceMultiplier.Set) {
+		!request.RPMLimit.Set && !request.ExpiresAtMS.Set && !request.PriceMultiplier.Set) {
 		return nil, app_errors.ErrBadRequest
 	}
 	if _, err := normalizeRPMLimit(request.RPMLimit, 0); err != nil {
@@ -404,15 +404,6 @@ func (s *Service) accessKeyUpdateMutation(
 	if err != nil {
 		return nil, err
 	}
-	var desiredCostLimitRules []normalizedAccessKeyCostLimitRule
-	if request.CostLimitRules.Set {
-		var err error
-		desiredCostLimitRules, err = normalizeAccessKeyCostLimitRules(request.CostLimitRules, true)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	var name *string
 	if request.Name != nil {
 		normalized, err := normalizeAccessKeyName(*request.Name)
@@ -529,30 +520,32 @@ func (s *Service) accessKeyUpdateMutation(
 				return result, app_errors.ParseDBError(err)
 			}
 		}
-		var costLimitRows []models.AccessKeyCostLimitRule
-		if request.CostLimitRules.Set {
-			costLimitRows, err = reconcileAccessKeyCostLimitRules(tx, row.ID, desiredCostLimitRules)
-		} else {
-			costLimitRows, err = loadAccessKeyCostLimitRuleRows(tx, row.ID)
-		}
-		if err != nil {
-			return result, err
-		}
-		if err := tx.Model(&models.AccessKey{}).
-			Select(
-				"id", "name", "key_prefix", "key_suffix", "status", "filters", "rpm_limit", "expires_at_ms", "price_multiplier_micros",
-				"created_at_ms", "updated_at_ms",
-			).
-			Where("id = ?", row.ID).
-			Take(&row).Error; err != nil {
-			return result, app_errors.ParseDBError(err)
-		}
-		result, err = mapAccessKeyMetadataRow(row)
-		if err == nil {
-			result.CostLimitRules = mapAccessKeyCostLimitRules(costLimitRows)
-		}
-		return result, err
+		return loadAccessKeyMetadata(tx, row.ID)
 	}, nil
+}
+
+// loadAccessKeyMetadata reads one AccessKey with its cost-limit rules.
+func loadAccessKeyMetadata(tx *gorm.DB, id uint) (AccessKeyMetadata, error) {
+	var row accessKeyMetadataRow
+	if err := tx.Model(&models.AccessKey{}).
+		Select(
+			"id", "name", "key_prefix", "key_suffix", "status", "filters", "rpm_limit", "expires_at_ms", "price_multiplier_micros",
+			"created_at_ms", "updated_at_ms",
+		).
+		Where("id = ?", id).
+		Take(&row).Error; err != nil {
+		return AccessKeyMetadata{}, app_errors.ParseDBError(err)
+	}
+	costLimitRows, err := loadAccessKeyCostLimitRuleRows(tx, id)
+	if err != nil {
+		return AccessKeyMetadata{}, err
+	}
+	result, err := mapAccessKeyMetadataRow(row)
+	if err != nil {
+		return AccessKeyMetadata{}, err
+	}
+	result.CostLimitRules = mapAccessKeyCostLimitRules(costLimitRows)
+	return result, nil
 }
 
 func (s *Service) ListAccessKeyOptions(ctx context.Context) ([]AccessKeyOption, error) {

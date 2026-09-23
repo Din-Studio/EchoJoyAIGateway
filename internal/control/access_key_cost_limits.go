@@ -20,65 +20,74 @@ type normalizedAccessKeyCostLimitRule struct {
 	PeriodSeconds int64
 }
 
-type accessKeyCostLimitPeriodMove struct {
-	RuleID          uint
-	TemporaryPeriod int64
-}
-
+// normalizeAccessKeyCostLimitRules validates the initial rules of a new
+// AccessKey as one set.
 func normalizeAccessKeyCostLimitRules(
 	field OptionalAccessKeyCostLimitRules,
-	allowExistingIDs bool,
 ) ([]normalizedAccessKeyCostLimitRule, error) {
 	if !field.Set {
 		return []normalizedAccessKeyCostLimitRule{}, nil
 	}
 	result := make([]normalizedAccessKeyCostLimitRule, 0, len(field.Values))
-	totalCount := 0
-	periods := make(map[int64]struct{})
-	ids := make(map[uint]struct{})
 	for _, input := range field.Values {
-		if input.ID != 0 && !allowExistingIDs {
-			return nil, app_errors.ErrValidation
-		}
-		if input.ID != 0 {
-			if _, duplicate := ids[input.ID]; duplicate {
-				return nil, app_errors.ErrValidation
-			}
-			ids[input.ID] = struct{}{}
-		}
-		parsed, err := pricing.ParseUSD(input.LimitUSD)
-		if err != nil || parsed <= 0 {
-			return nil, app_errors.ErrValidation
-		}
-		rule := normalizedAccessKeyCostLimitRule{
-			ID: input.ID, Kind: input.Kind, LimitNanoUSD: int64(parsed),
-			PeriodSeconds: input.PeriodSeconds,
-		}
-		switch rule.Kind {
-		case accessquota.KindTotal:
-			totalCount++
-			if totalCount > 1 || rule.PeriodSeconds != 0 {
-				return nil, app_errors.ErrValidation
-			}
-		case accessquota.KindPeriodic:
-			if rule.PeriodSeconds < accessquota.MinPeriodSeconds ||
-				rule.PeriodSeconds > accessquota.MaxPeriodSeconds {
-				return nil, app_errors.ErrValidation
-			}
-			if _, duplicate := periods[rule.PeriodSeconds]; duplicate {
-				return nil, app_errors.ErrValidation
-			}
-			periods[rule.PeriodSeconds] = struct{}{}
-		default:
-			return nil, app_errors.ErrValidation
+		rule, err := normalizeAccessKeyCostLimitRule(input)
+		if err != nil {
+			return nil, err
 		}
 		result = append(result, rule)
 	}
-	if len(periods) > accessquota.MaxPeriodicRules {
-		return nil, app_errors.ErrValidation
+	if err := validateAccessKeyCostLimitRuleSet(result); err != nil {
+		return nil, err
 	}
 	sortNormalizedAccessKeyCostLimitRules(result)
 	return result, nil
+}
+
+// normalizeAccessKeyCostLimitRule validates one rule definition on its own.
+func normalizeAccessKeyCostLimitRule(input AccessKeyCostLimitRuleRequest) (normalizedAccessKeyCostLimitRule, error) {
+	parsed, err := pricing.ParseUSD(input.LimitUSD)
+	if err != nil || parsed <= 0 {
+		return normalizedAccessKeyCostLimitRule{}, app_errors.ErrValidation
+	}
+	rule := normalizedAccessKeyCostLimitRule{
+		Kind: input.Kind, LimitNanoUSD: int64(parsed), PeriodSeconds: input.PeriodSeconds,
+	}
+	switch rule.Kind {
+	case accessquota.KindTotal:
+		if rule.PeriodSeconds != 0 {
+			return normalizedAccessKeyCostLimitRule{}, app_errors.ErrValidation
+		}
+	case accessquota.KindPeriodic:
+		if rule.PeriodSeconds < accessquota.MinPeriodSeconds ||
+			rule.PeriodSeconds > accessquota.MaxPeriodSeconds {
+			return normalizedAccessKeyCostLimitRule{}, app_errors.ErrValidation
+		}
+	default:
+		return normalizedAccessKeyCostLimitRule{}, app_errors.ErrValidation
+	}
+	return rule, nil
+}
+
+// validateAccessKeyCostLimitRuleSet enforces the per-key invariants: at most
+// one total rule and at most MaxPeriodicRules periodic rules with distinct
+// periods.
+func validateAccessKeyCostLimitRuleSet(rules []normalizedAccessKeyCostLimitRule) error {
+	totalCount := 0
+	periods := make(map[int64]struct{})
+	for _, rule := range rules {
+		if rule.Kind == accessquota.KindTotal {
+			totalCount++
+			continue
+		}
+		if _, duplicate := periods[rule.PeriodSeconds]; duplicate {
+			return app_errors.ErrValidation
+		}
+		periods[rule.PeriodSeconds] = struct{}{}
+	}
+	if totalCount > 1 || len(periods) > accessquota.MaxPeriodicRules {
+		return app_errors.ErrValidation
+	}
+	return nil
 }
 
 func sortNormalizedAccessKeyCostLimitRules(rules []normalizedAccessKeyCostLimitRule) {
@@ -121,97 +130,6 @@ func createAccessKeyCostLimitRules(
 		created = append(created, rule)
 	}
 	return created, nil
-}
-
-func reconcileAccessKeyCostLimitRules(
-	tx *gorm.DB,
-	accessKeyID uint,
-	desired []normalizedAccessKeyCostLimitRule,
-) ([]models.AccessKeyCostLimitRule, error) {
-	var current []models.AccessKeyCostLimitRule
-	if err := tx.Where("access_key_id = ?", accessKeyID).Order("id ASC").Find(&current).Error; err != nil {
-		return nil, app_errors.ParseDBError(err)
-	}
-	currentByID := make(map[uint]models.AccessKeyCostLimitRule, len(current))
-	for _, rule := range current {
-		currentByID[rule.ID] = rule
-	}
-	desiredIDs := make(map[uint]struct{}, len(desired))
-	for _, definition := range desired {
-		if definition.ID == 0 {
-			continue
-		}
-		currentRule, exists := currentByID[definition.ID]
-		if !exists || accessquota.Kind(currentRule.Kind) != definition.Kind {
-			return nil, app_errors.ErrValidation
-		}
-		desiredIDs[definition.ID] = struct{}{}
-	}
-	for _, rule := range current {
-		if _, retained := desiredIDs[rule.ID]; retained {
-			continue
-		}
-		if err := tx.Delete(&models.AccessKeyCostLimitRule{}, rule.ID).Error; err != nil {
-			return nil, app_errors.ParseDBError(err)
-		}
-	}
-	periodMoves, err := planAccessKeyCostLimitPeriodMoves(current, desired)
-	if err != nil {
-		return nil, err
-	}
-	for _, move := range periodMoves {
-		result := tx.Model(&models.AccessKeyCostLimitRule{}).
-			Where("id = ? AND access_key_id = ?", move.RuleID, accessKeyID).
-			Update("period_seconds", move.TemporaryPeriod)
-		if result.Error != nil {
-			return nil, app_errors.ParseDBError(result.Error)
-		}
-		if result.RowsAffected != 1 {
-			return nil, fmt.Errorf(
-				"temporarily move access key cost limit rule %d: %w",
-				move.RuleID,
-				app_errors.ErrInternalServer,
-			)
-		}
-	}
-
-	for _, definition := range desired {
-		if definition.ID == 0 {
-			if _, err := createAccessKeyCostLimitRules(
-				tx, accessKeyID, []normalizedAccessKeyCostLimitRule{definition},
-			); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		currentRule := currentByID[definition.ID]
-		semanticsChanged := currentRule.PeriodSeconds != definition.PeriodSeconds
-		updates := map[string]any{"limit_nano_usd": definition.LimitNanoUSD}
-		if semanticsChanged {
-			if currentRule.RuleRevision == ^uint64(0) {
-				return nil, fmt.Errorf("advance access key cost limit rule %d revision: %w", definition.ID, app_errors.ErrInternalServer)
-			}
-			updates["kind"] = string(definition.Kind)
-			updates["period_seconds"] = definition.PeriodSeconds
-			updates["rule_revision"] = currentRule.RuleRevision + 1
-		}
-		if err := tx.Model(&models.AccessKeyCostLimitRule{}).
-			Where("id = ? AND access_key_id = ?", definition.ID, accessKeyID).
-			Updates(updates).Error; err != nil {
-			return nil, app_errors.ParseDBError(err)
-		}
-		if semanticsChanged {
-			if err := resetAccessKeyCostLimitRuleState(
-				tx,
-				definition.ID,
-				currentRule.RuleRevision,
-				currentRule.RuleRevision+1,
-			); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return loadAccessKeyCostLimitRuleRows(tx, accessKeyID)
 }
 
 func (s *Service) ResetAccessKeyCostLimitRules(
@@ -303,64 +221,6 @@ func resetAccessKeyCostLimitRuleState(
 	return nil
 }
 
-func planAccessKeyCostLimitPeriodMoves(
-	current []models.AccessKeyCostLimitRule,
-	desired []normalizedAccessKeyCostLimitRule,
-) ([]accessKeyCostLimitPeriodMove, error) {
-	currentByID := make(map[uint]models.AccessKeyCostLimitRule, len(current))
-	reserved := make(map[int64]struct{}, len(current)+len(desired))
-	for _, rule := range current {
-		currentByID[rule.ID] = rule
-		if rule.Kind == models.AccessKeyCostLimitKindPeriodic {
-			reserved[rule.PeriodSeconds] = struct{}{}
-		}
-	}
-	changedIDs := make([]uint, 0)
-	for _, definition := range desired {
-		if definition.Kind == accessquota.KindPeriodic {
-			reserved[definition.PeriodSeconds] = struct{}{}
-		}
-		if definition.ID == 0 {
-			continue
-		}
-		currentRule := currentByID[definition.ID]
-		if currentRule.PeriodSeconds == definition.PeriodSeconds {
-			continue
-		}
-		if currentRule.RuleRevision == ^uint64(0) {
-			return nil, fmt.Errorf(
-				"advance access key cost limit rule %d revision: %w",
-				definition.ID,
-				app_errors.ErrInternalServer,
-			)
-		}
-		changedIDs = append(changedIDs, definition.ID)
-	}
-	sort.Slice(changedIDs, func(i, j int) bool { return changedIDs[i] < changedIDs[j] })
-	moves := make([]accessKeyCostLimitPeriodMove, 0, len(changedIDs))
-	candidate := accessquota.MaxPeriodSeconds
-	for _, ruleID := range changedIDs {
-		for candidate >= accessquota.MinPeriodSeconds {
-			if _, exists := reserved[candidate]; !exists {
-				break
-			}
-			candidate--
-		}
-		if candidate < accessquota.MinPeriodSeconds {
-			return nil, fmt.Errorf(
-				"plan temporary access key cost limit periods: %w",
-				app_errors.ErrInternalServer,
-			)
-		}
-		moves = append(moves, accessKeyCostLimitPeriodMove{
-			RuleID: ruleID, TemporaryPeriod: candidate,
-		})
-		reserved[candidate] = struct{}{}
-		candidate--
-	}
-	return moves, nil
-}
-
 func loadAccessKeyCostLimitRuleRows(
 	db *gorm.DB,
 	accessKeyID uint,
@@ -448,4 +308,140 @@ func cloneCostLimitMilliseconds(value *int64) *int64 {
 	}
 	cloned := *value
 	return &cloned
+}
+
+// CreateAccessKeyCostLimitRule adds one rule to an AccessKey. A rule starts
+// at revision 1 with no recorded usage.
+func (s *Service) CreateAccessKeyCostLimitRule(
+	ctx context.Context,
+	accessKeyID uint,
+	request AccessKeyCostLimitRuleRequest,
+) (AccessKeyMetadata, error) {
+	definition, err := normalizeAccessKeyCostLimitRule(request)
+	if err != nil {
+		return AccessKeyMetadata{}, err
+	}
+	return s.writeAccessKeyCostLimitRule(ctx, accessKeyID, func(tx *gorm.DB, current []normalizedAccessKeyCostLimitRule) error {
+		if err := validateAccessKeyCostLimitRuleSet(append(current, definition)); err != nil {
+			return err
+		}
+		_, err := createAccessKeyCostLimitRules(tx, accessKeyID, []normalizedAccessKeyCostLimitRule{definition})
+		return err
+	})
+}
+
+// UpdateAccessKeyCostLimitRule replaces one rule's definition. The kind is
+// immutable. Changing the period starts a new revision with no usage;
+// changing only the limit keeps the recorded usage.
+func (s *Service) UpdateAccessKeyCostLimitRule(
+	ctx context.Context,
+	accessKeyID uint,
+	ruleID uint,
+	request AccessKeyCostLimitRuleRequest,
+) (AccessKeyMetadata, error) {
+	if ruleID == 0 {
+		return AccessKeyMetadata{}, app_errors.ErrBadRequest
+	}
+	definition, err := normalizeAccessKeyCostLimitRule(request)
+	if err != nil {
+		return AccessKeyMetadata{}, err
+	}
+	return s.writeAccessKeyCostLimitRule(ctx, accessKeyID, func(tx *gorm.DB, current []normalizedAccessKeyCostLimitRule) error {
+		var existing models.AccessKeyCostLimitRule
+		if err := tx.Where("id = ? AND access_key_id = ?", ruleID, accessKeyID).Take(&existing).Error; err != nil {
+			return app_errors.ParseDBError(err)
+		}
+		if accessquota.Kind(existing.Kind) != definition.Kind {
+			return app_errors.ErrValidation
+		}
+		desired := make([]normalizedAccessKeyCostLimitRule, 0, len(current))
+		for _, rule := range current {
+			if rule.ID == ruleID {
+				rule = definition
+			}
+			desired = append(desired, rule)
+		}
+		if err := validateAccessKeyCostLimitRuleSet(desired); err != nil {
+			return err
+		}
+		updates := map[string]any{"limit_nano_usd": definition.LimitNanoUSD}
+		periodChanged := existing.PeriodSeconds != definition.PeriodSeconds
+		if periodChanged {
+			if existing.RuleRevision == ^uint64(0) {
+				return fmt.Errorf("advance access key cost limit rule %d revision: %w", ruleID, app_errors.ErrInternalServer)
+			}
+			updates["period_seconds"] = definition.PeriodSeconds
+			updates["rule_revision"] = existing.RuleRevision + 1
+		}
+		if err := tx.Model(&models.AccessKeyCostLimitRule{}).
+			Where("id = ? AND access_key_id = ?", ruleID, accessKeyID).
+			Updates(updates).Error; err != nil {
+			return app_errors.ParseDBError(err)
+		}
+		if periodChanged {
+			return resetAccessKeyCostLimitRuleState(tx, ruleID, existing.RuleRevision, existing.RuleRevision+1)
+		}
+		return nil
+	})
+}
+
+// DeleteAccessKeyCostLimitRule removes one rule and its usage state.
+func (s *Service) DeleteAccessKeyCostLimitRule(
+	ctx context.Context,
+	accessKeyID uint,
+	ruleID uint,
+) (AccessKeyMetadata, error) {
+	if ruleID == 0 {
+		return AccessKeyMetadata{}, app_errors.ErrBadRequest
+	}
+	return s.writeAccessKeyCostLimitRule(ctx, accessKeyID, func(tx *gorm.DB, _ []normalizedAccessKeyCostLimitRule) error {
+		result := tx.Where("id = ? AND access_key_id = ?", ruleID, accessKeyID).
+			Delete(&models.AccessKeyCostLimitRule{})
+		if result.Error != nil {
+			return app_errors.ParseDBError(result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return app_errors.ErrResourceNotFound
+		}
+		return nil
+	})
+}
+
+// writeAccessKeyCostLimitRule runs one rule mutation inside a published
+// configuration write, handing it the AccessKey's current rules, and returns
+// the AccessKey as committed.
+func (s *Service) writeAccessKeyCostLimitRule(
+	ctx context.Context,
+	accessKeyID uint,
+	mutate func(tx *gorm.DB, current []normalizedAccessKeyCostLimitRule) error,
+) (AccessKeyMetadata, error) {
+	if accessKeyID == 0 {
+		return AccessKeyMetadata{}, app_errors.ErrBadRequest
+	}
+	var result AccessKeyMetadata
+	_, err := s.writeConfig(ctx, func(tx *gorm.DB) error {
+		if err := tx.Select("id").Take(&models.AccessKey{}, accessKeyID).Error; err != nil {
+			return app_errors.ParseDBError(err)
+		}
+		rows, err := loadAccessKeyCostLimitRuleRows(tx, accessKeyID)
+		if err != nil {
+			return err
+		}
+		current := make([]normalizedAccessKeyCostLimitRule, 0, len(rows))
+		for _, row := range rows {
+			current = append(current, normalizedAccessKeyCostLimitRule{
+				ID: row.ID, Kind: accessquota.Kind(row.Kind),
+				LimitNanoUSD: row.LimitNanoUSD, PeriodSeconds: row.PeriodSeconds,
+			})
+		}
+		if err := mutate(tx, current); err != nil {
+			return err
+		}
+		result, err = loadAccessKeyMetadata(tx, accessKeyID)
+		return err
+	}, nil)
+	if err != nil {
+		return AccessKeyMetadata{}, err
+	}
+	return result, nil
 }

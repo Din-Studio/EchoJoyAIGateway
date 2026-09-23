@@ -48,12 +48,16 @@ import AccessKeyQuotaEditor from './AccessKeyQuotaEditor.vue'
 import AccessKeyQuotaResetDialog from './AccessKeyQuotaResetDialog.vue'
 import { accessState, accessTime } from './access-key-display'
 import {
+  applyRulePlan,
   draftErrors,
   draftFor,
   generateKey,
   inputFor,
   keyStrength,
   patchFor,
+  rebaseRules,
+  rulePlanEmpty,
+  rulePlanFor,
   type AccessDraft,
 } from './access-key-draft'
 
@@ -262,24 +266,49 @@ async function requestSave(): Promise<void> {
   }
   const current = base.value
   const patch = current ? patchFor(current, input) : undefined
+  const plan = current ? rulePlanFor(current, input) : undefined
   pending.value = true
   error.value = ''
   let saved: AccessKey | undefined
+  // 规则逐条提交且先于密钥字段；任一步失败即停止并以服务器最新状态为基准。
+  if (current && plan && !rulePlanEmpty(plan)) {
+    try {
+      const ruled = await applyRulePlan(client, current, plan, controller.signal)
+      if (controller.signal.aborted) return
+      base.value = ruled
+      draft.value.rules = rebaseRules(draft.value.rules, ruled)
+    } catch {
+      if (controller.signal.aborted) return
+      const latest = await getAccessKey(client, current.id, controller.signal, props.hint).catch(
+        () => null,
+      )
+      if (controller.signal.aborted) return
+      if (latest) {
+        base.value = latest
+        draft.value.rules = rebaseRules(draft.value.rules, latest)
+      }
+      error.value = t('accessKeys.failed')
+      pending.value = false
+      return
+    }
+  }
   try {
     if (!current || patch?.key) {
       const payload = JSON.stringify(patch ?? input)
       // 同一内容再次保存时复用幂等键，避免网络异常后重复创建或替换。
       if (submission?.payload !== payload) submission = { payload, operation: createOperationKey() }
     }
-    saved = current
-      ? await updateAccessKey(
-          client,
-          current.id,
-          patch!,
-          controller.signal,
-          patch?.key ? submission!.operation : undefined,
-        )
-      : await createAccessKey(client, input, submission!.operation, controller.signal)
+    saved = !current
+      ? await createAccessKey(client, input, submission!.operation, controller.signal)
+      : Object.keys(patch!).length === 0
+        ? base.value!
+        : await updateAccessKey(
+            client,
+            current.id,
+            patch!,
+            controller.signal,
+            patch?.key ? submission!.operation : undefined,
+          )
     if (controller.signal.aborted) return
     submission = undefined
     completed.value = true

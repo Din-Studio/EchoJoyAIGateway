@@ -76,8 +76,14 @@ export type UpdateAccessKeyRequest = Partial<{
   expires_at_ms: number | null
   rpm_limit: number
   price_multiplier: string
-  cost_limit_rules: AccessKeyCostLimitRuleInput[]
 }>
+
+/** Body of the cost-limit rule sub-resource endpoints. */
+export interface AccessKeyCostLimitRuleDefinition {
+  kind: AccessKeyCostLimitKind
+  limit_usd: string
+  period_seconds?: number
+}
 
 const metadataFields = [
   'id',
@@ -513,6 +519,52 @@ export function deleteAccessKey(
   signal?: AbortSignal,
 ): Promise<void> {
   return client.request(`/api/access-keys/${id}`, { method: 'DELETE', signal })
+}
+
+/** Each rule endpoint changes exactly one rule and returns the AccessKey as committed. */
+export async function createAccessKeyCostLimitRule(
+  client: ApiClient,
+  id: number,
+  rule: AccessKeyCostLimitRuleDefinition,
+  signal?: AbortSignal,
+): Promise<AccessKeyDto> {
+  return projectAccessKeyMetadata(
+    await client.request(`/api/access-keys/${id}/cost-limits`, {
+      method: 'POST',
+      json: rule,
+      signal,
+    }),
+  )
+}
+
+export async function updateAccessKeyCostLimitRule(
+  client: ApiClient,
+  id: number,
+  ruleID: number,
+  rule: AccessKeyCostLimitRuleDefinition,
+  signal?: AbortSignal,
+): Promise<AccessKeyDto> {
+  return projectAccessKeyMetadata(
+    await client.request(`/api/access-keys/${id}/cost-limits/${ruleID}`, {
+      method: 'PUT',
+      json: rule,
+      signal,
+    }),
+  )
+}
+
+export async function deleteAccessKeyCostLimitRule(
+  client: ApiClient,
+  id: number,
+  ruleID: number,
+  signal?: AbortSignal,
+): Promise<AccessKeyDto> {
+  return projectAccessKeyMetadata(
+    await client.request(`/api/access-keys/${id}/cost-limits/${ruleID}`, {
+      method: 'DELETE',
+      signal,
+    }),
+  )
 }
 
 export function resetAccessKeyCostLimits(

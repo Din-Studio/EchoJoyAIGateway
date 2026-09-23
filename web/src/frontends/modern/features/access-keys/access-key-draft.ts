@@ -1,5 +1,16 @@
 import { formatLocalDateTime, parseLocalDateTime } from '@modern/components/ui/date-time'
-import type { AccessInput, AccessKey, AccessScope, CostRule } from '@modern/api/access-keys'
+import {
+  createAccessKeyRule,
+  deleteAccessKeyRule,
+  updateAccessKeyRule,
+  type AccessInput,
+  type AccessKey,
+  type AccessPatch,
+  type AccessScope,
+  type CostRule,
+  type CostRuleDefinition,
+} from '@modern/api/access-keys'
+import type { ApiClient } from '@shared/http/client'
 import { createOperationKey } from '../groups/group-create-operation'
 
 export type ScopeDimension = 'groups' | 'protocols' | 'models'
@@ -108,19 +119,8 @@ function scopeJSON(scope: AccessScope): string {
     Object.fromEntries(Object.entries(scope).map(([key, values]) => [key, [...values].sort()])),
   )
 }
-const ruleJSON = (rules: CostRule[]) =>
-  JSON.stringify(
-    rules
-      .map((rule) => ({
-        id: rule.id,
-        kind: rule.kind,
-        limit_usd: normalizeDecimal(rule.limit_usd),
-        period_seconds: rule.kind === 'periodic' ? rule.period_seconds : 0,
-      }))
-      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
-  )
-export function patchFor(base: AccessKey, input: AccessInput): Partial<AccessInput> {
-  const patch: Partial<AccessInput> = {}
+export function patchFor(base: AccessKey, input: AccessInput): AccessPatch {
+  const patch: AccessPatch = {}
   if (input.key) patch.key = input.key
   if (base.name !== input.name) patch.name = input.name
   if (base.status !== input.status) patch.status = input.status
@@ -129,9 +129,87 @@ export function patchFor(base: AccessKey, input: AccessInput): Partial<AccessInp
   if (normalizeDecimal(base.price_multiplier) !== input.price_multiplier)
     patch.price_multiplier = input.price_multiplier
   if (scopeJSON(base.filters) !== scopeJSON(input.filters)) patch.filters = input.filters
-  if (ruleJSON(base.cost_limit_rules) !== ruleJSON(input.cost_limit_rules))
-    patch.cost_limit_rules = input.cost_limit_rules
   return patch
+}
+
+/** One rule endpoint call per changed rule; see applyRulePlan. */
+export interface RulePlan {
+  deletes: number[]
+  updates: { id: number; rule: CostRuleDefinition }[]
+  creates: CostRuleDefinition[]
+}
+function definitionOf(rule: CostRule): CostRuleDefinition {
+  return {
+    kind: rule.kind,
+    limit_usd: normalizeDecimal(rule.limit_usd),
+    ...(rule.kind === 'periodic' ? { period_seconds: rule.period_seconds } : {}),
+  }
+}
+export function rulePlanFor(base: AccessKey, input: AccessInput): RulePlan {
+  const baseByID = new Map(base.cost_limit_rules.map((rule) => [rule.id!, rule]))
+  const kept = new Set(
+    input.cost_limit_rules.flatMap((rule) => (rule.id === undefined ? [] : [rule.id])),
+  )
+  const plan: RulePlan = {
+    deletes: base.cost_limit_rules.flatMap((rule) => (kept.has(rule.id!) ? [] : [rule.id!])),
+    updates: [],
+    creates: [],
+  }
+  for (const rule of input.cost_limit_rules) {
+    const current = rule.id === undefined ? undefined : baseByID.get(rule.id)
+    if (!current) plan.creates.push(definitionOf(rule))
+    else if (JSON.stringify(definitionOf(current)) !== JSON.stringify(definitionOf(rule)))
+      plan.updates.push({ id: current.id!, rule: definitionOf(rule) })
+  }
+  return plan
+}
+export const rulePlanEmpty = (plan: RulePlan) =>
+  plan.deletes.length + plan.updates.length + plan.creates.length === 0
+/**
+ * Applies a rule plan one rule at a time: deletes first free their total or
+ * period slot, then updates, then creates. It stops at the first failure and
+ * returns the AccessKey as committed by the last successful call.
+ */
+export async function applyRulePlan(
+  client: ApiClient,
+  base: AccessKey,
+  plan: RulePlan,
+  signal: AbortSignal,
+): Promise<AccessKey> {
+  let latest = base
+  for (const ruleID of plan.deletes)
+    latest = await deleteAccessKeyRule(client, base.id, ruleID, signal)
+  for (const { id, rule } of plan.updates)
+    latest = await updateAccessKeyRule(client, base.id, id, rule, signal)
+  for (const rule of plan.creates) latest = await createAccessKeyRule(client, base.id, rule, signal)
+  return latest
+}
+/**
+ * Aligns draft rules with a newer server state after a partially applied
+ * plan: an unsaved draft rule adopts the ID of a server rule with the same
+ * kind and period that no other draft rule claims, so the next save updates
+ * it instead of creating a duplicate.
+ */
+export function rebaseRules(rules: RuleDraft[], latest: AccessKey): RuleDraft[] {
+  const latestIDs = new Set(latest.cost_limit_rules.map((rule) => rule.id!))
+  const claimed = new Set(
+    rules.flatMap((rule) => (rule.id !== undefined && latestIDs.has(rule.id) ? [rule.id] : [])),
+  )
+  return rules.map((rule) => {
+    if (rule.id !== undefined && latestIDs.has(rule.id)) return rule
+    const seconds = periodSeconds(rule)
+    const match = latest.cost_limit_rules.find(
+      (candidate) =>
+        !claimed.has(candidate.id!) &&
+        candidate.kind === rule.kind &&
+        (candidate.kind === 'total' || candidate.period_seconds === seconds),
+    )
+    const unsaved = { ...rule }
+    delete unsaved.id
+    if (!match) return unsaved
+    claimed.add(match.id!)
+    return { ...unsaved, id: match.id }
+  })
 }
 export function draftErrors(draft: AccessDraft, base?: AccessKey): Record<string, string> {
   const errors: Record<string, string> = {}

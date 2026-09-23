@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"sort"
 	"testing"
 	"time"
 
@@ -17,7 +16,7 @@ import (
 	"gpt-load/internal/storage/models"
 )
 
-func TestAccessKeyCostLimitRulesCreateAndReconcileDesiredList(t *testing.T) {
+func TestAccessKeyCostLimitRuleSubresourceCreatesUpdatesAndDeletesOneRule(t *testing.T) {
 	t.Parallel()
 	fixture, engine := newAccessKeyCostLimitHTTPFixture(t)
 	created := serveAccessKeyCostLimitRequest(t, engine, http.MethodPost, "/api/access-keys", `{
@@ -31,39 +30,20 @@ func TestAccessKeyCostLimitRulesCreateAndReconcileDesiredList(t *testing.T) {
 	if created.Code != http.StatusOK {
 		t.Fatalf("POST = %d %s, want 200", created.Code, created.Body.String())
 	}
-
 	var createdEnvelope struct {
 		Data AccessKeyCreateResult `json:"data"`
 	}
 	if err := json.Unmarshal(created.Body.Bytes(), &createdEnvelope); err != nil {
 		t.Fatalf("decode create response: %v", err)
 	}
-	if len(createdEnvelope.Data.CostLimitRules) != 3 {
-		t.Fatalf("created rules = %#v", createdEnvelope.Data.CostLimitRules)
-	}
-	rules := loadAccessKeyCostLimitRules(t, fixture, createdEnvelope.Data.ID)
+	accessKeyID := createdEnvelope.Data.ID
+	rules := loadAccessKeyCostLimitRules(t, fixture, accessKeyID)
 	if len(rules) != 3 {
 		t.Fatalf("stored rules = %#v", rules)
 	}
-	var stateCount int64
+	total, fiveHours, day := rules[0], rules[1], rules[2]
 	if err := fixture.db.Model(&models.AccessKeyCostLimitState{}).
-		Where("rule_id IN ?", []uint{rules[0].ID, rules[1].ID, rules[2].ID}).
-		Count(&stateCount).Error; err != nil {
-		t.Fatalf("count cost limit states: %v", err)
-	}
-	if stateCount != 3 {
-		t.Fatalf("state count = %d, want 3", stateCount)
-	}
-
-	periodic := make([]models.AccessKeyCostLimitRule, 0, 2)
-	for _, rule := range rules {
-		if rule.Kind == models.AccessKeyCostLimitKindPeriodic {
-			periodic = append(periodic, rule)
-		}
-	}
-	sort.Slice(periodic, func(i, j int) bool { return periodic[i].PeriodSeconds < periodic[j].PeriodSeconds })
-	if err := fixture.db.Model(&models.AccessKeyCostLimitState{}).
-		Where("rule_id = ?", periodic[0].ID).
+		Where("rule_id = ?", fiveHours.ID).
 		Updates(map[string]any{
 			"used_nano_usd":        int64(15_000_000_000),
 			"window_started_at_ms": int64(1_787_184_000_000),
@@ -73,56 +53,89 @@ func TestAccessKeyCostLimitRulesCreateAndReconcileDesiredList(t *testing.T) {
 		}).Error; err != nil {
 		t.Fatalf("seed periodic state: %v", err)
 	}
-
-	path := fmt.Sprintf("/api/access-keys/%d", createdEnvelope.Data.ID)
-	updated := serveAccessKeyCostLimitRequest(t, engine, http.MethodPut, path, fmt.Sprintf(`{
-		"cost_limit_rules":[
-			{"id":%d,"kind":"total","limit_usd":"120"},
-			{"id":%d,"kind":"periodic","limit_usd":"25","period_seconds":18000},
-			{"kind":"periodic","limit_usd":"40","period_seconds":36000}
-		]
-	}`, rules[0].ID, periodic[0].ID), "")
-	if updated.Code != http.StatusOK {
-		t.Fatalf("PUT amount/delete/add = %d %s, want 200", updated.Code, updated.Body.String())
+	rulePath := func(ruleID uint) string {
+		return fmt.Sprintf("/api/access-keys/%d/cost-limits/%d", accessKeyID, ruleID)
 	}
-	current := loadAccessKeyCostLimitRules(t, fixture, createdEnvelope.Data.ID)
-	if len(current) != 3 {
-		t.Fatalf("updated stored rules = %#v", current)
+	decodeRules := func(response *httptest.ResponseRecorder) []AccessKeyCostLimitRule {
+		t.Helper()
+		var envelope struct {
+			Data AccessKeyMetadata `json:"data"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+			t.Fatalf("decode rule response: %v", err)
+		}
+		if envelope.Data.ID != accessKeyID {
+			t.Fatalf("rule response access key = %d, want %d", envelope.Data.ID, accessKeyID)
+		}
+		return envelope.Data.CostLimitRules
+	}
+
+	// Changing only the limit keeps the rule identity and its usage.
+	amount := serveAccessKeyCostLimitRequest(t, engine, http.MethodPut, rulePath(fiveHours.ID),
+		`{"kind":"periodic","limit_usd":"25","period_seconds":18000}`, "")
+	if amount.Code != http.StatusOK {
+		t.Fatalf("PUT rule amount = %d %s, want 200", amount.Code, amount.Body.String())
+	}
+	if got := decodeRules(amount); len(got) != 3 || got[1].ID != fiveHours.ID || got[1].LimitUSD != "25" {
+		t.Fatalf("rules after amount change = %#v", got)
 	}
 	var preserved models.AccessKeyCostLimitState
-	if err := fixture.db.First(&preserved, periodic[0].ID).Error; err != nil {
+	if err := fixture.db.First(&preserved, fiveHours.ID).Error; err != nil {
 		t.Fatalf("load preserved state: %v", err)
 	}
-	if preserved.UsedNanoUSD != 15_000_000_000 || preserved.RuleRevision != periodic[0].RuleRevision ||
+	if preserved.UsedNanoUSD != 15_000_000_000 || preserved.RuleRevision != fiveHours.RuleRevision ||
 		preserved.WindowGeneration != 2 {
 		t.Fatalf("amount update reset state = %#v", preserved)
 	}
-	var deletedCount int64
-	if err := fixture.db.Model(&models.AccessKeyCostLimitRule{}).
-		Where("id = ?", periodic[1].ID).Count(&deletedCount).Error; err != nil {
-		t.Fatalf("count deleted rule: %v", err)
+
+	// Deleting removes exactly one rule and its state.
+	deleted := serveAccessKeyCostLimitRequest(t, engine, http.MethodDelete, rulePath(day.ID), "", "")
+	if deleted.Code != http.StatusOK || len(decodeRules(deleted)) != 2 {
+		t.Fatalf("DELETE rule = %d %s", deleted.Code, deleted.Body.String())
 	}
-	if deletedCount != 0 {
-		t.Fatalf("removed desired-list rule still exists")
+	var remaining int64
+	if err := fixture.db.Model(&models.AccessKeyCostLimitState{}).Where("rule_id = ?", day.ID).Count(&remaining).Error; err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatal("deleted rule state still exists")
+	}
+	if again := serveAccessKeyCostLimitRequest(t, engine, http.MethodDelete, rulePath(day.ID), "", ""); again.Code != http.StatusNotFound {
+		t.Fatalf("DELETE missing rule = %d %s, want 404", again.Code, again.Body.String())
 	}
 
-	changedDuration := serveAccessKeyCostLimitRequest(t, engine, http.MethodPut, path, fmt.Sprintf(`{
-		"cost_limit_rules":[
-			{"id":%d,"kind":"total","limit_usd":"120"},
-			{"id":%d,"kind":"periodic","limit_usd":"25","period_seconds":21600},
-			{"id":%d,"kind":"periodic","limit_usd":"40","period_seconds":36000}
-		]
-	}`, current[0].ID, periodic[0].ID, current[2].ID), "")
-	if changedDuration.Code != http.StatusOK {
-		t.Fatalf("PUT duration = %d %s, want 200", changedDuration.Code, changedDuration.Body.String())
+	// Creating adds exactly one rule with fresh state.
+	createdRule := serveAccessKeyCostLimitRequest(t, engine, http.MethodPost,
+		fmt.Sprintf("/api/access-keys/%d/cost-limits", accessKeyID),
+		`{"kind":"periodic","limit_usd":"40","period_seconds":36000}`, "")
+	if createdRule.Code != http.StatusOK || len(decodeRules(createdRule)) != 3 {
+		t.Fatalf("POST rule = %d %s", createdRule.Code, createdRule.Body.String())
+	}
+
+	// Changing the period starts a new revision with no usage.
+	period := serveAccessKeyCostLimitRequest(t, engine, http.MethodPut, rulePath(fiveHours.ID),
+		`{"kind":"periodic","limit_usd":"25","period_seconds":21600}`, "")
+	if period.Code != http.StatusOK {
+		t.Fatalf("PUT rule period = %d %s, want 200", period.Code, period.Body.String())
 	}
 	var reset models.AccessKeyCostLimitState
-	if err := fixture.db.First(&reset, periodic[0].ID).Error; err != nil {
+	if err := fixture.db.First(&reset, fiveHours.ID).Error; err != nil {
 		t.Fatalf("load reset state: %v", err)
 	}
-	if reset.RuleRevision != periodic[0].RuleRevision+1 || reset.UsedNanoUSD != 0 ||
+	if reset.RuleRevision != fiveHours.RuleRevision+1 || reset.UsedNanoUSD != 0 ||
 		reset.WindowStartedAtMS != nil || reset.WindowEndsAtMS != nil || reset.WindowGeneration != 0 {
-		t.Fatalf("duration update state = %#v, want reset next revision", reset)
+		t.Fatalf("period update state = %#v, want reset next revision", reset)
+	}
+	if final := loadAccessKeyCostLimitRules(t, fixture, accessKeyID); len(final) != 3 || final[0].ID != total.ID {
+		t.Fatalf("final rules = %#v", final)
+	}
+
+	// The AccessKey update no longer accepts rule definitions.
+	legacy := serveAccessKeyCostLimitRequest(t, engine, http.MethodPut,
+		fmt.Sprintf("/api/access-keys/%d", accessKeyID),
+		`{"cost_limit_rules":[{"kind":"total","limit_usd":"1"}]}`, "")
+	if legacy.Code != http.StatusBadRequest {
+		t.Fatalf("PUT access key with rules = %d %s, want 400", legacy.Code, legacy.Body.String())
 	}
 }
 
@@ -286,155 +299,57 @@ func TestAccessKeyCostLimitRulesAreValidatedAndIdempotent(t *testing.T) {
 	}
 }
 
-func TestAccessKeyCostLimitRuleKindCannotBeChangedInPlace(t *testing.T) {
+func TestAccessKeyCostLimitRuleSubresourceRejectsInvalidChanges(t *testing.T) {
 	t.Parallel()
 	fixture, engine := newAccessKeyCostLimitHTTPFixture(t)
-	created := serveAccessKeyCostLimitRequest(
-		t,
-		engine,
-		http.MethodPost,
-		"/api/access-keys",
-		`{"name":"fixed-kind","cost_limit_rules":[{"kind":"total","limit_usd":"10"}]}`,
-		"00000000-0000-4000-8000-000000009003",
-	)
-	if created.Code != http.StatusOK {
-		t.Fatalf("POST = %d %s, want 200", created.Code, created.Body.String())
-	}
-	var envelope struct {
-		Data AccessKeyCreateResult `json:"data"`
-	}
-	if err := json.Unmarshal(created.Body.Bytes(), &envelope); err != nil {
-		t.Fatal(err)
-	}
-	rule := envelope.Data.CostLimitRules[0]
-	updated := serveAccessKeyCostLimitRequest(
-		t,
-		engine,
-		http.MethodPut,
-		fmt.Sprintf("/api/access-keys/%d", envelope.Data.ID),
-		fmt.Sprintf(
-			`{"cost_limit_rules":[{"id":%d,"kind":"periodic","limit_usd":"10","period_seconds":300}]}`,
-			rule.ID,
-		),
-		"",
-	)
-	if updated.Code != http.StatusBadRequest {
-		t.Fatalf("PUT kind change = %d %s, want 400", updated.Code, updated.Body.String())
-	}
-	stored := loadAccessKeyCostLimitRules(t, fixture, envelope.Data.ID)
-	if len(stored) != 1 || stored[0].ID != rule.ID || stored[0].Kind != models.AccessKeyCostLimitKindTotal ||
-		stored[0].RuleRevision != 1 {
-		t.Fatalf("stored rules after rejected kind change = %#v", stored)
-	}
-}
-
-func TestAccessKeyCostLimitRulesAllowRetainedPeriodPermutations(t *testing.T) {
-	t.Parallel()
-	for _, test := range []struct {
-		name    string
-		initial []int64
-		desired []int64
-	}{
-		{name: "two rule swap", initial: []int64{300, 600}, desired: []int64{600, 300}},
-		{name: "three rule rotation", initial: []int64{300, 600, 900}, desired: []int64{600, 900, 300}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			assertAccessKeyCostLimitPeriodPermutation(
-				t,
-				newServiceFixture(t),
-				test.initial,
-				test.desired,
-			)
-		})
-	}
-}
-
-func assertAccessKeyCostLimitPeriodPermutation(
-	t *testing.T,
-	fixture serviceFixture,
-	initial []int64,
-	desired []int64,
-) {
-	t.Helper()
-	if len(initial) == 0 || len(initial) != len(desired) {
-		t.Fatalf("invalid permutation fixture: initial=%v desired=%v", initial, desired)
-	}
-	definitions := make([]AccessKeyCostLimitRuleRequest, 0, len(initial))
-	for _, period := range initial {
-		definitions = append(definitions, AccessKeyCostLimitRuleRequest{
-			Kind: accessquota.KindPeriodic, LimitUSD: "10", PeriodSeconds: period,
-		})
-	}
-	created, err := fixture.service.CreateAccessKey(t.Context(), AccessKeyCreateRequest{
-		Name: "period-permutation",
-		CostLimitRules: OptionalAccessKeyCostLimitRules{
-			Set: true, Values: definitions,
-		},
-	})
-	if err != nil {
-		t.Fatalf("CreateAccessKey() error = %v", err)
-	}
-	current := loadAccessKeyCostLimitRules(t, fixture, created.ID)
-	if len(current) != len(initial) {
-		t.Fatalf("created rules = %#v, want %d", current, len(initial))
-	}
-	for index, rule := range current {
-		windowStart := int64(1_000)
-		windowEnd := windowStart + rule.PeriodSeconds*1_000
-		if err := fixture.db.Model(&models.AccessKeyCostLimitState{}).
-			Where("rule_id = ?", rule.ID).
-			Updates(map[string]any{
-				"used_nano_usd":        int64(index + 1),
-				"window_started_at_ms": windowStart,
-				"window_ends_at_ms":    windowEnd,
-				"window_generation":    uint64(2),
-				"snapshot_version":     uint64(3),
-			}).Error; err != nil {
-			t.Fatalf("seed rule %d state: %v", rule.ID, err)
+	create := func(name, rules, idempotencyKey string) AccessKeyCreateResult {
+		t.Helper()
+		response := serveAccessKeyCostLimitRequest(t, engine, http.MethodPost, "/api/access-keys",
+			fmt.Sprintf(`{"name":%q,"key":"%s-access-key-value","cost_limit_rules":%s}`, name, name, rules), idempotencyKey)
+		if response.Code != http.StatusOK {
+			t.Fatalf("POST = %d %s, want 200", response.Code, response.Body.String())
 		}
-	}
-
-	desiredRules := make([]AccessKeyCostLimitRuleRequest, 0, len(desired))
-	for index, period := range desired {
-		desiredRules = append(desiredRules, AccessKeyCostLimitRuleRequest{
-			ID: current[index].ID, Kind: accessquota.KindPeriodic,
-			LimitUSD: "10", PeriodSeconds: period,
-		})
-	}
-	if _, err := fixture.service.UpdateAccessKey(t.Context(), created.ID, AccessKeyUpdateRequest{
-		CostLimitRules: OptionalAccessKeyCostLimitRules{Set: true, Values: desiredRules},
-	}); err != nil {
-		t.Fatalf("UpdateAccessKey(period permutation) error = %v", err)
-	}
-
-	var finalRules []models.AccessKeyCostLimitRule
-	if err := fixture.db.Where("access_key_id = ?", created.ID).Order("id ASC").Find(&finalRules).Error; err != nil {
-		t.Fatal(err)
-	}
-	finalByID := make(map[uint]models.AccessKeyCostLimitRule, len(finalRules))
-	for _, rule := range finalRules {
-		finalByID[rule.ID] = rule
-	}
-	for index, original := range current {
-		final, exists := finalByID[original.ID]
-		if !exists || final.PeriodSeconds != desired[index] ||
-			final.RuleRevision != original.RuleRevision+1 {
-			t.Fatalf(
-				"final rule %d = %#v, want period %d revision %d",
-				original.ID,
-				final,
-				desired[index],
-				original.RuleRevision+1,
-			)
+		var envelope struct {
+			Data AccessKeyCreateResult `json:"data"`
 		}
-		var state models.AccessKeyCostLimitState
-		if err := fixture.db.First(&state, original.ID).Error; err != nil {
+		if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
 			t.Fatal(err)
 		}
-		if state.RuleRevision != original.RuleRevision+1 || state.UsedNanoUSD != 0 ||
-			state.WindowStartedAtMS != nil || state.WindowEndsAtMS != nil ||
-			state.WindowGeneration != 0 || state.SnapshotVersion != 1 {
-			t.Fatalf("reset state for rule %d = %#v", original.ID, state)
+		return envelope.Data
+	}
+	owner := create("owner", `[{"kind":"total","limit_usd":"10"},{"kind":"periodic","limit_usd":"1","period_seconds":300},{"kind":"periodic","limit_usd":"2","period_seconds":600}]`,
+		"00000000-0000-4000-8000-000000009003")
+	other := create("other", `[{"kind":"total","limit_usd":"10"}]`, "00000000-0000-4000-8000-000000009006")
+	total, fiveMinutes := owner.CostLimitRules[0], owner.CostLimitRules[1]
+	base := fmt.Sprintf("/api/access-keys/%d/cost-limits", owner.ID)
+
+	for _, test := range []struct {
+		name, method, path, body string
+		want                     int
+	}{
+		{"second total rule", http.MethodPost, base, `{"kind":"total","limit_usd":"5"}`, http.StatusBadRequest},
+		{"duplicate period", http.MethodPost, base, `{"kind":"periodic","limit_usd":"5","period_seconds":600}`, http.StatusBadRequest},
+		{"client supplied id", http.MethodPost, base, `{"id":1,"kind":"periodic","limit_usd":"5","period_seconds":900}`, http.StatusBadRequest},
+		{"zero limit", http.MethodPost, base, `{"kind":"periodic","limit_usd":"0","period_seconds":900}`, http.StatusBadRequest},
+		{"kind change", http.MethodPut, fmt.Sprintf("%s/%d", base, total.ID), `{"kind":"periodic","limit_usd":"10","period_seconds":900}`, http.StatusBadRequest},
+		{"period taken by sibling", http.MethodPut, fmt.Sprintf("%s/%d", base, fiveMinutes.ID), `{"kind":"periodic","limit_usd":"1","period_seconds":600}`, http.StatusBadRequest},
+		{"rule of another key", http.MethodPut, fmt.Sprintf("%s/%d", base, other.CostLimitRules[0].ID), `{"kind":"total","limit_usd":"1"}`, http.StatusNotFound},
+		{"delete rule of another key", http.MethodDelete, fmt.Sprintf("%s/%d", base, other.CostLimitRules[0].ID), "", http.StatusNotFound},
+		{"missing access key", http.MethodPost, "/api/access-keys/999999/cost-limits", `{"kind":"total","limit_usd":"1"}`, http.StatusNotFound},
+	} {
+		response := serveAccessKeyCostLimitRequest(t, engine, test.method, test.path, test.body, "")
+		if response.Code != test.want {
+			t.Fatalf("%s = %d %s, want %d", test.name, response.Code, response.Body.String(), test.want)
+		}
+	}
+	stored := loadAccessKeyCostLimitRules(t, fixture, owner.ID)
+	if len(stored) != 3 || stored[0].Kind != models.AccessKeyCostLimitKindTotal ||
+		stored[1].PeriodSeconds != 300 || stored[2].PeriodSeconds != 600 {
+		t.Fatalf("stored rules after rejected changes = %#v", stored)
+	}
+	for _, rule := range stored {
+		if rule.RuleRevision != 1 {
+			t.Fatalf("rejected change advanced rule %d revision to %d", rule.ID, rule.RuleRevision)
 		}
 	}
 }

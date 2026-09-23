@@ -1015,6 +1015,72 @@ func (s *Server) handleResetAccessKeyCostLimits(c *gin.Context) {
 	response.SuccessI18n(c, "common.success", nil)
 }
 
+func (s *Server) handleCreateAccessKeyCostLimitRule(c *gin.Context) {
+	id, ok := accessKeyID(c)
+	if !ok {
+		return
+	}
+	var request AccessKeyCostLimitRuleRequest
+	if err := bindStrictJSON(c, &request); err != nil {
+		writeServiceError(c, "create_access_key_cost_limit_rule", mapControlJSONError(err))
+		return
+	}
+	result, err := s.service.CreateAccessKeyCostLimitRule(c.Request.Context(), id, request)
+	if err != nil {
+		writeServiceError(c, "create_access_key_cost_limit_rule", err)
+		return
+	}
+	response.SuccessI18n(c, "common.success", result)
+}
+
+func (s *Server) handleUpdateAccessKeyCostLimitRule(c *gin.Context) {
+	id, ok := accessKeyID(c)
+	if !ok {
+		return
+	}
+	ruleID, ok := costLimitRuleID(c, "update_access_key_cost_limit_rule")
+	if !ok {
+		return
+	}
+	var request AccessKeyCostLimitRuleRequest
+	if err := bindStrictJSON(c, &request); err != nil {
+		writeServiceError(c, "update_access_key_cost_limit_rule", mapControlJSONError(err))
+		return
+	}
+	result, err := s.service.UpdateAccessKeyCostLimitRule(c.Request.Context(), id, ruleID, request)
+	if err != nil {
+		writeServiceError(c, "update_access_key_cost_limit_rule", err)
+		return
+	}
+	response.SuccessI18n(c, "common.success", result)
+}
+
+func (s *Server) handleDeleteAccessKeyCostLimitRule(c *gin.Context) {
+	id, ok := accessKeyID(c)
+	if !ok {
+		return
+	}
+	ruleID, ok := costLimitRuleID(c, "delete_access_key_cost_limit_rule")
+	if !ok {
+		return
+	}
+	result, err := s.service.DeleteAccessKeyCostLimitRule(c.Request.Context(), id, ruleID)
+	if err != nil {
+		writeServiceError(c, "delete_access_key_cost_limit_rule", err)
+		return
+	}
+	response.SuccessI18n(c, "common.success", result)
+}
+
+func costLimitRuleID(c *gin.Context, operation string) (uint, bool) {
+	parsed, err := strconv.ParseUint(c.Param("rule_id"), 10, strconv.IntSize)
+	if err != nil || parsed == 0 {
+		writeServiceError(c, operation, app_errors.ErrBadRequest)
+		return 0, false
+	}
+	return uint(parsed), true
+}
+
 func (s *Server) handleDeleteAccessKey(c *gin.Context) {
 	id, ok := accessKeyID(c)
 	if !ok {
