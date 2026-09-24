@@ -218,6 +218,10 @@ func (manager *CredentialManager) acquireRefreshLease(
 		}
 		select {
 		case <-waitCtx.Done():
+			if errors.Is(ctx.Err(), context.Canceled) {
+				// The caller went away; no peer is known to hold the lease.
+				return nil, localEvidence("refresh_canceled", "subscription credential refresh was canceled")
+			}
 			manager.logger.WithFields(logrus.Fields{
 				"event": "subscription.refresh_lease_timeout", "credential_id": credentialID,
 			}).Warn("Subscription credential refresh is still in progress on another instance")

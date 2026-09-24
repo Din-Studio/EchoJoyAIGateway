@@ -212,15 +212,39 @@ func TestSharedHealthTestedRestoreRejectsChangedSharedState(t *testing.T) {
 		t.Fatalf("probe = %#v, %v", probe, err)
 	}
 
-	// A peer changed the failure generation after the probe; its event has
-	// not reached this instance yet.
-	key := "gl:{cred:" + formatUint(id) + "}:health"
-	generation := fixture.server.HGet(key, "fg")
-	fixture.server.HSet(key, "fg", generation+"0")
+	// A peer records another failure after the probe; its event has not
+	// reached this instance, whose mirror still matches the proof.
+	peerRegistry := state.NewCredentialRegistry()
+	peerRegistry.EnableSharedHealth()
+	entries, err := fixture.registry.SnapshotGroupCredentialEntriesExact(groupID, []uint{id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := peerRegistry.ReplaceCredentials(entries); err != nil {
+		t.Fatal(err)
+	}
+	peerClient, err := cluster.NewClient(&config.Config{Cluster: config.ClusterConfig{
+		RedisAddrs: []string{fixture.server.Addr()}, RedisKeyPrefix: "gl", InstanceID: "node-b",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = peerClient.Close() })
+	peerRef, _ := peerRegistry.CredentialRef(id)
+	if _, err := cluster.NewCredentialHealth(peerClient, peerRegistry).RecordFailure(t.Context(), peerRef, 1); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := fixture.service.RestoreTestedGroupCredential(t.Context(), groupID, id, *probe.RestoreProof); !errors.Is(err, app_errors.ErrCredentialVersionConflict) {
 		t.Fatalf("tested restore error = %v, want version conflict", err)
 	}
-	fixture.server.HSet(key, "fg", generation)
+	// A fresh probe of the current state restores it.
+	probe, err = fixture.service.TestGroupCredential(t.Context(), groupID, id, CredentialProbeRequest{
+		Protocol: optionalField[protocol.Protocol]{Set: true, Value: protocol.OpenAIEmbeddings},
+		Model:    optionalField[string]{Set: true, Value: "probe-model"},
+	})
+	if err != nil || probe.RestoreProof == nil {
+		t.Fatalf("second probe = %#v, %v", probe, err)
+	}
 	if _, err := fixture.service.RestoreTestedGroupCredential(t.Context(), groupID, id, *probe.RestoreProof); err != nil {
 		t.Fatalf("tested restore error = %v", err)
 	}
@@ -378,4 +402,44 @@ func readRevisionForTest(t *testing.T, fixture serviceFixture) uint64 {
 
 func formatUint(value uint) string {
 	return strconv.FormatUint(uint64(value), 10)
+}
+
+// A same-version auth copy that failed leaves Redis older than the database;
+// the periodic sync republishes the committed state so no mirror keeps a
+// ready credential excluded.
+func TestSyncRepublishesCommittedAuthOverStaleSharedState(t *testing.T) {
+	fixture := newSharedHealthFixture(t)
+	rows := refreshingSubscriptionRows(t, fixture.serviceFixture, 1)
+	row := rows[0]
+	if err := fixture.db.Model(&models.Credential{}).Where("id = ?", row.ID).
+		Update("auth_state", models.CredentialAuthStateReady).Error; err != nil {
+		t.Fatal(err)
+	}
+	group, err := loadGroupRow(fixture.db, row.GroupID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := state.CredentialRef{ID: row.ID, GroupID: row.GroupID,
+		IdentityGeneration: groupCollectionCredentialIdentity(row.IdentityFingerprint, group)}
+	// The refresh start reached Redis; its restore to ready did not.
+	if _, err := fixture.health.SetAuthState(t.Context(), ref, state.CredentialAuthStateRefreshing, row.SecretVersion); err != nil {
+		t.Fatal(err)
+	}
+	key := "gl:{cred:" + formatUint(row.ID) + "}:health"
+
+	if err := fixture.service.syncSubscriptionAuth(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := fixture.server.HGet(key, "auth"); got != string(state.CredentialAuthStateReady) {
+		t.Fatalf("shared auth = %q after sync, want ready from the database", got)
+	}
+
+	// Records of another secret version or already in agreement are left alone.
+	version := fixture.server.HGet(key, "ver")
+	if err := fixture.service.syncSubscriptionAuth(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := fixture.server.HGet(key, "ver"); got != version {
+		t.Fatalf("record version = %s after an aligned sync, want %s unchanged", got, version)
+	}
 }

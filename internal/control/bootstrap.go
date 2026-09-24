@@ -105,11 +105,9 @@ func (s *Service) EnsureInitialState(ctx context.Context) error {
 	}
 	s.priceRuntime.Publish(priceTable)
 	logrus.WithField("event", "startup.model_prices_publish").Info("model prices published")
-	if s.refreshLeases != nil {
-		if err := s.sweepInterruptedRefreshes(ctx); err != nil {
-			logrus.WithError(err).WithField("event", "subscription.refresh_sweep_failed").
-				Warn("interrupted refresh sweep failed; the periodic sweep retries")
-		}
+	if err := s.syncSubscriptionAuth(ctx); err != nil {
+		logrus.WithError(err).WithField("event", "subscription.refresh_sweep_failed").
+			Warn("subscription auth sync failed; the periodic sweep retries")
 	}
 	return nil
 }
