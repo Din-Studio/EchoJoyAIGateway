@@ -47,6 +47,10 @@ type CredentialEntry struct {
 	ProxyFingerprint        string
 	quotaRemaining          *float64
 	quotaResetAt            time.Time
+	// sharedEpoch and sharedVersion order the cluster health state this
+	// entry mirrors; both stay empty in single-instance mode.
+	sharedEpoch   string
+	sharedVersion uint64
 }
 
 type CredentialMeta struct {
@@ -76,6 +80,7 @@ type CredentialRegistry struct {
 	mu               sync.RWMutex
 	buckets          map[uint]map[uint]*CredentialEntry
 	credentialGroups map[uint]uint
+	sharedHealth     bool
 }
 
 func NewCredentialRegistry() *CredentialRegistry {
@@ -310,7 +315,11 @@ func (r *CredentialRegistry) ReconcileGroup(groupID uint, entries []CredentialEn
 			continue
 		}
 		cloned := cloneCredentialEntry(desired)
-		preserveModelCooldowns(&cloned, previous[desired.ID])
+		if r.sharedHealth {
+			preserveSharedHealth(&cloned, previous[desired.ID])
+		} else {
+			preserveModelCooldowns(&cloned, previous[desired.ID])
+		}
 		next[desired.ID] = &cloned
 	}
 	for credentialID := range previous {
@@ -534,13 +543,18 @@ func (r *CredentialRegistry) SetCredentialAuthState(credentialID uint, authState
 	if !ok {
 		return false
 	}
-	entry.AuthState = authState.normalize()
+	setEntryAuthStateLocked(entry, authState)
+	r.markSharedHealthDivergedLocked(entry)
 	r.scheduling.SyncCredential(runtimeView(entry))
+	return true
+}
+
+func setEntryAuthStateLocked(entry *CredentialEntry, authState CredentialAuthState) {
+	entry.AuthState = authState.normalize()
 	if entry.AuthState != CredentialAuthStateReady {
 		entry.quotaRemaining = nil
 		entry.quotaResetAt = time.Time{}
 	}
-	return true
 }
 
 // CredentialAuthStateOf returns the runtime auth state of one credential.
@@ -827,6 +841,7 @@ func (r *CredentialRegistry) ClearCooldownIfMatch(credentialID uint, expected ti
 		return false
 	}
 	entry.CooldownUntil = time.Time{}
+	r.markSharedHealthDivergedLocked(entry)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true
 }
@@ -842,6 +857,7 @@ func (r *CredentialRegistry) SetCooldownWithChange(credentialID uint, until time
 		return true, false
 	}
 	entry.CooldownUntil = until
+	r.markSharedHealthDivergedLocked(entry)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true, true
 }
@@ -863,6 +879,7 @@ func (r *CredentialRegistry) SetCooldownWithChangeIfVersion(
 		return true, false
 	}
 	entry.CooldownUntil = until
+	r.markSharedHealthDivergedLocked(entry)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true, true
 }
@@ -879,6 +896,7 @@ func (r *CredentialRegistry) SetBlacklistedWithChange(credentialID uint) (bool, 
 	}
 	entry.Blacklisted = true
 	entry.FailureGeneration++
+	r.markSharedHealthDivergedLocked(entry)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true, true
 }
@@ -894,6 +912,7 @@ func (r *CredentialRegistry) RestoreRuntimeState(credentialID uint) bool {
 	entry.Blacklisted = false
 	entry.FailureCount = 0
 	entry.FailureGeneration++
+	r.markSharedHealthDivergedLocked(entry)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true
 }
@@ -912,6 +931,7 @@ func (r *CredentialRegistry) IncrFailure(credentialID uint) (int, bool) {
 	}
 	entry.FailureCount++
 	entry.FailureGeneration++
+	r.markSharedHealthDivergedLocked(entry)
 	return entry.FailureCount, true
 }
 
@@ -925,6 +945,7 @@ func (r *CredentialRegistry) ClearFailure(credentialID uint) bool {
 	if entry.FailureCount != 0 {
 		entry.FailureCount = 0
 		entry.FailureGeneration++
+		r.markSharedHealthDivergedLocked(entry)
 	}
 	return true
 }
@@ -941,6 +962,7 @@ func (r *CredentialRegistry) Recover(credentialID uint) bool {
 		entry.FailureCount = 0
 		entry.FailureGeneration++
 	}
+	r.markSharedHealthDivergedLocked(entry)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true
 }
@@ -984,6 +1006,7 @@ func (r *CredentialRegistry) restoreRuntimeStateIfMatch(
 	entry.Blacklisted = false
 	entry.FailureCount = 0
 	entry.FailureGeneration++
+	r.markSharedHealthDivergedLocked(entry)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true
 }

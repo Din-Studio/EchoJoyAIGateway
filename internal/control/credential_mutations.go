@@ -307,6 +307,9 @@ func (s *Service) restoreGroupCredential(
 	var (
 		observedAt time.Time
 		restoreErr error
+		// sharedRestore carries a decision made under the locks to the
+		// shared store, which is only called after they are released.
+		sharedRestore func() error
 	)
 	restore := func(targetSignature *groupValidationSignature) {
 		observedAt = s.now().UTC()
@@ -337,6 +340,10 @@ func (s *Service) restoreGroupCredential(
 			}
 			credential := credentialProbeCredentialFromEntry(entries[0])
 			testedCredential = &credential
+		}
+		if s.sharedHealth != nil {
+			sharedRestore = s.sharedRestoreFor(groupView, current, testedCredential, observedAt)
+			return
 		}
 		if targetSignature == nil {
 			if !s.registry.ClearModelCooldowns(credentialID) {
@@ -396,11 +403,51 @@ func (s *Service) restoreGroupCredential(
 	if restoreErr != nil {
 		return CredentialItemResponse{}, restoreErr
 	}
+	if sharedRestore != nil {
+		if err := sharedRestore(); err != nil {
+			return CredentialItemResponse{}, err
+		}
+		s.stats.ClearProblemState(credentialID)
+	}
 	view, exists = findRuntimeCredential(s.registry.Snapshot(), credentialID)
 	if !exists {
 		return CredentialItemResponse{}, dbRegistryMismatch(mismatchMissingRegistry, groupID, credentialID)
 	}
 	return s.mapCredentialItem(ctx, row, view, group, s.stats.Snapshot(credentialID, observedAt), observedAt)
+}
+
+// sharedRestoreFor turns a restore decided under the mutation stripe into a
+// shared store write. A tested credential is recovered only while its
+// blacklist, failure generation, and cooldown are still the tested ones.
+func (s *Service) sharedRestoreFor(
+	group state.GroupCatalogView,
+	current state.CredentialRuntimeView,
+	tested *credentialProbeCredential,
+	observedAt time.Time,
+) func() error {
+	if tested != nil {
+		ref, cooldownUntil := tested.ref, tested.cooldownUntil
+		return func() error {
+			result, err := s.sharedHealth.RecoverIfMatch(context.Background(), ref, &cooldownUntil)
+			if err != nil {
+				return err
+			}
+			if !result.Accepted {
+				return app_errors.ErrCredentialVersionConflict
+			}
+			return nil
+		}
+	}
+	ref, exists := s.registry.CredentialRef(current.ID)
+	if !exists {
+		return func() error { return dbRegistryMismatch(mismatchMissingRegistry, current.GroupID, current.ID) }
+	}
+	bucket := classifyHealthKey(group, current, observedAt)
+	runtime := bucket == healthBucketCooldown || bucket == healthBucketBlacklisted
+	return func() error {
+		_, err := s.sharedHealth.Restore(context.Background(), ref, runtime, true)
+		return err
+	}
 }
 
 func validateCredentialRuntimeRow(
@@ -587,7 +634,10 @@ func (s *Service) BatchGroupCredentials(
 	if !ok {
 		return CredentialBatchResponse{}, fmt.Errorf("batch mutation coordinator unavailable: %w", app_errors.ErrInternalServer)
 	}
-	var mutationErr error
+	var (
+		mutationErr    error
+		sharedRestores []func() error
+	)
 	coordinator.DoMany(ids, func() {
 		before, snapshotErr := s.registry.SnapshotGroupCredentialEntriesExact(groupID, ids)
 		if snapshotErr != nil {
@@ -595,6 +645,10 @@ func (s *Service) BatchGroupCredentials(
 			return
 		}
 		if request.Action == CredentialBatchRestore {
+			if s.sharedHealth != nil {
+				sharedRestores, ids = s.sharedBatchRestores(group, before)
+				return
+			}
 			ids, mutationErr = s.restoreCredentialBatchRuntime(group, before)
 			return
 		}
@@ -696,6 +750,12 @@ func (s *Service) BatchGroupCredentials(
 	if mutationErr != nil {
 		return CredentialBatchResponse{}, mutationErr
 	}
+	for index, restore := range sharedRestores {
+		if err := restore(); err != nil {
+			return CredentialBatchResponse{}, err
+		}
+		s.stats.ClearProblemState(ids[index])
+	}
 	return CredentialBatchResponse{
 		AffectedCredentialIDs: ids,
 		Summary:               summarizeGroupRuntimeCredentials(group, s.registry.Snapshot(), s.now().UTC()),
@@ -726,6 +786,30 @@ func (s *Service) restoreCredentialBatchRuntime(group models.Group, entries []st
 		restored = append(restored, entry.ID)
 	}
 	return restored, nil
+}
+
+// sharedBatchRestores selects the same credentials as
+// restoreCredentialBatchRuntime and returns their shared store writes, to be
+// run after the mutation stripes are released.
+func (s *Service) sharedBatchRestores(group models.Group, entries []state.CredentialEntry) ([]func() error, []uint) {
+	groupView := state.GroupCatalogView{ID: group.ID, Enabled: group.Enabled, WeightManual: group.WeightManual}
+	now := s.now().UTC()
+	restores := make([]func() error, 0, len(entries))
+	restored := make([]uint, 0, len(entries))
+	for _, entry := range entries {
+		view := state.CredentialRuntimeView{
+			ID: entry.ID, GroupID: entry.GroupID,
+			Status: entry.Status, AuthState: entry.AuthState, WeightManual: entry.WeightManual,
+			CooldownUntil: entry.CooldownUntil, Blacklisted: entry.Blacklisted,
+		}
+		bucket := classifyHealthKey(groupView, view, now)
+		if bucket != healthBucketCooldown && bucket != healthBucketBlacklisted && !hasModelCooldown(entry.ModelCooldowns, now) {
+			continue
+		}
+		restores = append(restores, s.sharedRestoreFor(groupView, view, nil, now))
+		restored = append(restored, entry.ID)
+	}
+	return restores, restored
 }
 
 func (s *Service) applyCredentialBatchRegistryMutation(

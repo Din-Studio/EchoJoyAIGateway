@@ -227,6 +227,8 @@ func newServiceFixtureWithDatabase(t *testing.T, db *gorm.DB) serviceFixture {
 		requestLogStats,
 		accessQuota,
 		nil,
+		nil,
+		nil,
 		channelRegistry,
 	)
 	installCodexControlTestHooks(service)

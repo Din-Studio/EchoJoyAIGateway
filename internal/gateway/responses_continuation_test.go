@@ -291,13 +291,13 @@ func TestResponsesContinuationResumesFromRuntimeCheckpoint(t *testing.T) {
 	before, engine, _ := newContinuationFixture(t, &scriptedForwarder{results: []UpstreamResult{storedResponse("before-restart")}})
 	serveContinuation(t, engine, "gl-client", `{"model":"gpt-4o","input":"initial"}`, http.StatusOK)
 	dir := t.TempDir()
-	checkpoint := app.NewFileRuntimeStateCheckpoint(dir, nil, nil, before.responseBindings)
+	checkpoint := app.NewFileRuntimeStateCheckpoint(dir, nil, nil, before.responseBindings, nil)
 	if err := checkpoint.Save(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	forwarder := &scriptedForwarder{results: []UpstreamResult{storedResponse("new-root"), storedResponse("continued")}}
 	after, restarted, _ := newContinuationFixture(t, forwarder)
-	if err := app.NewFileRuntimeStateCheckpoint(dir, nil, nil, after.responseBindings).Restore(context.Background()); err != nil {
+	if err := app.NewFileRuntimeStateCheckpoint(dir, nil, nil, after.responseBindings, nil).Restore(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	serveContinuation(t, restarted, "gl-client", `{"model":"gpt-4o","input":"another root"}`, http.StatusOK)

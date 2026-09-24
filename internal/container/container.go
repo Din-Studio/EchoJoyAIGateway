@@ -69,7 +69,10 @@ func BuildContainer() (*dig.Container, error) {
 		httplifecycle.NewCoordinator,
 		app.NewEngineWithLifecycle,
 		webui.NewServer,
-		state.NewCredentialRegistry,
+		newCredentialRegistry,
+		cluster.NewCredentialHealth,
+		cluster.NewRefreshLease,
+		newSharedCredentialHealthStore,
 		state.NewResponseBindings,
 		newAccessQuotaRuntime,
 		func(client *cluster.Client, db *gorm.DB) *cluster.AccessQuota {
@@ -131,8 +134,11 @@ func BuildContainer() (*dig.Container, error) {
 			registry *state.CredentialRegistry,
 			stats *health.StatsStore,
 			responseBindings *state.ResponseBindings,
+			credentialHealth *cluster.CredentialHealth,
 		) app.RuntimeStateCheckpoint {
-			return app.NewFileRuntimeStateCheckpoint(cfg.DataDir, registry, stats, responseBindings)
+			return app.NewFileRuntimeStateCheckpoint(
+				cfg.DataDir, registry, stats, responseBindings, newCredentialHealthHydrator(credentialHealth),
+			)
 		},
 		control.NewRuntime,
 		func(runtime *control.Runtime) app.ControlRuntime { return runtime },
@@ -239,6 +245,9 @@ func BuildContainer() (*dig.Container, error) {
 			return nil, err
 		}
 	}
+	if err := dependencyContainer.Invoke(coordinateSubscriptionRefresh); err != nil {
+		return nil, fmt.Errorf("coordinate subscription refresh: %w", err)
+	}
 	if err := dependencyContainer.Invoke(func(
 		engine *gin.Engine,
 		registry *httproute.Registry,
@@ -290,6 +299,48 @@ func newAccessQuotaGate(
 		return shared
 	}
 	return gateway.NewLocalAccessQuotaGate(manager, runtime)
+}
+
+// newCredentialRegistry mirrors cluster-shared credential health when
+// cluster mode is enabled, before any credential is loaded.
+func newCredentialRegistry(client *cluster.Client) *state.CredentialRegistry {
+	registry := state.NewCredentialRegistry()
+	if client != nil {
+		registry.EnableSharedHealth()
+	}
+	return registry
+}
+
+// newSharedCredentialHealthStore exposes the Redis health store in cluster
+// mode and nil otherwise, never boxing a nil pointer.
+func newSharedCredentialHealthStore(shared *cluster.CredentialHealth) state.SharedCredentialHealthStore {
+	if shared == nil {
+		return nil
+	}
+	return shared
+}
+
+// newCredentialHealthHydrator restores health from Redis instead of the
+// checkpoint file in cluster mode.
+func newCredentialHealthHydrator(shared *cluster.CredentialHealth) app.CredentialHealthHydrator {
+	if shared == nil {
+		return nil
+	}
+	return shared
+}
+
+// coordinateSubscriptionRefresh makes subscription refreshes cluster-wide
+// single flight; it leaves the manager untouched in single-instance mode.
+func coordinateSubscriptionRefresh(
+	credentials *subscription.CredentialManager,
+	lease *cluster.RefreshLease,
+	shared *cluster.CredentialHealth,
+	service *control.Service,
+) {
+	if lease == nil || shared == nil {
+		return
+	}
+	credentials.SetClusterCoordination(lease, shared, service)
 }
 
 // newAccessKeyRPMLimiter selects the shared Redis window in cluster mode and

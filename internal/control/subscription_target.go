@@ -28,7 +28,8 @@ func (s *Service) restoreCredentialRuntimeForTarget(ctx context.Context, group m
 	if !sameSubscriptionTarget(group, current) {
 		return false, false, nil
 	}
-	return s.restoreCredentialRuntimeAfterReset(credentialID), true, nil
+	restored, err := s.restoreCredentialRuntimeAfterReset(finalizeContext, credentialID)
+	return restored, true, err
 }
 
 // resolveSubscriptionTarget validates stored channel parameters and freezes

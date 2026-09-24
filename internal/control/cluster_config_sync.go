@@ -23,6 +23,8 @@ const (
 type ClusterConfigSync struct {
 	reload       func(context.Context) (uint64, error)
 	readRevision func(context.Context) (uint64, error)
+	// sweep marks refreshes interrupted by a crashed holder on every poll.
+	sweep        func(context.Context) error
 	bus          *cluster.ConfigEventBus
 	pollInterval time.Duration
 	wake         chan struct{}
@@ -40,6 +42,7 @@ func NewClusterConfigSync(service *Service, bus *cluster.ConfigEventBus) *Cluste
 		readRevision: func(ctx context.Context) (uint64, error) {
 			return readClusterConfigRevision(ctx, service.db)
 		},
+		sweep:        service.sweepInterruptedRefreshes,
 		bus:          bus,
 		pollInterval: defaultClusterPollInterval,
 		wake:         make(chan struct{}, 1),
@@ -138,6 +141,7 @@ func (coordinator *ClusterConfigSync) pollOnceAsync(ctx context.Context) {
 }
 
 func (coordinator *ClusterConfigSync) pollOnce(ctx context.Context) {
+	defer coordinator.sweepNow(ctx)
 	revision, err := coordinator.readRevision(ctx)
 	if err != nil {
 		logrus.WithError(err).WithField("event", "control.cluster_revision_read_failed").
@@ -146,6 +150,16 @@ func (coordinator *ClusterConfigSync) pollOnce(ctx context.Context) {
 	}
 	if revision > coordinator.lastApplied.Load() {
 		coordinator.reloadNow(ctx)
+	}
+}
+
+func (coordinator *ClusterConfigSync) sweepNow(ctx context.Context) {
+	if coordinator.sweep == nil || ctx.Err() != nil {
+		return
+	}
+	if err := coordinator.sweep(ctx); err != nil {
+		logrus.WithError(err).WithField("event", "subscription.refresh_sweep_failed").
+			Warn("interrupted refresh sweep failed; retrying on the next poll")
 	}
 }
 

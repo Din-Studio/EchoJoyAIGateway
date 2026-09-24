@@ -55,3 +55,53 @@ func TestSingleInstanceModeSelectsInProcessLimitState(t *testing.T) {
 	}
 	var _ gateway.AccessQuotaGate = gate
 }
+
+func TestClusterModeSelectsSharedCredentialHealth(t *testing.T) {
+	server := miniredis.RunT(t)
+	client, err := cluster.NewClient(&config.Config{Cluster: config.ClusterConfig{
+		RedisAddrs: []string{server.Addr()}, RedisKeyPrefix: "gl", InstanceID: "container-test",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	registry := newCredentialRegistry(client)
+	shared := cluster.NewCredentialHealth(client, registry)
+	if store, ok := newSharedCredentialHealthStore(shared).(*cluster.CredentialHealth); !ok || store != shared {
+		t.Fatal("cluster mode health store is not the shared Redis implementation")
+	}
+	if hydrator := newCredentialHealthHydrator(shared); hydrator == nil {
+		t.Fatal("cluster mode checkpoint does not hydrate from Redis")
+	}
+	// Shared mode keeps mirrored health across a peer reload.
+	entry := state.CredentialEntry{
+		ID: 1, GroupID: 1, Version: 1, IdentityGeneration: 1, Fingerprint: "f",
+		Status: state.CredentialStatusActive, EncryptedValue: "c",
+	}
+	if err := registry.ReplaceCredentials([]state.CredentialEntry{entry}); err != nil {
+		t.Fatal(err)
+	}
+	registry.SetBlacklisted(1)
+	entry.Status = state.CredentialStatusDisabled
+	if _, err := registry.ReconcileGroup(1, []state.CredentialEntry{entry}); err != nil {
+		t.Fatal(err)
+	}
+	if !registry.Snapshot()[0].Blacklisted {
+		t.Fatal("cluster registry dropped health on reload")
+	}
+}
+
+func TestSingleInstanceModeKeepsCredentialHealthLocal(t *testing.T) {
+	if store := newSharedCredentialHealthStore(nil); store != nil {
+		t.Fatalf("single-instance health store = %T, want nil interface", store)
+	}
+	if hydrator := newCredentialHealthHydrator(nil); hydrator != nil {
+		t.Fatalf("single-instance hydrator = %T, want nil interface", hydrator)
+	}
+	if cluster.NewCredentialHealth(nil, state.NewCredentialRegistry()) != nil || cluster.NewRefreshLease(nil) != nil {
+		t.Fatal("single-instance mode created cluster health objects")
+	}
+	// Coordination is skipped without a lease; a nil manager would panic.
+	coordinateSubscriptionRefresh(nil, nil, nil, nil)
+}

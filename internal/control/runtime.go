@@ -9,6 +9,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"gpt-load/internal/channel"
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/health"
 	"gpt-load/internal/platform/encryption"
@@ -72,6 +73,7 @@ type Runtime struct {
 	operationRecovery  operationRecoveryRuntime
 	catalogSync        catalogSyncRuntime
 	configSync         configSyncRuntime
+	credentialHealth   configSyncRuntime
 	oauthCallback      *OAuthCallbackManager
 	manager            *state.Manager
 	validationInterval time.Duration
@@ -92,6 +94,7 @@ func NewRuntime(
 	operationRecovery *Service,
 	catalogSync *CatalogSyncCoordinator,
 	configSync *ClusterConfigSync,
+	credentialHealth *cluster.CredentialHealth,
 ) *Runtime {
 	runtime := &Runtime{
 		registry:           registry,
@@ -115,7 +118,7 @@ func NewRuntime(
 	if configSync != nil {
 		runtime.configSync = configSync
 	}
-	runtime.validator = newValidationWorker(
+	worker := newValidationWorker(
 		manager,
 		registry,
 		stats,
@@ -124,6 +127,11 @@ func NewRuntime(
 		channelRegistry,
 		executor,
 	)
+	if credentialHealth != nil {
+		runtime.credentialHealth = credentialHealth
+		worker.sharedHealth = credentialHealth
+	}
+	runtime.validator = worker
 	return runtime
 }
 
@@ -167,6 +175,13 @@ func (runtime *Runtime) Run(ctx context.Context) {
 		go func() {
 			defer wait.Done()
 			runtime.configSync.Run(ctx)
+		}()
+	}
+	if runtime.credentialHealth != nil {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			runtime.credentialHealth.Run(ctx)
 		}()
 	}
 	if runtime.oauthCallback != nil {

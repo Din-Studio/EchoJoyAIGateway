@@ -57,7 +57,7 @@ func TestRestoreAllAndQuotaResetClearModelCooldowns(t *testing.T) {
 	}
 	ref, _ := fixture.registry.CredentialRef(rows[0].ID)
 	fixture.registry.SetModelCooldown(ref, "a", now.Add(time.Hour), now)
-	if !fixture.service.restoreCredentialRuntimeAfterReset(rows[0].ID) || len(fixture.registry.ModelCooldowns(rows[0].ID, now)) != 0 {
+	if restored, err := fixture.service.restoreCredentialRuntimeAfterReset(t.Context(), rows[0].ID); err != nil || !restored || len(fixture.registry.ModelCooldowns(rows[0].ID, now)) != 0 {
 		t.Fatal("quota reset retained model limits")
 	}
 }

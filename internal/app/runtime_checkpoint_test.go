@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,7 +111,7 @@ func TestAppLogsCheckpointRestoreFailureOnce(t *testing.T) {
 		DB:                db,
 		StartupBootstrap:  startupBootstrapFunc(noopStartupBootstrap),
 		RuntimeState:      runtimeStateLoaderFunc(func(context.Context) error { return nil }),
-		RuntimeCheckpoint: NewFileRuntimeStateCheckpoint(dataDir, nil, nil, nil),
+		RuntimeCheckpoint: NewFileRuntimeStateCheckpoint(dataDir, nil, nil, nil, nil),
 		ControlRuntime:    newControlRuntimeFake(nil, false),
 		RequestLogs:       newRequestLogRuntimeFake(nil, nil),
 	})
@@ -199,7 +200,7 @@ func TestFileRuntimeStateCheckpointRestoresAndConsumesFile(t *testing.T) {
 	stats := health.NewStatsStore()
 	stats.RecordFailure(1, health.FailureCategoryUpstreamHostError, 503, time.Date(2026, 8, 7, 11, 59, 0, 0, time.UTC))
 
-	checkpoint := NewFileRuntimeStateCheckpoint(dataDir, registry, stats, nil)
+	checkpoint := NewFileRuntimeStateCheckpoint(dataDir, registry, stats, nil, nil)
 	if err := checkpoint.Save(context.Background()); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -218,7 +219,7 @@ func TestFileRuntimeStateCheckpointRestoresAndConsumesFile(t *testing.T) {
 		t.Fatalf("replace loaded registry: %v", err)
 	}
 	loadedStats := health.NewStatsStore()
-	loader := NewFileRuntimeStateCheckpoint(dataDir, loadedRegistry, loadedStats, nil)
+	loader := NewFileRuntimeStateCheckpoint(dataDir, loadedRegistry, loadedStats, nil, nil)
 	if err := loader.Restore(context.Background()); err != nil {
 		t.Fatalf("Restore() error = %v", err)
 	}
@@ -244,12 +245,12 @@ func TestFileRuntimeStateCheckpointRestoresResponseOwnership(t *testing.T) {
 		t.Fatal("record failed")
 	}
 	want, _ := original.Lookup(7, "stored-response")
-	checkpoint := NewFileRuntimeStateCheckpoint(dir, nil, nil, original)
+	checkpoint := NewFileRuntimeStateCheckpoint(dir, nil, nil, original, nil)
 	if err := checkpoint.Save(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	restored := state.NewResponseBindings()
-	loader := NewFileRuntimeStateCheckpoint(dir, nil, nil, restored)
+	loader := NewFileRuntimeStateCheckpoint(dir, nil, nil, restored, nil)
 	if err := loader.Restore(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +282,7 @@ func TestFileRuntimeStateCheckpointReturnsErrorWhenDeleteFails(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("replace registry: %v", err)
 	}
-	checkpoint := NewFileRuntimeStateCheckpoint(dataDir, registry, health.NewStatsStore(), nil)
+	checkpoint := NewFileRuntimeStateCheckpoint(dataDir, registry, health.NewStatsStore(), nil, nil)
 	// The normal file implementation removes the file successfully. This test
 	// documents that a failed removal must prevent applying stale data through
 	// the injectable filesystem hook used by the implementation.
@@ -307,7 +308,7 @@ func TestFileRuntimeStateCheckpointConsumesMalformedFileAndReturnsError(t *testi
 	}}); err != nil {
 		t.Fatalf("replace registry: %v", err)
 	}
-	checkpoint := NewFileRuntimeStateCheckpoint(dataDir, registry, health.NewStatsStore(), nil)
+	checkpoint := NewFileRuntimeStateCheckpoint(dataDir, registry, health.NewStatsStore(), nil, nil)
 	if err := checkpoint.Restore(context.Background()); err == nil {
 		t.Fatal("Restore() error = nil, want malformed checkpoint error")
 	}
@@ -316,5 +317,67 @@ func TestFileRuntimeStateCheckpointConsumesMalformedFileAndReturnsError(t *testi
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("malformed checkpoint file was not consumed, stat error = %v", err)
+	}
+}
+
+type recordingHydrator struct {
+	calls int
+	err   error
+}
+
+func (hydrator *recordingHydrator) Hydrate(context.Context) error {
+	hydrator.calls++
+	return hydrator.err
+}
+
+func TestFileRuntimeStateCheckpointUsesSharedHealthInClusterMode(t *testing.T) {
+	dataDir := t.TempDir()
+	entries := []state.CredentialEntry{{
+		ID: 1, GroupID: 10, Version: 1, IdentityGeneration: 1, Fingerprint: "test-1", Status: state.CredentialStatusActive,
+		EncryptedValue: "cipher-one",
+	}}
+	registry := state.NewCredentialRegistry()
+	if err := registry.ReplaceCredentials(entries); err != nil {
+		t.Fatal(err)
+	}
+	registry.SetBlacklisted(1)
+	registry.SchedulingState().WithLock(func(ledger *state.SchedulingLedger) { ledger.Sequence = 42 })
+
+	// A single-instance file holding health must not leak into cluster mode.
+	if err := NewFileRuntimeStateCheckpoint(dataDir, registry, nil, nil, nil).Save(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	loaded := state.NewCredentialRegistry()
+	if err := loaded.ReplaceCredentials(entries); err != nil {
+		t.Fatal(err)
+	}
+	hydrator := &recordingHydrator{}
+	if err := NewFileRuntimeStateCheckpoint(dataDir, loaded, nil, nil, hydrator).Restore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if hydrator.calls != 1 || loaded.Snapshot()[0].Blacklisted {
+		t.Fatalf("hydrate calls = %d, blacklisted = %t; want Redis to own health", hydrator.calls, loaded.Snapshot()[0].Blacklisted)
+	}
+	var sequence uint64
+	loaded.SchedulingState().WithLock(func(ledger *state.SchedulingLedger) { sequence = ledger.Sequence })
+	if sequence != 42 {
+		t.Fatalf("scheduling sequence = %d, want the local ledger restored", sequence)
+	}
+
+	// Without a file the shared health is still hydrated, and errors surface.
+	hydrator.err = errors.New("redis down")
+	if err := NewFileRuntimeStateCheckpoint(dataDir, loaded, nil, nil, hydrator).Restore(context.Background()); err == nil || hydrator.calls != 2 {
+		t.Fatalf("Restore() without file = %v, calls = %d", err, hydrator.calls)
+	}
+
+	if err := NewFileRuntimeStateCheckpoint(dataDir, registry, nil, nil, hydrator).Save(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dataDir, runtimeStateCheckpointFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"credentials"`) {
+		t.Fatalf("cluster checkpoint wrote credential health: %s", raw)
 	}
 }

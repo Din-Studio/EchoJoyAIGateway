@@ -207,9 +207,20 @@ func (s *Service) invalidateCredentialObservationAfterReset(
 	return &response, nil
 }
 
-func (s *Service) restoreCredentialRuntimeAfterReset(credentialID uint) bool {
+func (s *Service) restoreCredentialRuntimeAfterReset(ctx context.Context, credentialID uint) (bool, error) {
 	if credentialID == 0 || s.registry == nil || s.stats == nil {
-		return false
+		return false, nil
+	}
+	if s.sharedHealth != nil {
+		ref, exists := s.registry.CredentialRef(credentialID)
+		if !exists {
+			return false, nil
+		}
+		if _, err := s.sharedHealth.Restore(ctx, ref, true, true); err != nil {
+			return false, err
+		}
+		s.stats.ClearProblemState(credentialID)
+		return true, nil
 	}
 	restored := false
 	apply := func() {
@@ -227,7 +238,7 @@ func (s *Service) restoreCredentialRuntimeAfterReset(credentialID uint) bool {
 	} else {
 		s.mutations.Do(credentialID, apply)
 	}
-	return restored
+	return restored, nil
 }
 
 func (s *Service) beginResetCreditOperation(

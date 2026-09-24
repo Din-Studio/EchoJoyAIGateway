@@ -67,6 +67,8 @@ type Service struct {
 	accessQuota                       *accessquota.Runtime
 	clusterQuota                      *cluster.AccessQuota
 	clusterEvents                     configEventPublisher
+	sharedHealth                      state.SharedCredentialHealthStore
+	refreshLeases                     refreshLeaseProbe
 	modelDiscoveryTimeout             time.Duration
 	random                            io.Reader
 	operationRandom                   io.Reader
@@ -170,6 +172,8 @@ func NewService(
 	requestLogStats RequestLogStatsReader,
 	accessQuota *accessquota.Runtime,
 	clusterQuota *cluster.AccessQuota,
+	sharedHealth state.SharedCredentialHealthStore,
+	refreshLeases *cluster.RefreshLease,
 	channelRegistries ...*channel.Registry,
 ) *Service {
 	channelRegistry := channel.NewRegistry()
@@ -269,6 +273,10 @@ func NewService(
 	}
 	if clusterQuota != nil {
 		service.clusterQuota = clusterQuota
+	}
+	service.sharedHealth = sharedHealth
+	if refreshLeases != nil {
+		service.refreshLeases = refreshLeases
 	}
 	if subscriptionCredentials != nil {
 		service.prepareSubscriptionCredential = subscriptionCredentials.PrepareForControl
@@ -593,6 +601,12 @@ func (s *Service) withControlTransaction(
 		s.publishClusterConfigChange(revision)
 	}
 	return err
+}
+
+// CommitCredentialState commits a subscription credential change through the
+// control transaction, so in cluster mode peers reload the new secret.
+func (s *Service) CommitCredentialState(ctx context.Context, mutate func(*gorm.DB) error) error {
+	return s.withControlTransaction(ctx, mutate)
 }
 
 // publishClusterConfigChange notifies peers after a committed transaction.

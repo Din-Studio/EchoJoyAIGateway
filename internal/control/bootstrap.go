@@ -27,13 +27,17 @@ func (s *Service) EnsureInitialState(ctx context.Context) error {
 	var priceTable *pricing.Table
 	err := s.withControlTransaction(ctx, func(tx *gorm.DB) error {
 		nowMS := s.now().UnixMilli()
-		if err := tx.Model(&models.Credential{}).
-			Where("auth_state = ?", models.CredentialAuthStateRefreshing).
-			Updates(map[string]any{
-				"auth_state":      models.CredentialAuthStateOutcomeUnknown,
-				"auth_error_code": "refresh_interrupted", "updated_at_ms": nowMS,
-			}).Error; err != nil {
-			return app_errors.ParseDBError(err)
+		// In cluster mode a peer may be refreshing right now; only rows
+		// without a live refresh lease are swept, after this transaction.
+		if s.refreshLeases == nil {
+			if err := tx.Model(&models.Credential{}).
+				Where("auth_state = ?", models.CredentialAuthStateRefreshing).
+				Updates(map[string]any{
+					"auth_state":      models.CredentialAuthStateOutcomeUnknown,
+					"auth_error_code": "refresh_interrupted", "updated_at_ms": nowMS,
+				}).Error; err != nil {
+				return app_errors.ParseDBError(err)
+			}
 		}
 		if err := tx.Model(&models.CredentialStage{}).
 			Where("status = ?", models.CredentialStageExchanging).
@@ -101,5 +105,11 @@ func (s *Service) EnsureInitialState(ctx context.Context) error {
 	}
 	s.priceRuntime.Publish(priceTable)
 	logrus.WithField("event", "startup.model_prices_publish").Info("model prices published")
+	if s.refreshLeases != nil {
+		if err := s.sweepInterruptedRefreshes(ctx); err != nil {
+			logrus.WithError(err).WithField("event", "subscription.refresh_sweep_failed").
+				Warn("interrupted refresh sweep failed; the periodic sweep retries")
+		}
+	}
 	return nil
 }

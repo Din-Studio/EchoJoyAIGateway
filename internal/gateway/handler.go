@@ -89,6 +89,7 @@ type runtimeCredentialRegistry interface {
 	IncrFailure(credentialID uint) (int, bool)
 	SetBlacklistedWithChange(credentialID uint) (exists bool, changed bool)
 	ClearFailure(credentialID uint) bool
+	CredentialFailureCount(credentialID uint) (int, bool)
 }
 
 type Handler struct {
@@ -111,6 +112,7 @@ type Handler struct {
 	requestLogSink      telemetry.RequestLogSink
 	priceTables         PriceTableProvider
 	accessQuota         AccessQuotaGate
+	sharedHealth        state.SharedCredentialHealthStore
 	newRequestID        func() (string, error)
 	requestNow          func() time.Time
 	now                 func() time.Time
@@ -223,6 +225,7 @@ func NewHandlerWithLifecycle(
 	requestLogSink telemetry.RequestLogSink,
 	priceTables PriceTableProvider,
 	accessQuota AccessQuotaGate,
+	sharedHealth state.SharedCredentialHealthStore,
 	lifecycle *httplifecycle.Coordinator,
 	responseBindings *state.ResponseBindings,
 ) *Handler {
@@ -241,6 +244,7 @@ func NewHandlerWithLifecycle(
 	if accessQuota != nil {
 		handler.accessQuota = accessQuota
 	}
+	handler.sharedHealth = sharedHealth
 	if channelRegistry != nil {
 		handler.channels = channelRegistry
 	}
@@ -320,6 +324,11 @@ func (handler *Handler) applyDecisionEffectWithBlacklistPolicy(
 	blacklistThreshold int,
 	model string,
 ) {
+	if handler.sharedHealth != nil && handler.applySharedDecisionEffect(
+		ref, credentialVersion, decision, statusCode, attemptNow, blacklistThreshold, model,
+	) {
+		return
+	}
 	credentialID := ref.ID
 	switch decision.Effect {
 	case health.EffectCooldownModel:
@@ -377,7 +386,94 @@ func (handler *Handler) applyDecisionEffectWithBlacklistPolicy(
 	}
 }
 
+// applySharedDecisionEffect writes one health effect through the cluster
+// store outside every process lock. It returns false after a store failure so
+// the caller applies the local fallback, which at least keeps this instance
+// away from the failing credential.
+func (handler *Handler) applySharedDecisionEffect(
+	ref state.CredentialRef,
+	credentialVersion uint64,
+	decision health.Decision,
+	statusCode int,
+	attemptNow time.Time,
+	blacklistThreshold int,
+	model string,
+) bool {
+	var apply func(context.Context) (state.SharedHealthResult, error)
+	switch decision.Effect {
+	case health.EffectCooldownModel:
+		apply = func(ctx context.Context) (state.SharedHealthResult, error) {
+			return handler.sharedHealth.CooldownModel(ctx, ref, model, decision.CooldownUntil, attemptNow)
+		}
+	case health.EffectCooldownCredential:
+		apply = func(ctx context.Context) (state.SharedHealthResult, error) {
+			return handler.sharedHealth.CooldownCredential(ctx, ref, decision.CooldownUntil, credentialVersion)
+		}
+	case health.EffectRecordCredentialFailure:
+		apply = func(ctx context.Context) (state.SharedHealthResult, error) {
+			return handler.sharedHealth.RecordFailure(ctx, ref, blacklistThreshold)
+		}
+	default:
+		return true
+	}
+	if !handler.credentialTargetCurrent(ref) {
+		return true
+	}
+	result, err := apply(context.Background())
+	if err != nil {
+		handler.logSharedHealthUnavailable(ref.ID, string(decision.Effect), err)
+		return false
+	}
+	credentialID := ref.ID
+	switch decision.Effect {
+	case health.EffectCooldownModel:
+		if result.Accepted {
+			handler.stats.RecordProblem(credentialID, decision.Category, statusCode, attemptNow)
+		}
+		if result.Changed {
+			utils.LogPlaneBestEffort(handler.logger, logrus.WarnLevel, utils.LogPlaneData,
+				logrus.Fields{"event": "model_cooldown", "credential_id": credentialID, "model": model,
+					"cooldown_until": decision.CooldownUntil, "status_code": statusCode}, "Upstream model entered cooldown")
+		}
+	case health.EffectCooldownCredential:
+		if !result.Accepted {
+			return true
+		}
+		handler.stats.RecordProblem(credentialID, decision.Category, statusCode, attemptNow)
+		if result.Changed {
+			handler.logCredentialCooldown(credentialID, decision.Category, statusCode)
+		}
+	case health.EffectRecordCredentialFailure:
+		handler.stats.RecordFailure(credentialID, decision.Category, statusCode, attemptNow)
+		if result.BecameBlacklisted {
+			handler.logCredentialBlacklisted(credentialID, result.FailureCount, decision.Category, statusCode)
+		}
+	}
+	return true
+}
+
+func (handler *Handler) logSharedHealthUnavailable(credentialID uint, op string, err error) {
+	utils.LogPlaneBestEffort(handler.logger, logrus.WarnLevel, utils.LogPlaneData,
+		logrus.Fields{"event": "credential_health.redis_unavailable", "credential_id": credentialID,
+			"op": op, "error": err.Error()}, "Shared credential health is unavailable; applying the change locally")
+}
+
 func (handler *Handler) recordCredentialSuccess(ref state.CredentialRef, at time.Time) {
+	if handler.sharedHealth != nil {
+		if !handler.credentialTargetCurrent(ref) {
+			return
+		}
+		// Healthy traffic stays off Redis: only a mirrored failure streak
+		// needs clearing.
+		if failures, _ := handler.registry.CredentialFailureCount(ref.ID); failures > 0 {
+			if _, err := handler.sharedHealth.ClearFailure(context.Background(), ref); err != nil {
+				handler.logSharedHealthUnavailable(ref.ID, "clear_failure", err)
+				handler.mutateCredentialForTarget(ref, func() { handler.registry.ClearFailure(ref.ID) })
+			}
+		}
+		handler.stats.RecordSuccess(ref.ID, at)
+		return
+	}
 	handler.mutateCredentialForTarget(ref, func() {
 		if handler.registry.ClearFailure(ref.ID) {
 			handler.stats.RecordSuccess(ref.ID, at)
@@ -388,17 +484,22 @@ func (handler *Handler) recordCredentialSuccess(ref state.CredentialRef, at time
 func (handler *Handler) mutateCredentialForTarget(ref state.CredentialRef, mutate func()) {
 	apply := func() {
 		// 与配置变更共用凭据锁，避免校验后再切换目标；同目标的令牌刷新不影响结果归属。
-		current, exists := handler.registry.CredentialRef(ref.ID)
-		if !exists || current.GroupID != ref.GroupID || current.IdentityGeneration != ref.IdentityGeneration {
-			return
+		if handler.credentialTargetCurrent(ref) {
+			mutate()
 		}
-		mutate()
 	}
 	if handler.mutations == nil {
 		apply()
 	} else {
 		handler.mutations.Do(ref.ID, apply)
 	}
+}
+
+// credentialTargetCurrent reports whether ref still names the credential's
+// current group and identity, so a result is never attributed to a moved key.
+func (handler *Handler) credentialTargetCurrent(ref state.CredentialRef) bool {
+	current, exists := handler.registry.CredentialRef(ref.ID)
+	return exists && current.GroupID == ref.GroupID && current.IdentityGeneration == ref.IdentityGeneration
 }
 
 func retryAttemptLimit(retryCount int) int {
