@@ -25,7 +25,6 @@ func (r *CredentialRegistry) SetModelCooldown(ref CredentialRef, model string, u
 		entry.ModelCooldowns = make(map[string]time.Time)
 	}
 	entry.ModelCooldowns[model] = until
-	r.markSharedHealthDivergedLocked(entry)
 	return true, true
 }
 
@@ -50,7 +49,6 @@ func (r *CredentialRegistry) ClearModelCooldowns(credentialID uint) bool {
 	}
 	entry.ModelCooldowns = nil
 	entry.ModelCooldownGeneration++
-	r.markSharedHealthDivergedLocked(entry)
 	return true
 }
 

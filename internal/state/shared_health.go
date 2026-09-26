@@ -33,12 +33,6 @@ type SharedHealthResult struct {
 	BecameBlacklisted bool
 }
 
-// SharedHealthTarget identifies one mirrored credential for reconciliation.
-type SharedHealthTarget struct {
-	ID                 uint
-	IdentityGeneration uint64
-}
-
 // SharedCredentialHealthStore owns credential health in cluster mode. Every
 // method performs one store round trip and applies the resulting state to the
 // local registry mirror. Callers must not hold a mutation stripe, publishMu,
@@ -63,6 +57,13 @@ type SharedCredentialHealthStore interface {
 	// SetAuthState records the auth state of one secret version; an older
 	// secret version than the stored one is rejected.
 	SetAuthState(ctx context.Context, ref CredentialRef, authState CredentialAuthState, secretVersion uint64) (SharedHealthResult, error)
+	// ReadHealth returns the stored records; a credential without a record
+	// maps to the zero state with an empty Epoch.
+	ReadHealth(ctx context.Context, credentialIDs []uint) (map[uint]SharedCredentialHealth, error)
+	// ReplaceAuthState is SetAuthState conditioned on the record still being
+	// the observed one (same Epoch and Version), so a republish computed from
+	// an earlier read never overwrites a newer write.
+	ReplaceAuthState(ctx context.Context, ref CredentialRef, authState CredentialAuthState, secretVersion uint64, observed SharedCredentialHealth) (SharedHealthResult, error)
 }
 
 // EnableSharedHealth switches the registry to mirror a cluster store: peer
@@ -74,23 +75,24 @@ func (r *CredentialRegistry) EnableSharedHealth() {
 	r.mu.Unlock()
 }
 
-// SharedHealthTargets lists every mirrored credential in stable order.
-func (r *CredentialRegistry) SharedHealthTargets() []SharedHealthTarget {
+// CredentialIDs lists every registered credential in stable order.
+func (r *CredentialRegistry) CredentialIDs() []uint {
 	r.mu.RLock()
-	targets := make([]SharedHealthTarget, 0, len(r.credentialGroups))
-	for _, bucket := range r.buckets {
-		for _, entry := range bucket {
-			targets = append(targets, SharedHealthTarget{ID: entry.ID, IdentityGeneration: entry.IdentityGeneration})
-		}
+	ids := make([]uint, 0, len(r.credentialGroups))
+	for id := range r.credentialGroups {
+		ids = append(ids, id)
 	}
 	r.mu.RUnlock()
-	sort.Slice(targets, func(i, j int) bool { return targets[i].ID < targets[j].ID })
-	return targets
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }
 
 // ApplySharedHealth mirrors one store state. States of another identity
-// generation are ignored; within one epoch only a newer version applies, so
-// repeated or reordered deliveries converge. An empty state replaces a
+// generation are ignored; within one epoch an older version never applies,
+// so reordered deliveries converge. An equal version is applied again: the
+// store bumps the version on every change, so it carries the same content,
+// and reapplying it replaces any local fallback written while the store was
+// unreachable. An empty state replaces a
 // previously mirrored one because the store lost the record. A concurrent
 // first write can race such an empty read and briefly roll the mirror back;
 // the next event or reconciliation corrects it.
@@ -107,7 +109,7 @@ func (r *CredentialRegistry) ApplySharedHealth(credentialID uint, health SharedC
 		}
 		health = SharedCredentialHealth{IdentityGeneration: entry.IdentityGeneration}
 	} else if health.IdentityGeneration != entry.IdentityGeneration ||
-		health.Epoch == entry.sharedEpoch && health.Version <= entry.sharedVersion {
+		health.Epoch == entry.sharedEpoch && health.Version < entry.sharedVersion {
 		return false
 	}
 	entry.CooldownUntil = health.CooldownUntil
@@ -151,12 +153,14 @@ func sameCredentialIdentity(entry *CredentialEntry, ref CredentialRef) bool {
 		entry.EncryptedProxy == ref.EncryptedProxy && entry.ProxyFingerprint == ref.ProxyFingerprint
 }
 
-// markSharedHealthDivergedLocked records a local fallback mutation in shared
-// mode so the next store state replaces it even at an unchanged version.
-func (r *CredentialRegistry) markSharedHealthDivergedLocked(entry *CredentialEntry) {
+// preserveHealthLocked carries runtime health from previous into an entry
+// rebuilt from persisted configuration.
+func (r *CredentialRegistry) preserveHealthLocked(next *CredentialEntry, previous *CredentialEntry) {
 	if r.sharedHealth {
-		entry.sharedVersion = 0
+		preserveSharedHealth(next, previous)
+		return
 	}
+	preserveModelCooldowns(next, previous)
 }
 
 // preserveSharedHealth carries mirrored health across a configuration
