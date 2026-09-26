@@ -23,8 +23,7 @@ const (
 type ClusterConfigSync struct {
 	reload       func(context.Context) (uint64, error)
 	readRevision func(context.Context) (uint64, error)
-	// sweep marks refreshes interrupted by a crashed holder and realigns
-	// shared auth state with the database on every poll.
+	// sweep marks refreshes interrupted by a crashed holder on every poll.
 	sweep        func(context.Context) error
 	bus          *cluster.ConfigEventBus
 	pollInterval time.Duration
@@ -43,7 +42,7 @@ func NewClusterConfigSync(service *Service, bus *cluster.ConfigEventBus) *Cluste
 		readRevision: func(ctx context.Context) (uint64, error) {
 			return readClusterConfigRevision(ctx, service.db)
 		},
-		sweep:        service.syncSubscriptionAuth,
+		sweep:        service.sweepInterruptedRefreshes,
 		bus:          bus,
 		pollInterval: defaultClusterPollInterval,
 		wake:         make(chan struct{}, 1),

@@ -13,11 +13,7 @@ import "github.com/redis/go-redis/v9"
 // strings; deadlines and secret versions stay far below 2^53.
 //
 // A caller with another identity generation resets the record first, like a
-// local registry entry replaced for a new identity. Identity generations are
-// hashes and cannot be ordered, so a peer that has not reloaded a target
-// change yet can briefly bounce the record back to the old identity; this is
-// accepted because it only loses health recorded during reload skew and the
-// next write under the current identity resets it again. Every mutation bumps ver
+// local registry entry replaced for a new identity. Every mutation bumps ver
 // and publishes the full record, so a peer applies it without a read.
 //
 // KEYS[1]: the credential Hash. ARGV: op, origin, credentialID, idg,
@@ -121,21 +117,12 @@ elseif op == 'clear_cooldown_if_match' then
     changed = true
   end
 elseif op == 'auth' then
-  -- ARGV[10], ARGV[11]: when set, the record epoch and version the caller
-  -- read; the write is refused once any other write moved the record.
   local stored = redis.call('HGET', key, 'asv')
-  if ARGV[10] ~= '' and (redis.call('HGET', key, 'ep') ~= ARGV[10] or redis.call('HGET', key, 'ver') ~= ARGV[11]) then
+  if stored and tonumber(stored) > tonumber(ARGV[9]) then
     accepted = false
-  elseif stored and tonumber(stored) > tonumber(ARGV[9]) then
-    accepted = false
-  else
-    if redis.call('HGET', key, 'auth') ~= ARGV[8] or stored ~= ARGV[9] then
-      redis.call('HSET', key, 'auth', ARGV[8], 'asv', ARGV[9])
-      changed = true
-    end
-    -- Every accepted auth write moves the version, even an unchanged one, so
-    -- a conditional republish that read the record earlier is refused.
-    mutated = true
+  elseif redis.call('HGET', key, 'auth') ~= ARGV[8] or stored ~= ARGV[9] then
+    redis.call('HSET', key, 'auth', ARGV[8], 'asv', ARGV[9])
+    changed = true
   end
 else
   return redis.error_reply('unknown credential health op ' .. op)

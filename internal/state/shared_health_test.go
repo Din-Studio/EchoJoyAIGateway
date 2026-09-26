@@ -41,11 +41,8 @@ func TestApplySharedHealthOrdersStatesByEpochAndVersion(t *testing.T) {
 	if registry.ApplySharedHealth(1, SharedCredentialHealth{Epoch: "e1", Version: 4, IdentityGeneration: 7}) {
 		t.Fatal("older version in the same epoch was applied")
 	}
-	// The same version carries the same content, so reapplying it is safe.
-	if !registry.ApplySharedHealth(1, SharedCredentialHealth{
-		Epoch: "e1", Version: 5, IdentityGeneration: 7, CooldownUntil: cooldown, FailureCount: 2, FailureGeneration: 4,
-	}) {
-		t.Fatal("repeated version was not reapplied")
+	if registry.ApplySharedHealth(1, SharedCredentialHealth{Epoch: "e1", Version: 5, IdentityGeneration: 7}) {
+		t.Fatal("repeated version was applied")
 	}
 	if registry.ApplySharedHealth(1, SharedCredentialHealth{Epoch: "e1", Version: 9, IdentityGeneration: 8, Blacklisted: true}) {
 		t.Fatal("state of another identity generation was applied")
@@ -151,7 +148,7 @@ func TestSharedReconcileKeepsHealthAcrossConfigChanges(t *testing.T) {
 		t.Fatalf("view after weight reload = %#v ref=%#v", view, ref)
 	}
 	// The mirrored (epoch, version) survives too, so an older state stays out.
-	if registry.ApplySharedHealth(1, SharedCredentialHealth{Epoch: "e", Version: 3, IdentityGeneration: 7}) {
+	if registry.ApplySharedHealth(1, SharedCredentialHealth{Epoch: "e", Version: 4, IdentityGeneration: 7}) {
 		t.Fatal("reconcile dropped the mirrored version")
 	}
 
@@ -196,22 +193,5 @@ func TestLocalReconcileStillResetsHealthOnConfigChange(t *testing.T) {
 	}
 	if onlyView(t, registry).Blacklisted {
 		t.Fatal("single-instance reconcile kept health across a config change")
-	}
-}
-
-func TestSharedReplaceCredentialsKeepsMirroredHealth(t *testing.T) {
-	entry := sharedHealthEntry(1)
-	registry := newSharedHealthRegistry(t, entry)
-	registry.ApplySharedHealth(1, SharedCredentialHealth{
-		Epoch: "e", Version: 2, IdentityGeneration: 7, Blacklisted: true, FailureCount: 3, FailureGeneration: 5,
-	})
-	// A post-commit recovery rebuilds every entry from the database.
-	if err := registry.ReplaceCredentials([]CredentialEntry{entry}); err != nil {
-		t.Fatal(err)
-	}
-	view := onlyView(t, registry)
-	ref, _ := registry.CredentialRef(1)
-	if !view.Blacklisted || view.FailureCount != 3 || ref.FailureGeneration != 5 {
-		t.Fatalf("view after ReplaceCredentials = %#v ref=%#v, want mirrored health kept", view, ref)
 	}
 }

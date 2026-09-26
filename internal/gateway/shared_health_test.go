@@ -175,11 +175,3 @@ func TestHandlerFallsBackToLocalHealthWhenSharedStoreFails(t *testing.T) {
 		t.Fatal("local fallback did not clear the failure streak")
 	}
 }
-
-func (store *recordingHealthStore) ReadHealth(context.Context, []uint) (map[uint]state.SharedCredentialHealth, error) {
-	return nil, store.err
-}
-
-func (store *recordingHealthStore) ReplaceAuthState(_ context.Context, ref state.CredentialRef, _ state.CredentialAuthState, _ uint64, _ state.SharedCredentialHealth) (state.SharedHealthResult, error) {
-	return store.record("replace_auth", ref)
-}

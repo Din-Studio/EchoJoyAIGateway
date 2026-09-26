@@ -160,34 +160,10 @@ func (health *CredentialHealth) SetAuthState(
 	authState state.CredentialAuthState,
 	secretVersion uint64,
 ) (state.SharedHealthResult, error) {
-	return health.apply(ctx, ref, authOp(authState, secretVersion, "", 0))
-}
-
-// ReplaceAuthState implements state.SharedCredentialHealthStore.
-func (health *CredentialHealth) ReplaceAuthState(
-	ctx context.Context,
-	ref state.CredentialRef,
-	authState state.CredentialAuthState,
-	secretVersion uint64,
-	observed state.SharedCredentialHealth,
-) (state.SharedHealthResult, error) {
-	if observed.Epoch == "" {
-		return state.SharedHealthResult{}, nil
-	}
-	return health.apply(ctx, ref, authOp(authState, secretVersion, observed.Epoch, observed.Version))
-}
-
-func authOp(authState state.CredentialAuthState, secretVersion uint64, epoch string, version uint64) healthOp {
 	if authState == "" {
 		authState = state.CredentialAuthStateReady
 	}
-	observedVersion := ""
-	if epoch != "" {
-		observedVersion = strconv.FormatUint(version, 10)
-	}
-	return healthOp{"auth", []string{
-		string(authState), strconv.FormatUint(secretVersion, 10), epoch, observedVersion,
-	}}
+	return health.apply(ctx, ref, healthOp{"auth", []string{string(authState), strconv.FormatUint(secretVersion, 10)}})
 }
 
 // apply runs one script operation and mirrors the resulting record locally.
@@ -233,57 +209,33 @@ func (health *CredentialHealth) apply(
 // Hydrate mirrors the current Redis record of every registered credential.
 // It is the startup restore and the periodic repair for lost events.
 func (health *CredentialHealth) Hydrate(ctx context.Context) error {
-	records, err := health.ReadHealth(ctx, health.registry.CredentialIDs())
-	if err != nil {
-		return err
-	}
-	for id, record := range records {
-		health.registry.ApplySharedHealth(id, record)
+	targets := health.registry.SharedHealthTargets()
+	for start := 0; start < len(targets); start += credentialHealthHydrateBatch {
+		end := min(start+credentialHealthHydrateBatch, len(targets))
+		if err := health.hydrateBatch(ctx, targets[start:end]); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-// ReadHealth implements state.SharedCredentialHealthStore. A record that
-// cannot be decoded is logged and left out, so one foreign or corrupted key
-// never stops the repair of every other credential.
-func (health *CredentialHealth) ReadHealth(
-	ctx context.Context,
-	credentialIDs []uint,
-) (map[uint]state.SharedCredentialHealth, error) {
-	records := make(map[uint]state.SharedCredentialHealth, len(credentialIDs))
-	for start := 0; start < len(credentialIDs); start += credentialHealthHydrateBatch {
-		batch := credentialIDs[start:min(start+credentialHealthHydrateBatch, len(credentialIDs))]
-		if err := health.readBatch(ctx, batch, records); err != nil {
-			return nil, err
-		}
-	}
-	return records, nil
-}
-
-func (health *CredentialHealth) readBatch(
-	ctx context.Context,
-	credentialIDs []uint,
-	records map[uint]state.SharedCredentialHealth,
-) error {
+func (health *CredentialHealth) hydrateBatch(ctx context.Context, targets []state.SharedHealthTarget) error {
 	callCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	pipeline := health.client.Pipeline()
-	commands := make([]*redis.MapStringStringCmd, 0, len(credentialIDs))
-	for _, id := range credentialIDs {
-		commands = append(commands, pipeline.HGetAll(callCtx, health.key(id)))
+	commands := make([]*redis.MapStringStringCmd, 0, len(targets))
+	for _, target := range targets {
+		commands = append(commands, pipeline.HGetAll(callCtx, health.key(target.ID)))
 	}
 	if _, err := pipeline.Exec(callCtx); err != nil {
 		return fmt.Errorf("read credential health: %w", err)
 	}
-	for index, id := range credentialIDs {
+	for index, target := range targets {
 		record, err := decodeCredentialHealth(commands[index].Val())
 		if err != nil {
-			logrus.WithError(err).WithFields(logrus.Fields{
-				"event": "credential_health.record_invalid", "credential_id": id,
-			}).Warn("skipping undecodable credential health record")
-			continue
+			return fmt.Errorf("read credential %d health: %w", target.ID, err)
 		}
-		records[id] = record
+		health.registry.ApplySharedHealth(target.ID, record)
 	}
 	return nil
 }

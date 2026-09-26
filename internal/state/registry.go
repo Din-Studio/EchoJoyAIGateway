@@ -151,7 +151,7 @@ func (r *CredentialRegistry) ReplaceCredentials(entries []CredentialEntry) error
 	r.mu.Lock()
 	for groupID, bucket := range buckets {
 		for id, entry := range bucket {
-			r.preserveHealthLocked(entry, r.buckets[groupID][id])
+			preserveModelCooldowns(entry, r.buckets[groupID][id])
 		}
 	}
 	r.buckets = buckets
@@ -190,7 +190,7 @@ func (r *CredentialRegistry) ApplyCredentialImport(groupID uint, entries []Crede
 			r.buckets[groupID] = make(map[uint]*CredentialEntry)
 		}
 		cloned := cloneCredentialEntry(entry)
-		r.preserveHealthLocked(&cloned, r.buckets[groupID][entry.ID])
+		preserveModelCooldowns(&cloned, r.buckets[groupID][entry.ID])
 		r.buckets[groupID][entry.ID] = &cloned
 		r.credentialGroups[entry.ID] = groupID
 		r.scheduling.SyncCredential(runtimeView(r.buckets[groupID][entry.ID]))
@@ -315,7 +315,11 @@ func (r *CredentialRegistry) ReconcileGroup(groupID uint, entries []CredentialEn
 			continue
 		}
 		cloned := cloneCredentialEntry(desired)
-		r.preserveHealthLocked(&cloned, previous[desired.ID])
+		if r.sharedHealth {
+			preserveSharedHealth(&cloned, previous[desired.ID])
+		} else {
+			preserveModelCooldowns(&cloned, previous[desired.ID])
+		}
 		next[desired.ID] = &cloned
 	}
 	for credentialID := range previous {
@@ -540,6 +544,7 @@ func (r *CredentialRegistry) SetCredentialAuthState(credentialID uint, authState
 		return false
 	}
 	setEntryAuthStateLocked(entry, authState)
+	r.markSharedHealthDivergedLocked(entry)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true
 }
@@ -632,7 +637,15 @@ func (r *CredentialRegistry) ActiveEncryptedCredentialDataIfMatch(ref Credential
 		return "", false
 	}
 	entry, ok := r.buckets[groupID][ref.ID]
-	if !ok || !sameCredentialIdentity(entry, ref) ||
+	if !ok ||
+		entry.ID != ref.ID ||
+		entry.GroupID != ref.GroupID ||
+		entry.Version != ref.Version ||
+		entry.IdentityGeneration != ref.IdentityGeneration ||
+		entry.Fingerprint != ref.Fingerprint ||
+		entry.EncryptedValue != ref.EncryptedValue ||
+		entry.EncryptedProxy != ref.EncryptedProxy ||
+		entry.ProxyFingerprint != ref.ProxyFingerprint ||
 		entry.Status != CredentialStatusActive || entry.AuthState.normalize() != CredentialAuthStateReady {
 		return "", false
 	}
@@ -828,6 +841,7 @@ func (r *CredentialRegistry) ClearCooldownIfMatch(credentialID uint, expected ti
 		return false
 	}
 	entry.CooldownUntil = time.Time{}
+	r.markSharedHealthDivergedLocked(entry)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true
 }
@@ -843,6 +857,7 @@ func (r *CredentialRegistry) SetCooldownWithChange(credentialID uint, until time
 		return true, false
 	}
 	entry.CooldownUntil = until
+	r.markSharedHealthDivergedLocked(entry)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true, true
 }
@@ -864,6 +879,7 @@ func (r *CredentialRegistry) SetCooldownWithChangeIfVersion(
 		return true, false
 	}
 	entry.CooldownUntil = until
+	r.markSharedHealthDivergedLocked(entry)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true, true
 }
@@ -880,6 +896,7 @@ func (r *CredentialRegistry) SetBlacklistedWithChange(credentialID uint) (bool, 
 	}
 	entry.Blacklisted = true
 	entry.FailureGeneration++
+	r.markSharedHealthDivergedLocked(entry)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true, true
 }
@@ -895,6 +912,7 @@ func (r *CredentialRegistry) RestoreRuntimeState(credentialID uint) bool {
 	entry.Blacklisted = false
 	entry.FailureCount = 0
 	entry.FailureGeneration++
+	r.markSharedHealthDivergedLocked(entry)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true
 }
@@ -913,6 +931,7 @@ func (r *CredentialRegistry) IncrFailure(credentialID uint) (int, bool) {
 	}
 	entry.FailureCount++
 	entry.FailureGeneration++
+	r.markSharedHealthDivergedLocked(entry)
 	return entry.FailureCount, true
 }
 
@@ -926,6 +945,7 @@ func (r *CredentialRegistry) ClearFailure(credentialID uint) bool {
 	if entry.FailureCount != 0 {
 		entry.FailureCount = 0
 		entry.FailureGeneration++
+		r.markSharedHealthDivergedLocked(entry)
 	}
 	return true
 }
@@ -942,6 +962,7 @@ func (r *CredentialRegistry) Recover(credentialID uint) bool {
 		entry.FailureCount = 0
 		entry.FailureGeneration++
 	}
+	r.markSharedHealthDivergedLocked(entry)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true
 }
@@ -971,7 +992,10 @@ func (r *CredentialRegistry) restoreRuntimeStateIfMatch(
 	}
 	entry, ok := r.buckets[groupID][ref.ID]
 	if !ok || entry.Status != CredentialStatusActive || !entry.Blacklisted ||
-		!sameCredentialIdentity(entry, ref) ||
+		entry.GroupID != ref.GroupID || entry.Version != ref.Version ||
+		entry.IdentityGeneration != ref.IdentityGeneration ||
+		entry.Fingerprint != ref.Fingerprint || entry.EncryptedValue != ref.EncryptedValue ||
+		entry.EncryptedProxy != ref.EncryptedProxy || entry.ProxyFingerprint != ref.ProxyFingerprint ||
 		entry.FailureGeneration != ref.FailureGeneration ||
 		cooldownUntil != nil && !entry.CooldownUntil.Equal(*cooldownUntil) {
 		return false
@@ -982,6 +1006,7 @@ func (r *CredentialRegistry) restoreRuntimeStateIfMatch(
 	entry.Blacklisted = false
 	entry.FailureCount = 0
 	entry.FailureGeneration++
+	r.markSharedHealthDivergedLocked(entry)
 	r.scheduling.SyncCredential(runtimeView(entry))
 	return true
 }

@@ -376,16 +376,3 @@ func TestRefreshCommitsAfterStartupResetMarkedItInterrupted(t *testing.T) {
 	}
 	assertStoredAuthState(t, db, row.ID, models.CredentialAuthStateReady, "")
 }
-
-func TestClusterRefreshCanceledWhileWaitingIsNotReportedAsInProgress(t *testing.T) {
-	fixture := newClusterRefreshFixture(t, time.Now().Add(time.Minute))
-	if err := fixture.server.Set(fixture.leaseKey(), "node-z:held"); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	time.AfterFunc(200*time.Millisecond, cancel)
-	_, evidence := fixture.b.manager.Prepare(ctx, channel.Codex, credentialSnapshot(t, fixture.row, fixture.keyService), false)
-	if evidence == nil || evidence.Code != "refresh_canceled" {
-		t.Fatalf("evidence = %#v, want refresh_canceled", evidence)
-	}
-}
