@@ -16,8 +16,9 @@ import (
 const (
 	DefaultResponseBindingTTL      = 30 * 24 * time.Hour
 	DefaultResponseBindingCapacity = 100_000
-	maxResponseIDBytes             = 4 << 10
-	maxResponseBindingIDBytes      = 16 << 20
+	// MaxResponseIDBytes bounds a response ID that can own a binding.
+	MaxResponseIDBytes        = 4 << 10
+	maxResponseBindingIDBytes = 16 << 20
 )
 
 // ResponseBinding 只保存响应归属；可用性仍由当前路由和凭据运行态决定。
@@ -128,7 +129,7 @@ func NewResponseBinding(
 	ttl time.Duration,
 ) (ResponseBinding, bool) {
 	if accessKeyID == 0 || responseID == "" || ref.ID == 0 || ref.GroupID == 0 ||
-		ref.IdentityGeneration == 0 || len(responseID) > maxResponseIDBytes {
+		ref.IdentityGeneration == 0 || len(responseID) > MaxResponseIDBytes {
 		return ResponseBinding{}, false
 	}
 	var auto *automodel.Selection
@@ -203,7 +204,7 @@ func (bindings *ResponseBindings) RestoreCheckpoint(checkpoint []ResponseBinding
 	for _, binding := range ordered {
 		if binding.AccessKeyID == 0 || binding.ResponseID == "" || binding.CredentialID == 0 ||
 			binding.GroupID == 0 || binding.IdentityGeneration == 0 || !binding.ExpiresAt.After(now) ||
-			len(binding.ResponseID) > maxResponseIDBytes {
+			len(binding.ResponseID) > MaxResponseIDBytes {
 			continue
 		}
 		if !bindings.insert(binding) {

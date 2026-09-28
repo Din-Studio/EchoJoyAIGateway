@@ -6,6 +6,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"gpt-load/internal/affinity"
+	"gpt-load/internal/platform/utils"
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/scheduler"
 	"gpt-load/internal/state"
@@ -69,8 +70,9 @@ func (handler *Handler) resolveRequestAffinity(
 	}
 	observation, err := handler.affinity.Lookup(ctx, policy, key)
 	if err != nil {
-		handler.logger.WithError(err).WithField("event", "affinity.redis_unavailable").
-			Warn("soft affinity lookup failed; scheduling without a preference")
+		utils.LogPlaneBestEffort(handler.logger, logrus.WarnLevel, utils.LogPlaneData,
+			logrus.Fields{"event": "affinity.redis_unavailable", "op": "lookup", "error": err.Error()},
+			"Shared soft affinity is unavailable; scheduling without a preference")
 		return result
 	}
 	resolved := result
@@ -115,8 +117,9 @@ func (handler *Handler) recordAffinitySuccess(
 		},
 	)
 	if err != nil {
-		handler.logger.WithError(err).WithFields(logrus.Fields{
-			"event": "affinity.redis_unavailable", "credential_id": selection.CredentialID,
-		}).Warn("soft affinity could not be recorded")
+		utils.LogPlaneBestEffort(handler.logger, logrus.WarnLevel, utils.LogPlaneData,
+			logrus.Fields{"event": "affinity.redis_unavailable", "op": "record",
+				"credential_id": selection.CredentialID, "error": err.Error()},
+			"Shared soft affinity is unavailable; the success was not learned")
 	}
 }

@@ -87,7 +87,7 @@ func TestResponseBindingsMatchInProcessContract(t *testing.T) {
 				{1, "id", state.CredentialRef{GroupID: 2, IdentityGeneration: 3}},
 				{1, "id", state.CredentialRef{ID: 1, IdentityGeneration: 3}},
 				{1, "id", state.CredentialRef{ID: 1, GroupID: 2}},
-				{1, strings.Repeat("x", 4<<10+1), ref},
+				{1, strings.Repeat("x", state.MaxResponseIDBytes+1), ref},
 			} {
 				if record(invalid.accessKeyID, invalid.responseID, invalid.ref) {
 					t.Fatalf("invalid record accepted: %+v", invalid)
@@ -144,6 +144,10 @@ func TestResponseBindingsReturnErrorsWhenRedisIsUnavailable(t *testing.T) {
 	bindings := NewResponseBindings(client, time.Hour)
 	server.Close()
 	ctx := context.Background()
+	// An ID too long to ever be recorded resolves as a miss without Redis.
+	if _, found, err := bindings.Lookup(ctx, 1, strings.Repeat("x", state.MaxResponseIDBytes+1)); err != nil || found {
+		t.Fatalf("oversized Lookup() = %t, %v, want miss without a Redis call", found, err)
+	}
 	if _, _, err := bindings.Lookup(ctx, 1, "resp"); err == nil {
 		t.Fatal("Lookup() error = nil with Redis down")
 	}

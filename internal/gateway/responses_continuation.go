@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/sirupsen/logrus"
+
 	"gpt-load/internal/automodel"
 	"gpt-load/internal/channel"
 	"gpt-load/internal/dialect"
 	"gpt-load/internal/execution"
+	"gpt-load/internal/platform/utils"
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/scheduler"
 	"gpt-load/internal/state"
@@ -52,7 +55,8 @@ func (handler *Handler) responseBindingObserver(
 		}
 		recorded, err := handler.responseBindings.Record(ctx, accessKeyID, response.ID, ref, autoSelections...)
 		if err != nil {
-			return fmt.Errorf("%w: %v", errResponseOwnershipUnavailable, err)
+			// 保留原错误链，客户端取消仍可被 errors.Is(context.Canceled) 识别。
+			return fmt.Errorf("%w: %w", errResponseOwnershipUnavailable, err)
 		}
 		if !recorded {
 			return fmt.Errorf("%w: response ownership could not be recorded", ErrUpstreamProtocol)
@@ -91,8 +95,9 @@ func (handler *Handler) lookupResponseBinding(
 ) (state.ResponseBinding, bool, *reason) {
 	binding, found, err := handler.responseBindings.Lookup(ctx, accessKeyID, responseID)
 	if err != nil {
-		handler.logger.WithError(err).WithField("event", "response_binding.lookup_unavailable").
-			Warn("response ownership lookup failed")
+		utils.LogPlaneBestEffort(handler.logger, logrus.WarnLevel, utils.LogPlaneData,
+			logrus.Fields{"event": "response_binding.lookup_unavailable", "error": err.Error()},
+			"Shared response ownership is unavailable")
 		return state.ResponseBinding{}, false, &reasonClusterStateUnavailable
 	}
 	return binding, found, nil

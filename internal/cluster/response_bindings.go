@@ -49,6 +49,10 @@ func (bindings *ResponseBindings) Lookup(
 	accessKeyID uint,
 	responseID string,
 ) (state.ResponseBinding, bool, error) {
+	// Longer IDs can never be recorded; skip sending a client-sized key to Redis.
+	if responseID == "" || len(responseID) > state.MaxResponseIDBytes {
+		return state.ResponseBinding{}, false, nil
+	}
 	callCtx, cancel := context.WithTimeout(ctx, stateTimeout)
 	defer cancel()
 	raw, err := bindings.client.Get(callCtx, bindings.key(accessKeyID, responseID)).Result()
