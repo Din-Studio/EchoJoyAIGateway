@@ -39,7 +39,15 @@ func NewClusterConfigSync(service *Service, bus *cluster.ConfigEventBus) *Cluste
 		return nil
 	}
 	return &ClusterConfigSync{
-		reload: service.reloadCommittedConfig,
+		reload: func(ctx context.Context) (uint64, error) {
+			// A peer stores a new catalog before committing its prices, so
+			// adopting first keeps the catalog no older than the prices.
+			if err := service.catalogSync.adoptSharedCatalog(ctx); err != nil {
+				logrus.WithError(err).WithField("event", "models_dev_catalog_adopt_failed").
+					Warn("shared Models.dev catalog adoption failed; will retry on the next reload")
+			}
+			return service.reloadCommittedConfig(ctx)
+		},
 		readRevision: func(ctx context.Context) (uint64, error) {
 			return readClusterConfigRevision(ctx, service.db)
 		},

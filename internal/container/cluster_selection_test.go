@@ -8,6 +8,7 @@ import (
 
 	"gpt-load/internal/affinity"
 	"gpt-load/internal/cluster"
+	"gpt-load/internal/control"
 	"gpt-load/internal/gateway"
 	"gpt-load/internal/platform/config"
 	"gpt-load/internal/ratelimit"
@@ -143,5 +144,40 @@ func TestSingleInstanceModeKeepsResponseOwnershipAndAffinityLocal(t *testing.T) 
 	}
 	if _, ok := newAffinityStore(nil).(*affinity.Cache); !ok {
 		t.Fatal("single-instance affinity store is not the in-process cache")
+	}
+}
+
+func TestClusterModeSharesBackgroundJobsCatalogAndAdminLockout(t *testing.T) {
+	server := miniredis.RunT(t)
+	cfg := &config.Config{DataDir: t.TempDir(), Cluster: config.ClusterConfig{
+		RedisAddrs: []string{server.Addr()}, RedisKeyPrefix: "gl", InstanceID: "container-test",
+	}}
+	client, err := cluster.NewClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	if cluster.NewJobLease(client) == nil || cluster.NewAuthFailures(client) == nil {
+		t.Fatal("cluster mode did not create the shared job lease or admin lockout")
+	}
+	shared := cluster.NewCatalogStore(client)
+	if shared == nil {
+		t.Fatal("cluster mode did not create the shared catalog store")
+	}
+	bootstrap := control.NewCatalogBootstrap(cfg, shared)
+	if bootstrap.CachePath != "" || bootstrap.HasLKG {
+		t.Fatalf("cluster bootstrap = path %q, LKG %t; want the empty shared catalog, not a cache file",
+			bootstrap.CachePath, bootstrap.HasLKG)
+	}
+}
+
+func TestSingleInstanceModeKeepsBackgroundJobsCatalogAndAdminLockoutLocal(t *testing.T) {
+	if cluster.NewJobLease(nil) != nil || cluster.NewCatalogStore(nil) != nil || cluster.NewAuthFailures(nil) != nil {
+		t.Fatal("single-instance mode created shared background job, catalog, or lockout state")
+	}
+	cfg := &config.Config{DataDir: t.TempDir()}
+	if bootstrap := control.NewCatalogBootstrap(cfg, nil); bootstrap.CachePath == "" {
+		t.Fatal("single-instance bootstrap does not use the DATA_DIR cache file")
 	}
 }

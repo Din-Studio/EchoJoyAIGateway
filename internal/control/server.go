@@ -17,6 +17,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"gpt-load/internal/channel"
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/outboundproxy"
 	"gpt-load/internal/platform/config"
 	app_errors "gpt-load/internal/platform/errors"
@@ -34,16 +35,20 @@ type ReleaseUpdateChecker interface {
 }
 
 type Server struct {
-	authDigest        [sha256.Size]byte
-	service           *Service
-	systemInfo        systemInfoResponse
-	authFailures      *authFailureLimiter
-	compareDigest     func([]byte, []byte) int
-	logger            *logrus.Logger
-	authFailureEvents *utils.RateLimitedEventCounter
-	startedAt         time.Time
-	now               func() time.Time
-	releaseChecker    ReleaseUpdateChecker
+	authDigest   [sha256.Size]byte
+	service      *Service
+	systemInfo   systemInfoResponse
+	authFailures *authFailureLimiter
+	// sharedAuthFailures makes admin lockout cluster-wide; nil in
+	// single-instance mode.
+	sharedAuthFailures *cluster.AuthFailures
+	sharedAuthErrors   *utils.RateLimitedEventCounter
+	compareDigest      func([]byte, []byte) int
+	logger             *logrus.Logger
+	authFailureEvents  *utils.RateLimitedEventCounter
+	startedAt          time.Time
+	now                func() time.Time
+	releaseChecker     ReleaseUpdateChecker
 }
 
 const maxControlJSONBodyBytes int64 = 32 << 20
@@ -73,14 +78,20 @@ func NewServer(cfg *config.Config, service *Service) *Server {
 	}
 }
 
-// NewServerWithReleaseUpdateChecker wires the on-demand public update checker.
+// NewServerWithReleaseUpdateChecker wires the on-demand public update checker
+// and, in cluster mode, the admin lockout shared by every instance.
 func NewServerWithReleaseUpdateChecker(
 	cfg *config.Config,
 	service *Service,
 	releaseChecker ReleaseUpdateChecker,
+	sharedAuthFailures *cluster.AuthFailures,
 ) *Server {
 	server := NewServer(cfg, service)
 	server.releaseChecker = releaseChecker
+	if sharedAuthFailures != nil {
+		server.sharedAuthFailures = sharedAuthFailures
+		server.sharedAuthErrors = utils.NewRateLimitedEventCounter(time.Minute, time.Now)
+	}
 	return server
 }
 

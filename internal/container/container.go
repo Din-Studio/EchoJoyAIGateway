@@ -73,6 +73,9 @@ func BuildContainer() (*dig.Container, error) {
 		newCredentialRegistry,
 		cluster.NewCredentialHealth,
 		cluster.NewRefreshLease,
+		cluster.NewJobLease,
+		cluster.NewCatalogStore,
+		cluster.NewAuthFailures,
 		newSharedCredentialHealthStore,
 		newResponseBindings,
 		newResponseBindingStore,
@@ -217,8 +220,9 @@ func BuildContainer() (*dig.Container, error) {
 			cfg *config.Config,
 			service *control.Service,
 			checker *releasecheck.Checker,
+			sharedAuthFailures *cluster.AuthFailures,
 		) *control.Server {
-			return control.NewServerWithReleaseUpdateChecker(cfg, service, checker)
+			return control.NewServerWithReleaseUpdateChecker(cfg, service, checker, sharedAuthFailures)
 		},
 		newHTTPRegistry,
 		func(
