@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 const testPostgresDSN = "postgres://user:pass@127.0.0.1:5432/gpt_load?sslmode=disable"
@@ -22,10 +23,14 @@ func TestLoadParsesClusterConfiguration(t *testing.T) {
 	t.Setenv("REDIS_TLS", "true")
 	t.Setenv("REDIS_KEY_PREFIX", "tenant")
 	t.Setenv("INSTANCE_ID", "node-a")
+	t.Setenv("RESPONSE_BINDING_TTL", "24h")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Cluster.ResponseBindingTTL != 24*time.Hour {
+		t.Fatalf("ResponseBindingTTL = %s, want 24h", cfg.Cluster.ResponseBindingTTL)
 	}
 	if !cfg.Cluster.Enabled() {
 		t.Fatal("Cluster.Enabled() = false, want true")
@@ -64,6 +69,9 @@ func TestLoadGeneratesDistinctInstanceIDs(t *testing.T) {
 	}
 	if first.Cluster.RedisTLS {
 		t.Fatal("RedisTLS = true, want false by default")
+	}
+	if first.Cluster.ResponseBindingTTL != 720*time.Hour {
+		t.Fatalf("ResponseBindingTTL = %s, want 720h by default", first.Cluster.ResponseBindingTTL)
 	}
 }
 
@@ -129,6 +137,20 @@ func TestLoadRejectsInvalidClusterConfiguration(t *testing.T) {
 			},
 			wantErr: "REDIS_KEY_PREFIX must not contain whitespace or end with a colon",
 		},
+		{
+			name: "unparsable response binding ttl",
+			prepare: func(t *testing.T) {
+				t.Setenv("RESPONSE_BINDING_TTL", "abc")
+			},
+			wantErr: "RESPONSE_BINDING_TTL must be a duration of at least 1m",
+		},
+		{
+			name: "response binding ttl below one minute",
+			prepare: func(t *testing.T) {
+				t.Setenv("RESPONSE_BINDING_TTL", "30s")
+			},
+			wantErr: "RESPONSE_BINDING_TTL must be a duration of at least 1m",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -151,6 +173,7 @@ func TestLoadIgnoresClusterVariablesWithoutRedisAddrs(t *testing.T) {
 	t.Setenv("REDIS_KEY_PREFIX", "bad:")
 	t.Setenv("INSTANCE_ID", "node-a")
 	t.Setenv("REDIS_DSN", "://invalid-redis-dsn")
+	t.Setenv("RESPONSE_BINDING_TTL", "abc")
 
 	cfg, err := Load()
 	if err != nil {
@@ -160,7 +183,7 @@ func TestLoadIgnoresClusterVariablesWithoutRedisAddrs(t *testing.T) {
 		t.Fatal("Cluster.Enabled() = true, want false")
 	}
 	if cfg.Cluster.RedisAddrs != nil || cfg.Cluster.RedisPassword != "" || cfg.Cluster.RedisTLS ||
-		cfg.Cluster.RedisKeyPrefix != "" || cfg.Cluster.InstanceID != "" {
+		cfg.Cluster.RedisKeyPrefix != "" || cfg.Cluster.InstanceID != "" || cfg.Cluster.ResponseBindingTTL != 0 {
 		t.Fatalf("Cluster = %#v, want zero value", cfg.Cluster)
 	}
 }

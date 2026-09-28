@@ -241,10 +241,10 @@ func TestFileRuntimeStateCheckpointRestoresAndConsumesFile(t *testing.T) {
 func TestFileRuntimeStateCheckpointRestoresResponseOwnership(t *testing.T) {
 	dir := t.TempDir()
 	original := state.NewResponseBindings()
-	if !original.Record(7, "stored-response", state.CredentialRef{ID: 2, GroupID: 3, IdentityGeneration: 4}) {
+	if recorded, err := original.Record(context.Background(), 7, "stored-response", state.CredentialRef{ID: 2, GroupID: 3, IdentityGeneration: 4}); err != nil || !recorded {
 		t.Fatal("record failed")
 	}
-	want, _ := original.Lookup(7, "stored-response")
+	want, _, _ := original.Lookup(context.Background(), 7, "stored-response")
 	checkpoint := NewFileRuntimeStateCheckpoint(dir, nil, nil, original, nil)
 	if err := checkpoint.Save(context.Background()); err != nil {
 		t.Fatal(err)
@@ -254,7 +254,7 @@ func TestFileRuntimeStateCheckpointRestoresResponseOwnership(t *testing.T) {
 	if err := loader.Restore(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	got, ok := restored.Lookup(7, "stored-response")
+	got, ok, _ := restored.Lookup(context.Background(), 7, "stored-response")
 	if !ok || got.AccessKeyID != want.AccessKeyID || got.CredentialID != want.CredentialID ||
 		got.GroupID != want.GroupID || got.IdentityGeneration != want.IdentityGeneration ||
 		!got.ExpiresAt.Equal(want.ExpiresAt) {

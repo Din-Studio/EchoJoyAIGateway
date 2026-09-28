@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 
@@ -27,6 +28,8 @@ const (
 	defaultDatabaseMaxOpenConns    = 10
 	defaultDatabaseMaxIdleConns    = 5
 	defaultRedisKeyPrefix          = "gl"
+	defaultResponseBindingTTL      = 720 * time.Hour
+	minResponseBindingTTL          = time.Minute
 )
 
 // ServerConfig contains process-level HTTP server settings.
@@ -118,6 +121,8 @@ type ClusterConfig struct {
 	RedisTLS       bool
 	RedisKeyPrefix string
 	InstanceID     string
+	// ResponseBindingTTL bounds how long Responses ownership stays in Redis.
+	ResponseBindingTTL time.Duration
 }
 
 // Enabled reports whether the operator selected cluster mode.
@@ -336,12 +341,20 @@ func parseClusterConfig() (ClusterConfig, error) {
 			return ClusterConfig{}, err
 		}
 	}
+	responseBindingTTL := defaultResponseBindingTTL
+	if raw := strings.TrimSpace(os.Getenv("RESPONSE_BINDING_TTL")); raw != "" {
+		responseBindingTTL, err = time.ParseDuration(raw)
+		if err != nil || responseBindingTTL < minResponseBindingTTL {
+			return ClusterConfig{}, fmt.Errorf("RESPONSE_BINDING_TTL must be a duration of at least 1m")
+		}
+	}
 	return ClusterConfig{
-		RedisAddrs:     addrs,
-		RedisPassword:  os.Getenv("REDIS_PASSWORD"),
-		RedisTLS:       redisTLS != nil && *redisTLS,
-		RedisKeyPrefix: keyPrefix,
-		InstanceID:     instanceID,
+		RedisAddrs:         addrs,
+		RedisPassword:      os.Getenv("REDIS_PASSWORD"),
+		RedisTLS:           redisTLS != nil && *redisTLS,
+		RedisKeyPrefix:     keyPrefix,
+		InstanceID:         instanceID,
+		ResponseBindingTTL: responseBindingTTL,
 	}, nil
 }
 

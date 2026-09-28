@@ -41,8 +41,9 @@ type FileRuntimeStateCheckpoint struct {
 	registry         *state.CredentialRegistry
 	stats            *health.StatsStore
 	responseBindings *state.ResponseBindings
-	// credentialHealth, set in cluster mode, owns credential health, so the
-	// file keeps only this instance's scheduling, stats, and responses.
+	// credentialHealth, set in cluster mode, owns credential health, and
+	// responseBindings is nil there because Redis owns Responses ownership,
+	// so the file keeps only this instance's scheduling and stats.
 	credentialHealth CredentialHealthHydrator
 	removeFile       func(string) error
 }

@@ -217,7 +217,11 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 			}
 			boundAuto = parent.autoSelection
 		} else {
-			stored, found := h.responseBindings.Lookup(key.ID, original.previous)
+			stored, found, failure := h.lookupResponseBinding(s.ctx, key.ID, original.previous)
+			if failure != nil {
+				reject(*failure)
+				return
+			}
 			if !found {
 				reject(reasonResponseBindingNotFound)
 				return
@@ -280,7 +284,7 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		}
 		return
 	}
-	affinity := h.resolveRequestAffinity(snapshot, key.ID, protocol.OpenAIResponses, original.metadata.AffinityPrefix, query.AllowedCredentialRefs, original.metadata.PromptCacheKey)
+	affinity := h.resolveRequestAffinity(s.ctx, snapshot, key.ID, protocol.OpenAIResponses, original.metadata.AffinityPrefix, query.AllowedCredentialRefs, original.metadata.PromptCacheKey)
 	if requiredRef == nil {
 		query.PreferredCredentialID = affinity.preferredCredentialID
 	}
@@ -539,7 +543,9 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 			finishRejectedAttempt()
 		} else {
 			value := reasonUpstreamConnect
-			if result.ExecutionError != nil {
+			if errors.Is(result.Err, errResponseOwnershipUnavailable) {
+				value = reasonClusterStateUnavailable
+			} else if result.ExecutionError != nil {
 				if result.ExecutionError.Kind == execution.ErrorKindTimeout {
 					value = reasonUpstreamTimeout
 				} else if result.ExecutionError.StatusCode >= 400 {
@@ -643,7 +649,8 @@ func (s *websocketConnection) runWebsocketAttempt(ctx context.Context, cancel co
 			idle.stop()
 		}
 	}()
-	onResponse := s.handler.responseBindingObserver(s.keyID, selection, ref, input.Request, recorder.autoSelection())
+	onResponse := s.handler.responseBindingObserver(ctx, s.keyID, selection, ref, input.Request, recorder.autoSelection())
+	var ownershipErr error
 	wsResult := binding.session.ExecuteTurn(ctx, input.Request.Body, func(ctx context.Context, body []byte) error {
 		var event struct {
 			Type       string          `json:"type"`
@@ -771,6 +778,9 @@ func (s *websocketConnection) runWebsocketAttempt(ctx context.Context, cancel co
 			}
 			if !providerError && binding.capabilities.StoredResponses && onResponse != nil {
 				if err := onResponse(event.Response); err != nil {
+					if errors.Is(err, errResponseOwnershipUnavailable) {
+						ownershipErr = err
+					}
 					return err
 				}
 			}
@@ -836,6 +846,10 @@ func (s *websocketConnection) runWebsocketAttempt(ctx context.Context, cancel co
 	}
 	if s.ctx.Err() != nil && !observer.terminalForwarded {
 		result.Stream = prioritizeStreamObservation(s.ctx, s.ctx.Err(), result.Stream)
+	}
+	if ownershipErr != nil {
+		result.Err = ownershipErr
+		result.ExecutionError = responseOwnershipEvidence(ownershipErr)
 	}
 	return result
 }

@@ -137,6 +137,10 @@ func judgeUpstreamResult(
 }
 
 func decisionEvidence(result UpstreamResult) (*execution.ErrorEvidence, error) {
+	if errors.Is(result.Err, errResponseOwnershipUnavailable) {
+		// 归属登记失败是共享状态故障，不能按流的结束方式判为上游或凭据故障。
+		return responseOwnershipEvidence(result.Err), nil
+	}
 	evidence := result.ExecutionError
 	downstreamErr := result.Err
 	summary := result.Stream.ErrorSummary

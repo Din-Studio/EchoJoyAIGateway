@@ -69,6 +69,19 @@ type AccessKeyRPMLimiter interface {
 	Allow(ctx context.Context, accessKeyID uint, limit int64) (ratelimit.LimitDecision, error)
 }
 
+// ResponseBindingStore owns Responses ownership: the in-process index in
+// single-instance mode and the shared Redis index in cluster mode.
+type ResponseBindingStore interface {
+	Lookup(ctx context.Context, accessKeyID uint, responseID string) (state.ResponseBinding, bool, error)
+	Record(
+		ctx context.Context,
+		accessKeyID uint,
+		responseID string,
+		ref state.CredentialRef,
+		autoSelections ...*automodel.Selection,
+	) (bool, error)
+}
+
 // PriceTableProvider exposes the currently published immutable price table.
 type PriceTableProvider interface {
 	Load() *pricing.Table
@@ -122,8 +135,8 @@ type Handler struct {
 	authFailureEvents   *utils.RateLimitedEventCounter
 	routeNotFoundEvents *utils.RateLimitedEventCounter
 	lifecycle           *httplifecycle.Coordinator
-	affinityCache       *affinity.Cache
-	responseBindings    *state.ResponseBindings
+	affinity            AffinityStore
+	responseBindings    ResponseBindingStore
 	websocketLimits     websocketLimits
 	websocketBudget     websocketBudget
 }
@@ -181,7 +194,7 @@ func NewHandler(
 		manager:         manager, channels: channels, subscriptions: subscriptions, registry: registry, encryption: encryptionService,
 		forwarder: forwarder, dialects: dialects, stats: stats, mutations: mutations,
 		limiter: limiter, requestLogSink: requestLogSink, priceTables: priceTables,
-		affinityCache:    affinity.NewCache(),
+		affinity:         affinity.NewCache(),
 		responseBindings: state.NewResponseBindings(),
 		websocketLimits:  defaultWebsocketLimits(),
 		newRequestID:     newRequestID,
@@ -227,7 +240,8 @@ func NewHandlerWithLifecycle(
 	accessQuota AccessQuotaGate,
 	sharedHealth state.SharedCredentialHealthStore,
 	lifecycle *httplifecycle.Coordinator,
-	responseBindings *state.ResponseBindings,
+	responseBindings ResponseBindingStore,
+	affinityStore AffinityStore,
 ) *Handler {
 	handler := NewHandler(
 		manager,
@@ -252,7 +266,12 @@ func NewHandlerWithLifecycle(
 		handler.subscriptions = subscriptions
 	}
 	handler.lifecycle = lifecycle
-	handler.responseBindings = responseBindings
+	if responseBindings != nil {
+		handler.responseBindings = responseBindings
+	}
+	if affinityStore != nil {
+		handler.affinity = affinityStore
+	}
 	return handler
 }
 
@@ -708,9 +727,18 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 	}
 	recorder.setClientModel(model)
 	var boundAuto *automodel.Selection
+	var binding state.ResponseBinding
 	autoQuery := scheduler.Query{}
 	if metadata.PreviousResponseID != "" {
-		binding, found := handler.responseBindings.Lookup(accessKey.ID, metadata.PreviousResponseID)
+		var found bool
+		var failure *reason
+		binding, found, failure = handler.lookupResponseBinding(
+			ginContext.Request.Context(), accessKey.ID, metadata.PreviousResponseID,
+		)
+		if failure != nil {
+			handler.completeReason(ginContext, recorder, *failure)
+			return
+		}
 		if !found {
 			handler.completeReason(ginContext, recorder, reasonResponseBindingNotFound)
 			return
@@ -764,11 +792,6 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 	query.AllowedCredentialRefs = allowedCredentialRefs
 	var requestAffinity requestAffinity
 	if metadata.PreviousResponseID != "" {
-		binding, found := handler.responseBindings.Lookup(accessKey.ID, metadata.PreviousResponseID)
-		if !found {
-			handler.completeReason(ginContext, recorder, reasonResponseBindingNotFound)
-			return
-		}
 		query.AllowedCredentialIDs = map[uint]struct{}{binding.CredentialID: {}}
 		query.AllowedCredentialRefs = map[uint]state.CredentialRef{
 			binding.CredentialID: {
@@ -778,6 +801,7 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 		}
 	} else {
 		requestAffinity = handler.resolveRequestAffinity(
+			ginContext.Request.Context(),
 			snapshot, accessKey.ID, selectedRoute.Protocol, metadata.AffinityPrefix, allowedCredentialRefs, metadata.PromptCacheKey,
 		)
 		query.PreferredCredentialID = requestAffinity.preferredCredentialID
@@ -1292,7 +1316,7 @@ func (handler *Handler) executeAttempts(
 			ProxyFingerprint:       proxyFingerprint,
 			ForceCredentialRefresh: forceCredentialRefresh,
 			ContinuityKey:          requestAffinity.continuityKey,
-			OnResponse:             handler.responseBindingObserver(recorder.accessKeyID, selection, ref, prepared.request, recorder.autoSelection()),
+			OnResponse:             handler.responseBindingObserver(ginContext.Request.Context(), recorder.accessKeyID, selection, ref, prepared.request, recorder.autoSelection()),
 			OnFirstResponse: func() {
 				recorder.recordFirstResponse()
 			},
@@ -1321,11 +1345,7 @@ func (handler *Handler) executeAttempts(
 			if input.OnResponse != nil {
 				if err := input.OnResponse(result.Body); err != nil {
 					result.Err = err
-					result.ExecutionError = &execution.ErrorEvidence{
-						Kind: execution.ErrorKindInternal, OriginHint: execution.ErrorOriginInternal,
-						ScopeHint: execution.ErrorScopeRequest, Code: "response_binding_conflict",
-						Summary: "Response ownership could not be recorded.", ReplaySafety: execution.ReplaySafetyUnknown,
-					}
+					result.ExecutionError = responseOwnershipEvidence(err)
 				}
 			}
 		}
@@ -1585,6 +1605,8 @@ func transportReason(result UpstreamResult) reason {
 	case result.DispatchState == execution.DispatchNotSent && result.ExecutionError != nil &&
 		result.ExecutionError.Kind == execution.ErrorKindInvalidRequest:
 		return reasonInvalidProtocolRequest
+	case errors.Is(result.Err, errResponseOwnershipUnavailable):
+		return reasonClusterStateUnavailable
 	case errors.Is(result.Err, ErrUpstreamProtocol):
 		return reasonUpstreamProtocol
 	case isTimeoutError(result.Err):

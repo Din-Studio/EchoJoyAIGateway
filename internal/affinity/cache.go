@@ -2,6 +2,7 @@ package affinity
 
 import (
 	"container/list"
+	"context"
 	"sync"
 	"time"
 )
@@ -22,6 +23,18 @@ func (target Target) Valid() bool {
 	return target.GroupID != 0 && target.CredentialID != 0 && target.IdentityGeneration != 0
 }
 
+// Policy is the frozen affinity configuration of one published snapshot.
+type Policy struct {
+	Revision uint64
+	Capacity int
+	TTL      time.Duration
+}
+
+// Valid reports whether the policy enables affinity at all.
+func (policy Policy) Valid() bool {
+	return policy.Revision != 0 && policy.Capacity > 0 && policy.TTL > 0
+}
+
 // Observation is a versioned cache lookup used for conditional success updates.
 type Observation struct {
 	Target   Target
@@ -29,10 +42,23 @@ type Observation struct {
 	revision uint64
 	version  uint64
 	found    bool
+	// token is the stored value a shared store compares before overwriting.
+	token string
 }
 
 func (observation Observation) Found() bool {
 	return observation.found
+}
+
+// SharedObservation records what a shared store saw for key. An empty token
+// means no live mapping was observed.
+func SharedObservation(key Key, target Target, token string) Observation {
+	return Observation{Target: target, key: key, found: token != "", token: token}
+}
+
+// Token returns the stored value observed by a shared store.
+func (observation Observation) Token() string {
+	return observation.token
 }
 
 type cacheEntry struct {
@@ -71,7 +97,7 @@ func newCache(capacity int, ttl time.Duration, now func() time.Time) *Cache {
 // newer revision clears entries so changed TTL, capacity, and group policy
 // take effect atomically. Older requests cannot restore stale configuration.
 func (cache *Cache) Configure(revision uint64, capacity int, ttl time.Duration) bool {
-	if cache == nil || revision == 0 || capacity <= 0 || ttl <= 0 || cache.now == nil {
+	if cache == nil || !(Policy{Revision: revision, Capacity: capacity, TTL: ttl}).Valid() || cache.now == nil {
 		return false
 	}
 	cache.mu.Lock()
@@ -90,7 +116,25 @@ func (cache *Cache) Configure(revision uint64, capacity int, ttl time.Duration) 
 	return true
 }
 
-func (cache *Cache) Lookup(key Key) Observation {
+// Lookup applies policy and returns the current mapping for key. A policy the
+// cache cannot apply, such as an older revision, disables affinity for the
+// request. The in-process cache never fails.
+func (cache *Cache) Lookup(_ context.Context, policy Policy, key Key) (Observation, error) {
+	if !cache.Configure(policy.Revision, policy.Capacity, policy.TTL) {
+		return Observation{}, nil
+	}
+	return cache.lookup(key), nil
+}
+
+// RecordSuccess conditionally learns target under policy; see recordSuccess.
+func (cache *Cache) RecordSuccess(_ context.Context, policy Policy, key Key, observed Observation, target Target) (bool, error) {
+	if !cache.Configure(policy.Revision, policy.Capacity, policy.TTL) {
+		return false, nil
+	}
+	return cache.recordSuccess(key, observed, target), nil
+}
+
+func (cache *Cache) lookup(key Key) Observation {
 	if cache == nil || !key.Valid() || cache.now == nil {
 		return Observation{}
 	}
@@ -108,9 +152,9 @@ func (cache *Cache) Lookup(key Key) Observation {
 	}
 }
 
-// RecordSuccess conditionally learns the successful target. It returns true
+// recordSuccess conditionally learns the successful target. It returns true
 // when this call inserted, refreshed, or changed the current mapping.
-func (cache *Cache) RecordSuccess(key Key, observed Observation, target Target) bool {
+func (cache *Cache) recordSuccess(key Key, observed Observation, target Target) bool {
 	if cache == nil || !key.Valid() || !target.Valid() || cache.now == nil {
 		return false
 	}

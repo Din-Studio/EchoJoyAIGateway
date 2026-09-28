@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -243,6 +244,10 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 			}
 			completeData, terminalInChunk, err := streamBuffer.push(observedData)
 			if err != nil {
+				if errors.Is(err, errResponseOwnershipUnavailable) {
+					downstreamErr = err
+					return err
+				}
 				downstreamErr = executionStreamProtocolFailure(err)
 				return downstreamErr
 			}

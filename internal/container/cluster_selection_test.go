@@ -2,9 +2,11 @@ package container
 
 import (
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 
+	"gpt-load/internal/affinity"
 	"gpt-load/internal/cluster"
 	"gpt-load/internal/gateway"
 	"gpt-load/internal/platform/config"
@@ -104,4 +106,42 @@ func TestSingleInstanceModeKeepsCredentialHealthLocal(t *testing.T) {
 	}
 	// Coordination is skipped without a lease; a nil manager would panic.
 	coordinateSubscriptionRefresh(nil, nil, nil, nil)
+}
+
+func TestClusterModeSharesResponseOwnershipAndAffinity(t *testing.T) {
+	server := miniredis.RunT(t)
+	cfg := &config.Config{Cluster: config.ClusterConfig{
+		RedisAddrs: []string{server.Addr()}, RedisKeyPrefix: "gl", InstanceID: "container-test",
+		ResponseBindingTTL: time.Hour,
+	}}
+	client, err := cluster.NewClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	local := newResponseBindings(client)
+	if local != nil {
+		t.Fatal("cluster mode created the in-process ownership index")
+	}
+	if _, ok := newResponseBindingStore(cfg, client, local).(*cluster.ResponseBindings); !ok {
+		t.Fatal("cluster mode ownership store is not the shared Redis implementation")
+	}
+	if _, ok := newAffinityStore(client).(*cluster.Affinity); !ok {
+		t.Fatal("cluster mode affinity store is not the shared Redis implementation")
+	}
+}
+
+func TestSingleInstanceModeKeepsResponseOwnershipAndAffinityLocal(t *testing.T) {
+	cfg := &config.Config{}
+	local := newResponseBindings(nil)
+	if local == nil {
+		t.Fatal("single-instance mode has no in-process ownership index")
+	}
+	if store, ok := newResponseBindingStore(cfg, nil, local).(*state.ResponseBindings); !ok || store != local {
+		t.Fatal("single-instance ownership store is not the checkpointed in-process index")
+	}
+	if _, ok := newAffinityStore(nil).(*affinity.Cache); !ok {
+		t.Fatal("single-instance affinity store is not the in-process cache")
+	}
 }

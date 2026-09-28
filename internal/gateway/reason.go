@@ -76,7 +76,7 @@ var (
 	reasonClusterStateUnavailable = reason{
 		Status:  http.StatusServiceUnavailable,
 		Code:    "cluster_state_unavailable",
-		Message: "Shared rate limit state is unavailable.",
+		Message: "Shared cluster state is unavailable.",
 	}
 	reasonParameterOverrideUnavailable = reason{
 		Status:  http.StatusServiceUnavailable,

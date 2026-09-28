@@ -236,6 +236,7 @@ Windows 普通用户可改为下载 `gpt-load-windows-setup.exe`。双击并确�
 | `REDIS_TLS`                     | `false`                                     | 集群模式下是否通过 TLS 连接 Redis。                                                                                                                      |
 | `REDIS_KEY_PREFIX`              | `gl`                                        | 集群模式下所有 Redis 键与频道的前缀；不能包含空白，也不能以 `:` 结尾。                                                                                   |
 | `INSTANCE_ID`                   | `<主机名>-<随机串>`                         | 本进程在集群事件中的标识，每个实例必须唯一。                                                                                                             |
+| `RESPONSE_BINDING_TTL`          | `720h`                                      | 仅集群模式。响应归属（`previous_response_id` 续接）在 Redis 中的保留时长，至少 `1m`。 |
 
 环境代理仅在凭据、Group 和全局设置都未指定代理时生效。
 
@@ -245,7 +246,7 @@ Windows 普通用户可改为下载 `gpt-load-windows-setup.exe`。双击并确�
 
 - 默认只监听 `127.0.0.1`。需要远程访问时，应通过受控网络或带 TLS 的反向代理暴露，并配置 ACL 与防火墙。
 - 妥善管理 `AUTH_KEY` 与 `ENCRYPTION_KEY`，不要把真实密钥提交到仓库、日志、截图或公开 Issue。
-- 2.0 默认以**单应用实例**运行。设置 `REDIS_ADDRS` 可启用实验性集群模式（需 PostgreSQL、显式 `AUTH_KEY`/`ENCRYPTION_KEY`）；当前版本在实例间共享配置变更、AccessKey 的 RPM 限流和成本额度、凭据健康（冷却、黑名单、失败计数、模型冷却）与订阅授权状态，同一订阅账号的刷新在集群内同一时刻只由一个实例执行；Responses 续接仍为实例本地。凭据健康统计页显示的是本实例视图，验证探测在每个实例上都会运行。正在刷新订阅账号的实例崩溃后，该账号最迟约 60 秒（租约 TTL 加一个轮询周期）内被标记为 `outcome_unknown`，需要人工恢复。写入 Redis 失败的凭据健康变更先在本实例生效，Redis 恢复后以 Redis 中的状态为准。Redis 不可用时，设置了 RPM 或成本额度的 AccessKey 请求返回 503 `cluster_state_unavailable`，不会转发上游。Redis 须配置 `maxmemory-policy noeviction`，并建议开启 AOF 持久化；Redis 丢数据时，已用额度回退到最后一次数据库检查点（约 1 秒前）。各实例需要通过 NTP 校时。
+- 2.0 默认以**单应用实例**运行。设置 `REDIS_ADDRS` 可启用实验性集群模式（需 PostgreSQL、显式 `AUTH_KEY`/`ENCRYPTION_KEY`）；当前版本在实例间共享配置变更、AccessKey 的 RPM 限流和成本额度、凭据健康（冷却、黑名单、失败计数、模型冷却）、订阅授权状态、响应归属（`previous_response_id` 续接）与软亲和，同一订阅账号的刷新在集群内同一时刻只由一个实例执行，负载均衡无需粘性会话。集群模式下 `affinity_capacity` 不生效，配置变更也不会清空软亲和；缩短 `affinity_ttl` 仍会立即作用于已有条目。切换到集群模式之前、或滚动升级期间由旧版本实例创建的响应，无法在未持有它们的实例上续接。Redis 不可用时，续接请求与 `store` 响应返回 503 `cluster_state_unavailable`（响应不下发，避免交出任何实例都无法续接的 ID），软亲和则退回普通调度。每个 `store` 响应在 `RESPONSE_BINDING_TTL` 内占用一个 Redis 键，约 0.25 KB（带自动模型选择时约 0.5 KB），每条软亲和在 `affinity_ttl` 内约 0.3 KB；可按「每日 `store` 响应数 × TTL 天数 × 0.25–0.5 KB」估算内存。凭据健康统计页显示的是本实例视图，验证探测在每个实例上都会运行。正在刷新订阅账号的实例崩溃后，该账号最迟约 60 秒（租约 TTL 加一个轮询周期）内被标记为 `outcome_unknown`，需要人工恢复。写入 Redis 失败的凭据健康变更先在本实例生效，Redis 恢复后以 Redis 中的状态为准。Redis 不可用时，设置了 RPM 或成本额度的 AccessKey 请求返回 503 `cluster_state_unavailable`，不会转发上游。Redis 须配置 `maxmemory-policy noeviction`，并建议开启 AOF 持久化；Redis 丢数据时，已用额度回退到最后一次数据库检查点（约 1 秒前）。各实例需要通过 NTP 校时。
 - 用量与成本是基于上游返回数据的**估算**，用于运行分析和资源评估，不等同于服务商账单或财务对账结果。
 - 订阅渠道依赖上游 OAuth 与兼容协议，可能随上游变化调整。请只接入自己有权使用的账号，并遵守对应服务商条款。
 - HTTP Responses 的 `previous_response_id` 续接按协议及现有存储能力自动接入：原生 Responses 且声明由上游管理状态的渠道目前包括 `openai`、`gpt_load`、`xai`、`newapi`、`cliproxyapi`、`sub2api`。按 AccessKey 隔离归属，在当前路由允许时固定原凭据，不受软亲和开关影响；实际状态可用性由上游决定。无状态及转换响应不登记为持久状态。未知 ID（包括升级前或网关外创建的 ID）直接拒绝；Group 参数覆盖不能改写该字段。

@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"gpt-load/internal/accessquota"
+	"gpt-load/internal/affinity"
 	"gpt-load/internal/app"
 	"gpt-load/internal/catalog"
 	"gpt-load/internal/channel"
@@ -73,7 +74,9 @@ func BuildContainer() (*dig.Container, error) {
 		cluster.NewCredentialHealth,
 		cluster.NewRefreshLease,
 		newSharedCredentialHealthStore,
-		state.NewResponseBindings,
+		newResponseBindings,
+		newResponseBindingStore,
+		newAffinityStore,
 		newAccessQuotaRuntime,
 		func(client *cluster.Client, db *gorm.DB) *cluster.AccessQuota {
 			return cluster.NewAccessQuota(client, requestlog.AccessQuotaStateReader{DB: db})
@@ -286,6 +289,38 @@ func newAccessQuotaRuntime(client *cluster.Client) *accessquota.Runtime {
 		return nil
 	}
 	return accessquota.NewRuntime()
+}
+
+// newResponseBindings owns in-process Responses ownership only in
+// single-instance mode; cluster mode keeps it in Redis, so the checkpoint
+// file skips it.
+func newResponseBindings(client *cluster.Client) *state.ResponseBindings {
+	if client != nil {
+		return nil
+	}
+	return state.NewResponseBindings()
+}
+
+// newResponseBindingStore selects the shared Redis ownership index in cluster
+// mode and the checkpointed in-process index otherwise.
+func newResponseBindingStore(
+	cfg *config.Config,
+	client *cluster.Client,
+	local *state.ResponseBindings,
+) gateway.ResponseBindingStore {
+	if shared := cluster.NewResponseBindings(client, cfg.Cluster.ResponseBindingTTL); shared != nil {
+		return shared
+	}
+	return local
+}
+
+// newAffinityStore selects the shared Redis soft-affinity store in cluster
+// mode and the in-process cache otherwise.
+func newAffinityStore(client *cluster.Client) gateway.AffinityStore {
+	if shared := cluster.NewAffinity(client); shared != nil {
+		return shared
+	}
+	return affinity.NewCache()
 }
 
 // newAccessQuotaGate selects the shared Redis gate in cluster mode and the
