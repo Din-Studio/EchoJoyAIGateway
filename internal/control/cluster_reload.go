@@ -117,11 +117,9 @@ func (s *Service) reloadCommittedConfigLocked(ctx context.Context) (uint64, erro
 	for _, entry := range entries {
 		byGroup[entry.GroupID] = append(byGroup[entry.GroupID], entry)
 	}
-	if s.registrySnapshot != nil {
-		for _, view := range s.registrySnapshot() {
-			if _, exists := byGroup[view.GroupID]; !exists {
-				byGroup[view.GroupID] = nil
-			}
+	for _, view := range before {
+		if _, exists := byGroup[view.GroupID]; !exists {
+			byGroup[view.GroupID] = nil
 		}
 	}
 	groupIDs := make([]uint, 0, len(byGroup))
