@@ -12,10 +12,10 @@ const (
 )
 
 type autoTaskKey struct {
-	accessKeyID uint
-	entryID     string
-	revision    uint64
-	fingerprint string
+	accessKeyID       uint
+	entryID           string
+	configFingerprint string
+	fingerprint       string
 }
 
 type autoTaskPreset struct {

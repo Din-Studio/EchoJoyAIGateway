@@ -28,7 +28,7 @@ func TestResponseBindingsMatchInProcessContract(t *testing.T) {
 			ref := state.CredentialRef{ID: 1, GroupID: 2, IdentityGeneration: 3, Version: 9}
 			selection := &automodel.Selection{
 				EntryID: "entry", EntryName: "auto", PresetID: "high", TargetModel: "model",
-				ParameterOverrides: json.RawMessage(`[]`), ConfigRevision: 4, TaskFingerprint: "task",
+				ParameterOverrides: json.RawMessage(`[]`), ConfigFingerprint: "entry-fingerprint", TaskFingerprint: "task",
 			}
 			record := func(accessKeyID uint, responseID string, ref state.CredentialRef, auto ...*automodel.Selection) bool {
 				t.Helper()

@@ -126,11 +126,11 @@ func (handler *Handler) prepareAutoModel(ctx context.Context, snapshot *state.Co
 	skipPrewarm := prewarm && extractReason != ""
 	sameTask := bound != nil && view.ExecutionPhase == automodel.ExecutionPhaseToolContinuation &&
 		view.TaskFingerprint != "" && bound.TaskFingerprint == view.TaskFingerprint &&
-		bound.ConfigRevision == snapshot.Revision
+		bound.ConfigFingerprint == entry.Fingerprint
 	reuse := bound != nil && (skipPrewarm ||
 		(extractReason == "task_missing" && view.ExecutionPhase != automodel.ExecutionPhaseUserTask) || sameTask)
 	presets, fallbackAllowed := allowedAutoPresets(snapshot, key, entry, metadata, query)
-	cacheKey := autoTaskKey{accessKeyID: key.ID, entryID: entry.ID, revision: snapshot.Revision, fingerprint: view.TaskFingerprint}
+	cacheKey := autoTaskKey{accessKeyID: key.ID, entryID: entry.ID, configFingerprint: entry.Fingerprint, fingerprint: view.TaskFingerprint}
 	var cachedPreset *automodel.CompiledPreset
 	if !reuse && !skipPrewarm && extractReason == "" && fallbackAllowed {
 		if value, found := handler.autoTasks.lookup(cacheKey, handler.now()); found &&
@@ -226,7 +226,7 @@ func (handler *Handler) prepareAutoModel(ctx context.Context, snapshot *state.Co
 		}
 	}
 	if decision.Source != "binding" {
-		decision.Selection = automodel.Selection{EntryID: entry.ID, EntryName: entry.Name, PresetID: chosen.ID, PresetName: chosen.Name, TargetModel: chosen.Model, ParameterOverrides: chosen.ParameterOverrides, ConfigRevision: snapshot.Revision, TaskFingerprint: view.TaskFingerprint}
+		decision.Selection = automodel.Selection{EntryID: entry.ID, EntryName: entry.Name, PresetID: chosen.ID, PresetName: chosen.Name, TargetModel: chosen.Model, ParameterOverrides: chosen.ParameterOverrides, ConfigFingerprint: entry.Fingerprint, TaskFingerprint: view.TaskFingerprint}
 	}
 	if ctx.Err() != nil {
 		return parsed, metadata, decision, nil
@@ -258,7 +258,7 @@ func (handler *Handler) prepareAutoModel(ctx context.Context, snapshot *state.Co
 			if selection == nil {
 				continue
 			}
-			usedKey := autoTaskKey{accessKeyID: key.ID, entryID: selection.EntryID, revision: selection.ConfigRevision, fingerprint: selection.TaskFingerprint}
+			usedKey := autoTaskKey{accessKeyID: key.ID, entryID: selection.EntryID, configFingerprint: selection.ConfigFingerprint, fingerprint: selection.TaskFingerprint}
 			handler.autoTasks.consumePrewarm(usedKey, selection.PresetID)
 		}
 	}

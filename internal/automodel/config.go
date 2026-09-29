@@ -3,6 +3,8 @@ package automodel
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,6 +63,10 @@ type CompiledEntry struct {
 	Enabled  bool
 	Fallback string
 	Presets  []CompiledPreset
+	// Fingerprint identifies the entry's persisted configuration. It is the
+	// same on every instance and across restarts, so a selection bound on one
+	// instance can be checked on another.
+	Fingerprint string
 }
 
 type Compiled struct {
@@ -155,7 +161,13 @@ func Compile(config Config, ordinaryModels map[string]struct{}) (result *Compile
 		if len(entry.Presets) < 1 || len(entry.Presets) > 254 {
 			return nil, fmt.Errorf("automatic model requires 1 through 254 presets")
 		}
-		value := CompiledEntry{ID: entry.ID, Name: entry.Name, Enabled: entry.Enabled, Fallback: entry.Fallback}
+		encodedEntry, err := json.Marshal(entry)
+		if err != nil {
+			return nil, err
+		}
+		fingerprint := sha256.Sum256(encodedEntry)
+		value := CompiledEntry{ID: entry.ID, Name: entry.Name, Enabled: entry.Enabled, Fallback: entry.Fallback,
+			Fingerprint: hex.EncodeToString(fingerprint[:])}
 		criteria := map[string]string{}
 		for _, preset := range entry.Presets {
 			if !validName(preset.ID) || strings.TrimSpace(preset.Name) == "" ||

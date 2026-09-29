@@ -205,8 +205,7 @@ func TestAutoModelWebsocketPrewarmDoesNotFreezeLaterTask(t *testing.T) {
 	}
 }
 
-func configureAutoModelTest(t *testing.T, handler *Handler, manager *state.Manager, filters state.FilterSet) {
-	t.Helper()
+func autoModelTestConfig() automodel.Config {
 	config := automodel.DefaultConfig()
 	config.Enabled = true
 	config.APIKey = "decision-secret"
@@ -214,6 +213,21 @@ func configureAutoModelTest(t *testing.T, handler *Handler, manager *state.Manag
 		{ID: "balanced", Name: "balanced", Description: "Ordinary bounded implementation", Model: "gpt-4o", ParameterOverrides: json.RawMessage(`[{"match":{"protocol":"openai-completions"},"set":{"reasoning_effort":"medium"}}]`)},
 		{ID: "strong", Name: "strong", Description: "Complex architecture", Model: "gpt-4.1", ParameterOverrides: json.RawMessage(`[{"match":{"protocol":"openai-responses"},"set":{"reasoning":{"effort":"high"}}}]`)},
 	}}}
+	return config
+}
+
+func autoProbeFingerprint(t *testing.T, manager *state.Manager) string {
+	t.Helper()
+	entry, exists := manager.Current().AutoModels.Lookup("auto-probe")
+	if !exists || entry.Fingerprint == "" {
+		t.Fatalf("auto-probe entry = %#v, exists=%t", entry, exists)
+	}
+	return entry.Fingerprint
+}
+
+func configureAutoModelTest(t *testing.T, handler *Handler, manager *state.Manager, filters state.FilterSet) {
+	t.Helper()
+	config := autoModelTestConfig()
 	_, err := manager.Publish(state.CompileInput{AutoModel: &config, ChannelRegistry: channel.NewRegistry(),
 		Groups:      []state.GroupConfig{{ID: 1, Name: "openai", ChannelID: channel.OpenAI, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "gpt-4o"}, {ID: "gpt-4.1"}}, Enabled: true}},
 		Credentials: []state.CredentialConfig{{ID: 1, GroupID: 1, Status: state.CredentialStatusActive, Version: 1, IdentityGeneration: 1, Fingerprint: "credential-1"}, {ID: 2, GroupID: 1, Status: state.CredentialStatusActive, Version: 1, IdentityGeneration: 2, Fingerprint: "credential-2"}},
@@ -298,7 +312,7 @@ func TestAutoModelResponsesContinuationReusesFrozenSelection(t *testing.T) {
 	handler, manager, _ := newHandlerForTest(t, forwarder, "key-a", "key-b")
 	handler.dialects = dialect.NewSet(dialect.NewOpenAI(), dialect.NewOpenAIResponses())
 	configureAutoModelTest(t, handler, manager, state.FilterSet{})
-	selection := &automodel.Selection{EntryID: "auto-probe", EntryName: "auto-probe", PresetID: "old-preset", PresetName: "old preset", TargetModel: "gpt-4o", ParameterOverrides: json.RawMessage(`[{"match":{"protocol":"openai-responses"},"set":{"reasoning":{"effort":"high"}}}]`), ConfigRevision: 1}
+	selection := &automodel.Selection{EntryID: "auto-probe", EntryName: "auto-probe", PresetID: "old-preset", PresetName: "old preset", TargetModel: "gpt-4o", ParameterOverrides: json.RawMessage(`[{"match":{"protocol":"openai-responses"},"set":{"reasoning":{"effort":"high"}}}]`)}
 	if !recordTestBinding(t, handler, 1, "resp-before", state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}, selection) {
 		t.Fatal("cannot store binding")
 	}
@@ -333,7 +347,7 @@ func TestAutoModelResponsesFullHistoryToolContinuationReusesMatchingTask(t *test
 	if reason != "" || view.TaskFingerprint == "" {
 		t.Fatalf("initial view=%#v reason=%q", view, reason)
 	}
-	selection := &automodel.Selection{EntryID: "auto-probe", EntryName: "auto-probe", PresetID: "balanced", PresetName: "balanced", TargetModel: "gpt-4o", ParameterOverrides: json.RawMessage(`[]`), ConfigRevision: manager.Current().Revision, TaskFingerprint: view.TaskFingerprint}
+	selection := &automodel.Selection{EntryID: "auto-probe", EntryName: "auto-probe", PresetID: "balanced", PresetName: "balanced", TargetModel: "gpt-4o", ParameterOverrides: json.RawMessage(`[]`), ConfigFingerprint: autoProbeFingerprint(t, manager), TaskFingerprint: view.TaskFingerprint}
 	if !recordTestBinding(t, handler, 1, "resp-before", state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}, selection) {
 		t.Fatal("cannot store binding")
 	}
@@ -358,6 +372,72 @@ func TestAutoModelResponsesFullHistoryToolContinuationReusesMatchingTask(t *test
 	}
 }
 
+// A tool continuation can land on another instance whose snapshot revision
+// differs. The bound selection is reused when the entry's configuration is the
+// same and reclassified once it changed.
+func TestAutoModelToolContinuationChecksEntryConfigurationAcrossInstances(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		edit      func(*automodel.Config)
+		wantCalls int
+	}{
+		{name: "same configuration", wantCalls: 0},
+		{name: "changed preset", edit: func(config *automodel.Config) {
+			config.Models[0].Presets[1].Description = "Complex architecture and migrations"
+		}, wantCalls: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			forwarder := &scriptedForwarder{results: []UpstreamResult{{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"id":"resp-next","object":"response","model":"gpt-4o"}`)}}}
+			handler, manager, _ := newHandlerForTest(t, forwarder, "key-a", "key-b")
+			handler.dialects = dialect.NewSet(dialect.NewOpenAI(), dialect.NewOpenAIResponses())
+			configureAutoModelTest(t, handler, manager, state.FilterSet{})
+
+			// The writing instance compiled its configuration at revision 41.
+			writer := state.NewManager()
+			for range 40 {
+				if _, err := writer.Publish(state.CompileInput{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			config := autoModelTestConfig()
+			if test.edit != nil {
+				test.edit(&config)
+			}
+			if _, err := writer.Publish(state.CompileInput{AutoModel: &config, ChannelRegistry: channel.NewRegistry(),
+				Groups: []state.GroupConfig{{ID: 1, Name: "openai", ChannelID: channel.OpenAI, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "gpt-4o"}, {ID: "gpt-4.1"}}, Enabled: true}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if writer.Current().Revision != 41 || manager.Current().Revision == writer.Current().Revision {
+				t.Fatalf("revisions writer=%d reader=%d, want different", writer.Current().Revision, manager.Current().Revision)
+			}
+
+			view, reason := automodel.Extract(protocol.OpenAIResponses, []byte(`{"model":"auto-probe","input":[{"role":"user","content":"fix the parser"}]}`))
+			if reason != "" || view.TaskFingerprint == "" {
+				t.Fatalf("initial view=%#v reason=%q", view, reason)
+			}
+			selection := &automodel.Selection{EntryID: "auto-probe", EntryName: "auto-probe", PresetID: "balanced", PresetName: "balanced", TargetModel: "gpt-4o", ParameterOverrides: json.RawMessage(`[]`), ConfigFingerprint: autoProbeFingerprint(t, writer), TaskFingerprint: view.TaskFingerprint}
+			if !recordTestBinding(t, handler, 1, "resp-before", state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}, selection) {
+				t.Fatal("cannot store binding")
+			}
+			calls := 0
+			handler.decisionClient = autoDecisionClient(func(*http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"answers":{"preset":{"choice":"balanced","confidence":0.9}},"usage":{"input_tokens":100,"output_tokens":0}}`))}, nil
+			})
+			engine := gin.New()
+			bindGatewayRoutesForTest(t, engine, handler)
+			request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"auto-probe","previous_response_id":"resp-before","input":[{"role":"user","content":"fix the parser"},{"type":"function_call","name":"test","arguments":"{}"},{"type":"function_call_output","call_id":"call-1","output":"tests failed"}]}`))
+			request.Header.Set("Authorization", "Bearer gl-client")
+			response := httptest.NewRecorder()
+			engine.ServeHTTP(response, request)
+			if response.Code != 200 || calls != test.wantCalls || len(forwarder.inputs) != 1 {
+				t.Fatalf("status=%d decisions=%d (want %d) inputs=%d body=%s", response.Code, calls, test.wantCalls, len(forwarder.inputs), response.Body)
+			}
+		})
+	}
+}
+
 func TestAutoModelResponsesFullHistoryToolContinuationReclassifiesDifferentTask(t *testing.T) {
 	forwarder := &scriptedForwarder{results: []UpstreamResult{{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"id":"resp-next","object":"response","model":"gpt-4.1"}`)}}}
 	handler, manager, _ := newHandlerForTest(t, forwarder, "key-a", "key-b")
@@ -367,7 +447,7 @@ func TestAutoModelResponsesFullHistoryToolContinuationReclassifiesDifferentTask(
 	if reason != "" || view.TaskFingerprint == "" {
 		t.Fatalf("initial view=%#v reason=%q", view, reason)
 	}
-	selection := &automodel.Selection{EntryID: "auto-probe", EntryName: "auto-probe", PresetID: "balanced", PresetName: "balanced", TargetModel: "gpt-4o", ParameterOverrides: json.RawMessage(`[]`), ConfigRevision: manager.Current().Revision, TaskFingerprint: view.TaskFingerprint}
+	selection := &automodel.Selection{EntryID: "auto-probe", EntryName: "auto-probe", PresetID: "balanced", PresetName: "balanced", TargetModel: "gpt-4o", ParameterOverrides: json.RawMessage(`[]`), ConfigFingerprint: autoProbeFingerprint(t, manager), TaskFingerprint: view.TaskFingerprint}
 	if !recordTestBinding(t, handler, 1, "resp-before", state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}, selection) {
 		t.Fatal("cannot store binding")
 	}
@@ -427,7 +507,7 @@ func TestAutoModelResponsesNewTaskCanChangeModelOnBoundCredential(t *testing.T) 
 	handler, manager, _ := newHandlerForTest(t, forwarder, "key-a", "key-b")
 	handler.dialects = dialect.NewSet(dialect.NewOpenAI(), dialect.NewOpenAIResponses())
 	configureAutoModelTest(t, handler, manager, state.FilterSet{})
-	selection := &automodel.Selection{EntryID: "auto-probe", EntryName: "auto-probe", PresetID: "balanced", PresetName: "balanced", TargetModel: "gpt-4o", ParameterOverrides: json.RawMessage(`[]`), ConfigRevision: 1}
+	selection := &automodel.Selection{EntryID: "auto-probe", EntryName: "auto-probe", PresetID: "balanced", PresetName: "balanced", TargetModel: "gpt-4o", ParameterOverrides: json.RawMessage(`[]`)}
 	if !recordTestBinding(t, handler, 1, "resp-before", state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}, selection) {
 		t.Fatal("cannot store binding")
 	}
