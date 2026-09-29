@@ -486,7 +486,7 @@ func (s *Service) advanceOperationStageLocked(
 		updates["completed_at_ms"] = nowMS
 	}
 	var adopted *models.ControlOperation
-	err := s.withControlTransaction(ctx, func(tx *gorm.DB) error {
+	err := s.withBookkeepingTransaction(ctx, func(tx *gorm.DB) error {
 		result := tx.Model(&models.ControlOperation{}).
 			Where(
 				"commit_sequence = ? AND last_completed_stage = ?",
@@ -540,7 +540,7 @@ func (s *Service) recordOperationFailureLocked(
 	if timeErr != nil {
 		return app_errors.ErrInternalServer
 	}
-	err := s.withControlTransaction(ctx, func(tx *gorm.DB) error {
+	err := s.withBookkeepingTransaction(ctx, func(tx *gorm.DB) error {
 		return tx.Model(&models.ControlOperation{}).
 			Where("commit_sequence = ?", operation.CommitSequence).
 			Updates(map[string]any{

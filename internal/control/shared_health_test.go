@@ -353,15 +353,18 @@ func TestSweepMarksOnlyRefreshesWithoutLease(t *testing.T) {
 	if record != string(state.CredentialAuthStateOutcomeUnknown) {
 		t.Fatalf("shared auth = %q, want outcome_unknown", record)
 	}
-	revision := readRevisionForTest(t, fixture.serviceFixture)
+	// The swept state reaches peers through shared health, not a reload.
+	if got := readRevisionForTest(t, fixture.serviceFixture); got != 0 {
+		t.Fatalf("revision = %d after a sweep, want 0", got)
+	}
+	if changes := events.published(); len(changes) != 0 {
+		t.Fatalf("sweep published %#v", changes)
+	}
 
-	// Nothing left to sweep: no write transaction, no revision bump.
+	// Nothing left to sweep.
 	fixture.service.refreshLeases = fakeRefreshLeases{held: map[uint]bool{rows[0].ID: true}}
 	if err := fixture.service.sweepInterruptedRefreshes(t.Context()); err != nil {
 		t.Fatal(err)
-	}
-	if got := readRevisionForTest(t, fixture.serviceFixture); got != revision {
-		t.Fatalf("revision = %d after an empty sweep, want %d", got, revision)
 	}
 
 	// A lease check failure skips the round without touching any row.

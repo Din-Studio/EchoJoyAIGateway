@@ -60,7 +60,7 @@ func (s *Service) sweepInterruptedRefreshes(ctx context.Context) error {
 	}
 
 	var swept []models.Credential
-	err = s.withControlTransaction(ctx, func(tx *gorm.DB) error {
+	err = s.withBookkeepingTransaction(ctx, func(tx *gorm.DB) error {
 		swept = swept[:0]
 		nowMS := s.now().UnixMilli()
 		for _, row := range orphaned {
@@ -79,7 +79,7 @@ func (s *Service) sweepInterruptedRefreshes(ctx context.Context) error {
 			}
 		}
 		if len(swept) == 0 {
-			// Every row finished meanwhile; roll back so the revision stays.
+			// Every row finished meanwhile; nothing to publish.
 			return errNoInterruptedRefresh
 		}
 		return nil

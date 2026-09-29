@@ -3,8 +3,11 @@ package control
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -114,5 +117,68 @@ func TestControlTransactionWithoutClusterLeavesNoRevisionRow(t *testing.T) {
 	revision, err := readClusterConfigRevision(t.Context(), fixture.db)
 	if err != nil || revision != 0 {
 		t.Fatalf("readClusterConfigRevision() = %d, %v; want 0", revision, err)
+	}
+}
+
+func TestBookkeepingTransactionsDoNotBumpOrPublish(t *testing.T) {
+	fixture := newServiceFixture(t)
+	publisher := &recordingConfigEventPublisher{}
+	fixture.service.clusterEvents = publisher
+	fixture.service.now = func() time.Time {
+		return time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
+	}
+
+	// The group commit bumps once; the stage advances that follow do not.
+	mutations := 0
+	input := newDurableGroupOperationInput(t, fixture, "3c0a8b54-6f1d-4e2a-9b7c-0123456789ab", &mutations)
+	if _, err := fixture.service.executeIdempotentOperation(t.Context(), input); err != nil {
+		t.Fatalf("executeIdempotentOperation() error = %v", err)
+	}
+	var operation models.ControlOperation
+	if err := fixture.db.Take(&operation).Error; err != nil {
+		t.Fatalf("read operation: %v", err)
+	}
+	if operation.LastCompletedStage != string(operationStageCompleted) {
+		t.Fatalf("operation stage = %q, want completed", operation.LastCompletedStage)
+	}
+	assertClusterRevision(t, fixture, publisher, 1)
+
+	if err := fixture.service.recordOperationFailureLocked(
+		t.Context(), &operation, operationStageSnapshotPublished,
+	); err != nil {
+		t.Fatalf("recordOperationFailureLocked() error = %v", err)
+	}
+	compacted, err := fixture.service.CompactCompletedOperations(
+		t.Context(), time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil || compacted != 1 {
+		t.Fatalf("CompactCompletedOperations() = %d, %v; want 1", compacted, err)
+	}
+	assertClusterRevision(t, fixture, publisher, 1)
+
+	groupID, err := strconv.ParseUint(strings.TrimPrefix(operation.ResourceIdentity, "group:"), 10, 64)
+	if err != nil {
+		t.Fatalf("parse resource identity %q: %v", operation.ResourceIdentity, err)
+	}
+	if err := fixture.service.DeleteGroup(t.Context(), uint(groupID)); err != nil {
+		t.Fatalf("DeleteGroup() error = %v", err)
+	}
+	assertClusterRevision(t, fixture, publisher, 2)
+}
+
+func assertClusterRevision(
+	t *testing.T,
+	fixture serviceFixture,
+	publisher *recordingConfigEventPublisher,
+	want uint64,
+) {
+	t.Helper()
+	revision, err := readClusterConfigRevision(t.Context(), fixture.db)
+	if err != nil || revision != want {
+		t.Fatalf("stored revision = %d, %v; want %d", revision, err, want)
+	}
+	changes := publisher.published()
+	if len(changes) != int(want) || changes[len(changes)-1].Revision != want {
+		t.Fatalf("published %#v, want %d changes ending at revision %d", changes, want, want)
 	}
 }

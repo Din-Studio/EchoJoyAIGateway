@@ -577,9 +577,29 @@ func (s *Service) withControlTransaction(
 	ctx context.Context,
 	mutate func(*gorm.DB) error,
 ) error {
+	return s.runControlTransaction(ctx, mutate, true)
+}
+
+// withBookkeepingTransaction is for writes a peer reload would not apply:
+// control operation progress, which reload never reads, and swept auth state,
+// which reaches peers through shared health instead. It neither bumps the
+// configuration revision nor announces the commit.
+func (s *Service) withBookkeepingTransaction(
+	ctx context.Context,
+	mutate func(*gorm.DB) error,
+) error {
+	return s.runControlTransaction(ctx, mutate, false)
+}
+
+func (s *Service) runControlTransaction(
+	ctx context.Context,
+	mutate func(*gorm.DB) error,
+	announce bool,
+) error {
+	announce = announce && s.clusterEvents != nil
 	var revision uint64
 	callback := mutate
-	if s.clusterEvents != nil {
+	if announce {
 		callback = func(tx *gorm.DB) error {
 			if err := mutate(tx); err != nil {
 				return err
@@ -597,7 +617,7 @@ func (s *Service) withControlTransaction(
 	if dbtx.IsInfrastructure(err) {
 		return fmt.Errorf("%v: %w", err, app_errors.ErrDatabase)
 	}
-	if err == nil && s.clusterEvents != nil {
+	if err == nil && announce {
 		s.publishClusterConfigChange(revision)
 	}
 	return err

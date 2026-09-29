@@ -119,7 +119,7 @@ func (s *Service) compactCompletedOperationsLocked(
 		cutoffMS = 0
 	}
 	var rowsAffected int64
-	err = s.withControlTransaction(ctx, func(tx *gorm.DB) error {
+	err = s.withBookkeepingTransaction(ctx, func(tx *gorm.DB) error {
 		result := tx.Model(&models.ControlOperation{}).
 			Where("completed_at_ms IS NOT NULL").
 			Where("completed_at_ms <= ?", cutoffMS).
