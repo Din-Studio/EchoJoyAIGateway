@@ -1,7 +1,9 @@
 package control
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -97,6 +99,17 @@ func (s *Service) reloadCommittedConfigLocked(ctx context.Context) (uint64, erro
 
 	s.priceRuntime.Publish(priceTable)
 
+	var before []state.CredentialRuntimeView
+	if s.registrySnapshot != nil {
+		before = s.registrySnapshot()
+	}
+	beforeParams := make(map[uint]json.RawMessage)
+	if current := s.manager.Current(); current != nil {
+		for groupID, group := range current.Groups {
+			beforeParams[groupID] = group.Params
+		}
+	}
+
 	byGroup := make(map[uint][]state.CredentialEntry, len(input.Groups))
 	for _, group := range input.Groups {
 		byGroup[group.ID] = nil
@@ -121,6 +134,8 @@ func (s *Service) reloadCommittedConfigLocked(ctx context.Context) (uint64, erro
 			return 0, fmt.Errorf("reconcile committed group %d credentials: %w", groupID, err)
 		}
 	}
+	s.retirePeerChangedRuntime(before, entries)
+	s.resetPeerRetargetedGroups(beforeParams, input, byGroup)
 	if err := s.restoreCredentialQuotaObservations(ctx); err != nil {
 		return 0, fmt.Errorf("restore committed credential quota observations: %w", err)
 	}
@@ -135,4 +150,56 @@ func (s *Service) reloadCommittedConfigLocked(ctx context.Context) (uint64, erro
 		}
 	}
 	return revision, nil
+}
+
+// retirePeerChangedRuntime applies the local runtime side effects of peer
+// credential deletes and proxy edits, as the writing instance did after its
+// own commit: deleted credentials lose their stats and provider runtime, and
+// credentials whose proxy changed lose their provider runtime.
+func (s *Service) retirePeerChangedRuntime(
+	before []state.CredentialRuntimeView,
+	committed []state.CredentialEntry,
+) {
+	proxies := make(map[uint]string, len(committed))
+	for _, entry := range committed {
+		proxies[entry.ID] = entry.ProxyFingerprint
+	}
+	for _, view := range before {
+		proxy, exists := proxies[view.ID]
+		switch {
+		case !exists:
+			if s.stats != nil {
+				s.stats.Reset(view.ID)
+			}
+			s.retireCredentialRuntime(view.ID)
+		case proxy != view.ProxyFingerprint:
+			s.retireCredentialRuntime(view.ID)
+		}
+	}
+}
+
+// resetPeerRetargetedGroups mirrors a local params edit for groups whose
+// params a peer changed: observation flights for the old target are dropped
+// and the group's credential stats start over.
+func (s *Service) resetPeerRetargetedGroups(
+	beforeParams map[uint]json.RawMessage,
+	input state.CompileInput,
+	byGroup map[uint][]state.CredentialEntry,
+) {
+	for _, group := range input.Groups {
+		previous, known := beforeParams[group.ID]
+		if !known || input.ChannelRegistry == nil {
+			continue
+		}
+		params, err := input.ChannelRegistry.ValidateParams(group.ChannelID, group.Params)
+		if err != nil || bytes.Equal(previous, params.CanonicalJSON()) {
+			continue
+		}
+		s.invalidateGroupObservationFlights(group.ID)
+		if s.stats != nil {
+			for _, entry := range byGroup[group.ID] {
+				s.stats.Reset(entry.ID)
+			}
+		}
+	}
 }

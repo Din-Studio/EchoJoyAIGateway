@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"gpt-load/internal/channel"
+	"gpt-load/internal/outboundproxy"
 	"gpt-load/internal/pricing"
 	"gpt-load/internal/state"
 	"gpt-load/internal/storage/models"
@@ -271,5 +272,96 @@ func TestClusterReloadAppliesRemoteModelPrices(t *testing.T) {
 	}
 	if !rule.Prices.Input.Set || rule.Prices.Input.NanoUSDPerMillion != pricing.NanoUSD(input) || !rule.IsManual {
 		t.Fatalf("instance B price rule = %#v, want manual input %d", rule, input)
+	}
+}
+
+// A peer reload leaves the same local runtime behind as the writer's own
+// commit: deleted credentials lose stats and provider runtime, proxy edits
+// retire the runtime, and unchanged credentials keep both.
+func TestClusterReloadRetiresRuntimeForPeerCredentialChanges(t *testing.T) {
+	pair := newClusterPair(t)
+	runtime := &recordingCredentialRuntimeExecutor{}
+	pair.b.service.executor = runtime
+	groupID := createGroupWithCredentials(t, pair.a, "sk-peer-kept\nsk-peer-deleted")
+	pair.reloadB(t)
+	views := registryViewsForGroup(pair.b.registry, groupID)
+	if len(views) != 2 {
+		t.Fatalf("instance B registry views = %d, want 2", len(views))
+	}
+	kept, deleted := views[0].ID, views[1].ID
+	now := pair.b.service.now()
+	pair.b.stats.RecordSuccess(kept, now)
+	pair.b.stats.RecordSuccess(deleted, now)
+
+	pair.reloadB(t)
+	if got := runtime.retiredCredentialIDs(); len(got) != 0 {
+		t.Fatalf("unchanged reload retired %v", got)
+	}
+
+	if err := pair.a.service.DeleteGroupCredential(t.Context(), groupID, deleted); err != nil {
+		t.Fatalf("DeleteGroupCredential() error = %v", err)
+	}
+	pair.reloadB(t)
+	if got := runtime.retiredCredentialIDs(); len(got) != 1 || got[0] != deleted {
+		t.Fatalf("retired after peer delete = %v, want [%d]", got, deleted)
+	}
+	if got := pair.b.stats.Snapshot(deleted, now); got.Success != 0 {
+		t.Fatalf("deleted credential stats = %#v, want reset", got)
+	}
+	if got := pair.b.stats.Snapshot(kept, now); got.Success != 1 {
+		t.Fatalf("kept credential stats = %#v, want preserved", got)
+	}
+
+	if _, err := pair.a.service.UpdateGroupCredential(t.Context(), groupID, kept, CredentialUpdateRequest{
+		Proxy: optionalField[outboundproxy.Config]{Set: true, Value: outboundproxy.Config{Mode: outboundproxy.ModeDirect}},
+	}); err != nil {
+		t.Fatalf("UpdateGroupCredential(proxy) error = %v", err)
+	}
+	pair.reloadB(t)
+	if got := runtime.retiredCredentialIDs(); len(got) != 2 || got[1] != kept {
+		t.Fatalf("retired after peer proxy edit = %v, want [%d %d]", got, deleted, kept)
+	}
+	if got := pair.b.stats.Snapshot(kept, now); got.Success != 1 {
+		t.Fatalf("proxy edit reset stats = %#v, want preserved", got)
+	}
+}
+
+func TestClusterReloadResetsGroupsWhosePeerParamsChanged(t *testing.T) {
+	pair := newClusterPair(t)
+	retargeted := createCompatibleGroup(t, pair.a, "https://before.example.com/v1", "sk-retargeted")
+	unchanged := createCompatibleGroup(t, pair.a, "https://steady.example.com/v1", "sk-steady")
+	pair.reloadB(t)
+	retargetedID := registryViewsForGroup(pair.b.registry, retargeted)[0].ID
+	unchangedID := registryViewsForGroup(pair.b.registry, unchanged)[0].ID
+	now := pair.b.service.now()
+	pair.b.stats.RecordSuccess(retargetedID, now)
+	pair.b.stats.RecordSuccess(unchangedID, now)
+	pair.b.service.observationMu.Lock()
+	pair.b.service.observationFlights = map[observationFlightKey]*observationFlight{
+		{groupID: retargeted, credentialID: retargetedID}: {done: make(chan struct{})},
+		{groupID: unchanged, credentialID: unchangedID}:   {done: make(chan struct{})},
+	}
+	pair.b.service.observationMu.Unlock()
+
+	if _, err := pair.a.service.UpdateGroupSettings(t.Context(), retargeted, GroupSettingsUpdateRequest{
+		Params: optionalField[json.RawMessage]{Set: true,
+			Value: json.RawMessage(`{"base_url":"https://after.example.com/v1"}`)},
+	}); err != nil {
+		t.Fatalf("UpdateGroupSettings(params) error = %v", err)
+	}
+	pair.reloadB(t)
+	if got := pair.b.stats.Snapshot(retargetedID, now); got.Success != 0 {
+		t.Fatalf("retargeted group stats = %#v, want reset", got)
+	}
+	if got := pair.b.stats.Snapshot(unchangedID, now); got.Success != 1 {
+		t.Fatalf("unchanged group stats = %#v, want preserved", got)
+	}
+	pair.b.service.observationMu.Lock()
+	defer pair.b.service.observationMu.Unlock()
+	if _, exists := pair.b.service.observationFlights[observationFlightKey{groupID: retargeted, credentialID: retargetedID}]; exists {
+		t.Fatal("retargeted group observation flight survived the reload")
+	}
+	if _, exists := pair.b.service.observationFlights[observationFlightKey{groupID: unchanged, credentialID: unchangedID}]; !exists {
+		t.Fatal("unchanged group observation flight was dropped")
 	}
 }
