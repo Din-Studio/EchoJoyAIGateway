@@ -224,7 +224,7 @@ jobs:
           cache: false
 
       - name: Run race-enabled tests
-        run: go test -race -vet=off -count=1 -timeout=15m . ./internal/...
+        run: go test -race -vet=off -count=1 -timeout=15m . ./internal/... ./tools/...
 
   race-cpa:
     needs: validate-tag

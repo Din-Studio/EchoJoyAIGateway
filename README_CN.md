@@ -242,18 +242,83 @@ Windows 普通用户可改为下载 `gpt-load-windows-setup.exe`。双击并确�
 
 </details>
 
+## 集群部署（实验性）
+
+设置 `REDIS_ADDRS` 后，多个 GPT-Load 实例共享同一个 PostgreSQL 与 Redis，可以放在负载均衡后面水平扩容。不设置时仍以单实例运行，行为不变。
+
+### 依赖
+
+- PostgreSQL，已在 18 上验证。集群模式不支持 SQLite 与 MySQL。
+- Redis 7.0 及以上，已在 7.4 上验证；单节点或 Redis Cluster 均可。使用 Redis Cluster 时，`REDIS_ADDRS` 必须列出全部主节点；只写一个地址会被当作单节点，访问其他节点上的数据时失败。
+- Redis 必须设置 `maxmemory-policy noeviction`，建议开启 AOF 持久化。
+- 所有实例必须显式设置相同的 `AUTH_KEY` 与 `ENCRYPTION_KEY`；`INSTANCE_ID` 每个实例唯一，默认 `<主机名>-<随机串>`。
+- 各实例通过 NTP 校时。
+- 每个实例使用独立的 `DATA_DIR`，其中的 checkpoint 保存本实例的调度与统计状态。
+
+### 用 Compose 启动样例
+
+`docker-compose.cluster.yml` 包含 nginx、3 个 GPT-Load 副本、3 个主节点的 Redis Cluster 和 PostgreSQL，需要 Docker Compose v2.24 及以上：
+
+```bash
+cp .env.example .env
+# 在 .env 中设置 AUTH_KEY、ENCRYPTION_KEY 与 POSTGRES_PASSWORD
+docker compose -f docker-compose.cluster.yml up -d
+curl --fail http://127.0.0.1:3001/health
+```
+
+nginx 发布在 `HOST`（默认 `127.0.0.1`）的 `PORT`（默认 `3001`）上。扩容时复制一个 `gpt-load-N` 服务（修改 `INSTANCE_ID` 和数据卷），并在 `deploy/cluster/nginx.conf` 的 `upstream` 中加一行。样例中的 Redis 没有副本，任一节点故障都会使共享状态不可用；生产环境请使用托管 Redis，或为每个主节点配置副本。
+
+### 负载均衡要求
+
+- 不需要粘性会话。
+- 原生 Responses WebSocket（`GET /v1/responses`）需要转发 `Upgrade` 与 `Connection` 头，并原样透传 `Host`：网关用它校验浏览器发来的 `Origin`。
+- 关闭响应缓冲，让 SSE 逐块转发；读超时要覆盖长时间生成与 WebSocket 会话，样例设为 1 小时。
+- 以 `GET /health` 作为就绪探针。集群模式下它同时检查数据库与 Redis，任一不可用时返回 503 并给出原因。
+
+完整配置见 `deploy/cluster/nginx.conf`。
+
+### 数据库连接
+
+每个实例最多打开 `DATABASE_MAX_OPEN_CONNECTIONS`（默认 `10`）个连接，总数为副本数乘以该值，必须小于 PostgreSQL 的 `max_connections`。需要 PgBouncer 时请使用 session 模式：启动迁移依赖会话级 advisory lock，transaction 模式未经验证，不受支持。
+
+### 订阅账号授权
+
+Codex、Claude、Antigravity 的 OAuth 自动回调发往固定端口的 `localhost`，无法经负载均衡到达实例，集群样例因此不发布回调端口。在浏览器中完成登录后，把地址栏里的完整回调 URL 粘贴到授权弹窗即可；授权状态保存在数据库中，任一实例都能完成授权。
+
+### 共享行为与已知限制
+
+- 实例间共享配置变更、AccessKey 的 RPM 限流和成本额度、凭据健康（冷却、黑名单、失败计数、模型冷却）、订阅授权状态、响应归属（`previous_response_id` 续接）与软亲和，负载均衡无需粘性会话。配置变更通常在 1 秒内对其他实例生效，漏掉的通知由 30 秒一次的轮询补上。同一订阅账号的刷新在集群内同一时刻只由一个实例执行。
+- 保留清理、操作结果压缩、验证探测与 Models.dev 自动同步每个周期只由一个实例执行；手动同步以及组或设置变更触发的同步在接收变更的实例上执行。Models.dev 目录通过 Redis 共享（约为目录原始大小，上限 32 MiB），不再使用 `DATA_DIR/models.dev.catalog.json`；集群首次启动时每个实例各拉取一次。
+- 管理鉴权失败锁定在所有实例上生效，按 TCP 对端地址计算；实例位于负载均衡之后时，这就是负载均衡的地址，所有管理员共用同一个计数，建议在网络层限制管理入口的来源。Redis 不可用时各实例单独计数。
+- 集群模式下 `affinity_capacity` 不生效，配置变更也不会清空软亲和；缩短 `affinity_ttl` 仍会立即作用于已有条目。
+- 切换到集群模式之前、或滚动升级期间由旧版本实例创建的响应，无法在未持有它们的实例上续接。
+- Redis 不可用时：设置了 RPM 或成本额度的 AccessKey 请求返回 503 `cluster_state_unavailable`，不会转发上游；续接请求与 `store` 响应同样返回 503（响应不下发，避免交出任何实例都无法续接的 ID）；软亲和退回普通调度；凭据健康变更先在本实例生效，Redis 恢复后以 Redis 中的状态为准。
+- Redis 丢数据时，已用额度回退到最后一次数据库检查点（约 1 秒前）。
+- 成本额度按已记账的成本判定，而成本在响应发出之后才记账（集群模式下约多一次 Redis 往返）。因此紧接着上一个响应发出的请求，以及并发在途的请求，都可能使已用额度略超限额；单实例模式同样如此，只是时间窗口更短。
+- 内存估算：每个 `store` 响应在 `RESPONSE_BINDING_TTL` 内占用一个 Redis 键，约 0.25 KB（带自动模型选择时约 0.5 KB）；每条软亲和在 `affinity_ttl` 内约 0.3 KB。可按「每日 `store` 响应数 × TTL 天数 × 0.25–0.5 KB」估算。
+- 凭据健康统计页与调度公平账本是本实例视图。
+- 正在刷新订阅账号的实例崩溃后，该账号最迟约 60 秒（租约 TTL 加一个轮询周期）内被标记为 `outcome_unknown`，需要人工恢复。
+- WebSocket 连接数上限按实例计算，N 个实例时每个 AccessKey 最多可建立 N 倍的连接。WebSocket 会话固定在建立它的实例上，该实例重启或下线会断开其上的会话。
+
+### 运行验收
+
+以下命令在同一份样例上运行验收，需要 Docker 与 Compose v2.24 及以上：
+
+- `make cluster-e2e`：在真实的 3 节点 Redis Cluster 上运行数据库与 Redis 合同测试，并检查 RPM 精确放行、成本额度零超出、配置传播不超过 1 秒、WebSocket 可经 nginx 建立。CI 在每个 PR 上运行它。
+- `make bench-cluster`：在上述检查之外，对比 3 副本集群与单实例的吞吐和 p99 延迟。每个网关默认限制为 1 核（`GATEWAY_CPUS`），所有容器共享宿主机 CPU，请在 8 核及以上的主机上运行。
+
 ## 生产使用注意事项
 
 - 默认只监听 `127.0.0.1`。需要远程访问时，应通过受控网络或带 TLS 的反向代理暴露，并配置 ACL 与防火墙。
 - 妥善管理 `AUTH_KEY` 与 `ENCRYPTION_KEY`，不要把真实密钥提交到仓库、日志、截图或公开 Issue。
-- 2.0 默认以**单应用实例**运行。设置 `REDIS_ADDRS` 可启用实验性集群模式（需 PostgreSQL、显式 `AUTH_KEY`/`ENCRYPTION_KEY`）；当前版本在实例间共享配置变更、AccessKey 的 RPM 限流和成本额度、凭据健康（冷却、黑名单、失败计数、模型冷却）、订阅授权状态、响应归属（`previous_response_id` 续接）与软亲和，同一订阅账号的刷新在集群内同一时刻只由一个实例执行，负载均衡无需粘性会话。保留清理、操作结果压缩、验证探测与 Models.dev 自动同步每个周期只由一个实例执行；手动同步以及组或设置变更触发的同步在接收变更的实例上执行。Models.dev 目录通过 Redis 共享（约为目录原始大小，上限 32 MiB），不再使用 `DATA_DIR/models.dev.catalog.json`；集群首次启动时每个实例各拉取一次。管理鉴权失败锁定在所有实例上生效，按 TCP 对端地址计算，实例位于负载均衡之后时即为负载均衡的地址；Redis 不可用时各实例单独计数。集群模式下 `affinity_capacity` 不生效，配置变更也不会清空软亲和；缩短 `affinity_ttl` 仍会立即作用于已有条目。切换到集群模式之前、或滚动升级期间由旧版本实例创建的响应，无法在未持有它们的实例上续接。Redis 不可用时，续接请求与 `store` 响应返回 503 `cluster_state_unavailable`（响应不下发，避免交出任何实例都无法续接的 ID），软亲和则退回普通调度。每个 `store` 响应在 `RESPONSE_BINDING_TTL` 内占用一个 Redis 键，约 0.25 KB（带自动模型选择时约 0.5 KB），每条软亲和在 `affinity_ttl` 内约 0.3 KB；可按「每日 `store` 响应数 × TTL 天数 × 0.25–0.5 KB」估算内存。凭据健康统计页显示的是本实例视图。正在刷新订阅账号的实例崩溃后，该账号最迟约 60 秒（租约 TTL 加一个轮询周期）内被标记为 `outcome_unknown`，需要人工恢复。写入 Redis 失败的凭据健康变更先在本实例生效，Redis 恢复后以 Redis 中的状态为准。Redis 不可用时，设置了 RPM 或成本额度的 AccessKey 请求返回 503 `cluster_state_unavailable`，不会转发上游。Redis 须配置 `maxmemory-policy noeviction`，并建议开启 AOF 持久化；Redis 丢数据时，已用额度回退到最后一次数据库检查点（约 1 秒前）。各实例需要通过 NTP 校时。
+- 2.0 默认以**单应用实例**运行；多实例部署见[集群部署（实验性）](#集群部署实验性)。
 - 用量与成本是基于上游返回数据的**估算**，用于运行分析和资源评估，不等同于服务商账单或财务对账结果。
 - 订阅渠道依赖上游 OAuth 与兼容协议，可能随上游变化调整。请只接入自己有权使用的账号，并遵守对应服务商条款。
 - HTTP Responses 的 `previous_response_id` 续接按协议及现有存储能力自动接入：原生 Responses 且声明由上游管理状态的渠道目前包括 `openai`、`gpt_load`、`xai`、`newapi`、`cliproxyapi`、`sub2api`。按 AccessKey 隔离归属，在当前路由允许时固定原凭据，不受软亲和开关影响；实际状态可用性由上游决定。无状态及转换响应不登记为持久状态。未知 ID（包括升级前或网关外创建的 ID）直接拒绝；Group 参数覆盖不能改写该字段。
 - 原生 Responses WebSocket 使用同端口 `GET /v1/responses`，按渠道声明的实际能力准入，支持 OpenAI、xAI、Codex 及符合原生合同的 CPA/sub2api、GPT-Load 端点。兼容客户端携带布尔参数 `stream:true/false`，两者均按 WS 事件流返回。每轮独立检查权限、限流、额度与当前路由，并记录用量及成本。同一连接固定上游身份；不回退 HTTP、不缓存或重放聊天历史。
 - `responses_websocket_enabled` 默认开启，分组显式设置优先于全局，未覆盖时继承全局。关闭会立即断开受影响的 WS 连接并中断生成；HTTP/SSE 不受影响。重新开启不会恢复旧连接的临时状态。
 - 完整 `stream_id` 多流与分叉用于 OpenAI 和满足端到端条件的 GPT-Load 级联；其余上述渠道串行执行并明确拒绝命名流。预热实际发送 `generate:false`。Codex 只支持原连接内续接，不能使用 `store:true` 或凭旧 ID 跨连接恢复；其他渠道的持久续接仍取决于存储能力与有效归属。[Codex SDK 的代理、读取和关闭边界](third_party/cpaembedded/README.md#codex-websocket-session)继续适用。
-- 响应归属保存在内存中，默认保留 30 天，最多 100,000 条，ID 文本合计最多 16 MiB，达到容量时淘汰旧记录。正常停机成功保存 checkpoint 后可在同一数据目录恢复；不保证崩溃恢复或上游历史仍有效。
+- 单实例模式下，响应归属保存在内存中，默认保留 30 天，最多 100,000 条，ID 文本合计最多 16 MiB，达到容量时淘汰旧记录。正常停机成功保存 checkpoint 后可在同一数据目录恢复；不保证崩溃恢复或上游历史仍有效。
 - `conversation` 与其他既有资源 ID 不在上述归属路由范围内，仍依赖单凭据或上游跨凭据共享资源。
 
 ## 从 1.x 切换

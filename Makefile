@@ -27,7 +27,7 @@ build: _web-build ## Build the Web UI and application binary
 
 .PHONY: test
 test: ## Run Go unit tests
-	$(GO) test -count=1 . ./internal/...
+	$(GO) test -count=1 . ./internal/... ./tools/...
 
 .PHONY: check
 check: _web-deps ## Run source checks and build
@@ -38,8 +38,16 @@ check: _web-deps ## Run source checks and build
 	$(PNPM) --dir $(WEB_DIR) run format
 	$(PNPM) --dir $(WEB_DIR) run build
 	$(GO) build -o $(APP) .
-	$(GO) test -count=1 . ./internal/...
+	$(GO) test -count=1 . ./internal/... ./tools/...
 	git --no-pager diff --check
+
+.PHONY: cluster-e2e
+cluster-e2e: ## Run cluster acceptance on the compose sample with a real Redis Cluster
+	tools/clusterbench/run.sh e2e
+
+.PHONY: bench-cluster
+bench-cluster: ## Measure cluster throughput and p99 against a single instance (needs >= 8 CPUs)
+	tools/clusterbench/run.sh bench
 
 .PHONY: help
 help: ## Display available targets

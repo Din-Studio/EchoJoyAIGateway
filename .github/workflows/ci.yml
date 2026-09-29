@@ -79,7 +79,7 @@ jobs:
           cache: false
 
       - name: Run race-enabled tests
-        run: go test -race -vet=off -count=1 -timeout=15m . ./internal/...
+        run: go test -race -vet=off -count=1 -timeout=15m . ./internal/... ./tools/...
 
   race-cpa:
     runs-on: [self-hosted, Linux, ARM64]
@@ -180,6 +180,30 @@ jobs:
           GPT_LOAD_DATABASE_SECONDARY_DSN: ${{ matrix.driver == 'mysql' && format(matrix.dsn, job.services.secondary-mysql.ports['3306']) || '' }}
           GPT_LOAD_REDIS_TEST_ADDR: ${{ matrix.driver == 'postgres' && format('127.0.0.1:{0}', job.services.redis.ports['6379']) || '' }}
         run: .github/scripts/ci-database-contract.sh "${{ matrix.driver }}"
+
+  # 在 docker-compose.cluster.yml 样例上运行集群验收：真实 3 节点 Redis Cluster
+  # 上的合同测试，以及 RPM、成本额度、配置传播与 WebSocket 经 nginx 的确定性检查。
+  cluster-e2e:
+    runs-on: [self-hosted, Linux, ARM64]
+    timeout-minutes: 40
+    env:
+      COMPOSE_PROJECT_NAME: gl-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # override 使用 `!reset` 与 env_file.required，需要 Compose v2.24+。
+      - name: Check Docker Compose
+        run: docker compose version
+
+      - name: Run cluster acceptance
+        run: make cluster-e2e
+
+      - name: Remove acceptance images
+        if: always()
+        run: docker image rm -f "gpt-load:${COMPOSE_PROJECT_NAME}" "gpt-load-clusterbench:${COMPOSE_PROJECT_NAME}" >/dev/null 2>&1 || true
 
   windows-encryption-acl:
     runs-on: [self-hosted, Windows, X64]

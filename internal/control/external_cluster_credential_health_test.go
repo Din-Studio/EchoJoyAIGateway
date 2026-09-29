@@ -60,7 +60,7 @@ func newHealthContractInstance(t *testing.T, dsn, redisAddr, keyPrefix, instance
 	base := newClusterContractInstance(t, dsn, redisAddr, keyPrefix, instanceID)
 	base.fixture.registry.EnableSharedHealth()
 	client, err := cluster.NewClient(&config.Config{Cluster: config.ClusterConfig{
-		RedisAddrs: []string{redisAddr}, RedisKeyPrefix: keyPrefix, InstanceID: instanceID,
+		RedisAddrs: redisTestAddrs(redisAddr), RedisKeyPrefix: keyPrefix, InstanceID: instanceID,
 	}})
 	if err != nil {
 		t.Fatal(err)

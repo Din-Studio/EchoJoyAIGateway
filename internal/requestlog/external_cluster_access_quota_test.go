@@ -46,8 +46,16 @@ func externalClusterEnv(t *testing.T) (string, string) {
 
 func externalClusterClient(t *testing.T, redisAddr, keyPrefix, instanceID string) *cluster.Client {
 	t.Helper()
+	// A comma-separated address lists every Redis Cluster node and selects
+	// the cluster client.
+	var addrs []string
+	for _, addr := range strings.Split(redisAddr, ",") {
+		if addr = strings.TrimSpace(addr); addr != "" {
+			addrs = append(addrs, addr)
+		}
+	}
 	client, err := cluster.NewClient(&config.Config{Cluster: config.ClusterConfig{
-		RedisAddrs: []string{redisAddr}, RedisKeyPrefix: keyPrefix, InstanceID: instanceID,
+		RedisAddrs: addrs, RedisKeyPrefix: keyPrefix, InstanceID: instanceID,
 	}})
 	if err != nil {
 		t.Fatalf("cluster.NewClient(%s) error = %v", instanceID, err)

@@ -24,7 +24,7 @@ func newClusterContractInstance(t *testing.T, dsn, redisAddr, keyPrefix, instanc
 	t.Helper()
 	fixture := newServiceFixtureWithDSN(t, dsn)
 	client, err := cluster.NewClient(&config.Config{Cluster: config.ClusterConfig{
-		RedisAddrs: []string{redisAddr}, RedisKeyPrefix: keyPrefix, InstanceID: instanceID,
+		RedisAddrs: redisTestAddrs(redisAddr), RedisKeyPrefix: keyPrefix, InstanceID: instanceID,
 	}})
 	if err != nil {
 		t.Fatalf("cluster.NewClient(%s) error = %v", instanceID, err)
@@ -33,6 +33,18 @@ func newClusterContractInstance(t *testing.T, dsn, redisAddr, keyPrefix, instanc
 	bus := cluster.NewConfigEventBus(client)
 	fixture.service.clusterEvents = bus
 	return clusterContractInstance{fixture: fixture, bus: bus}
+}
+
+// redisTestAddrs splits GPT_LOAD_REDIS_TEST_ADDR on commas, so listing every
+// node of a Redis Cluster exercises cluster.Client in cluster mode.
+func redisTestAddrs(value string) []string {
+	var addrs []string
+	for _, addr := range strings.Split(value, ",") {
+		if addr = strings.TrimSpace(addr); addr != "" {
+			addrs = append(addrs, addr)
+		}
+	}
+	return addrs
 }
 
 func awaitGroupVisible(t *testing.T, instance clusterContractInstance, groupID uint, timeout time.Duration) time.Duration {

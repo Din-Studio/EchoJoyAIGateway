@@ -242,18 +242,83 @@ Environment proxies apply only when no proxy is specified on the credential, gro
 
 </details>
 
+## Cluster deployment (experimental)
+
+With `REDIS_ADDRS` set, several GPT-Load instances share one PostgreSQL database and one Redis, so you can scale out behind a load balancer. Without it, GPT-Load runs as a single instance and behaves as before.
+
+### Requirements
+
+- PostgreSQL, verified on 18. Cluster mode does not support SQLite or MySQL.
+- Redis 7.0 or later, verified on 7.4, either a single node or a Redis Cluster. For a Redis Cluster, `REDIS_ADDRS` must list every primary; a single address is treated as a single node and fails when data lives on another node.
+- Configure Redis with `maxmemory-policy noeviction`; AOF persistence is recommended.
+- Every instance must set the same `AUTH_KEY` and `ENCRYPTION_KEY` explicitly. `INSTANCE_ID` must be unique per instance and defaults to `<hostname>-<random>`.
+- Keep instance clocks synchronized with NTP.
+- Give each instance its own `DATA_DIR`; its checkpoint holds that instance's scheduling and statistics state.
+
+### Start the Compose sample
+
+`docker-compose.cluster.yml` runs nginx, three GPT-Load replicas, a three-primary Redis Cluster, and PostgreSQL. It needs Docker Compose v2.24 or later:
+
+```bash
+cp .env.example .env
+# Set AUTH_KEY, ENCRYPTION_KEY, and POSTGRES_PASSWORD in .env
+docker compose -f docker-compose.cluster.yml up -d
+curl --fail http://127.0.0.1:3001/health
+```
+
+nginx is published on `HOST` (default `127.0.0.1`) and `PORT` (default `3001`). To add a replica, copy a `gpt-load-N` service (change `INSTANCE_ID` and the data volume) and add a line to the `upstream` block in `deploy/cluster/nginx.conf`. The sample Redis has no replicas, so losing any node makes shared state unavailable; in production, use a managed Redis or give each primary a replica.
+
+### Load balancer requirements
+
+- Sticky sessions are not needed.
+- Native Responses WebSocket (`GET /v1/responses`) needs the `Upgrade` and `Connection` headers forwarded and `Host` passed through unchanged, because the gateway checks the browser's `Origin` against it.
+- Disable response buffering so SSE is forwarded chunk by chunk, and set a read timeout long enough for long generations and WebSocket sessions; the sample uses one hour.
+- Use `GET /health` as the readiness probe. In cluster mode it checks both the database and Redis and returns 503 with the reason when either is unavailable.
+
+See `deploy/cluster/nginx.conf` for the complete configuration.
+
+### Database connections
+
+Each instance opens up to `DATABASE_MAX_OPEN_CONNECTIONS` (default `10`) connections, so the total is replicas × that value and must stay below PostgreSQL's `max_connections`. If you need PgBouncer, use session mode: startup migrations rely on a session-level advisory lock, and transaction mode is unverified and unsupported.
+
+### Subscription account authorization
+
+The Codex, Claude, and Antigravity OAuth clients call back to `localhost` on a fixed port, which cannot reach an instance through a load balancer, so the cluster sample does not publish those ports. After signing in, paste the full callback URL from the browser's address bar into the authorization dialog. Authorization state lives in the database, so any instance can complete it.
+
+### Shared behavior and known limitations
+
+- Instances share configuration changes, AccessKey RPM limits and cost limits, credential health (cooldown, blacklist, failure counts, model cooldown), subscription auth state, Responses ownership (`previous_response_id` continuation), and soft affinity, so the load balancer needs no sticky sessions. Configuration changes usually reach other instances within 1 s, and a 30 s poll catches any missed notification. Each subscription account is refreshed on only one instance at a time.
+- Retention cleanup, operation result compaction, validation probes, and automatic Models.dev syncs run on only one instance per period; manual syncs and syncs triggered by group or setting changes run on the instance that received the change. The Models.dev catalog is shared through Redis (about the size of the raw catalog, at most 32 MiB) instead of `DATA_DIR/models.dev.catalog.json`; on the first cluster start each instance fetches it once.
+- Admin authentication lockout applies to every instance and is keyed by the TCP peer address. Behind a load balancer that is the load balancer's address, so all administrators share one counter; restrict where the admin UI can be reached at the network layer. While Redis is unavailable each instance counts failures on its own.
+- In cluster mode `affinity_capacity` has no effect and configuration changes do not clear soft affinity; a shorter `affinity_ttl` still applies to existing entries immediately.
+- Responses created before switching to cluster mode, or while a rolling upgrade still runs older instances, cannot be continued on instances that do not hold them.
+- When Redis is unavailable, requests from AccessKeys with an RPM or cost limit fail with 503 `cluster_state_unavailable` instead of being forwarded. Continuation requests and `store` Responses also fail with 503 (the response is withheld rather than delivered with an ID no instance can continue). Soft affinity falls back to normal scheduling. Credential health changes apply locally first and are replaced by the Redis state once Redis is reachable again.
+- If Redis loses data, cost usage falls back to the last database checkpoint (about 1 s old).
+- Cost limits are checked against settled costs, and a request's cost is settled after its response is sent (one extra Redis round trip in cluster mode). A request sent right after the previous response, like requests already in flight, can therefore push usage slightly past the limit; single-instance mode behaves the same with a shorter window.
+- Memory budget: each stored response keeps one Redis key for `RESPONSE_BINDING_TTL`, about 0.25 KB (about 0.5 KB with an automatic model selection), and each soft-affinity entry about 0.3 KB for `affinity_ttl`. Budget roughly daily `store` responses × TTL in days × 0.25–0.5 KB.
+- The credential health statistics page and the scheduling fairness ledger show this instance's view.
+- If the instance refreshing a subscription account crashes, the account is marked `outcome_unknown` within about 60 s (lease TTL plus one poll interval) and needs a manual recovery.
+- WebSocket connection limits apply per instance, so with N instances each AccessKey can open up to N times as many connections. A WebSocket session stays on the instance that accepted it; restarting or removing that instance closes its sessions.
+
+### Run the acceptance checks
+
+These commands run on the same sample and need Docker and Compose v2.24 or later:
+
+- `make cluster-e2e` runs the database and Redis contract tests against a real three-node Redis Cluster, then checks that RPM limits admit exactly the limit, cost limits never overshoot, configuration changes propagate within 1 s, and WebSocket connects through nginx. CI runs it on every pull request.
+- `make bench-cluster` adds a throughput and p99 latency comparison between the three-replica cluster and a single instance. Each gateway is limited to one CPU by default (`GATEWAY_CPUS`) and every container shares the host, so run it on a host with at least 8 CPUs.
+
 ## Production considerations
 
 - The service listens on `127.0.0.1` only by default. For remote access, expose it through a controlled network or a TLS reverse proxy, and configure ACLs and firewall rules.
 - Manage `AUTH_KEY` and `ENCRYPTION_KEY` carefully. Never commit real keys to a repository, log, screenshot, or public issue.
-- 2.0 runs as a **single application instance** by default. Setting `REDIS_ADDRS` enables the experimental cluster mode (requires PostgreSQL and explicit `AUTH_KEY`/`ENCRYPTION_KEY`); the current version shares configuration changes, AccessKey RPM limits and cost limits, credential health (cooldown, blacklist, failure counts, model cooldown), subscription auth state, Responses ownership (`previous_response_id` continuation), and soft affinity across instances, and refreshes each subscription account on only one instance at a time, so the load balancer needs no sticky sessions. Retention cleanup, operation result compaction, validation probes, and automatic Models.dev syncs run on only one instance per period; manual syncs and syncs triggered by group or setting changes run on the instance that received the change. The Models.dev catalog is shared through Redis (about the size of the raw catalog, at most 32 MiB) instead of `DATA_DIR/models.dev.catalog.json`; on the first cluster start each instance fetches it once. Admin authentication lockout applies to every instance and is keyed by the TCP peer address, which is the load balancer's address when instances run behind one; while Redis is unavailable each instance counts failures on its own. In cluster mode `affinity_capacity` has no effect and configuration changes do not clear soft affinity; a shorter `affinity_ttl` still applies to existing entries immediately. Responses created before switching to cluster mode, or while a rolling upgrade still runs older instances, cannot be continued on instances that do not hold them. When Redis is unavailable, continuation requests and `store` Responses fail with 503 `cluster_state_unavailable` (the response is withheld rather than delivered with an ID no instance can continue), while soft affinity falls back to normal scheduling. Each stored response keeps one Redis key for `RESPONSE_BINDING_TTL`, about 0.25 KB (about 0.5 KB with an automatic model selection), and each soft-affinity entry about 0.3 KB for `affinity_ttl`: budget roughly daily `store` responses × TTL in days × 0.25–0.5 KB. The credential health statistics page shows this instance's view. If the instance refreshing a subscription account crashes, the account is marked `outcome_unknown` within about 60 s (lease TTL plus one poll interval) and needs a manual recovery. Credential health changes that cannot reach Redis are applied locally and replaced by the Redis state once it is reachable again. When Redis is unavailable, requests from AccessKeys with an RPM or cost limit fail with 503 `cluster_state_unavailable` instead of being forwarded. Configure Redis with `maxmemory-policy noeviction` and enable AOF persistence; if Redis loses data, cost usage falls back to the last database checkpoint (about 1 s old). Keep instance clocks synchronized with NTP.
+- 2.0 runs as a **single application instance** by default; for multiple instances, see [Cluster deployment (experimental)](#cluster-deployment-experimental).
 - Usage and cost are **estimates** derived from upstream responses. They support operational analysis and capacity planning, and do not equal a provider invoice or a financial reconciliation.
 - Subscription channels depend on upstream OAuth and compatibility protocols and may change as upstreams change. Only connect accounts you are entitled to use, and follow each provider's terms.
 - HTTP Responses continuation with `previous_response_id` automatically uses native Responses routes that declare upstream-managed storage: currently `openai`, `gpt_load`, `xai`, `newapi`, `cliproxyapi`, and `sub2api`. Ownership is isolated by AccessKey and pins the original credential when current routing permits, independently of soft affinity; actual state availability depends on the upstream. Stateless and converted responses are not registered as persistent state. Unknown IDs, including IDs created before upgrading or outside this gateway, are rejected. Group parameter overrides cannot change this field.
 - Native Responses WebSocket uses `GET /v1/responses` on the same port. Admission follows declared upstream capabilities for OpenAI, xAI, Codex, and compatible native CPA/sub2api and GPT-Load endpoints. Clients may include the boolean `stream:true/false`; both values still use the WS event stream. Each turn checks current permissions, rate and cost limits, and routing, with separate usage and cost records. One connection keeps one upstream identity; there is no HTTP fallback or conversation-history replay.
 - `responses_websocket_enabled` defaults to enabled. An explicit group setting overrides the global value; otherwise the group inherits it. Disabling immediately closes affected WS connections and interrupts generation without affecting HTTP/SSE. Re-enabling does not restore the old connection's temporary state.
 - Full `stream_id` multiplexing and forks are enabled for OpenAI and GPT-Load cascades that support them end to end. The other channels above run serially and reject named streams. Prewarming sends `generate:false` upstream. Codex continuation requires the original live connection: `store:true` and restoration by an old ID on a new connection are unsupported. Persistent continuation on other channels depends on storage capabilities and valid ownership. Existing [Codex SDK proxy, reading, and shutdown limits](third_party/cpaembedded/README.md#codex-websocket-session) still apply.
-- Response bindings stay in memory for up to 30 days, with limits of 100,000 entries and 16 MiB of ID text; older entries are evicted when capacity is reached. A successful checkpoint during normal shutdown allows restoration from the same data directory. Crash recovery and continued upstream state availability are not guaranteed.
+- In single-instance mode, response bindings stay in memory for up to 30 days, with limits of 100,000 entries and 16 MiB of ID text; older entries are evicted when capacity is reached. A successful checkpoint during normal shutdown allows restoration from the same data directory. Crash recovery and continued upstream state availability are not guaranteed.
 - `conversation` and other existing resource IDs are outside this ownership routing scope and still depend on a single credential or upstream resource sharing across credentials.
 
 ## Moving from 1.x

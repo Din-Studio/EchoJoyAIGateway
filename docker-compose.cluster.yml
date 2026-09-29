@@ -1,0 +1,169 @@
+# 集群模式样例：nginx + 3 个 GPT-Load 副本 + 3 主节点 Redis Cluster + PostgreSQL。
+#
+#   cp .env.example .env    # 设置 AUTH_KEY、ENCRYPTION_KEY、POSTGRES_PASSWORD
+#   docker compose -f docker-compose.cluster.yml up -d
+#
+# 扩容：复制一个 gpt-load-N 服务（改 INSTANCE_ID 与数据卷），并在
+# deploy/cluster/nginx.conf 的 upstream 中加一行。样例的 Redis 没有副本，
+# 生产环境请使用托管 Redis 或为每个主节点配置副本。
+
+x-gpt-load: &gpt-load
+  image: ghcr.io/tbphp/gpt-load:2
+  env_file:
+    - path: .env
+      required: false
+  environment: &gpt-load-env
+    HOST: 0.0.0.0
+    PORT: "3001"
+    DATA_DIR: /app/data
+    DATABASE_DSN: postgres://gpt_load:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/gpt_load?sslmode=disable
+    REDIS_ADDRS: redis-1:6379,redis-2:6379,redis-3:6379
+    AUTH_KEY: ${AUTH_KEY:?set AUTH_KEY in .env; every instance must share it}
+    ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY in .env; every instance must share it}
+  restart: always
+  stop_grace_period: ${CONTAINER_STOP_GRACE_PERIOD:-15s}
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis-init:
+      condition: service_completed_successfully
+  healthcheck:
+    test: wget -q --spider -T 10 -O /dev/null http://localhost:3001/health
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 40s
+    start_interval: 2s
+
+x-redis: &redis
+  image: redis:7.4-alpine
+  restart: always
+  healthcheck:
+    test: redis-cli ping
+    interval: 5s
+    timeout: 5s
+    retries: 20
+
+services:
+  nginx:
+    image: nginx:1.29-alpine
+    restart: always
+    ports:
+      - "${BIND_ADDRESS:-${HOST:-127.0.0.1}}:${PORT:-3001}:80"
+    volumes:
+      - ./deploy/cluster/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      gpt-load-1:
+        condition: service_healthy
+      gpt-load-2:
+        condition: service_healthy
+      gpt-load-3:
+        condition: service_healthy
+    healthcheck:
+      test: wget -q --spider -T 10 -O /dev/null http://127.0.0.1/health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+      start_interval: 2s
+
+  gpt-load-1:
+    <<: *gpt-load
+    environment:
+      <<: *gpt-load-env
+      INSTANCE_ID: gpt-load-1
+    volumes:
+      - gpt-load-1-data:/app/data
+
+  gpt-load-2:
+    <<: *gpt-load
+    environment:
+      <<: *gpt-load-env
+      INSTANCE_ID: gpt-load-2
+    volumes:
+      - gpt-load-2-data:/app/data
+
+  gpt-load-3:
+    <<: *gpt-load
+    environment:
+      <<: *gpt-load-env
+      INSTANCE_ID: gpt-load-3
+    volumes:
+      - gpt-load-3-data:/app/data
+
+  redis-1:
+    <<: *redis
+    command: >-
+      redis-server --cluster-enabled yes --cluster-config-file nodes.conf
+      --cluster-announce-hostname redis-1 --cluster-preferred-endpoint-type hostname
+      --maxmemory-policy noeviction --appendonly yes
+    volumes:
+      - redis-1-data:/data
+
+  redis-2:
+    <<: *redis
+    command: >-
+      redis-server --cluster-enabled yes --cluster-config-file nodes.conf
+      --cluster-announce-hostname redis-2 --cluster-preferred-endpoint-type hostname
+      --maxmemory-policy noeviction --appendonly yes
+    volumes:
+      - redis-2-data:/data
+
+  redis-3:
+    <<: *redis
+    command: >-
+      redis-server --cluster-enabled yes --cluster-config-file nodes.conf
+      --cluster-announce-hostname redis-3 --cluster-preferred-endpoint-type hostname
+      --maxmemory-policy noeviction --appendonly yes
+    volumes:
+      - redis-3-data:/data
+
+  # 一次性创建集群；集群已存在时直接成功退出，重复 up 是幂等的。
+  redis-init:
+    image: redis:7.4-alpine
+    restart: "no"
+    depends_on:
+      redis-1:
+        condition: service_healthy
+      redis-2:
+        condition: service_healthy
+      redis-3:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        if redis-cli -h redis-1 cluster info | grep -q '^cluster_state:ok'; then
+          echo "Redis Cluster already initialized"
+          exit 0
+        fi
+        nodes=""
+        for host in redis-1 redis-2 redis-3; do
+          nodes="$$nodes $$(getent hosts $$host | awk '{print $$1}'):6379"
+        done
+        redis-cli --cluster create $$nodes --cluster-replicas 0 --cluster-yes
+        until redis-cli -h redis-1 cluster info | grep -q '^cluster_state:ok'; do sleep 1; done
+
+  postgres:
+    image: postgres:18-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: gpt_load
+      POSTGRES_DB: gpt_load
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: pg_isready -U gpt_load -d gpt_load
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  gpt-load-1-data:
+  gpt-load-2-data:
+  gpt-load-3-data:
+  redis-1-data:
+  redis-2-data:
+  redis-3-data:
+  postgres-data:

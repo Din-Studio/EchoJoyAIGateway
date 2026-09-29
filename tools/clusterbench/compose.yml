@@ -1,0 +1,100 @@
+# 验收 override：叠加在 docker-compose.cluster.yml 之上，由 tools/clusterbench/run.sh 驱动。
+#   docker compose -f docker-compose.cluster.yml -f tools/clusterbench/compose.yml ...
+# 相对路径以第一个文件（仓库根）为准。它只追加验收服务并替换镜像、关闭
+# models.dev 自动同步、限制网关 CPU、去掉宿主端口，不改动样例拓扑。
+
+x-bench-gateway: &bench-gateway
+  image: ${GPT_LOAD_IMAGE:?run through tools/clusterbench/run.sh}
+  cpus: ${GATEWAY_CPUS:-1}
+  restart: "no"
+
+x-bench-env: &bench-env
+  MODELS_DEV_AUTO_SYNC_ENABLED: "false"
+  LOG_LEVEL: warn
+
+x-clusterbench: &clusterbench
+  image: ${CLUSTERBENCH_IMAGE:?run through tools/clusterbench/run.sh}
+  restart: "no"
+
+services:
+  nginx:
+    ports: !reset []
+
+  gpt-load-1:
+    <<: *bench-gateway
+    environment: *bench-env
+  gpt-load-2:
+    <<: *bench-gateway
+    environment: *bench-env
+  gpt-load-3:
+    <<: *bench-gateway
+    environment: *bench-env
+
+  fake-upstream:
+    <<: *clusterbench
+    command: ["upstream", "-listen", ":8080", "-delay", "${UPSTREAM_DELAY:-50ms}"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/v1/models"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  # 单实例模式基线：不设 REDIS_ADDRS，使用独立的 PostgreSQL，CPU 限额与集群副本相同。
+  gpt-load-single:
+    <<: *bench-gateway
+    environment:
+      <<: *bench-env
+      HOST: 0.0.0.0
+      PORT: "3001"
+      DATA_DIR: /app/data
+      DATABASE_DSN: postgres://gpt_load:${POSTGRES_PASSWORD}@postgres-single:5432/gpt_load?sslmode=disable
+      AUTH_KEY: ${AUTH_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+    depends_on:
+      postgres-single:
+        condition: service_healthy
+    healthcheck:
+      test: wget -q --spider -T 10 -O /dev/null http://localhost:3001/health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+      start_interval: 2s
+
+  postgres-single:
+    image: postgres:18-alpine
+    restart: "no"
+    environment:
+      POSTGRES_USER: gpt_load
+      POSTGRES_DB: gpt_load
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: pg_isready -U gpt_load -d gpt_load
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  clusterbench:
+    <<: *clusterbench
+    profiles: [tools]
+    environment:
+      AUTH_KEY: ${AUTH_KEY}
+      GATEWAY_CPUS: ${GATEWAY_CPUS:-1}
+
+  # 在真实 Redis Cluster 上运行现有的 TestExternal* 合同测试。宿主机无法解析
+  # Cluster 公布的节点主机名，所以测试在 compose 网络内运行。
+  contract:
+    build:
+      context: .
+      dockerfile: tools/clusterbench/Dockerfile
+      target: source
+    profiles: [tools]
+    restart: "no"
+    working_dir: /repo
+    volumes:
+      - .:/repo:ro
+    environment:
+      GOFLAGS: -buildvcs=false
+      GPT_LOAD_DATABASE_TEST_DSN: postgres://gpt_load:${POSTGRES_PASSWORD}@postgres:5432/gpt_load_contract?sslmode=disable
+      GPT_LOAD_REDIS_TEST_ADDR: redis-1:6379,redis-2:6379,redis-3:6379
+    entrypoint: ["bash", ".github/scripts/ci-database-contract.sh", "postgres"]
