@@ -19,8 +19,6 @@ type refreshLeaseProbe interface {
 	Held(ctx context.Context, credentialIDs []uint) (map[uint]bool, error)
 }
 
-var errNoInterruptedRefresh = errors.New("no interrupted refresh")
-
 // sweepInterruptedRefreshes marks refreshes whose holder is gone as
 // outcome_unknown. In cluster mode a refresh is interrupted exactly when its
 // row is refreshing and no instance holds the credential's refresh lease;
@@ -78,17 +76,14 @@ func (s *Service) sweepInterruptedRefreshes(ctx context.Context) error {
 				swept = append(swept, row)
 			}
 		}
-		if len(swept) == 0 {
-			// Every row finished meanwhile; nothing to publish.
-			return errNoInterruptedRefresh
-		}
 		return nil
 	})
-	if errors.Is(err, errNoInterruptedRefresh) {
-		return nil
-	}
 	if err != nil {
 		return err
+	}
+	if len(swept) == 0 {
+		// Every row finished meanwhile; nothing to publish.
+		return nil
 	}
 	s.publishSweptAuthStates(ctx, swept)
 	logrus.WithFields(logrus.Fields{
