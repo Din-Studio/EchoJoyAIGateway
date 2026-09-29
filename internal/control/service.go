@@ -615,7 +615,7 @@ func (s *Service) CommitCredentialState(ctx context.Context, mutate func(*gorm.D
 func (s *Service) publishClusterConfigChange(revision uint64) {
 	ctx, cancel := context.WithTimeout(context.Background(), clusterPublishTimeout)
 	defer cancel()
-	change := cluster.ConfigChange{Revision: revision, Origin: s.clusterEvents.InstanceID()}
+	change := cluster.ConfigChange{Revision: revision}
 	if err := s.clusterEvents.Publish(ctx, change); err != nil {
 		logrus.WithError(err).WithFields(logrus.Fields{
 			"event":    "control.cluster_publish_failed",

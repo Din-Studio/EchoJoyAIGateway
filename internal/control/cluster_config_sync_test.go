@@ -164,7 +164,7 @@ func TestClusterConfigSyncReloadsOnStartupAndPeerEvents(t *testing.T) {
 
 	reloader.setRevision(2)
 	revision.Store(2)
-	publishUntil(t, bus, cluster.ConfigChange{Revision: 2, Origin: "node-a"}, func() bool {
+	publishUntil(t, bus, cluster.ConfigChange{Revision: 2}, func() bool {
 		return reloader.count() >= 2
 	})
 	waitForReloadCount(t, reloader, 2)
@@ -172,14 +172,53 @@ func TestClusterConfigSyncReloadsOnStartupAndPeerEvents(t *testing.T) {
 		t.Fatalf("lastApplied = %d, want 2", got)
 	}
 
-	// Stale or self-originated events never trigger a reload.
-	publishAndAwait(t, bus, cluster.ConfigChange{Revision: 2, Origin: "node-a"})
-	publishAndAwait(t, bus, cluster.ConfigChange{Revision: 1, Origin: "node-a"})
-	publishAndAwait(t, bus, cluster.ConfigChange{Revision: 3, Origin: "node-b"})
+	// Stale events never trigger a reload.
+	publishAndAwait(t, bus, cluster.ConfigChange{Revision: 2})
+	publishAndAwait(t, bus, cluster.ConfigChange{Revision: 1})
 	assertReloadCountStays(t, reloader, 2)
-	if got := coordinator.lastApplied.Load(); got != 3 {
-		t.Fatalf("lastApplied after own event = %d, want 3", got)
+
+	// A newer revision reloads whichever instance committed it, and only the
+	// reload advances the applied revision.
+	reloader.setRevision(3)
+	revision.Store(3)
+	publishUntil(t, bus, cluster.ConfigChange{Revision: 3}, func() bool {
+		return reloader.count() >= 3
+	})
+	waitForAppliedRevision(t, coordinator, 3)
+	assertReloadCountStays(t, reloader, 3)
+}
+
+// A peer commit whose event was lost is still applied when the next event
+// skips past it: the event triggers a reload that reads the peer's revision
+// instead of marking it applied unread.
+func TestClusterConfigSyncReloadsAcrossLostPeerEvent(t *testing.T) {
+	_, bus := newSyncTestBus(t, "node-b")
+	reloader := &fakeClusterReloader{revision: 1}
+	var revision atomic.Uint64
+	revision.Store(1)
+	coordinator := newTestClusterConfigSync(reloader, bus, &revision, time.Hour)
+	runClusterConfigSync(t, coordinator)
+	waitForReloadCount(t, reloader, 1)
+	assertReloadCountStays(t, reloader, 1)
+
+	reloader.setRevision(3)
+	revision.Store(3)
+	publishUntil(t, bus, cluster.ConfigChange{Revision: 3}, func() bool {
+		return reloader.count() >= 2
+	})
+	waitForAppliedRevision(t, coordinator, 3)
+}
+
+func waitForAppliedRevision(t *testing.T, coordinator *ClusterConfigSync, want uint64) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if coordinator.lastApplied.Load() == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
+	t.Fatalf("lastApplied = %d, want %d", coordinator.lastApplied.Load(), want)
 }
 
 func TestClusterConfigSyncCoalescesEventsDuringReload(t *testing.T) {
@@ -197,12 +236,12 @@ func TestClusterConfigSyncCoalescesEventsDuringReload(t *testing.T) {
 	assertReloadCountStays(t, reloader, 1)
 
 	// First peer event starts a reload that blocks; nine more arrive meanwhile.
-	publishUntil(t, bus, cluster.ConfigChange{Revision: 2, Origin: "node-a"}, func() bool {
+	publishUntil(t, bus, cluster.ConfigChange{Revision: 2}, func() bool {
 		return reloader.count() >= 2
 	})
 	<-reloader.started
 	for index := range 9 {
-		publishAndAwait(t, bus, cluster.ConfigChange{Revision: uint64(3 + index), Origin: "node-a"})
+		publishAndAwait(t, bus, cluster.ConfigChange{Revision: uint64(3 + index)})
 	}
 	time.Sleep(100 * time.Millisecond)
 	reloader.setRevision(11)

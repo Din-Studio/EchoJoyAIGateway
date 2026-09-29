@@ -332,7 +332,7 @@ func storedAuthState(t *testing.T, fixture serviceFixture, id uint) models.Crede
 
 func TestSweepMarksOnlyRefreshesWithoutLease(t *testing.T) {
 	fixture := newSharedHealthFixture(t)
-	events := &recordingConfigEventPublisher{instance: "node-a"}
+	events := &recordingConfigEventPublisher{}
 	fixture.service.clusterEvents = events
 	rows := refreshingSubscriptionRows(t, fixture.serviceFixture, 2)
 	fixture.service.refreshLeases = fakeRefreshLeases{held: map[uint]bool{rows[0].ID: true}}
@@ -376,7 +376,7 @@ func TestSweepMarksOnlyRefreshesWithoutLease(t *testing.T) {
 
 func TestClusterBootstrapSweepsOnlyRefreshesWithoutLease(t *testing.T) {
 	fixture := newSharedHealthFixture(t)
-	fixture.service.clusterEvents = &recordingConfigEventPublisher{instance: "node-a"}
+	fixture.service.clusterEvents = &recordingConfigEventPublisher{}
 	rows := refreshingSubscriptionRows(t, fixture.serviceFixture, 2)
 	fixture.service.refreshLeases = fakeRefreshLeases{held: map[uint]bool{rows[0].ID: true}}
 

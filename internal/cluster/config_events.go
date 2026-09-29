@@ -12,10 +12,9 @@ import (
 const configEventsChannel = "events"
 
 // ConfigChange announces that a control-plane transaction committed the given
-// configuration revision on the named instance.
+// configuration revision.
 type ConfigChange struct {
 	Revision uint64 `json:"revision"`
-	Origin   string `json:"origin"`
 }
 
 // ConfigEventBus publishes and receives ConfigChange events over Redis
@@ -30,14 +29,6 @@ func NewConfigEventBus(client *Client) *ConfigEventBus {
 		return nil
 	}
 	return &ConfigEventBus{client: client}
-}
-
-// InstanceID returns the origin used for events published by this process.
-func (bus *ConfigEventBus) InstanceID() string {
-	if bus == nil {
-		return ""
-	}
-	return bus.client.InstanceID()
 }
 
 func (bus *ConfigEventBus) channel() string {

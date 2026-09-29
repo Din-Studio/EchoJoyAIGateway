@@ -17,9 +17,9 @@ const (
 )
 
 // ClusterConfigSync keeps this instance's runtime configuration aligned with
-// control-plane commits made by cluster peers. Redis events are the fast path;
-// polling the PostgreSQL revision is the correctness path, so a lost event
-// only costs latency. It is nil in single-instance mode.
+// control-plane commits made by any cluster instance, itself included. Redis
+// events are the fast path; polling the PostgreSQL revision is the correctness
+// path, so a lost event only costs latency. It is nil in single-instance mode.
 type ClusterConfigSync struct {
 	reload       func(context.Context) (uint64, error)
 	readRevision func(context.Context) (uint64, error)
@@ -114,14 +114,11 @@ func (coordinator *ClusterConfigSync) runSubscriber(ctx context.Context) {
 	}
 }
 
-// handle runs on the subscriber goroutine. Events published by this instance
-// only advance the applied revision because the local write path already
-// published the change; peer events with a newer revision request a reload.
+// handle runs on the subscriber goroutine. Every newer revision, including one
+// this instance committed, requests a reload: the applied revision only
+// advances after a reload has read it, so a peer commit that lost its own
+// event is still picked up. The writer's own reload finds nothing to change.
 func (coordinator *ClusterConfigSync) handle(change cluster.ConfigChange) {
-	if change.Origin == coordinator.bus.InstanceID() {
-		coordinator.advanceApplied(change.Revision)
-		return
-	}
 	if change.Revision > coordinator.lastApplied.Load() {
 		coordinator.requestReload()
 	}

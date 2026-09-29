@@ -30,8 +30,8 @@ func newClusterPair(t *testing.T) clusterPair {
 		a: newServiceFixtureWithDatabase(t, db),
 		b: newServiceFixtureWithDatabase(t, db),
 	}
-	pair.a.service.clusterEvents = &recordingConfigEventPublisher{instance: "node-a"}
-	pair.b.service.clusterEvents = &recordingConfigEventPublisher{instance: "node-b"}
+	pair.a.service.clusterEvents = &recordingConfigEventPublisher{}
+	pair.b.service.clusterEvents = &recordingConfigEventPublisher{}
 	return pair
 }
 

@@ -24,8 +24,8 @@ func TestConfigEventBusPublishSubscribeRoundTrip(t *testing.T) {
 
 	// Malformed payloads are skipped without terminating the subscription.
 	server.Publish("gl:events", "{not json")
-	server.Publish("gl:events", `{"revision":0,"origin":"x"}`)
-	want := ConfigChange{Revision: 7, Origin: "node-b"}
+	server.Publish("gl:events", `{"revision":0}`)
+	want := ConfigChange{Revision: 7}
 	if err := bus.Publish(t.Context(), want); err != nil {
 		t.Fatalf("Publish() error = %v", err)
 	}
@@ -80,9 +80,6 @@ func TestConfigEventBusSubscribeDoesNotLeakGoroutines(t *testing.T) {
 
 func TestNilConfigEventBusIsInert(t *testing.T) {
 	var bus *ConfigEventBus
-	if bus.InstanceID() != "" {
-		t.Fatal("nil bus InstanceID must be empty")
-	}
 	if err := bus.Publish(t.Context(), ConfigChange{Revision: 1}); err != nil {
 		t.Fatalf("nil bus Publish() error = %v", err)
 	}

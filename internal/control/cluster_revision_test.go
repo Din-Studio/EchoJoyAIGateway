@@ -13,10 +13,9 @@ import (
 )
 
 type recordingConfigEventPublisher struct {
-	mu       sync.Mutex
-	instance string
-	changes  []cluster.ConfigChange
-	err      error
+	mu      sync.Mutex
+	changes []cluster.ConfigChange
+	err     error
 }
 
 func (publisher *recordingConfigEventPublisher) Publish(_ context.Context, change cluster.ConfigChange) error {
@@ -24,10 +23,6 @@ func (publisher *recordingConfigEventPublisher) Publish(_ context.Context, chang
 	defer publisher.mu.Unlock()
 	publisher.changes = append(publisher.changes, change)
 	return publisher.err
-}
-
-func (publisher *recordingConfigEventPublisher) InstanceID() string {
-	return publisher.instance
 }
 
 func (publisher *recordingConfigEventPublisher) published() []cluster.ConfigChange {
@@ -51,7 +46,7 @@ func readStoredClusterRevision(t *testing.T, db *gorm.DB) (string, bool) {
 
 func TestControlTransactionBumpsClusterRevisionAndPublishes(t *testing.T) {
 	fixture := newServiceFixture(t)
-	publisher := &recordingConfigEventPublisher{instance: "node-a"}
+	publisher := &recordingConfigEventPublisher{}
 	fixture.service.clusterEvents = publisher
 
 	groupID := createGroupWithCredentials(t, fixture, "sk-first")
@@ -74,15 +69,15 @@ func TestControlTransactionBumpsClusterRevisionAndPublishes(t *testing.T) {
 		t.Fatalf("published %d changes, want 2: %#v", len(changes), changes)
 	}
 	for index, change := range changes {
-		if change.Revision != uint64(index+1) || change.Origin != "node-a" {
-			t.Fatalf("change[%d] = %#v, want revision %d origin node-a", index, change, index+1)
+		if change.Revision != uint64(index+1) {
+			t.Fatalf("change[%d] = %#v, want revision %d", index, change, index+1)
 		}
 	}
 }
 
 func TestControlTransactionDoesNotBumpOrPublishOnFailure(t *testing.T) {
 	fixture := newServiceFixture(t)
-	publisher := &recordingConfigEventPublisher{instance: "node-a"}
+	publisher := &recordingConfigEventPublisher{}
 	fixture.service.clusterEvents = publisher
 
 	boom := errors.New("boom")
@@ -100,7 +95,7 @@ func TestControlTransactionDoesNotBumpOrPublishOnFailure(t *testing.T) {
 
 func TestControlTransactionPublishFailureDoesNotFailWrite(t *testing.T) {
 	fixture := newServiceFixture(t)
-	publisher := &recordingConfigEventPublisher{instance: "node-a", err: errors.New("redis down")}
+	publisher := &recordingConfigEventPublisher{err: errors.New("redis down")}
 	fixture.service.clusterEvents = publisher
 
 	createGroupWithCredentials(t, fixture, "sk-first")

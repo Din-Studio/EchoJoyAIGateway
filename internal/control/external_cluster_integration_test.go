@@ -58,7 +58,7 @@ func awaitGroupVisible(t *testing.T, instance clusterContractInstance, groupID u
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("group %d not visible on %s within %s", groupID, instance.bus.InstanceID(), timeout)
+	t.Fatalf("group %d not visible within %s", groupID, timeout)
 	return 0
 }
 
@@ -148,7 +148,7 @@ func TestExternalClusterConfigPropagation(t *testing.T) {
 	// Sever the fast path: instance A commits without a reachable publish so
 	// only the one-second poll can carry the change to instance B.
 	instanceA.fixture.service.clusterEvents = &recordingConfigEventPublisher{
-		instance: "node-a", err: fmt.Errorf("redis publish blocked"),
+		err: fmt.Errorf("redis publish blocked"),
 	}
 	if _, err := instanceA.fixture.service.UpdateGroupModels(t.Context(), propagatedGroup, GroupModelsUpdateRequest{
 		Models: optionalGroupModels{Set: true, Values: []GroupModel{{ID: "gpt-4o"}, {ID: "gpt-4.1"}}},

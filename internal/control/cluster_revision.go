@@ -21,7 +21,6 @@ const clusterConfigRevisionKey = models.InternalSystemSettingPrefix + "cluster.c
 // configEventPublisher is the control-plane view of cluster.ConfigEventBus.
 type configEventPublisher interface {
 	Publish(context.Context, cluster.ConfigChange) error
-	InstanceID() string
 }
 
 // bumpClusterConfigRevision increments the revision inside the committing
