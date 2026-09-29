@@ -75,10 +75,6 @@ export interface AccessInput {
   price_multiplier: string
   cost_limit_rules: CostRule[]
 }
-/** Fields the AccessKey update accepts; cost-limit rules have their own endpoints. */
-export type AccessPatch = Partial<Omit<AccessInput, 'cost_limit_rules'>>
-/** Body of the cost-limit rule sub-resource endpoints. */
-export type CostRuleDefinition = Omit<CostRule, 'id'>
 export const accessKeysKey = ['modern', 'access-keys'] as const
 export const accessDetailKey = (id: number) => ['modern', 'access-key-detail', id] as const
 const timestamp = (value: unknown) => (value == null ? null : integer(value))
@@ -250,7 +246,7 @@ export async function createAccessKey(
 export async function updateAccessKey(
   client: ApiClient,
   id: number,
-  patch: AccessPatch,
+  patch: Partial<AccessInput>,
   signal: AbortSignal,
   operation?: string,
 ): Promise<AccessKey> {
@@ -259,49 +255,6 @@ export async function updateAccessKey(
       method: 'PUT',
       json: patch,
       ...(operation ? { headers: { 'Idempotency-Key': operation } } : {}),
-      signal,
-    }),
-  )
-}
-/** Each rule endpoint changes exactly one rule and returns the AccessKey as committed. */
-export async function createAccessKeyRule(
-  client: ApiClient,
-  id: number,
-  rule: CostRuleDefinition,
-  signal: AbortSignal,
-): Promise<AccessKey> {
-  return readAccessKey(
-    await client.request(`/api/access-keys/${id}/cost-limits`, {
-      method: 'POST',
-      json: rule,
-      signal,
-    }),
-  )
-}
-export async function updateAccessKeyRule(
-  client: ApiClient,
-  id: number,
-  ruleID: number,
-  rule: CostRuleDefinition,
-  signal: AbortSignal,
-): Promise<AccessKey> {
-  return readAccessKey(
-    await client.request(`/api/access-keys/${id}/cost-limits/${ruleID}`, {
-      method: 'PUT',
-      json: rule,
-      signal,
-    }),
-  )
-}
-export async function deleteAccessKeyRule(
-  client: ApiClient,
-  id: number,
-  ruleID: number,
-  signal: AbortSignal,
-): Promise<AccessKey> {
-  return readAccessKey(
-    await client.request(`/api/access-keys/${id}/cost-limits/${ruleID}`, {
-      method: 'DELETE',
       signal,
     }),
   )

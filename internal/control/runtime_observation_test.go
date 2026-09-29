@@ -310,9 +310,11 @@ func TestRuntimeHealthKeepsAccessQuotaViewWithCapturedConfig(t *testing.T) {
 		close(allowDecrypt)
 		t.Fatal("RuntimeHealth() did not reach problem-key mapping")
 	}
-	if _, err := fixture.service.DeleteAccessKeyCostLimitRule(t.Context(), created.ID, created.CostLimitRules[0].ID); err != nil {
+	if _, err := fixture.service.UpdateAccessKey(t.Context(), created.ID, AccessKeyUpdateRequest{
+		CostLimitRules: OptionalAccessKeyCostLimitRules{Set: true, Values: []AccessKeyCostLimitRuleRequest{}},
+	}); err != nil {
 		close(allowDecrypt)
-		t.Fatalf("DeleteAccessKeyCostLimitRule(remove quota) error = %v", err)
+		t.Fatalf("UpdateAccessKey(remove quota) error = %v", err)
 	}
 	close(allowDecrypt)
 	result := <-resultCh
