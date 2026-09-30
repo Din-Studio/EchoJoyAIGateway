@@ -45,7 +45,7 @@ func TestMigrationRegistryContainsOrderedMigrations(t *testing.T) {
 func TestMigrationRegistryUsesOneOrderedChainForFreshAndExistingDatabases(t *testing.T) {
 	entries, calls := testMigrationRegistry()
 
-	fresh := openInternalMigrationTestDatabase(t)
+	fresh := openEmptyTestDatabase(t)
 	if err := applyMigrationRegistry(fresh, entries); err != nil {
 		t.Fatalf("migrate fresh database: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestMigrationRegistryUsesOneOrderedChainForFreshAndExistingDatabases(t *tes
 		t.Fatalf("fresh migration calls = %v, want [0001_test 0002_test]", *calls)
 	}
 
-	existing := openInternalMigrationTestDatabase(t)
+	existing := openEmptyTestDatabase(t)
 	if err := existing.AutoMigrate(&schemaMigration{}); err != nil {
 		t.Fatalf("create existing migration ledger: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestApplyMigrationRegistryRejectsOutOfOrderEntries(t *testing.T) {
 	entries, _ := testMigrationRegistry()
 	entries[0], entries[1] = entries[1], entries[0]
 
-	err := applyMigrationRegistry(openInternalMigrationTestDatabase(t), entries)
+	err := applyMigrationRegistry(openEmptyTestDatabase(t), entries)
 	if err == nil || !strings.Contains(err.Error(), "migration registry entry 1") {
 		t.Fatalf("applyMigrationRegistry() error = %v, want out-of-order registry rejection", err)
 	}

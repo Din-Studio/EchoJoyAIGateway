@@ -324,9 +324,6 @@ func TestQueryUsageMixedSourcesRejectCorruptRowsBeforeCombining(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			db := openRequestLogQueryDB(t)
 			start := time.Date(2026, time.September, 8, 14, 0, 0, 0, time.UTC)
-			if err := db.Exec(`PRAGMA ignore_check_constraints = ON`).Error; err != nil {
-				t.Fatal(err)
-			}
 			first, second := usageStat(start, 7, "model", 100), usageStat(start, 8, "model", 1)
 			switch kind {
 			case "misaligned hour":
@@ -334,14 +331,16 @@ func TestQueryUsageMixedSourcesRejectCorruptRowsBeforeCombining(t *testing.T) {
 			case "negative hourly count":
 				second.RequestCount, second.SuccessCount = -1, -1
 			}
-			createUsageStats(t, db, first, second)
 			row := aggregationRow("corrupt-boundary", start.Add(-time.Minute), 7, "model")
 			if kind == "negative log tokens" {
 				row.UncachedInputTokens = -1
 			}
-			if err := db.Create(&row).Error; err != nil {
-				t.Fatal(err)
-			}
+			withoutCheckConstraints(t, db, []string{"usage_stats", "request_logs"}, func() {
+				createUsageStats(t, db, first, second)
+				if err := db.Create(&row).Error; err != nil {
+					t.Fatal(err)
+				}
+			})
 			if _, err := newRequestLogTestService(db).QueryUsage(context.Background(), UsageQuery{
 				FromMS: start.Add(-30 * time.Minute).UnixMilli(), ToMS: start.Add(7*time.Hour + 30*time.Minute).UnixMilli(),
 			}); err == nil {

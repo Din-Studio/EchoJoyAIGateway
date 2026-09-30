@@ -3,8 +3,6 @@ package requestlog
 import (
 	"context"
 	"fmt"
-	"os"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +13,7 @@ import (
 	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/telemetry"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 // TestExternalDatabaseConcurrentUsageAggregation proves that two request-log
@@ -23,10 +22,7 @@ import (
 // the bucket ends up with the exact sum.
 func TestExternalDatabaseConcurrentUsageAggregation(t *testing.T) {
 	// 不标记 t.Parallel()：依赖 GPT_LOAD_DATABASE_TEST_DSN 的共享外部数据库。
-	dsn := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := pgtest.DSN(t)
 	const writers = 2
 	const rowsPerWriter = 1000
 

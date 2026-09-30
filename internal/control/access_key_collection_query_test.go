@@ -9,6 +9,7 @@ import (
 
 	"gpt-load/internal/state"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 func TestQueryAccessKeyCollectionRecordsSummarizesBeforeFiltering(t *testing.T) {
@@ -238,14 +239,9 @@ func TestListAccessKeyCollectionRejectsCanceledContextAndInvalidMappedMetadata(t
 		Name: "invalid", KeyValue: "ciphertext", KeyHash: "hash", KeySuffix: "bad ",
 		Status: string(state.AccessKeyStatusActive), Filters: models.JSON(`{}`),
 	}
-	if err := fixture.db.Exec("PRAGMA ignore_check_constraints = ON").Error; err != nil {
-		t.Fatalf("disable check constraints: %v", err)
-	}
+	pgtest.DropConstraints(t, fixture.db, "access_keys", 'c')
 	if err := fixture.db.Create(&row).Error; err != nil {
 		t.Fatalf("create invalid access key: %v", err)
-	}
-	if err := fixture.db.Exec("PRAGMA ignore_check_constraints = OFF").Error; err != nil {
-		t.Fatalf("restore check constraints: %v", err)
 	}
 	if _, err := fixture.service.ListAccessKeyCollection(t.Context(), AccessKeyCollectionQuery{Page: 1, PageSize: 20}); err == nil {
 		t.Fatal("ListAccessKeyCollection() error = nil for invalid mapped metadata")

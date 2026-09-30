@@ -10,6 +10,7 @@ import (
 	"gpt-load/internal/state"
 	"gpt-load/internal/state/loader"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 func TestBuildCompileInputLoadsPersistedPriceMultipliers(t *testing.T) {
@@ -62,9 +63,8 @@ func TestBuildCompileInputRejectsInvalidPersistedPriceMultipliers(t *testing.T) 
 	}
 	mustCreate(t, db, &group)
 	mustCreate(t, db, &key)
-	if err := db.Exec("PRAGMA ignore_check_constraints = ON").Error; err != nil {
-		t.Fatal(err)
-	}
+	pgtest.DropConstraints(t, db, "groups", 'c')
+	pgtest.DropConstraints(t, db, "access_keys", 'c')
 	for _, resource := range []struct {
 		model any
 		name  string

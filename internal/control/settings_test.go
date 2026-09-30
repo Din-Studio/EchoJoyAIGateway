@@ -23,6 +23,7 @@ import (
 	"gpt-load/internal/state"
 	stateloader "gpt-load/internal/state/loader"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 func TestSettingsProxyConfigIsEncryptedMaskedAndResettable(t *testing.T) {
@@ -726,16 +727,7 @@ func TestUpdateSettingsRejectsInvalidChangesWithoutPublishing(t *testing.T) {
 func TestUpdateSettingsRollsBackAllRowsWithoutPublishing(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
-	if err := fixture.db.Exec(`
-		CREATE TRIGGER reject_request_timeout
-		BEFORE INSERT ON system_settings
-		WHEN NEW.key = 'request_timeout'
-		BEGIN
-			SELECT RAISE(ABORT, 'forced settings rollback');
-		END
-	`).Error; err != nil {
-		t.Fatal(err)
-	}
+	pgtest.FailOn(t, fixture.db, "system_settings", "INSERT", "NEW.key = 'request_timeout'", "forced settings rollback")
 	fixture.service.db = fixture.db.Session(&gorm.Session{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})

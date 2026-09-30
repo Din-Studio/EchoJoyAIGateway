@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,28 +21,24 @@ import (
 	subscriptionproviders "gpt-load/internal/subscription/providers"
 	"gpt-load/internal/subscription/providers/codex"
 	subscriptionruntime "gpt-load/internal/subscription/runtime"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 // externalClusterTarget returns the real PostgreSQL DSN and Redis address,
-// skipping the test when either is unavailable.
+// failing the test when either is not configured.
 func externalClusterTarget(t *testing.T) (string, string) {
 	t.Helper()
-	dsn := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
-	redisAddr := strings.TrimSpace(os.Getenv("GPT_LOAD_REDIS_TEST_ADDR"))
-	if redisAddr == "" {
-		t.Skip("GPT_LOAD_REDIS_TEST_ADDR is not set")
-	}
+	dsn := pgtest.DSN(t)
 	database, err := config.ParseDatabaseDSN(dsn)
 	if err != nil {
 		t.Fatalf("ParseDatabaseDSN() error = %v", err)
 	}
+	// The MySQL contract shard has no Redis; skip on the driver before
+	// requiring the Redis address.
 	if database.Driver != config.DatabaseDriverPostgreSQL {
 		t.Skipf("cluster mode requires PostgreSQL, got %s", database.Driver)
 	}
-	return dsn, redisAddr
+	return dsn, pgtest.RedisAddr(t)
 }
 
 // healthContractInstance is one simulated process with shared credential

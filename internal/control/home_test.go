@@ -302,7 +302,7 @@ func TestReadHomeBaseFailsClosed(t *testing.T) {
 
 func TestReadHomeBaseKeepsDatabaseRowsInOneReadSnapshot(t *testing.T) {
 	t.Parallel()
-	fixture, dsn := newFileServiceFixture(t)
+	fixture, dsn := newServiceFixtureWithSecondDSN(t)
 	group := validControlGroup("home-snapshot")
 	if err := fixture.db.Create(group).Error; err != nil {
 		t.Fatalf("create group: %v", err)
@@ -370,7 +370,7 @@ func TestReadHomeBaseKeepsDatabaseRowsInOneReadSnapshot(t *testing.T) {
 		),
 	}
 	if err := writer.Create(&newAccessKey).Error; err != nil {
-		t.Fatalf("WAL writer create access key: %v", err)
+		t.Fatalf("writer create access key: %v", err)
 	}
 	close(releaseRead)
 

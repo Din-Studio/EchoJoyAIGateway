@@ -20,20 +20,15 @@ import (
 	"gpt-load/internal/state"
 	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/pgtest"
 )
 
-// externalClusterEnv returns the shared PostgreSQL DSN and Redis address, or
-// skips when either is absent.
+// externalClusterEnv returns the shared PostgreSQL DSN and Redis address. It
+// skips on a non-PostgreSQL DSN before reading Redis, so the MySQL contract
+// shard never requires Redis.
 func externalClusterEnv(t *testing.T) (string, string) {
 	t.Helper()
-	dsn := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
-	redisAddr := strings.TrimSpace(os.Getenv("GPT_LOAD_REDIS_TEST_ADDR"))
-	if redisAddr == "" {
-		t.Skip("GPT_LOAD_REDIS_TEST_ADDR is not set")
-	}
+	dsn := pgtest.DSN(t)
 	database, err := config.ParseDatabaseDSN(dsn)
 	if err != nil {
 		t.Fatalf("ParseDatabaseDSN() error = %v", err)
@@ -41,7 +36,7 @@ func externalClusterEnv(t *testing.T) (string, string) {
 	if database.Driver != config.DatabaseDriverPostgreSQL {
 		t.Skipf("cluster mode requires PostgreSQL, got %s", database.Driver)
 	}
-	return dsn, redisAddr
+	return dsn, pgtest.RedisAddr(t)
 }
 
 func externalClusterClient(t *testing.T, redisAddr, keyPrefix, instanceID string) *cluster.Client {

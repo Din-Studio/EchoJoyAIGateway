@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	gormsqlite "github.com/glebarez/sqlite"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 
+	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 func TestQueryUsageHourAggregatesFiltersAndLeavesSparseBucketsAbsent(t *testing.T) {
@@ -557,7 +557,7 @@ func TestQueryUsageOrdersDistributionByRequestsAndCost(t *testing.T) {
 }
 
 func TestQueryUsageUsesOneReadSnapshot(t *testing.T) {
-	db, dsn := openRequestLogFileDB(t)
+	db, dsn := openRequestLogDBWithDSN(t)
 	service := newRequestLogTestService(db)
 	start := time.Date(2026, time.July, 3, 0, 0, 0, 0, time.UTC)
 	createUsageStats(t, db, usageStat(start, 1, "before", 1))
@@ -882,27 +882,57 @@ func createUsageStatsWithoutGroups(t *testing.T, db *gorm.DB, rows ...models.Usa
 	}
 }
 
+// createCorruptUsageStats stores rows the schema CHECK constraints reject.
 func createCorruptUsageStats(t *testing.T, db *gorm.DB, rows ...models.UsageStat) {
 	t.Helper()
-	if err := db.Exec(`PRAGMA ignore_check_constraints = ON`).Error; err != nil {
-		t.Fatalf("disable SQLite CHECK constraints: %v", err)
-	}
-	for _, row := range rows {
-		if err := db.Create(&row).Error; err != nil {
-			t.Fatalf("create corrupt UsageStat %#v: %v", row, err)
+	withoutCheckConstraints(t, db, []string{"usage_stats"}, func() {
+		for _, row := range rows {
+			if err := db.Create(&row).Error; err != nil {
+				t.Fatalf("create corrupt UsageStat %#v: %v", row, err)
+			}
 		}
+	})
+}
+
+// withoutCheckConstraints runs write with the CHECK constraints of tables
+// removed, then restores them as NOT VALID: the corrupt rows stay while every
+// later write is checked again.
+func withoutCheckConstraints(t *testing.T, db *gorm.DB, tables []string, write func()) {
+	t.Helper()
+	type checkConstraint struct {
+		Name       string
+		Definition string
 	}
-	if err := db.Exec(`PRAGMA ignore_check_constraints = OFF`).Error; err != nil {
-		t.Fatalf("restore SQLite CHECK constraints: %v", err)
+	saved := make(map[string][]checkConstraint, len(tables))
+	for _, table := range tables {
+		var constraints []checkConstraint
+		if err := db.Raw(`
+			SELECT conname AS name, pg_get_constraintdef(oid) AS definition
+			FROM pg_constraint
+			WHERE conrelid = ?::regclass AND contype = 'c'
+			ORDER BY conname
+		`, table).Scan(&constraints).Error; err != nil {
+			t.Fatalf("list %s CHECK constraints: %v", table, err)
+		}
+		saved[table] = constraints
+		pgtest.DropConstraints(t, db, table, 'c')
+	}
+	write()
+	for _, table := range tables {
+		for _, constraint := range saved[table] {
+			if err := db.Exec(fmt.Sprintf(
+				`ALTER TABLE %q ADD CONSTRAINT %q %s NOT VALID`,
+				table, constraint.Name, constraint.Definition,
+			)).Error; err != nil {
+				t.Fatalf("restore %s constraint %s: %v", table, constraint.Name, err)
+			}
+		}
 	}
 }
 
 func openUsageQueryWriterDB(t *testing.T, dsn string) (*gorm.DB, func()) {
 	t.Helper()
-	db, err := gorm.Open(
-		gormsqlite.Open(dsn+"?_pragma=busy_timeout(5000)"),
-		&gorm.Config{Logger: logger.Default.LogMode(logger.Silent)},
-	)
+	db, err := storage.Open(dsn)
 	if err != nil {
 		t.Fatalf("open concurrent UsageStat writer: %v", err)
 	}

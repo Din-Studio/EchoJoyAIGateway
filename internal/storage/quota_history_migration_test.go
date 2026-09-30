@@ -2,7 +2,6 @@ package storage
 
 import (
 	"fmt"
-	"os"
 	"testing"
 
 	"gorm.io/gorm"
@@ -13,7 +12,7 @@ import (
 func TestQuotaHistoryMigrationCreatesQueryableHistory(t *testing.T) {
 	t.Parallel()
 
-	db := openInternalMigrationTestDatabase(t)
+	db := openEmptyTestDatabase(t)
 	if err := applyMigrations(db); err != nil {
 		t.Fatal(err)
 	}
@@ -30,17 +29,8 @@ func TestQuotaHistoryMigrationCreatesQueryableHistory(t *testing.T) {
 	}
 }
 
-func TestQuotaHistoryMigrationContract(t *testing.T) {
-	t.Parallel()
-
-	testQuotaHistoryMigration(t, openInternalMigrationTestDatabase)
-}
-
 func TestExternalQuotaHistoryMigrationContract(t *testing.T) {
-	dsn := os.Getenv("GPT_LOAD_DATABASE_TEST_DSN")
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := externalMigrationContractDSN(t)
 	testQuotaHistoryMigration(t, func(t *testing.T) *gorm.DB { return openExternalIncrementalMigrationDatabase(t, dsn) })
 }
 
@@ -48,9 +38,6 @@ func testQuotaHistoryMigration(t *testing.T, open func(*testing.T) *gorm.DB) {
 	for _, scenario := range []string{"fresh", "upgrade", "interrupted"} {
 		t.Run(scenario, func(t *testing.T) {
 			db := open(t)
-			if db.Dialector.Name() == "sqlite" {
-				t.Parallel()
-			}
 			if scenario != "fresh" {
 				if err := applyMigrationRegistry(db, migrations[:15]); err != nil {
 					t.Fatal(err)

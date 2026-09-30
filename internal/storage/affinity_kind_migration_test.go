@@ -2,31 +2,19 @@ package storage
 
 import (
 	"fmt"
-	"os"
 	"testing"
 
 	"gorm.io/gorm"
 )
 
-func TestAffinityKindMigrationContract(t *testing.T) {
-	t.Parallel()
-
-	testAffinityKindMigration(t, openInternalMigrationTestDatabase)
-}
 func TestExternalAffinityKindMigrationContract(t *testing.T) {
-	dsn := os.Getenv("GPT_LOAD_DATABASE_TEST_DSN")
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := externalMigrationContractDSN(t)
 	testAffinityKindMigration(t, func(t *testing.T) *gorm.DB { return openExternalIncrementalMigrationDatabase(t, dsn) })
 }
 func testAffinityKindMigration(t *testing.T, open func(*testing.T) *gorm.DB) {
 	for _, scenario := range []string{"fresh", "upgrade", "interrupted"} {
 		t.Run(scenario, func(t *testing.T) {
 			db := open(t)
-			if db.Dialector.Name() == "sqlite" {
-				t.Parallel()
-			}
 			if scenario != "fresh" {
 				if err := applyMigrationRegistry(db, migrations[:13]); err != nil {
 					t.Fatal(err)

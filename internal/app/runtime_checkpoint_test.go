@@ -14,6 +14,7 @@ import (
 	"gpt-load/internal/health"
 	"gpt-load/internal/state"
 	"gpt-load/internal/storage"
+	"gpt-load/internal/testutil/pgtest"
 
 	"github.com/sirupsen/logrus"
 )
@@ -53,7 +54,7 @@ func (fake runtimeCheckpointFake) Save(ctx context.Context) error {
 }
 
 func TestAppRestoresCheckpointAfterRuntimeRecovery(t *testing.T) {
-	db, err := storage.Open(":memory:")
+	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -101,7 +102,7 @@ func TestAppLogsCheckpointRestoreFailureOnce(t *testing.T) {
 		t.Fatalf("write malformed checkpoint fixture: %v", err)
 	}
 
-	db, err := storage.Open(":memory:")
+	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -138,7 +139,7 @@ func TestAppLogsCheckpointRestoreFailureOnce(t *testing.T) {
 }
 
 func TestAppSavesCheckpointBeforeRequestLogsAndUsesIndependentContext(t *testing.T) {
-	db, err := storage.Open(":memory:")
+	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}

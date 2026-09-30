@@ -19,6 +19,7 @@ import (
 	"gpt-load/internal/platform/encryption"
 	"gpt-load/internal/state"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 const bootstrapMarkerForTest = models.InternalSystemSettingPrefix + "bootstrap.default_access_key.v1"
@@ -150,7 +151,7 @@ func TestEnsureInitialStateIsIdempotentWhenMarkerExists(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("create bootstrap marker: %v", err)
 	}
-	if err := fixture.db.Exec("DROP TABLE access_keys").Error; err != nil {
+	if err := fixture.db.Exec("DROP TABLE access_keys CASCADE").Error; err != nil {
 		t.Fatalf("drop AccessKey table: %v", err)
 	}
 
@@ -196,16 +197,8 @@ func TestEnsureInitialStateRollsBackAccessKeyWhenMarkerWriteFails(t *testing.T) 
 	t.Parallel()
 	fixture := newServiceFixture(t)
 	fixture.service.random = bytes.NewReader(make([]byte, 16))
-	if err := fixture.db.Exec(`
-		CREATE TRIGGER reject_bootstrap_marker
-		BEFORE INSERT ON system_settings
-		WHEN NEW.key = '_internal.bootstrap.default_access_key.v1'
-		BEGIN
-		  SELECT RAISE(ABORT, 'marker rejected');
-		END;
-	`).Error; err != nil {
-		t.Fatalf("create marker rejection trigger: %v", err)
-	}
+	pgtest.FailOn(t, fixture.db, "system_settings", "INSERT",
+		"NEW.key = '_internal.bootstrap.default_access_key.v1'", "marker rejected")
 
 	if err := fixture.service.EnsureInitialState(context.Background()); err == nil {
 		t.Fatal("EnsureInitialState() error = nil, want marker rejection")

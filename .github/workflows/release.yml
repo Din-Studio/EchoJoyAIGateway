@@ -209,8 +209,33 @@ jobs:
     needs: validate-tag
     # 同一 commit 的 CI 已全绿时跳过；publication-preflight 接受 skipped 结果。
     if: ${{ needs.validate-tag.outputs.ci_verified != 'true' }}
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: [self-hosted, Linux, ARM64]
     timeout-minutes: 20
+    # 业务测试跑在真实 PostgreSQL 与 Redis 上；GitHub services 只支持 Linux runner。
+    # 数据库只用内存盘，每个实例按实际使用量占用，最多 2 GiB。
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gpt_load
+        ports:
+          - 5432
+        options: >-
+          --tmpfs /var/lib/postgresql:rw,nosuid,nodev,size=2g
+          --health-cmd="pg_isready -U postgres -d gpt_load"
+          --health-interval=5s
+          --health-timeout=10s
+          --health-retries=20
+      redis:
+        image: redis:7
+        ports:
+          - 6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=10s
+          --health-retries=20
     steps:
       - name: Checkout tag commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -224,6 +249,9 @@ jobs:
           cache: false
 
       - name: Run race-enabled tests
+        env:
+          GPT_LOAD_DATABASE_TEST_DSN: postgres://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/gpt_load?sslmode=disable
+          GPT_LOAD_REDIS_TEST_ADDR: 127.0.0.1:${{ job.services.redis.ports['6379'] }}
         run: go test -race -vet=off -count=1 -timeout=15m . ./internal/... ./tools/...
 
   race-cpa:
@@ -287,6 +315,16 @@ jobs:
           --health-interval=5s
           --health-timeout=10s
           --health-retries=20
+      # PostgreSQL 矩阵项附带 Redis，覆盖集群模式的双实例配置广播合同。
+      redis:
+        image: ${{ matrix.driver == 'postgres' && 'redis:7' || '' }}
+        ports:
+          - 6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=10s
+          --health-retries=20
       # MySQL 两组使用独立实例，避免不同测试数据库争用同名 GET_LOCK。
       secondary-mysql:
         image: ${{ matrix.driver == 'mysql' && 'mysql:8.4' || '' }}
@@ -317,6 +355,7 @@ jobs:
         env:
           GPT_LOAD_DATABASE_TEST_DSN: ${{ format(matrix.dsn, job.services.database.ports[format('{0}', matrix.port)]) }}
           GPT_LOAD_DATABASE_SECONDARY_DSN: ${{ matrix.driver == 'mysql' && format(matrix.dsn, job.services.secondary-mysql.ports['3306']) || '' }}
+          GPT_LOAD_REDIS_TEST_ADDR: ${{ matrix.driver == 'postgres' && format('127.0.0.1:{0}', job.services.redis.ports['6379']) || '' }}
         run: .github/scripts/ci-database-contract.sh "${{ matrix.driver }}"
 
   build-binaries:

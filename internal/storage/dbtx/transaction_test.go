@@ -5,9 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	gormsqlite "github.com/glebarez/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	"gpt-load/internal/storage"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 func TestCapabilitiesForDriverPreserveDatabaseTransactionSemantics(t *testing.T) {
@@ -44,10 +43,7 @@ func TestCapabilitiesForDriverPreserveDatabaseTransactionSemantics(t *testing.T)
 }
 
 func TestDiscardConnectionTreatsBadConnectionAsSuccessfulCleanup(t *testing.T) {
-	db, err := gorm.Open(
-		gormsqlite.Open(":memory:"),
-		&gorm.Config{Logger: logger.Default.LogMode(logger.Silent)},
-	)
+	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}

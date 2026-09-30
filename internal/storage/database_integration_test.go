@@ -3,7 +3,6 @@ package storage_test
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -16,16 +15,14 @@ import (
 	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/dbtx"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/pgtest"
 )
 
-// TestExternalDatabaseConcurrentMigrations is opt-in so ordinary unit tests
-// remain hermetic. It starts two migration attempts against the same external
-// database to exercise the driver-level serialization contract.
+// TestExternalDatabaseConcurrentMigrations starts two migration attempts
+// against the same external database to exercise the driver-level
+// serialization contract.
 func TestExternalDatabaseConcurrentMigrations(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := pgtest.DSN(t)
 
 	databases := make([]*gorm.DB, 2)
 	for index := range databases {
@@ -59,15 +56,12 @@ func TestExternalDatabaseConcurrentMigrations(t *testing.T) {
 	}
 }
 
-// TestExternalDatabaseLifecycle is opt-in so ordinary unit tests remain
-// hermetic. Set GPT_LOAD_DATABASE_TEST_DSN to one MySQL or PostgreSQL URL to
-// exercise connection, migration, reserved-column queries, foreign keys, and
-// the dialect-specific GORM upsert against a real server.
+// TestExternalDatabaseLifecycle runs against GPT_LOAD_DATABASE_TEST_DSN, one
+// MySQL or PostgreSQL URL, to exercise connection, migration, reserved-column
+// queries, foreign keys, and the dialect-specific GORM upsert against a real
+// server.
 func TestExternalDatabaseLifecycle(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := pgtest.DSN(t)
 
 	db, err := storage.OpenWithSource(dsn, config.DatabaseSourceExternal)
 	if err != nil {
@@ -259,7 +253,8 @@ func TestExternalDatabaseLifecycle(t *testing.T) {
 	setting := models.SystemSetting{
 		// Keep this lifecycle-only row outside the public runtime-settings
 		// namespace. The same CI database also executes control workflow tests.
-		Key:         models.InternalSystemSettingPrefix + "integration.key",
+		// The shared database outlives one run, so the key is unique per run.
+		Key:         fmt.Sprintf("%sintegration.key.%d", models.InternalSystemSettingPrefix, time.Now().UnixNano()),
 		Value:       `{}`,
 		UpdatedAtMS: time.Now().UnixMilli(),
 	}
@@ -322,10 +317,7 @@ func TestExternalDatabaseLifecycle(t *testing.T) {
 // MySQL requires an explicit binary column collation; PostgreSQL already
 // preserves case under its normal text semantics.
 func TestExternalDatabaseModelPriceIdentityUsesExactComparison(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := pgtest.DSN(t)
 
 	db, err := storage.OpenWithSource(dsn, config.DatabaseSourceExternal)
 	if err != nil {
@@ -356,10 +348,7 @@ func TestExternalDatabaseModelPriceIdentityUsesExactComparison(t *testing.T) {
 // explicitly promote the one report transaction before requesting its stable
 // snapshot; WITH CONSISTENT SNAPSHOT alone follows the session isolation.
 func TestExternalDatabaseReadSnapshotUsesRepeatableRead(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := pgtest.DSN(t)
 
 	db, err := storage.OpenWithSource(dsn, config.DatabaseSourceExternal)
 	if err != nil {

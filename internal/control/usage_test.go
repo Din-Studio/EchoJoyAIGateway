@@ -749,7 +749,7 @@ func TestUsageAPIRejectsUnsafeProcessStatsWithoutLeakingCause(t *testing.T) {
 	}
 }
 
-func TestUsageAPIExcludesLegacyZeroAttemptAggregateFromSQLite(t *testing.T) {
+func TestUsageAPIExcludesLegacyZeroAttemptAggregate(t *testing.T) {
 	t.Parallel()
 	initControlI18n(t)
 	now := time.Date(2026, time.July, 27, 12, 0, 0, 0, time.UTC)

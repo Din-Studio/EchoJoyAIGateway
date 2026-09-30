@@ -3,9 +3,7 @@ package control
 import (
 	"crypto/rand"
 	"fmt"
-	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 
@@ -13,6 +11,7 @@ import (
 
 	"gpt-load/internal/channel"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 // TestExternalDatabaseConcurrentIdempotentOperation proves the cross-instance
@@ -21,11 +20,8 @@ import (
 // committed result, create one resource, and leave one completed operation row.
 func TestExternalDatabaseConcurrentIdempotentOperation(t *testing.T) {
 	// 不标记 t.Parallel()：依赖 GPT_LOAD_DATABASE_TEST_DSN 的共享外部数据库，并发执行有唯一索引冲突等正确性风险。
-	dsn := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
-	instances := []serviceFixture{newServiceFixtureWithDSN(t, dsn), newServiceFixtureWithDSN(t, dsn)}
+	dsn := pgtest.DSN(t)
+	instances := []serviceFixture{newExternalServiceFixture(t, dsn), newExternalServiceFixture(t, dsn)}
 	control := instances[0].db
 
 	const rounds = 20

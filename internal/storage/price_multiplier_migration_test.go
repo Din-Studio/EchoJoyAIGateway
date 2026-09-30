@@ -2,8 +2,6 @@ package storage
 
 import (
 	"fmt"
-	"os"
-	"strings"
 	"testing"
 
 	"gorm.io/gorm"
@@ -14,7 +12,7 @@ import (
 
 func TestPriceMultiplierMigrationAddsConfigurationColumns(t *testing.T) {
 	t.Parallel()
-	db := openInternalMigrationTestDatabase(t)
+	db := openEmptyTestDatabase(t)
 	if err := AutoMigrate(db); err != nil {
 		t.Fatal(err)
 	}
@@ -25,16 +23,8 @@ func TestPriceMultiplierMigrationAddsConfigurationColumns(t *testing.T) {
 	}
 }
 
-func TestPriceMultiplierMigrationUpgradeAndRecovery(t *testing.T) {
-	t.Parallel()
-	testPriceMultiplierMigrationContract(t, func(t *testing.T) *gorm.DB { return openInternalMigrationTestDatabase(t) })
-}
-
 func TestExternalPriceMultiplierMigrationContract(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := externalMigrationContractDSN(t)
 	testPriceMultiplierMigrationContract(t, func(t *testing.T) *gorm.DB { return openExternalIncrementalMigrationDatabase(t, dsn) })
 }
 
@@ -43,9 +33,6 @@ func testPriceMultiplierMigrationContract(t *testing.T, open func(*testing.T) *g
 	for _, mode := range []string{"fresh", "upgrade", "interrupted", "columns_added"} {
 		t.Run(mode, func(t *testing.T) {
 			db := open(t)
-			if db.Dialector.Name() == "sqlite" {
-				t.Parallel()
-			}
 			if mode != "fresh" {
 				if err := applyMigrationRegistry(db, migrations[:8]); err != nil {
 					t.Fatal(err)

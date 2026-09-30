@@ -2,33 +2,22 @@ package storage
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 
 	"gorm.io/gorm"
 
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/pgtest"
 )
 
-func TestModelCooldownMigrationContract(t *testing.T) {
-	t.Parallel()
-	testModelCooldownMigration(t, openInternalMigrationTestDatabase)
-}
-
 func TestExternalModelCooldownMigrationContract(t *testing.T) {
-	dsn := os.Getenv("GPT_LOAD_DATABASE_TEST_DSN")
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := externalMigrationContractDSN(t)
 	testModelCooldownMigration(t, func(t *testing.T) *gorm.DB { return openExternalIncrementalMigrationDatabase(t, dsn) })
 }
 
 func TestExternalModelCooldownMigrationRecoversConstraintReplacement(t *testing.T) {
-	dsn := os.Getenv("GPT_LOAD_DATABASE_TEST_DSN")
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := pgtest.DSN(t)
 	db := openExternalIncrementalMigrationDatabase(t, dsn)
 	if db.Dialector.Name() != "mysql" {
 		t.Skip("DDL auto-commit recovery is specific to MySQL")
@@ -63,9 +52,6 @@ func testModelCooldownMigration(t *testing.T, open func(*testing.T) *gorm.DB) {
 	for _, scenario := range []string{"fresh", "upgrade", "interrupted", "column_added"} {
 		t.Run(scenario, func(t *testing.T) {
 			db := open(t)
-			if db.Dialector.Name() == "sqlite" {
-				t.Parallel()
-			}
 			if scenario != "fresh" {
 				if err := applyMigrationRegistry(db, migrations[:9]); err != nil {
 					t.Fatal(err)

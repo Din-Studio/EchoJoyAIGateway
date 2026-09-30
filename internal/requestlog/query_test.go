@@ -18,7 +18,6 @@ import (
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/telemetry"
-	"gpt-load/internal/testutil/sqlitetest"
 	"gpt-load/internal/usage"
 )
 
@@ -918,11 +917,6 @@ func TestServiceListOmitsAttemptsAndDetailLoadsThem(t *testing.T) {
 		*detail.Attempts[0].Reasoning.BudgetTokens != reasoningBudget {
 		t.Fatalf("detail attempts = %#v", detail.Attempts)
 	}
-}
-
-func openRequestLogQueryDB(t *testing.T) *gorm.DB {
-	t.Helper()
-	return sqlitetest.OpenMigrated(t)
 }
 
 func requestLogQueryRow(

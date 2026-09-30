@@ -37,6 +37,7 @@ import (
 	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/telemetry"
+	"gpt-load/internal/testutil/pgtest"
 	"gpt-load/internal/webui"
 )
 
@@ -83,7 +84,7 @@ func TestSystemOutboundProxyProviderUsesEnvironmentAndLatestGlobalSnapshot(t *te
 func TestBuildContainerInstallsDataPlaneCORSBeforeRouteAuthentication(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 	if err := i18n.Init(); err != nil {
 		t.Fatalf("i18n.Init() error = %v", err)
@@ -155,7 +156,7 @@ func TestBuildContainerInstallsDataPlaneCORSBeforeRouteAuthentication(t *testing
 func TestBuildContainerDoesNotInitializeUnusedRuntimeStore(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 	t.Setenv("REDIS_DSN", "://invalid-redis-dsn")
 
@@ -177,7 +178,7 @@ func TestBuildContainerDoesNotInitializeUnusedRuntimeStore(t *testing.T) {
 func TestBuildContainerRestoresAndReconcilesAccessKeyCostLimits(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()
@@ -275,7 +276,7 @@ func TestBuildContainerRestoresAndReconcilesAccessKeyCostLimits(t *testing.T) {
 func TestBuildContainerPublishesCodexSubscriptionGroup(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()
@@ -315,7 +316,7 @@ func TestBuildContainerPublishesCodexSubscriptionGroup(t *testing.T) {
 func TestBuildContainerPublishesClaudeSubscriptionGroup(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()
@@ -355,7 +356,7 @@ func TestBuildContainerPublishesClaudeSubscriptionGroup(t *testing.T) {
 func TestBuildContainerWiresRequestLogRetentionSnapshotProvider(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()
@@ -394,7 +395,7 @@ func TestBuildContainerWiresRequestLogRetentionSnapshotProvider(t *testing.T) {
 func TestBuildContainerWiresUsageReaderToSingletonRequestLogService(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()
@@ -424,7 +425,7 @@ func TestBuildContainerWiresHomeStatisticsReaderToSingletonRequestLogService(
 ) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()
@@ -458,7 +459,7 @@ func TestBuildContainerWiresHomeStatisticsReaderToSingletonRequestLogService(
 func TestBuildContainerWiresSingletonPriceRuntime(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()
@@ -507,7 +508,7 @@ func TestBuildContainerWiresSingletonPriceRuntime(t *testing.T) {
 func TestBuildContainerResolvesAllDialects(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()
@@ -550,7 +551,7 @@ func TestBuildContainerResolvesRuntimeDependencies(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", dataDir)
-	t.Setenv("DATABASE_DSN", "")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "")
 
 	dependencyContainer, err := BuildContainer()
@@ -561,7 +562,7 @@ func TestBuildContainerResolvesRuntimeDependencies(t *testing.T) {
 	var resolved bool
 	err = dependencyContainer.Invoke(func(
 		_ *app.App,
-		cfg *config.Config,
+		_ *config.Config,
 		keyService encryption.Service,
 		db *gorm.DB,
 		_ *gin.Engine,
@@ -636,13 +637,8 @@ func TestBuildContainerResolvesRuntimeDependencies(t *testing.T) {
 				requestLogService,
 			)
 		}
-		if want := filepath.Join(dataDir, "gpt-load.db"); cfg.DatabaseDSN != want {
-			t.Fatalf("DatabaseDSN = %q, want %q", cfg.DatabaseDSN, want)
-		}
-		for _, name := range []string{"gpt-load.db", encryption.KeyFileName} {
-			if _, err := os.Stat(filepath.Join(dataDir, name)); err != nil {
-				t.Fatalf("%s was not created in DATA_DIR: %v", name, err)
-			}
+		if _, err := os.Stat(filepath.Join(dataDir, encryption.KeyFileName)); err != nil {
+			t.Fatalf("%s was not created in DATA_DIR: %v", encryption.KeyFileName, err)
 		}
 		if _, err := os.Stat(filepath.Join(dataDir, authkey.FileName)); !os.IsNotExist(err) {
 			t.Fatalf("explicit AUTH_KEY created %s: %v", authkey.FileName, err)
@@ -660,7 +656,7 @@ func TestBuildContainerResolvesRuntimeDependencies(t *testing.T) {
 func TestBuildContainerUsesSingletonAccessKeyRPMLimiter(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()
@@ -703,7 +699,7 @@ func TestBuildContainerUsesSingletonAccessKeyRPMLimiter(t *testing.T) {
 func TestBuildContainerWiresSingletonMutationCoordinator(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()
@@ -769,7 +765,7 @@ func mutationCoordinatorFieldPointer(t *testing.T, value reflect.Value, fieldNam
 func TestBuildContainerUsesSingletonDataPlaneRuntimeServices(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()
@@ -820,7 +816,7 @@ func TestBuildContainerUsesSingletonDataPlaneRuntimeServices(t *testing.T) {
 func TestBuildContainerWiresRequestLogIntoEveryConsumer(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()
@@ -872,7 +868,7 @@ func TestBuildContainerWiresRequestLogIntoEveryConsumer(t *testing.T) {
 func TestBuildContainerUsesSingletonRequestLogReader(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()
@@ -925,7 +921,7 @@ func TestBuildContainerUsesSingletonRequestLogReader(t *testing.T) {
 func TestBuildContainerUsesSingletonRequestLogCleaner(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()
@@ -979,7 +975,7 @@ func TestBuildContainerGeneratesAuthKeyWhenEnvironmentIsEmpty(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AUTH_KEY", "")
 	t.Setenv("DATA_DIR", dataDir)
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()
@@ -1009,7 +1005,7 @@ func TestBuildContainerGeneratesAuthKeyWhenEnvironmentIsEmpty(t *testing.T) {
 func TestBuildContainerUsesSingletonStatsStore(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()
@@ -1043,7 +1039,7 @@ func TestBuildContainerUsesSingletonStatsStore(t *testing.T) {
 func TestBuildContainerWiresRuntimeReadConsumersToSingletons(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()
@@ -1088,7 +1084,7 @@ func TestBuildContainerWiresRuntimeReadConsumersToSingletons(t *testing.T) {
 func TestContainerHealthEndpointReadsSharedStatsStore(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 	if err := i18n.Init(); err != nil {
 		t.Fatalf("i18n.Init() error = %v", err)
@@ -1165,7 +1161,7 @@ func TestContainerHealthEndpointReadsSharedStatsStore(t *testing.T) {
 func TestBuildContainerRegistersWebUIControlAndGatewayRoutes(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 	if err := i18n.Init(); err != nil {
 		t.Fatalf("i18n.Init() error = %v", err)
@@ -1324,7 +1320,7 @@ func TestBuildContainerRegistersGatewayRoute(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", dataDir)
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key")
 
 	dependencyContainer, err := BuildContainer()
@@ -1353,7 +1349,7 @@ func TestBuildContainerRegistersGatewayRoute(t *testing.T) {
 func TestBuildContainerDoesNotRedirectTrailingSlashGatewayRoute(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 
 	dependencyContainer, err := BuildContainer()

@@ -4,16 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	gormsqlite "github.com/glebarez/sqlite"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 
 	"gpt-load/internal/accessquota"
 	"gpt-load/internal/catalog"
@@ -32,7 +28,7 @@ import (
 	subscriptionproviders "gpt-load/internal/subscription/providers"
 	subscriptionruntime "gpt-load/internal/subscription/runtime"
 	"gpt-load/internal/testutil/encryptiontest"
-	"gpt-load/internal/testutil/sqlitetest"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 var (
@@ -163,7 +159,7 @@ func initControlI18n(t *testing.T) {
 
 func newServiceFixture(t *testing.T) serviceFixture {
 	t.Helper()
-	return newServiceFixtureWithDatabase(t, sqlitetest.OpenMigrated(t))
+	return newServiceFixtureWithDSN(t, pgtest.NewDatabase(t))
 }
 
 func mustEnsureInitialPrices(t *testing.T, fixture serviceFixture) {
@@ -176,15 +172,25 @@ func mustEnsureInitialPrices(t *testing.T, fixture serviceFixture) {
 	}
 }
 
-func newFileServiceFixture(t *testing.T) (serviceFixture, string) {
+// newServiceFixtureWithSecondDSN returns a fixture and the DSN of its
+// database, so a test can open a second connection to the same data.
+func newServiceFixtureWithSecondDSN(t *testing.T) (serviceFixture, string) {
 	t.Helper()
-	dsn := filepath.Join(t.TempDir(), "control.db")
+	dsn := pgtest.NewDatabase(t)
 	return newServiceFixtureWithDSN(t, dsn), dsn
 }
 
-func newServiceFixtureWithDSN(t *testing.T, dsn string) serviceFixture {
+// newExternalServiceFixture migrates the shared external test database named
+// by GPT_LOAD_DATABASE_TEST_DSN before opening a fixture on it.
+func newExternalServiceFixture(t *testing.T, dsn string) serviceFixture {
 	t.Helper()
 	return newServiceFixtureWithDatabase(t, openControlTestDBWithDSN(t, dsn))
+}
+
+// newServiceFixtureWithDSN opens an already migrated database.
+func newServiceFixtureWithDSN(t *testing.T, dsn string) serviceFixture {
+	t.Helper()
+	return newServiceFixtureWithDatabase(t, openControlTestDBWithoutMigration(t, dsn))
 }
 
 func newServiceFixtureWithDatabase(t *testing.T, db *gorm.DB) serviceFixture {
@@ -251,11 +257,6 @@ func (reconciler controlAccessQuotaReconciler) ReconcileConfigSnapshot(snapshot 
 	return reconciler.runtime.Reconcile(snapshot.AccessQuotaDefinitions())
 }
 
-func openControlTestDB(t *testing.T) *gorm.DB {
-	t.Helper()
-	return openControlTestDBWithDSN(t, ":memory:")
-}
-
 func openControlTestDBWithDSN(t *testing.T, dsn string) *gorm.DB {
 	t.Helper()
 	db := openControlTestDBWithoutMigration(t, dsn)
@@ -281,54 +282,6 @@ func openControlTestDBWithoutMigration(t *testing.T, dsn string) *gorm.DB {
 		}
 	})
 	return db
-}
-
-func holdRollbackJournalReadLock(t *testing.T, appDB *gorm.DB, dsn string) func() {
-	t.Helper()
-	if err := appDB.Exec("PRAGMA busy_timeout = 1").Error; err != nil {
-		t.Fatalf("set app busy_timeout: %v", err)
-	}
-	var mode string
-	if err := appDB.Raw("PRAGMA journal_mode = DELETE").Scan(&mode).Error; err != nil {
-		t.Fatalf("set rollback journal: %v", err)
-	}
-	if !strings.EqualFold(mode, "delete") {
-		t.Fatalf("journal_mode = %q, want delete", mode)
-	}
-
-	blocker, err := gorm.Open(
-		gormsqlite.Open(dsn+"?_pragma=busy_timeout(1)"),
-		&gorm.Config{Logger: logger.Default.LogMode(logger.Silent)},
-	)
-	if err != nil {
-		t.Fatalf("open blocker: %v", err)
-	}
-	blockerSQL, err := blocker.DB()
-	if err != nil {
-		t.Fatalf("blocker DB(): %v", err)
-	}
-	readTx := blocker.Begin()
-	if readTx.Error != nil {
-		t.Fatal(readTx.Error)
-	}
-	var count int64
-	if err := readTx.Table("groups").Count(&count).Error; err != nil {
-		t.Fatal(err)
-	}
-
-	var once sync.Once
-	release := func() {
-		once.Do(func() {
-			if err := readTx.Rollback().Error; err != nil {
-				t.Errorf("release read lock: %v", err)
-			}
-			if err := blockerSQL.Close(); err != nil {
-				t.Errorf("close blocker: %v", err)
-			}
-		})
-	}
-	t.Cleanup(release)
-	return release
 }
 
 func assertGroupCount(t *testing.T, db *gorm.DB, want int64) {

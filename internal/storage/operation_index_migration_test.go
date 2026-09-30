@@ -2,21 +2,13 @@ package storage
 
 import (
 	"fmt"
-	"os"
 	"testing"
 
 	"gorm.io/gorm"
 )
 
-func TestOperationIndexMigrationContract(t *testing.T) {
-	testOperationIndexMigration(t, openInternalMigrationTestDatabase)
-}
-
 func TestExternalOperationIndexMigrationContract(t *testing.T) {
-	dsn := os.Getenv("GPT_LOAD_DATABASE_TEST_DSN")
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := externalMigrationContractDSN(t)
 	testOperationIndexMigration(t, func(t *testing.T) *gorm.DB {
 		return openExternalIncrementalMigrationDatabase(t, dsn)
 	})

@@ -20,6 +20,7 @@ import (
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/state"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 func TestDeleteGroupRejectsActiveAndDisabledExplicitAccessKeyReferences(t *testing.T) {
@@ -208,7 +209,7 @@ func TestDeleteGroupCompileFailurePreservesDatabaseRegistryAndSnapshot(t *testin
 
 func TestDeleteGroupCommitFailurePreservesDatabaseRegistryAndSnapshot(t *testing.T) {
 	t.Parallel()
-	fixture, dsn := newFileServiceFixture(t)
+	fixture := newServiceFixture(t)
 	groupID := createGroupWithCredentials(t, fixture, "sk-delete-commit-busy")
 	var row models.Credential
 	if err := fixture.db.Where("group_id = ?", groupID).Take(&row).Error; err != nil {
@@ -216,7 +217,7 @@ func TestDeleteGroupCommitFailurePreservesDatabaseRegistryAndSnapshot(t *testing
 	}
 	beforeSnapshot := fixture.manager.Current()
 	beforeRegistry := fixture.registry.Snapshot()
-	releaseReader := holdRollbackJournalReadLock(t, fixture.db, dsn)
+	releaseReader := pgtest.FailOnCommit(t, fixture.db, "groups", "forced commit failure")
 
 	err := fixture.service.DeleteGroup(t.Context(), groupID)
 	var apiErr *app_errors.APIError
@@ -257,7 +258,7 @@ func TestDeleteGroupCorruptAccessKeyFiltersPreservesDatabaseRegistryAndSnapshot(
 	if err := fixture.db.Create(&corrupt).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.db.Exec("UPDATE access_keys SET filters = ? WHERE id = ?", "not-json", corrupt.ID).Error; err != nil {
+	if err := fixture.db.Exec("UPDATE access_keys SET filters = ? WHERE id = ?", `{"unknown":true}`, corrupt.ID).Error; err != nil {
 		t.Fatal(err)
 	}
 	beforeSnapshot := fixture.manager.Current()

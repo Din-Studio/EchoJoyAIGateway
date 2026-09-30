@@ -16,6 +16,7 @@ import (
 	"gpt-load/internal/platform/config"
 	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 func TestCredentialStatusAcceptsOnlyDurableOperatorStates(t *testing.T) {
@@ -106,17 +107,10 @@ func TestAutoMigrateCreatesReviewedIndexesAndPrimaryKeys(t *testing.T) {
 	t.Parallel()
 
 	db := openMigratedDatabase(t)
-	type pragmaColumn struct {
-		Name    string
-		NotNull int `gorm:"column:notnull"`
-	}
-	type pragmaIndex struct {
-		Name string
-	}
 
 	for _, table := range []string{"request_logs", "jobs", "system_settings"} {
-		var columns []pragmaColumn
-		if err := db.Raw("PRAGMA table_info('" + table + "')").Scan(&columns).Error; err != nil {
+		columns, err := db.Migrator().ColumnTypes(table)
+		if err != nil {
 			t.Fatalf("inspect %s columns: %v", table, err)
 		}
 
@@ -126,10 +120,10 @@ func TestAutoMigrateCreatesReviewedIndexesAndPrimaryKeys(t *testing.T) {
 			if table == "system_settings" {
 				keyName = "key"
 			}
-			if column.Name == keyName {
+			if column.Name() == keyName {
 				found = true
-				if column.NotNull != 1 {
-					t.Errorf("%s.%s notnull = %d, want 1", table, keyName, column.NotNull)
+				if nullable, ok := column.Nullable(); !ok || nullable {
+					t.Errorf("%s.%s nullable = %t/%t, want NOT NULL", table, keyName, nullable, ok)
 				}
 			}
 		}
@@ -142,14 +136,8 @@ func TestAutoMigrateCreatesReviewedIndexesAndPrimaryKeys(t *testing.T) {
 		t.Fatal("retired upstream_keys table exists")
 	}
 	for _, table := range []string{"credentials", "access_keys"} {
-		var indexes []pragmaIndex
-		if err := db.Raw("PRAGMA index_list('" + table + "')").Scan(&indexes).Error; err != nil {
-			t.Fatalf("inspect %s indexes: %v", table, err)
-		}
-		for _, index := range indexes {
-			if index.Name == "idx_"+table+"_status" {
-				t.Errorf("%s has ordinary status index %q", table, index.Name)
-			}
+		if db.Migrator().HasIndex(table, "idx_"+table+"_status") {
+			t.Errorf("%s has ordinary status index %q", table, "idx_"+table+"_status")
 		}
 	}
 }
@@ -246,10 +234,10 @@ func TestOpenWithSourceExternalRejectsMissingParentWithoutCreation(t *testing.T)
 	}
 }
 
-func TestOpenAllowsUnversionedFileWithExternalTables(t *testing.T) {
+func TestOpenAllowsUnversionedDatabaseWithExternalTables(t *testing.T) {
 	t.Parallel()
-	path := filepath.Join(t.TempDir(), "external-tables.db")
-	db, err := storage.Open(path)
+	dsn := pgtest.NewEmptyDatabase(t)
+	db, err := storage.Open(dsn)
 	if err != nil {
 		t.Fatalf("create database: %v", err)
 	}
@@ -263,14 +251,8 @@ func TestOpenAllowsUnversionedFileWithExternalTables(t *testing.T) {
 	if err := sqlDB.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(path + "-wal"); err != nil && !os.IsNotExist(err) {
-		t.Fatal(err)
-	}
-	if err := os.Remove(path + "-shm"); err != nil && !os.IsNotExist(err) {
-		t.Fatal(err)
-	}
 
-	reopened, err := storage.Open(path)
+	reopened, err := storage.Open(dsn)
 	if err != nil {
 		t.Fatalf("Open(database with external table) error = %v, want success", err)
 	}
@@ -593,19 +575,7 @@ func TestOpenUsesImmediateTransactions(t *testing.T) {
 func TestOpenConfiguresParameterizedSQLLogging(t *testing.T) {
 	t.Parallel()
 
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("Open(:memory:) error = %v", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("db.DB() error = %v", err)
-	}
-	t.Cleanup(func() {
-		if err := sqlDB.Close(); err != nil {
-			t.Errorf("close database: %v", err)
-		}
-	})
+	db := openEmptyDatabase(t)
 
 	filter, ok := db.Logger.(gorm.ParamsFilter)
 	if !ok {
@@ -699,19 +669,7 @@ func TestAutoMigrateRejectsRetiredV2MigrationLedgers(t *testing.T) {
 	t.Parallel()
 	for _, retiredID := range []string{"0001_initial_v2", "0001_final_v2"} {
 		t.Run(retiredID, func(t *testing.T) {
-			db, err := storage.Open(":memory:")
-			if err != nil {
-				t.Fatalf("Open(:memory:) error = %v", err)
-			}
-			sqlDB, err := db.DB()
-			if err != nil {
-				t.Fatalf("db.DB() error = %v", err)
-			}
-			t.Cleanup(func() {
-				if err := sqlDB.Close(); err != nil {
-					t.Errorf("close database: %v", err)
-				}
-			})
+			db := openEmptyDatabase(t)
 
 			if err := db.Exec(`CREATE TABLE schema_migrations (
 				id varchar(255) PRIMARY KEY NOT NULL
@@ -722,7 +680,7 @@ func TestAutoMigrateRejectsRetiredV2MigrationLedgers(t *testing.T) {
 				t.Fatalf("seed legacy migration ledger: %v", err)
 			}
 
-			err = storage.AutoMigrate(db)
+			err := storage.AutoMigrate(db)
 			if err == nil || !strings.Contains(err.Error(), "unknown or non-contiguous migration") {
 				t.Fatalf("AutoMigrate() error = %v, want retired v2 ledger rejection", err)
 			}
@@ -735,19 +693,7 @@ func TestAutoMigrateRejectsRetiredV2MigrationLedgers(t *testing.T) {
 
 func TestAutoMigrateRejectsAppliedMigrationWithIncompleteSchema(t *testing.T) {
 	t.Parallel()
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("Open(:memory:) error = %v", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("db.DB() error = %v", err)
-	}
-	t.Cleanup(func() {
-		if err := sqlDB.Close(); err != nil {
-			t.Errorf("close database: %v", err)
-		}
-	})
+	db := openEmptyDatabase(t)
 
 	if err := db.Exec(`CREATE TABLE schema_migrations (
 		id varchar(255) PRIMARY KEY NOT NULL
@@ -765,7 +711,7 @@ func TestAutoMigrateRejectsAppliedMigrationWithIncompleteSchema(t *testing.T) {
 		t.Fatalf("create incomplete pre-Beta schema: %v", err)
 	}
 
-	err = storage.AutoMigrate(db)
+	err := storage.AutoMigrate(db)
 	if err == nil || !strings.Contains(err.Error(), "validate applied migration 0001_initial") {
 		t.Fatalf("AutoMigrate() error = %v, want incomplete applied migration rejection", err)
 	}
@@ -774,19 +720,7 @@ func TestAutoMigrateRejectsAppliedMigrationWithIncompleteSchema(t *testing.T) {
 func TestAutoMigrateAllowsEmptyLedgerBesideExistingExternalTables(t *testing.T) {
 	t.Parallel()
 
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("Open(:memory:) error = %v", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("db.DB() error = %v", err)
-	}
-	t.Cleanup(func() {
-		if err := sqlDB.Close(); err != nil {
-			t.Errorf("close database: %v", err)
-		}
-	})
+	db := openEmptyDatabase(t)
 
 	if err := db.Exec(`CREATE TABLE schema_migrations (
 		id varchar(255) PRIMARY KEY NOT NULL
@@ -797,7 +731,7 @@ func TestAutoMigrateAllowsEmptyLedgerBesideExistingExternalTables(t *testing.T) 
 		t.Fatalf("create legacy table: %v", err)
 	}
 
-	err = storage.AutoMigrate(db)
+	err := storage.AutoMigrate(db)
 	if err != nil {
 		t.Fatalf("AutoMigrate() error = %v, want success with external table", err)
 	}
@@ -812,34 +746,15 @@ func TestAutoMigrateAllowsEmptyLedgerBesideExistingExternalTables(t *testing.T) 
 func TestAutoMigrateCreatesRequestLogFieldsAndCompositeIndexes(t *testing.T) {
 	t.Parallel()
 
-	dsn := filepath.Join(t.TempDir(), "fresh-request-log-v1.db")
-	db, err := storage.Open(dsn)
-	if err != nil {
-		t.Fatalf("Open(%q) error = %v", dsn, err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("db.DB() error = %v", err)
-	}
-	t.Cleanup(func() {
-		if err := sqlDB.Close(); err != nil {
-			t.Errorf("close database: %v", err)
-		}
-	})
-	if err := storage.AutoMigrate(db); err != nil {
-		t.Fatalf("AutoMigrate() error = %v", err)
-	}
+	db := openMigratedDatabase(t)
 
-	type columnInfo struct {
-		Name string
-	}
-	var columns []columnInfo
-	if err := db.Raw("PRAGMA table_info('request_logs')").Scan(&columns).Error; err != nil {
+	columns, err := db.Migrator().ColumnTypes("request_logs")
+	if err != nil {
 		t.Fatalf("inspect request_logs columns: %v", err)
 	}
 	columnNames := make(map[string]struct{}, len(columns))
 	for _, column := range columns {
-		columnNames[column.Name] = struct{}{}
+		columnNames[column.Name()] = struct{}{}
 	}
 	for _, name := range []string{
 		"error_code",
@@ -855,67 +770,40 @@ func TestAutoMigrateCreatesRequestLogFieldsAndCompositeIndexes(t *testing.T) {
 		}
 	}
 
-	type indexInfo struct {
-		Name string
-	}
-	var indexes []indexInfo
-	if err := db.Raw("PRAGMA index_list('request_logs')").Scan(&indexes).Error; err != nil {
-		t.Fatalf("inspect request_logs indexes: %v", err)
-	}
-	indexNames := make(map[string]struct{}, len(indexes))
-	for _, index := range indexes {
-		indexNames[index.Name] = struct{}{}
-	}
-
 	wantIndexes := map[string][]struct {
 		name string
-		desc int
+		desc bool
 	}{
 		"idx_request_logs_completed_id": {
-			{name: "completed_at_ms", desc: 1},
-			{name: "id", desc: 1},
+			{name: "completed_at_ms", desc: true},
+			{name: "id", desc: true},
 		},
 		"idx_request_logs_access_completed_id": {
 			{name: "access_key_id"},
-			{name: "completed_at_ms", desc: 1},
-			{name: "id", desc: 1},
+			{name: "completed_at_ms", desc: true},
+			{name: "id", desc: true},
 		},
 		"idx_request_logs_status_completed_id": {
 			{name: "status"},
-			{name: "completed_at_ms", desc: 1},
-			{name: "id", desc: 1},
+			{name: "completed_at_ms", desc: true},
+			{name: "id", desc: true},
 		},
 		"idx_request_logs_model_completed_id": {
 			{name: "client_model"},
-			{name: "completed_at_ms", desc: 1},
-			{name: "id", desc: 1},
+			{name: "completed_at_ms", desc: true},
+			{name: "id", desc: true},
 		},
 		"idx_request_logs_upstream_model_completed_id": {
 			{name: "upstream_model"},
-			{name: "completed_at_ms", desc: 1},
-			{name: "id", desc: 1},
+			{name: "completed_at_ms", desc: true},
+			{name: "id", desc: true},
 		},
 	}
-	type indexedColumn struct {
-		Sequence int    `gorm:"column:seqno"`
-		Name     string `gorm:"column:name"`
-		Desc     int    `gorm:"column:desc"`
-		Key      int    `gorm:"column:key"`
-	}
 	for indexName, wantColumns := range wantIndexes {
-		if _, ok := indexNames[indexName]; !ok {
+		gotColumns := indexKeyColumns(t, db, "request_logs", indexName)
+		if len(gotColumns) == 0 {
 			t.Errorf("request_logs index %q is missing", indexName)
 			continue
-		}
-		var indexedColumns []indexedColumn
-		if err := db.Raw("PRAGMA index_xinfo('" + indexName + "')").Scan(&indexedColumns).Error; err != nil {
-			t.Fatalf("inspect %s columns: %v", indexName, err)
-		}
-		gotColumns := make([]indexedColumn, 0, len(indexedColumns))
-		for _, column := range indexedColumns {
-			if column.Key == 1 {
-				gotColumns = append(gotColumns, column)
-			}
 		}
 		if len(gotColumns) != len(wantColumns) {
 			t.Errorf("%s columns = %+v, want %d key columns", indexName, gotColumns, len(wantColumns))
@@ -923,30 +811,20 @@ func TestAutoMigrateCreatesRequestLogFieldsAndCompositeIndexes(t *testing.T) {
 		}
 		for position, want := range wantColumns {
 			got := gotColumns[position]
-			if got.Sequence != position || got.Name != want.name || got.Desc != want.desc {
-				t.Errorf("%s column %d = seq:%d name:%q desc:%d, want seq:%d name:%q desc:%d",
-					indexName, position, got.Sequence, got.Name, got.Desc, position, want.name, want.desc)
+			if got.Name != want.name || got.Desc != want.desc {
+				t.Errorf("%s column %d = name:%q desc:%t, want name:%q desc:%t",
+					indexName, position, got.Name, got.Desc, want.name, want.desc)
 			}
 		}
 	}
-
 }
 
 func TestAutoMigrateOmitsGroupSignature(t *testing.T) {
 	t.Parallel()
 
 	db := openMigratedDatabase(t)
-	type columnInfo struct {
-		Name string
-	}
-	var columns []columnInfo
-	if err := db.Raw("PRAGMA table_info('groups')").Scan(&columns).Error; err != nil {
-		t.Fatalf("inspect groups columns: %v", err)
-	}
-	for _, column := range columns {
-		if column.Name == "signature" {
-			t.Fatal("fresh groups schema still contains signature")
-		}
+	if db.Migrator().HasColumn("groups", "signature") {
+		t.Fatal("fresh groups schema still contains signature")
 	}
 }
 
@@ -975,25 +853,13 @@ func TestAutoMigrateAllowsDuplicateChannelTargets(t *testing.T) {
 func TestAutoMigrateAllowsUnversionedDatabaseWithExternalTables(t *testing.T) {
 	t.Parallel()
 
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("Open(:memory:) error = %v", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("db.DB() error = %v", err)
-	}
-	t.Cleanup(func() {
-		if err := sqlDB.Close(); err != nil {
-			t.Errorf("close database: %v", err)
-		}
-	})
+	db := openEmptyDatabase(t)
 
 	if err := db.Exec("CREATE TABLE legacy_data (id INTEGER PRIMARY KEY)").Error; err != nil {
 		t.Fatalf("create legacy table: %v", err)
 	}
 
-	err = storage.AutoMigrate(db)
+	err := storage.AutoMigrate(db)
 	if err != nil {
 		t.Fatalf("AutoMigrate() error = %v, want success for an unversioned database with external tables", err)
 	}
@@ -1008,25 +874,13 @@ func TestAutoMigrateAllowsUnversionedDatabaseWithExternalTables(t *testing.T) {
 func TestAutoMigrateRejectsFirstInitializationWithExistingGroups(t *testing.T) {
 	t.Parallel()
 
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("Open(:memory:) error = %v", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("db.DB() error = %v", err)
-	}
-	t.Cleanup(func() {
-		if err := sqlDB.Close(); err != nil {
-			t.Errorf("close database: %v", err)
-		}
-	})
+	db := openEmptyDatabase(t)
 
 	if err := db.Exec("CREATE TABLE groups (id INTEGER PRIMARY KEY)").Error; err != nil {
 		t.Fatalf("create existing groups table: %v", err)
 	}
 
-	err = storage.AutoMigrate(db)
+	err := storage.AutoMigrate(db)
 	if err == nil || !strings.Contains(err.Error(), "groups table already exists") {
 		t.Fatalf("AutoMigrate() error = %v, want existing groups rejection", err)
 	}
@@ -1125,26 +979,17 @@ func TestAutoMigrateCreatesCredentialForeignKeyWithCascade(t *testing.T) {
 	t.Parallel()
 
 	db := openMigratedDatabase(t)
-	type foreignKey struct {
-		Table    string
-		From     string
-		To       string
-		OnDelete string `gorm:"column:on_delete"`
-	}
-	var foreignKeys []foreignKey
-	if err := db.Raw("PRAGMA foreign_key_list('credentials')").Scan(&foreignKeys).Error; err != nil {
-		t.Fatalf("inspect credentials foreign keys: %v", err)
-	}
+	credentialForeignKeys := foreignKeys(t, db, "credentials")
 	var groupForeignKey *foreignKey
-	for index := range foreignKeys {
-		candidate := &foreignKeys[index]
+	for index := range credentialForeignKeys {
+		candidate := &credentialForeignKeys[index]
 		if candidate.Table == "groups" && candidate.From == "group_id" && candidate.To == "id" {
 			groupForeignKey = candidate
 			break
 		}
 	}
 	if groupForeignKey == nil || groupForeignKey.OnDelete != "CASCADE" {
-		t.Fatalf("credentials foreign keys = %+v, want cascading group_id -> groups.id", foreignKeys)
+		t.Fatalf("credentials foreign keys = %+v, want cascading group_id -> groups.id", credentialForeignKeys)
 	}
 
 	group := models.Group{
@@ -1174,12 +1019,24 @@ func TestAutoMigrateCreatesCredentialForeignKeyWithCascade(t *testing.T) {
 	}
 }
 
+// openMigratedDatabase opens an isolated clone of the fully migrated
+// PostgreSQL template.
 func openMigratedDatabase(t *testing.T) *gorm.DB {
 	t.Helper()
+	return openTestDatabase(t, pgtest.NewDatabase(t))
+}
 
-	db, err := storage.Open(":memory:")
+// openEmptyDatabase opens an isolated empty PostgreSQL database.
+func openEmptyDatabase(t *testing.T) *gorm.DB {
+	t.Helper()
+	return openTestDatabase(t, pgtest.NewEmptyDatabase(t))
+}
+
+func openTestDatabase(t *testing.T, dsn string) *gorm.DB {
+	t.Helper()
+	db, err := storage.Open(dsn)
 	if err != nil {
-		t.Fatalf("Open(:memory:) error = %v", err)
+		t.Fatalf("Open() error = %v", err)
 	}
 	sqlDB, err := db.DB()
 	if err != nil {
@@ -1190,11 +1047,60 @@ func openMigratedDatabase(t *testing.T) *gorm.DB {
 			t.Errorf("close database: %v", err)
 		}
 	})
-
-	if err := storage.AutoMigrate(db); err != nil {
-		t.Fatalf("AutoMigrate() error = %v", err)
-	}
 	return db
+}
+
+type indexKeyColumn struct {
+	Name string
+	Desc bool
+}
+
+// indexKeyColumns lists the key columns of one index in index order.
+func indexKeyColumns(t *testing.T, db *gorm.DB, table, indexName string) []indexKeyColumn {
+	t.Helper()
+	var columns []indexKeyColumn
+	if err := db.Raw(`
+		SELECT a.attname AS name, (i.indoption[k.position - 1] & 1) = 1 AS "desc"
+		FROM pg_index i
+		JOIN pg_class ci ON ci.oid = i.indexrelid
+		CROSS JOIN LATERAL unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, position)
+		JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+		WHERE i.indrelid = ?::regclass AND ci.relname = ? AND k.position <= i.indnkeyatts
+		ORDER BY k.position
+	`, table, indexName).Scan(&columns).Error; err != nil {
+		t.Fatalf("inspect %s columns: %v", indexName, err)
+	}
+	return columns
+}
+
+type foreignKey struct {
+	Table    string
+	From     string
+	To       string
+	OnDelete string `gorm:"column:on_delete"`
+}
+
+// foreignKeys lists the foreign keys declared on table.
+func foreignKeys(t *testing.T, db *gorm.DB, table string) []foreignKey {
+	t.Helper()
+	var result []foreignKey
+	if err := db.Raw(`
+		SELECT ccu.table_name AS "table", kcu.column_name AS "from",
+			ccu.column_name AS "to", rc.delete_rule AS on_delete
+		FROM information_schema.table_constraints tc
+		JOIN information_schema.key_column_usage kcu
+			ON kcu.constraint_schema = tc.constraint_schema AND kcu.constraint_name = tc.constraint_name
+		JOIN information_schema.constraint_column_usage ccu
+			ON ccu.constraint_schema = tc.constraint_schema AND ccu.constraint_name = tc.constraint_name
+		JOIN information_schema.referential_constraints rc
+			ON rc.constraint_schema = tc.constraint_schema AND rc.constraint_name = tc.constraint_name
+		WHERE tc.constraint_type = 'FOREIGN KEY'
+			AND tc.table_schema = current_schema() AND tc.table_name = ?
+		ORDER BY tc.constraint_name, kcu.ordinal_position
+	`, table).Scan(&result).Error; err != nil {
+		t.Fatalf("inspect %s foreign keys: %v", table, err)
+	}
+	return result
 }
 
 func assertDuplicateRejected(t *testing.T, firstErr, duplicateErr error) {

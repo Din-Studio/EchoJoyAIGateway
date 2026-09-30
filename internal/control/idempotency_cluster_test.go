@@ -8,9 +8,8 @@ import (
 	"gpt-load/internal/storage/models"
 )
 
-// 两个 Service 共享同一个 SQLite 连接模拟两个进程共用一个数据库；SQLite 单连接
-// 不允许并行事务，因此用 PrepareMutation / beforeAdvanceOperationStage 钩子在
-// 事务之间做确定性交错。
+// 两个 Service 共享同一个数据库模拟两个进程共用一个数据库；用
+// PrepareMutation / beforeAdvanceOperationStage 钩子在事务之间做确定性交错。
 
 func newPeerFixtures(t *testing.T) (serviceFixture, serviceFixture) {
 	t.Helper()

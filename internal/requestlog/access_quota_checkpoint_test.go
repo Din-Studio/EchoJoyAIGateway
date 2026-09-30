@@ -14,11 +14,10 @@ import (
 	"gpt-load/internal/accessquota"
 	"gpt-load/internal/platform/redact"
 	"gpt-load/internal/storage/models"
-	"gpt-load/internal/testutil/sqlitetest"
 )
 
 func TestAccessQuotaCheckpointWriterAppliesAndRetriesAbsoluteSnapshot(t *testing.T) {
-	db := sqlitetest.OpenMigrated(t)
+	db := openRequestLogQueryDB(t)
 	accessKey, rule := createCheckpointRule(t, db)
 	writer := &gormAccessQuotaCheckpointWriter{db: db}
 	startedAt := int64(1_787_184_000_000)
@@ -47,7 +46,7 @@ func TestAccessQuotaCheckpointWriterAppliesAndRetriesAbsoluteSnapshot(t *testing
 
 func TestAccessQuotaCheckpointWriterClassifiesStaleDeletedAndMissingState(t *testing.T) {
 	t.Run("stale revision is discarded", func(t *testing.T) {
-		db := sqlitetest.OpenMigrated(t)
+		db := openRequestLogQueryDB(t)
 		accessKey, rule := createCheckpointRule(t, db)
 		if err := db.Model(&models.AccessKeyCostLimitRule{}).Where("id = ?", rule.ID).
 			Update("rule_revision", 2).Error; err != nil {
@@ -75,7 +74,7 @@ func TestAccessQuotaCheckpointWriterClassifiesStaleDeletedAndMissingState(t *tes
 	})
 
 	t.Run("deleted rule is discarded", func(t *testing.T) {
-		db := sqlitetest.OpenMigrated(t)
+		db := openRequestLogQueryDB(t)
 		accessKey, rule := createCheckpointRule(t, db)
 		if err := db.Delete(&rule).Error; err != nil {
 			t.Fatal(err)
@@ -90,7 +89,7 @@ func TestAccessQuotaCheckpointWriterClassifiesStaleDeletedAndMissingState(t *tes
 	})
 
 	t.Run("existing rule without state fails", func(t *testing.T) {
-		db := sqlitetest.OpenMigrated(t)
+		db := openRequestLogQueryDB(t)
 		accessKey, rule := createCheckpointRule(t, db)
 		if err := db.Delete(&models.AccessKeyCostLimitState{}, rule.ID).Error; err != nil {
 			t.Fatal(err)
@@ -106,7 +105,7 @@ func TestAccessQuotaCheckpointWriterClassifiesStaleDeletedAndMissingState(t *tes
 }
 
 func TestRequestLogServiceFlushesAndAcknowledgesQuotaDirtyStateWithoutLogEvent(t *testing.T) {
-	db := sqlitetest.OpenMigrated(t)
+	db := openRequestLogQueryDB(t)
 	accessKey, rule := createCheckpointRule(t, db)
 	runtime := accessquota.NewRuntime()
 	if err := runtime.Reconcile(map[uint][]accessquota.Rule{accessKey.ID: {
@@ -138,7 +137,7 @@ func TestRequestLogServiceFlushesAndAcknowledgesQuotaDirtyStateWithoutLogEvent(t
 }
 
 func TestRequestLogWorkerWakesForQuotaCheckpointAndDrainsOnStop(t *testing.T) {
-	db := sqlitetest.OpenMigrated(t)
+	db := openRequestLogQueryDB(t)
 	accessKey, rule := createCheckpointRule(t, db)
 	runtime := accessquota.NewRuntime()
 	if err := runtime.Reconcile(map[uint][]accessquota.Rule{accessKey.ID: {
@@ -374,7 +373,7 @@ func waitForCheckpointCost(t *testing.T, db *gorm.DB, ruleID uint, want int64) {
 }
 
 func TestAccessQuotaStateReaderReturnsCheckpointsWithAccessKey(t *testing.T) {
-	db := sqlitetest.OpenMigrated(t)
+	db := openRequestLogQueryDB(t)
 	accessKey, rule := createCheckpointRule(t, db)
 	startedAt := int64(1_787_184_000_000)
 	endsAt := startedAt + 300_000
@@ -439,7 +438,7 @@ func (source *scriptedCheckpointSource) SetDirtyNotifier(notifier func()) {
 }
 
 func TestRequestLogServiceCheckpointsSharedQuotaSource(t *testing.T) {
-	db := sqlitetest.OpenMigrated(t)
+	db := openRequestLogQueryDB(t)
 	accessKey, rule := createCheckpointRule(t, db)
 	service := NewService(db, redact.New(), staticRetentionPolicy{days: 7})
 	source := &scriptedCheckpointSource{

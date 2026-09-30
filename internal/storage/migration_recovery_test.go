@@ -3,7 +3,6 @@ package storage
 import (
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,225 +11,11 @@ import (
 
 	"gpt-load/internal/platform/config"
 	migrationfiles "gpt-load/internal/storage/migrations"
+	"gpt-load/internal/testutil/pgtest"
 )
 
-func TestApplyMySQLMigrationRecoversEveryInitialDDLBoundary(t *testing.T) {
-	t.Parallel()
-	models := migrationfiles.SchemaModels0001()
-	for boundary := 0; boundary <= len(models); boundary++ {
-		t.Run(migrationfiles.TableNames0001()[boundaryOrLast(boundary, len(models))], func(t *testing.T) {
-			t.Parallel()
-			db := openInternalMigrationTestDatabase(t)
-			if err := db.AutoMigrate(&schemaMigration{}); err != nil {
-				t.Fatalf("create migration ledger: %v", err)
-			}
-			if err := db.Create(&schemaMigration{ID: migrationResumeMarker(migrations[0].ID)}).Error; err != nil {
-				t.Fatalf("create resume marker: %v", err)
-			}
-			if boundary > 0 {
-				if err := db.AutoMigrate(models[:boundary]...); err != nil {
-					t.Fatalf("create schema prefix %d: %v", boundary, err)
-				}
-			}
-
-			if err := applyMySQLMigration(db, migrations[0]); err != nil {
-				t.Fatalf("resume boundary %d: %v", boundary, err)
-			}
-			assertInternalMigrationComplete(t, db, []string{migrations[0].ID})
-		})
-	}
-
-}
-
-func TestApplyMySQLMigrationRecoversEveryAccessKeyCostLimitDDLBoundary(t *testing.T) {
-	t.Parallel()
-	models := migrationfiles.SchemaModels0002()
-	for boundary := 0; boundary <= len(models); boundary++ {
-		t.Run(migrationfiles.TableNames0002()[boundaryOrLast(boundary, len(models))], func(t *testing.T) {
-			t.Parallel()
-			db := openInternalMigrationTestDatabase(t)
-			if err := db.AutoMigrate(&schemaMigration{}); err != nil {
-				t.Fatalf("create migration ledger: %v", err)
-			}
-			if err := migrations[0].Up(db); err != nil {
-				t.Fatalf("create baseline schema: %v", err)
-			}
-			if err := migrations[0].Validate(db); err != nil {
-				t.Fatalf("validate baseline schema: %v", err)
-			}
-			if err := db.Create(&schemaMigration{ID: migrations[0].ID}).Error; err != nil {
-				t.Fatalf("record baseline migration: %v", err)
-			}
-			if err := db.Create(&schemaMigration{ID: migrationResumeMarker(migrations[1].ID)}).Error; err != nil {
-				t.Fatalf("create resume marker: %v", err)
-			}
-			if boundary > 0 {
-				if err := db.AutoMigrate(models[:boundary]...); err != nil {
-					t.Fatalf("create schema prefix %d: %v", boundary, err)
-				}
-			}
-
-			if err := applyMySQLMigration(db, migrations[1]); err != nil {
-				t.Fatalf("resume boundary %d: %v", boundary, err)
-			}
-			assertInternalMigrationComplete(t, db, []string{migrations[0].ID, migrations[1].ID})
-		})
-	}
-}
-
-func TestApplyMySQLMigrationRecoversObservationFreshnessRemoval(t *testing.T) {
-	t.Parallel()
-	for _, alreadyDropped := range []bool{false, true} {
-		t.Run(fmt.Sprintf("already_dropped_%t", alreadyDropped), func(t *testing.T) {
-			t.Parallel()
-			db := openInternalMigrationTestDatabase(t)
-			if err := db.AutoMigrate(&schemaMigration{}); err != nil {
-				t.Fatalf("create migration ledger: %v", err)
-			}
-			for index := 0; index < 2; index++ {
-				if err := migrations[index].Up(db); err != nil {
-					t.Fatalf("apply migration %d: %v", index+1, err)
-				}
-				if err := db.Create(&schemaMigration{ID: migrations[index].ID}).Error; err != nil {
-					t.Fatalf("record migration %d: %v", index+1, err)
-				}
-			}
-			if err := db.Create(&schemaMigration{ID: migrationResumeMarker(migrations[2].ID)}).Error; err != nil {
-				t.Fatalf("create resume marker: %v", err)
-			}
-			if alreadyDropped {
-				if err := migrations[2].Up(db); err != nil {
-					t.Fatalf("apply interrupted removal: %v", err)
-				}
-			}
-
-			if err := applyMySQLMigration(db, migrations[2]); err != nil {
-				t.Fatalf("resume freshness removal: %v", err)
-			}
-			assertInternalMigrationComplete(t, db, []string{
-				migrations[0].ID,
-				migrations[1].ID,
-				migrations[2].ID,
-			})
-		})
-	}
-}
-
-func TestApplyMySQLMigrationRecoversAccessKeyLifecycleAddition(t *testing.T) {
-	t.Parallel()
-	for _, columnAlreadyAdded := range []bool{false, true} {
-		t.Run(fmt.Sprintf("column_already_added_%t", columnAlreadyAdded), func(t *testing.T) {
-			t.Parallel()
-			db := openInternalMigrationTestDatabase(t)
-			if err := db.AutoMigrate(&schemaMigration{}); err != nil {
-				t.Fatalf("create migration ledger: %v", err)
-			}
-			for index := 0; index < 6; index++ {
-				if err := migrations[index].Up(db); err != nil {
-					t.Fatalf("apply migration %d: %v", index+1, err)
-				}
-				if err := migrations[index].Validate(db); err != nil {
-					t.Fatalf("validate migration %d: %v", index+1, err)
-				}
-				if err := db.Create(&schemaMigration{ID: migrations[index].ID}).Error; err != nil {
-					t.Fatalf("record migration %d: %v", index+1, err)
-				}
-			}
-			if err := db.Create(&schemaMigration{ID: migrationResumeMarker(migrations[6].ID)}).Error; err != nil {
-				t.Fatalf("create lifecycle recovery marker: %v", err)
-			}
-			if columnAlreadyAdded {
-				if err := migrations[6].Up(db); err != nil {
-					t.Fatalf("apply interrupted lifecycle migration: %v", err)
-				}
-			}
-
-			if err := applyMySQLMigration(db, migrations[6]); err != nil {
-				t.Fatalf("resume lifecycle migration: %v", err)
-			}
-			applied := make([]string, 0, 7)
-			for index := 0; index <= 6; index++ {
-				applied = append(applied, migrations[index].ID)
-			}
-			assertInternalMigrationComplete(t, db, applied)
-		})
-	}
-}
-
-func TestApplyMySQLMigrationRejectsUnsafeResumeState(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name  string
-		setup func(*testing.T, internalMigrationDB)
-	}{
-		{
-			name: "external table",
-			setup: func(t *testing.T, db internalMigrationDB) {
-				t.Helper()
-				if err := db.Exec("CREATE TABLE foreign_data (id integer PRIMARY KEY)").Error; err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-		{
-			name: "existing business data",
-			setup: func(t *testing.T, db internalMigrationDB) {
-				t.Helper()
-				if err := db.AutoMigrate(migrationfiles.SchemaModels0001()[0]); err != nil {
-					t.Fatal(err)
-				}
-				if err := db.Exec(`INSERT INTO groups
-					(name, channel_id, params, models, enabled, created_at_ms, updated_at_ms)
-					VALUES ('unsafe', 'openai', '{}', '[]', TRUE, 0, 0)`).Error; err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-		{
-			name: "retired schema column",
-			setup: func(t *testing.T, db internalMigrationDB) {
-				t.Helper()
-				if err := db.Exec("CREATE TABLE groups (id integer PRIMARY KEY, provider_id text)").Error; err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			db := openInternalMigrationTestDatabase(t)
-			if err := db.AutoMigrate(&schemaMigration{}); err != nil {
-				t.Fatal(err)
-			}
-			if err := db.Create(&schemaMigration{ID: migrationResumeMarker(migrations[0].ID)}).Error; err != nil {
-				t.Fatal(err)
-			}
-			test.setup(t, internalMigrationDB{db})
-
-			err := applyMySQLMigration(db, migrations[0])
-			if test.name == "external table" {
-				if err != nil {
-					t.Fatalf("applyMySQLMigration() error = %v, want external table to be ignored", err)
-				}
-				if !db.Migrator().HasTable("foreign_data") {
-					t.Fatal("migration removed the external table")
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), "unsafe interrupted migration") {
-				t.Fatalf("applyMySQLMigration() error = %v, want unsafe interrupted migration", err)
-			}
-		})
-	}
-}
-
 func TestExternalDatabaseMySQLInterruptedBaselineRecovery(t *testing.T) {
-	rawDSN := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if rawDSN == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	rawDSN := pgtest.DSN(t)
 	parsed, err := url.Parse(rawDSN)
 	if err != nil || !strings.EqualFold(parsed.Scheme, "mysql") {
 		t.Skip("interrupted baseline recovery is specific to MySQL")
@@ -306,10 +91,7 @@ func TestExternalDatabaseMySQLInterruptedBaselineRecovery(t *testing.T) {
 }
 
 func TestExternalDatabaseIncrementalMigrations(t *testing.T) {
-	rawDSN := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if rawDSN == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	rawDSN := pgtest.DSN(t)
 	db := openExternalIncrementalMigrationDatabase(t, rawDSN)
 	if err := db.AutoMigrate(&schemaMigration{}); err != nil {
 		t.Fatalf("create migration ledger: %v", err)
@@ -334,10 +116,7 @@ func TestExternalDatabaseIncrementalMigrations(t *testing.T) {
 }
 
 func TestExternalDatabaseMySQLRecoversObservationFreshnessCheckDrop(t *testing.T) {
-	rawDSN := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if rawDSN == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	rawDSN := pgtest.DSN(t)
 	parsed, err := url.Parse(rawDSN)
 	if err != nil || !strings.EqualFold(parsed.Scheme, "mysql") {
 		t.Skip("observation freshness recovery is specific to MySQL")
@@ -373,10 +152,7 @@ func TestExternalDatabaseMySQLRecoversObservationFreshnessCheckDrop(t *testing.T
 }
 
 func TestExternalDatabaseMySQLRecoversPartialErrorDecisionMigration(t *testing.T) {
-	rawDSN := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if rawDSN == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	rawDSN := pgtest.DSN(t)
 	parsed, err := url.Parse(rawDSN)
 	if err != nil || !strings.EqualFold(parsed.Scheme, "mysql") {
 		t.Skip("error decision recovery is specific to MySQL")
@@ -417,20 +193,19 @@ func openExternalIncrementalMigrationDatabase(t *testing.T, rawDSN string) *gorm
 	if err != nil {
 		t.Fatalf("parse external database DSN: %v", err)
 	}
-	admin, err := OpenWithSource(rawDSN, config.DatabaseSourceExternal)
-	if err != nil {
-		t.Fatalf("open external database admin connection: %v", err)
-	}
-	adminSQL, err := admin.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = adminSQL.Close() })
-
-	name := fmt.Sprintf("gpt_load_cost_migration_%d", time.Now().UnixNano())
 	targetURL := *parsed
 	switch strings.ToLower(parsed.Scheme) {
 	case "mysql":
+		admin, err := OpenWithSource(rawDSN, config.DatabaseSourceExternal)
+		if err != nil {
+			t.Fatalf("open external database admin connection: %v", err)
+		}
+		adminSQL, err := admin.DB()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = adminSQL.Close() })
+		name := fmt.Sprintf("gpt_load_cost_migration_%d", time.Now().UnixNano())
 		if err := admin.Exec("CREATE DATABASE `" + name + "`").Error; err != nil {
 			t.Fatalf("create MySQL migration database: %v", err)
 		}
@@ -442,17 +217,9 @@ func openExternalIncrementalMigrationDatabase(t *testing.T, rawDSN string) *gorm
 		targetURL.Path = "/" + name
 		targetURL.RawPath = ""
 	case "postgres", "postgresql":
-		if err := admin.Exec(`CREATE SCHEMA "` + name + `"`).Error; err != nil {
-			t.Fatalf("create PostgreSQL migration schema: %v", err)
-		}
-		t.Cleanup(func() {
-			if dropErr := admin.Exec(`DROP SCHEMA IF EXISTS "` + name + `" CASCADE`).Error; dropErr != nil {
-				t.Errorf("drop PostgreSQL migration schema: %v", dropErr)
-			}
-		})
-		query := targetURL.Query()
-		query.Set("search_path", name)
-		targetURL.RawQuery = query.Encode()
+		// A database of its own also isolates PostgreSQL's per-database
+		// migration advisory lock, so contracts can run in parallel.
+		targetURL = mustParseURL(t, pgtest.NewEmptyDatabase(t))
 	default:
 		t.Fatalf("unsupported external driver %q", parsed.Scheme)
 	}
@@ -467,6 +234,28 @@ func openExternalIncrementalMigrationDatabase(t *testing.T, rawDSN string) *gorm
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	return db
+}
+
+// externalMigrationContractDSN returns the external test DSN and runs the
+// contract in parallel on PostgreSQL, where each contract database has its
+// own migration lock. MySQL's GET_LOCK is server-wide, so contracts stay
+// serial there.
+func externalMigrationContractDSN(t *testing.T) string {
+	t.Helper()
+	dsn := pgtest.DSN(t)
+	if scheme := strings.ToLower(mustParseURL(t, dsn).Scheme); scheme == "postgres" || scheme == "postgresql" {
+		t.Parallel()
+	}
+	return dsn
+}
+
+func mustParseURL(t *testing.T, raw string) url.URL {
+	t.Helper()
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse database DSN: %v", err)
+	}
+	return *parsed
 }
 
 func runExternalMySQLCostLimitRecovery(t *testing.T, admin *gorm.DB, parsed *url.URL) {
@@ -539,22 +328,6 @@ func runExternalMySQLCostLimitRecovery(t *testing.T, admin *gorm.DB, parsed *url
 	}
 }
 
-type internalMigrationDB struct{ *gorm.DB }
-
-func openInternalMigrationTestDatabase(t *testing.T) *gorm.DB {
-	t.Helper()
-	db, err := Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	return db
-}
-
 func assertInternalMigrationComplete(t *testing.T, db *gorm.DB, wantIDs []string) {
 	t.Helper()
 	for _, table := range migrationfiles.TableNames0001() {
@@ -607,11 +380,4 @@ func registeredMigrationIDs() []string {
 		result = append(result, entry.ID)
 	}
 	return result
-}
-
-func boundaryOrLast(boundary, count int) int {
-	if boundary < count {
-		return boundary
-	}
-	return count - 1
 }

@@ -12,6 +12,7 @@ import (
 	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/migrations"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 type initialColumn struct {
@@ -222,19 +223,11 @@ func TestAutoMigrateCreatesNormalizedRequestLogInitialSchema(t *testing.T) {
 		t.Error("request_log_attempts.conversion_trace_json temporary column exists")
 	}
 
-	var foreignKeys []struct {
-		Table    string
-		From     string
-		To       string
-		OnDelete string `gorm:"column:on_delete"`
-	}
-	if err := db.Raw("PRAGMA foreign_key_list('request_log_attempts')").Scan(&foreignKeys).Error; err != nil {
-		t.Fatalf("inspect request_log_attempts foreign keys: %v", err)
-	}
-	if len(foreignKeys) != 1 || foreignKeys[0].Table != "request_logs" ||
-		foreignKeys[0].From != "request_id" || foreignKeys[0].To != "id" ||
-		foreignKeys[0].OnDelete != "CASCADE" {
-		t.Fatalf("request_log_attempts foreign keys = %#v", foreignKeys)
+	attemptForeignKeys := foreignKeys(t, db, "request_log_attempts")
+	if len(attemptForeignKeys) != 1 || attemptForeignKeys[0].Table != "request_logs" ||
+		attemptForeignKeys[0].From != "request_id" || attemptForeignKeys[0].To != "id" ||
+		attemptForeignKeys[0].OnDelete != "CASCADE" {
+		t.Fatalf("request_log_attempts foreign keys = %#v", attemptForeignKeys)
 	}
 }
 
@@ -532,8 +525,8 @@ func TestFinalSchemaUsesMillisecondIntegersAndEnforcesCounters(t *testing.T) {
 				t.Errorf("%s.%s is missing", table, name)
 				continue
 			}
-			if !strings.EqualFold(column.Type, "INTEGER") {
-				t.Errorf("%s.%s type = %q, want INTEGER", table, name, column.Type)
+			if !strings.EqualFold(column.Type, "int8") {
+				t.Errorf("%s.%s type = %q, want int8 (bigint)", table, name, column.Type)
 			}
 		}
 	}
@@ -650,7 +643,7 @@ func TestAutoMigrateRejectsChangedTableForCompletedMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := db.Exec(`CREATE TABLE usage_stats AS
-		SELECT * FROM usage_stats_checked WHERE 0`).Error; err != nil {
+		SELECT * FROM usage_stats_checked WHERE false`).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Exec(`DROP TABLE usage_stats_checked`).Error; err != nil {
@@ -733,11 +726,25 @@ func assertModelPriceTiersNull(
 	}
 }
 
+// openInitialTestDatabase opens an isolated empty PostgreSQL database so each
+// test drives the migration chain itself.
 func openInitialTestDatabase(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := storage.Open(":memory:")
+	return openTestDatabase(t, pgtest.NewEmptyDatabase(t))
+}
+
+// openMigratedInitialTestDatabase opens an isolated clone of the fully migrated
+// PostgreSQL template.
+func openMigratedInitialTestDatabase(t *testing.T) *gorm.DB {
+	t.Helper()
+	return openTestDatabase(t, pgtest.NewDatabase(t))
+}
+
+func openTestDatabase(t *testing.T, dsn string) *gorm.DB {
+	t.Helper()
+	db, err := storage.Open(dsn)
 	if err != nil {
-		t.Fatalf("Open(:memory:) error = %v", err)
+		t.Fatalf("Open() error = %v", err)
 	}
 	sqlDB, err := db.DB()
 	if err != nil {
@@ -751,23 +758,21 @@ func openInitialTestDatabase(t *testing.T) *gorm.DB {
 	return db
 }
 
-func openMigratedInitialTestDatabase(t *testing.T) *gorm.DB {
-	t.Helper()
-	db := openInitialTestDatabase(t)
-	if err := storage.AutoMigrate(db); err != nil {
-		t.Fatalf("AutoMigrate() error = %v", err)
-	}
-	return db
-}
-
 func initialColumns(t *testing.T, db *gorm.DB, table string) map[string]initialColumn {
 	t.Helper()
-	var columns []initialColumn
-	if err := db.Raw("PRAGMA table_info('" + table + "')").Scan(&columns).Error; err != nil {
+	columnTypes, err := db.Migrator().ColumnTypes(table)
+	if err != nil {
 		t.Fatalf("inspect %s columns: %v", table, err)
 	}
-	result := make(map[string]initialColumn, len(columns))
-	for _, column := range columns {
+	result := make(map[string]initialColumn, len(columnTypes))
+	for _, columnType := range columnTypes {
+		column := initialColumn{Name: columnType.Name(), Type: columnType.DatabaseTypeName()}
+		if nullable, ok := columnType.Nullable(); ok && !nullable {
+			column.NotNull = 1
+		}
+		if value, ok := columnType.DefaultValue(); ok {
+			column.DefaultValue = &value
+		}
 		result[column.Name] = column
 	}
 	return result
@@ -791,37 +796,71 @@ func assertUniqueIndex(
 	wantColumns []string,
 ) {
 	t.Helper()
-	var indexes []struct {
-		Name   string
-		Unique int
+	columns := indexKeyColumns(t, db, table, indexName)
+	if len(columns) == 0 {
+		t.Fatalf("%s is missing", indexName)
 	}
-	if err := db.Raw("PRAGMA index_list('" + table + "')").Scan(&indexes).Error; err != nil {
-		t.Fatalf("inspect %s indexes: %v", table, err)
+	if !columns[0].Unique {
+		t.Fatalf("%s is not unique", indexName)
 	}
-	for _, index := range indexes {
-		if index.Name != indexName {
-			continue
-		}
-		if index.Unique != 1 {
-			t.Fatalf("%s unique = %d, want 1", indexName, index.Unique)
-		}
-		var columns []struct {
-			Name string
-			Key  int
-		}
-		if err := db.Raw("PRAGMA index_xinfo('" + indexName + "')").Scan(&columns).Error; err != nil {
-			t.Fatalf("inspect %s columns: %v", indexName, err)
-		}
-		gotColumns := make([]string, 0, len(wantColumns))
-		for _, column := range columns {
-			if column.Key == 1 {
-				gotColumns = append(gotColumns, column.Name)
-			}
-		}
-		if !reflect.DeepEqual(gotColumns, wantColumns) {
-			t.Fatalf("%s columns = %v, want %v", indexName, gotColumns, wantColumns)
-		}
-		return
+	gotColumns := make([]string, 0, len(columns))
+	for _, column := range columns {
+		gotColumns = append(gotColumns, column.Name)
 	}
-	t.Fatalf("%s is missing", indexName)
+	if !reflect.DeepEqual(gotColumns, wantColumns) {
+		t.Fatalf("%s columns = %v, want %v", indexName, gotColumns, wantColumns)
+	}
+}
+
+type indexKeyColumn struct {
+	Name   string
+	Unique bool
+}
+
+// indexKeyColumns lists the key columns of one index in index order.
+func indexKeyColumns(t *testing.T, db *gorm.DB, table, indexName string) []indexKeyColumn {
+	t.Helper()
+	var columns []indexKeyColumn
+	if err := db.Raw(`
+		SELECT a.attname AS name, i.indisunique AS "unique"
+		FROM pg_index i
+		JOIN pg_class ci ON ci.oid = i.indexrelid
+		CROSS JOIN LATERAL unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, position)
+		JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+		WHERE i.indrelid = ?::regclass AND ci.relname = ? AND k.position <= i.indnkeyatts
+		ORDER BY k.position
+	`, table, indexName).Scan(&columns).Error; err != nil {
+		t.Fatalf("inspect %s columns: %v", indexName, err)
+	}
+	return columns
+}
+
+type foreignKey struct {
+	Table    string
+	From     string
+	To       string
+	OnDelete string `gorm:"column:on_delete"`
+}
+
+// foreignKeys lists the foreign keys declared on table.
+func foreignKeys(t *testing.T, db *gorm.DB, table string) []foreignKey {
+	t.Helper()
+	var result []foreignKey
+	if err := db.Raw(`
+		SELECT ccu.table_name AS "table", kcu.column_name AS "from",
+			ccu.column_name AS "to", rc.delete_rule AS on_delete
+		FROM information_schema.table_constraints tc
+		JOIN information_schema.key_column_usage kcu
+			ON kcu.constraint_schema = tc.constraint_schema AND kcu.constraint_name = tc.constraint_name
+		JOIN information_schema.constraint_column_usage ccu
+			ON ccu.constraint_schema = tc.constraint_schema AND ccu.constraint_name = tc.constraint_name
+		JOIN information_schema.referential_constraints rc
+			ON rc.constraint_schema = tc.constraint_schema AND rc.constraint_name = tc.constraint_name
+		WHERE tc.constraint_type = 'FOREIGN KEY'
+			AND tc.table_schema = current_schema() AND tc.table_name = ?
+		ORDER BY tc.constraint_name, kcu.ordinal_position
+	`, table).Scan(&result).Error; err != nil {
+		t.Fatalf("inspect %s foreign keys: %v", table, err)
+	}
+	return result
 }

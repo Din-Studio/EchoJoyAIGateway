@@ -9,7 +9,7 @@ func TestSelfHostedCIKeepsPlatformGatesAndLocalCaches(t *testing.T) {
 	ci := readRepositoryFile(t, ".github/workflows/ci.yml")
 	for job, runner := range map[string]string{
 		"test":                   "[self-hosted, macOS, ARM64]",
-		"race-tests":             "[self-hosted, macOS, ARM64]",
+		"race-tests":             "[self-hosted, Linux, ARM64]",
 		"race-cpa":               "[self-hosted, Linux, ARM64]",
 		"database-contract":      "[self-hosted, Linux, ARM64]",
 		"windows-encryption-acl": "[self-hosted, Windows, X64]",
@@ -60,7 +60,7 @@ func TestReleaseUsesSelfHostedValidationAndHostedPublicationRunners(t *testing.T
 	content := readRepositoryFile(t, ".github/workflows/release.yml")
 	for job, runner := range map[string]string{
 		"static-checks":     "[self-hosted, macOS, ARM64]",
-		"race-tests":        "[self-hosted, macOS, ARM64]",
+		"race-tests":        "[self-hosted, Linux, ARM64]",
 		"race-cpa":          "[self-hosted, Linux, ARM64]",
 		"database-contract": "[self-hosted, Linux, ARM64]",
 	} {

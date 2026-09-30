@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 
@@ -22,11 +21,13 @@ import (
 	"gpt-load/internal/platform/encryption"
 	"gpt-load/internal/state"
 	stateloader "gpt-load/internal/state/loader"
+	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/models"
 	subscriptionproviders "gpt-load/internal/subscription/providers"
 	"gpt-load/internal/subscription/providers/codex"
 	subscriptionruntime "gpt-load/internal/subscription/runtime"
 	"gpt-load/internal/testutil/encryptiontest"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 type failingEncryptService struct {
@@ -570,13 +571,19 @@ func newCredentialManagerFixture(
 	canonical []byte,
 ) (*CredentialManager, *gorm.DB, *state.CredentialRegistry, encryption.Service, models.Credential) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{TranslateError: true})
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Group{}, &models.Credential{}, &models.CredentialQuotaHistory{}); err != nil {
+	sqlDB, err := db.DB()
+	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close credential manager test database: %v", err)
+		}
+	})
 	keyService := encryptiontest.Service(t, "subscription-manager-test-encryption-key-material")
 	ciphertext, err := keyService.Encrypt(string(canonical))
 	if err != nil {

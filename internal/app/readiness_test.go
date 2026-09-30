@@ -9,6 +9,7 @@ import (
 	"gpt-load/internal/cluster"
 	"gpt-load/internal/platform/config"
 	"gpt-load/internal/storage"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 func newTestClusterClient(t *testing.T) (*miniredis.Miniredis, *cluster.Client) {
@@ -31,7 +32,7 @@ func TestNewReadinessProbeIsNilWithoutClusterClient(t *testing.T) {
 }
 
 func TestReadinessProbeChecksDatabaseAndRedis(t *testing.T) {
-	db, err := storage.Open(":memory:")
+	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}

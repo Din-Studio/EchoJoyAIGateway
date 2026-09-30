@@ -28,11 +28,12 @@ import (
 	stateloader "gpt-load/internal/state/loader"
 	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/pgtest"
 )
 
-func TestReadSnapshotKeepsOneVersionWhileWALWriterCommits(t *testing.T) {
+func TestReadSnapshotKeepsOneVersionWhileWriterCommits(t *testing.T) {
 	t.Parallel()
-	fixture, dsn := newFileServiceFixture(t)
+	fixture, dsn := newServiceFixtureWithSecondDSN(t)
 	group := validControlGroup("read-snapshot-old")
 	if err := fixture.db.Create(group).Error; err != nil {
 		t.Fatal(err)
@@ -87,10 +88,10 @@ func TestReadSnapshotKeepsOneVersionWhileWALWriterCommits(t *testing.T) {
 	select {
 	case err := <-writeDone:
 		if err != nil {
-			t.Fatalf("WAL writer update error = %v", err)
+			t.Fatalf("writer update error = %v", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("read snapshot blocked WAL writer")
+		t.Fatal("read snapshot blocked writer")
 	}
 	close(releaseRead)
 	select {
@@ -133,11 +134,11 @@ func TestReadSnapshotCancellationTakesPrecedenceAndReleasesConnection(t *testing
 	}
 }
 
-func TestWriteConfigDiscardsConnectionAfterCommitBusy(t *testing.T) {
+func TestWriteConfigRecoversAfterCommitFailure(t *testing.T) {
 	t.Parallel()
-	fixture, dsn := newFileServiceFixture(t)
+	fixture := newServiceFixture(t)
 	beforeRevision := fixture.manager.Current().Revision
-	releaseReader := holdRollbackJournalReadLock(t, fixture.db, dsn)
+	releaseReader := pgtest.FailOnCommit(t, fixture.db, "groups", "forced commit failure")
 
 	callbackRan := false
 	_, err := fixture.service.writeConfig(t.Context(), func(tx *gorm.DB) error {
@@ -163,13 +164,6 @@ func TestWriteConfigDiscardsConnectionAfterCommitBusy(t *testing.T) {
 	}
 	if failedCount != 0 {
 		t.Fatalf("ghost group count = %d, want 0", failedCount)
-	}
-	var mode string
-	if err := fixture.db.Raw("PRAGMA journal_mode").Scan(&mode).Error; err != nil {
-		t.Fatal(err)
-	}
-	if !strings.EqualFold(mode, "wal") {
-		t.Fatalf("reopened journal_mode = %q, want wal", mode)
 	}
 
 	_, err = fixture.service.writeConfig(t.Context(), func(tx *gorm.DB) error {

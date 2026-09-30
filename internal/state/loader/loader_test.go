@@ -22,8 +22,9 @@ import (
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/state"
 	"gpt-load/internal/state/loader"
+	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/models"
-	"gpt-load/internal/testutil/sqlitetest"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 func TestBuildCompileInputWithProxyDecryptsGlobalAndGroupPolicies(t *testing.T) {
@@ -872,16 +873,11 @@ func TestLoaderRejectsAccessKeyCostLimitWithoutState(t *testing.T) {
 
 func TestLoaderRejectsOrphanAccessKeyCostLimitState(t *testing.T) {
 	db := openMigratedDatabase(t)
-	if err := db.Exec("PRAGMA foreign_keys = OFF").Error; err != nil {
-		t.Fatal(err)
-	}
+	pgtest.DropConstraints(t, db, "access_key_cost_limit_states", 'f')
 	if err := db.Create(&models.AccessKeyCostLimitState{
 		RuleID: 999, RuleRevision: 1, SnapshotVersion: 1,
 	}).Error; err != nil {
 		t.Fatalf("create orphan state: %v", err)
-	}
-	if err := db.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
-		t.Fatal(err)
 	}
 
 	manager := state.NewManager()
@@ -917,14 +913,7 @@ func TestLoaderRejectsInvalidCredentialRowsWithoutPublishing(t *testing.T) {
 		{
 			name: "unknown access status",
 			insert: func(t *testing.T, db *gorm.DB, _ models.Group) {
-				if err := db.Exec("PRAGMA ignore_check_constraints = ON").Error; err != nil {
-					t.Fatalf("disable SQLite check constraints: %v", err)
-				}
-				defer func() {
-					if err := db.Exec("PRAGMA ignore_check_constraints = OFF").Error; err != nil {
-						t.Errorf("restore SQLite check constraints: %v", err)
-					}
-				}()
+				pgtest.DropConstraints(t, db, "access_keys", 'c')
 				mustCreate(t, db, &models.AccessKey{
 					Name: "invalid", KeyValue: "access-cipher", KeyHash: "invalid-status-hash",
 					KeySuffix: "0006", Status: "revoked", Filters: models.JSON(`{}`),
@@ -1004,7 +993,20 @@ func TestLoaderRejectsInvalidCredentialRowsWithoutPublishing(t *testing.T) {
 
 func openMigratedDatabase(t *testing.T) *gorm.DB {
 	t.Helper()
-	return sqlitetest.OpenMigrated(t)
+	db, err := storage.Open(pgtest.NewDatabase(t))
+	if err != nil {
+		t.Fatalf("open loader test database: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("loader test database handle: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close loader test database: %v", err)
+		}
+	})
+	return db
 }
 
 func mustCreate(t *testing.T, db *gorm.DB, value any) {

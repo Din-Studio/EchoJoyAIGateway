@@ -2,7 +2,6 @@ package storage
 
 import (
 	"fmt"
-	"os"
 	"testing"
 
 	"gorm.io/gorm"
@@ -10,16 +9,8 @@ import (
 	"gpt-load/internal/storage/models"
 )
 
-func TestCustomAccessKeyMigrationContract(t *testing.T) {
-	t.Parallel()
-	testCustomAccessKeyMigration(t, openInternalMigrationTestDatabase)
-}
-
 func TestExternalCustomAccessKeyMigrationContract(t *testing.T) {
-	dsn := os.Getenv("GPT_LOAD_DATABASE_TEST_DSN")
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := externalMigrationContractDSN(t)
 	testCustomAccessKeyMigration(t, func(t *testing.T) *gorm.DB { return openExternalIncrementalMigrationDatabase(t, dsn) })
 }
 
@@ -27,9 +18,6 @@ func testCustomAccessKeyMigration(t *testing.T, open func(*testing.T) *gorm.DB) 
 	for _, scenario := range []string{"fresh", "upgrade", "interrupted"} {
 		t.Run(scenario, func(t *testing.T) {
 			db := open(t)
-			if db.Dialector.Name() == "sqlite" {
-				t.Parallel()
-			}
 			var key models.AccessKey
 			var rule models.AccessKeyCostLimitRule
 			var deletedID uint
@@ -72,12 +60,6 @@ func testCustomAccessKeyMigration(t *testing.T, open func(*testing.T) *gorm.DB) 
 				if err := applyMigrationRegistry(db, registry); err == nil {
 					t.Fatal("interruption succeeded")
 				}
-				if db.Dialector.Name() == "sqlite" {
-					var enabled int
-					if err := db.Raw("PRAGMA foreign_keys").Scan(&enabled).Error; err != nil || enabled != 1 {
-						t.Fatal("interrupted migration did not restore foreign keys")
-					}
-				}
 			}
 			if err := AutoMigrate(db); err != nil {
 				t.Fatal(err)
@@ -118,12 +100,6 @@ func testCustomAccessKeyMigration(t *testing.T, open func(*testing.T) *gorm.DB) 
 			for _, invalid := range []string{"", "abc", "12345"} {
 				if err := db.Model(&custom).Update("key_suffix", invalid).Error; err == nil {
 					t.Fatal("invalid suffix length accepted")
-				}
-			}
-			if db.Dialector.Name() == "sqlite" {
-				var foreignKeys int
-				if err := db.Raw("PRAGMA foreign_keys").Scan(&foreignKeys).Error; err != nil || foreignKeys != 1 {
-					t.Fatal("foreign keys not restored")
 				}
 			}
 		})
