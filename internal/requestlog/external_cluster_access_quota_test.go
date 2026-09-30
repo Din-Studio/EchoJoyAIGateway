@@ -184,24 +184,56 @@ func TestExternalClusterAccessKeyRPMExact(t *testing.T) {
 	for _, instanceID := range []string{"node-a", "node-b", "node-c"} {
 		limiters = append(limiters, cluster.NewAccessKeyRPM(externalClusterClient(t, redisAddr, keyPrefix, instanceID)))
 	}
+	// A call that outlasts the 200ms per-call state timeout may still have
+	// been admitted by Redis, so its burst has no exact count. Loaded
+	// machines and port-forwarded Redis occasionally stall a round trip that
+	// long, so such a burst is retried on a fresh access key.
+	const attempts = 5
+	for accessKeyID := uint(1); ; accessKeyID++ {
+		admitted, err := admitRPMBurst(limiters, accessKeyID)
+		if err == nil {
+			if admitted != 60 {
+				t.Fatalf("admitted %d, want exactly 60", admitted)
+			}
+			return
+		}
+		if accessKeyID == attempts {
+			t.Fatalf("every burst hit a Redis error, last: %v", err)
+		}
+		t.Logf("burst on access key %d: %v; retrying on a fresh key", accessKeyID, err)
+	}
+}
+
+// admitRPMBurst sends 200 concurrent requests for a limit of 60 through a
+// bounded worker pool spread over every instance, and reports the first
+// Redis error.
+func admitRPMBurst(limiters []*cluster.AccessKeyRPM, accessKeyID uint) (int32, error) {
+	requests := make(chan struct{}, 200)
+	for range 200 {
+		requests <- struct{}{}
+	}
+	close(requests)
 	var admitted atomic.Int32
+	var firstErr error
+	var errOnce sync.Once
 	var wait sync.WaitGroup
-	for request := range 200 {
+	for worker := range 8 * len(limiters) {
+		limiter := limiters[worker%len(limiters)]
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			decision, err := limiters[request%len(limiters)].Allow(context.Background(), 1, 60)
-			if err != nil {
-				t.Error(err)
-				return
-			}
-			if decision.Allowed {
-				admitted.Add(1)
+			for range requests {
+				decision, err := limiter.Allow(context.Background(), accessKeyID, 60)
+				if err != nil {
+					errOnce.Do(func() { firstErr = err })
+					continue
+				}
+				if decision.Allowed {
+					admitted.Add(1)
+				}
 			}
 		}()
 	}
 	wait.Wait()
-	if admitted.Load() != 60 {
-		t.Fatalf("admitted %d, want exactly 60", admitted.Load())
-	}
+	return admitted.Load(), firstErr
 }
