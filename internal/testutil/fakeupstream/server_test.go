@@ -549,6 +549,17 @@ func TestReadEmbeddedFixtureNormalizesPortablePrefixes(t *testing.T) {
 	}
 }
 
+func TestFixtureReturnsEmbeddedGolden(t *testing.T) {
+	got, err := Fixture("openai", "success.json")
+	if err != nil {
+		t.Fatalf("Fixture() error = %v", err)
+	}
+	assertFixtureBody(t, got, "openai", "success.json")
+	if _, err := Fixture("openai", "missing.json"); err == nil {
+		t.Fatal("Fixture() 读取不存在的 fixture 应返回错误")
+	}
+}
+
 type flushRecorder struct {
 	*httptest.ResponseRecorder
 	flushes int

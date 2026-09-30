@@ -11,24 +11,24 @@ func TestCacheLearnsAndRefreshesSuccessfulTarget(t *testing.T) {
 	key := Key("one")
 	target := Target{GroupID: 1, CredentialID: 11, IdentityGeneration: 101}
 
-	miss := cache.Lookup(key)
+	miss := cache.lookup(key)
 	if miss.Found() {
 		t.Fatalf("initial Lookup() = %#v, want miss", miss)
 	}
-	if !cache.RecordSuccess(key, miss, target) {
+	if !cache.recordSuccess(key, miss, target) {
 		t.Fatal("RecordSuccess() = false, want insert")
 	}
-	first := cache.Lookup(key)
+	first := cache.lookup(key)
 	if !first.Found() || first.Target != target {
 		t.Fatalf("Lookup() = %#v, want target %#v", first, target)
 	}
 
 	now = now.Add(50 * time.Minute)
-	if !cache.RecordSuccess(key, first, target) {
+	if !cache.recordSuccess(key, first, target) {
 		t.Fatal("RecordSuccess() = false, want TTL refresh")
 	}
 	now = now.Add(20 * time.Minute)
-	if refreshed := cache.Lookup(key); !refreshed.Found() || refreshed.Target != target {
+	if refreshed := cache.lookup(key); !refreshed.Found() || refreshed.Target != target {
 		t.Fatalf("Lookup() after refreshed TTL = %#v, want hit", refreshed)
 	}
 }
@@ -38,14 +38,14 @@ func TestCacheLookupDoesNotRefreshTTL(t *testing.T) {
 	cache := newCache(2, time.Hour, func() time.Time { return now })
 	key := Key("one")
 	target := Target{GroupID: 1, CredentialID: 11, IdentityGeneration: 101}
-	cache.RecordSuccess(key, Observation{}, target)
+	cache.recordSuccess(key, Observation{}, target)
 
 	now = now.Add(50 * time.Minute)
-	if !cache.Lookup(key).Found() {
+	if !cache.lookup(key).Found() {
 		t.Fatal("Lookup() before expiry = miss, want hit")
 	}
 	now = now.Add(11 * time.Minute)
-	if got := cache.Lookup(key); got.Found() {
+	if got := cache.lookup(key); got.Found() {
 		t.Fatalf("Lookup() after original expiry = %#v, want miss", got)
 	}
 }
@@ -56,23 +56,23 @@ func TestCacheFirstSuccessWinsAndFallbackUsesCompareAndSwap(t *testing.T) {
 	first := Target{GroupID: 1, CredentialID: 11, IdentityGeneration: 101}
 	second := Target{GroupID: 1, CredentialID: 12, IdentityGeneration: 102}
 
-	missOne := cache.Lookup(key)
-	missTwo := cache.Lookup(key)
-	if !cache.RecordSuccess(key, missOne, first) {
+	missOne := cache.lookup(key)
+	missTwo := cache.lookup(key)
+	if !cache.recordSuccess(key, missOne, first) {
 		t.Fatal("first miss success did not create mapping")
 	}
-	if cache.RecordSuccess(key, missTwo, second) {
+	if cache.recordSuccess(key, missTwo, second) {
 		t.Fatal("second concurrent miss overwrote first-success mapping")
 	}
 
-	observedFirst := cache.Lookup(key)
-	if !cache.RecordSuccess(key, observedFirst, second) {
+	observedFirst := cache.lookup(key)
+	if !cache.recordSuccess(key, observedFirst, second) {
 		t.Fatal("fallback success did not switch observed mapping")
 	}
-	if cache.RecordSuccess(key, observedFirst, first) {
+	if cache.recordSuccess(key, observedFirst, first) {
 		t.Fatal("stale success overwrote newer fallback mapping")
 	}
-	got := cache.Lookup(key)
+	got := cache.lookup(key)
 	if !got.Found() || got.Target != second {
 		t.Fatalf("Lookup() = %#v, want fallback target %#v", got, second)
 	}
@@ -82,15 +82,15 @@ func TestCacheEvictsLeastRecentlyUsedEntry(t *testing.T) {
 	cache := newCache(2, time.Hour, time.Now)
 	target := Target{GroupID: 1, CredentialID: 11, IdentityGeneration: 101}
 	for _, key := range []Key{"one", "two"} {
-		cache.RecordSuccess(key, Observation{}, target)
+		cache.recordSuccess(key, Observation{}, target)
 	}
-	cache.Lookup("one")
-	cache.RecordSuccess("three", Observation{}, target)
+	cache.lookup("one")
+	cache.recordSuccess("three", Observation{}, target)
 
-	if cache.Lookup("two").Found() {
+	if cache.lookup("two").Found() {
 		t.Fatal("least recently used entry remained cached")
 	}
-	if !cache.Lookup("one").Found() || !cache.Lookup("three").Found() || cache.entryCount() != 2 {
+	if !cache.lookup("one").Found() || !cache.lookup("three").Found() || cache.entryCount() != 2 {
 		t.Fatalf("cache state invalid after eviction; entries=%d", cache.entryCount())
 	}
 }
@@ -106,11 +106,11 @@ func TestCacheRejectsInvalidInputs(t *testing.T) {
 		{key: "key"},
 		{key: "key", target: Target{GroupID: 1, CredentialID: 11}},
 	} {
-		if cache.RecordSuccess(test.key, Observation{}, test.target) {
+		if cache.recordSuccess(test.key, Observation{}, test.target) {
 			t.Fatalf("RecordSuccess(%q, %#v) = true, want false", test.key, test.target)
 		}
 	}
-	if cache.Lookup("").Found() || cache.entryCount() != 0 {
+	if cache.lookup("").Found() || cache.entryCount() != 0 {
 		t.Fatalf("invalid inputs changed cache; entries=%d", cache.entryCount())
 	}
 }
@@ -123,33 +123,33 @@ func TestCacheConfigureClearsEntriesAndRejectsOlderRevision(t *testing.T) {
 	if !cache.Configure(1, 2, time.Hour) {
 		t.Fatal("Configure(1) = false")
 	}
-	observed := cache.Lookup(key)
-	if !cache.RecordSuccess(key, observed, target) {
+	observed := cache.lookup(key)
+	if !cache.recordSuccess(key, observed, target) {
 		t.Fatal("RecordSuccess() = false")
 	}
-	stale := cache.Lookup(key)
+	stale := cache.lookup(key)
 	if !cache.Configure(2, 1, 30*time.Minute) {
 		t.Fatal("Configure(2) = false")
 	}
-	if cache.Lookup(key).Found() || cache.entryCount() != 0 {
+	if cache.lookup(key).Found() || cache.entryCount() != 0 {
 		t.Fatal("new configuration did not clear old entries")
 	}
 	if cache.Configure(1, 2, time.Hour) {
 		t.Fatal("older configuration revision was accepted")
 	}
-	if cache.RecordSuccess(key, stale, target) {
+	if cache.recordSuccess(key, stale, target) {
 		t.Fatal("request from an older configuration revision rewrote the cache")
 	}
 	for _, nextKey := range []Key{"two", "three"} {
-		if !cache.RecordSuccess(nextKey, cache.Lookup(nextKey), target) {
+		if !cache.recordSuccess(nextKey, cache.lookup(nextKey), target) {
 			t.Fatalf("RecordSuccess(%q) = false", nextKey)
 		}
 	}
-	if cache.Lookup("two").Found() || !cache.Lookup("three").Found() || cache.entryCount() != 1 {
+	if cache.lookup("two").Found() || !cache.lookup("three").Found() || cache.entryCount() != 1 {
 		t.Fatal("configured capacity was not enforced")
 	}
 	now = now.Add(31 * time.Minute)
-	if cache.Lookup("three").Found() {
+	if cache.lookup("three").Found() {
 		t.Fatal("configured TTL was not enforced")
 	}
 }

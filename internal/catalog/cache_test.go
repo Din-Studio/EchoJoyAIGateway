@@ -458,3 +458,34 @@ func validSyncResult(t *testing.T) SyncResult {
 		Snapshot: snapshot,
 	}
 }
+
+func TestEncodeCacheDecodesToTheDocumentLoadCacheReads(t *testing.T) {
+	result := validSyncResult(t)
+	encoded, err := EncodeCache(result)
+	if err != nil {
+		t.Fatalf("EncodeCache() error = %v", err)
+	}
+	decoded, err := DecodeCache(encoded)
+	if err != nil {
+		t.Fatalf("DecodeCache() error = %v", err)
+	}
+	if decoded.Metadata != result.Metadata || string(decoded.RawJSON) != string(result.RawJSON) ||
+		!reflect.DeepEqual(decoded.Snapshot, result.Snapshot) {
+		t.Fatalf("decoded cache = %#v, want result %#v", decoded, result)
+	}
+
+	path := filepath.Join(t.TempDir(), "models.dev.catalog.json")
+	if err := StoreCache(path, result); err != nil {
+		t.Fatalf("StoreCache() error = %v", err)
+	}
+	stored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(cache) error = %v", err)
+	}
+	if !bytes.Equal(stored, encoded) {
+		t.Fatal("StoreCache() wrote different bytes than EncodeCache()")
+	}
+	if _, err := DecodeCache([]byte(`{"version":1}`)); err == nil {
+		t.Fatal("DecodeCache() accepted an incomplete document")
+	}
+}

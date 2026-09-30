@@ -516,7 +516,9 @@ func (s *websocketConnection) run() {
 					key, authorized := s.authorized(s.handler.manager.Current())
 					if !authorized {
 						value = reasonInvalidAccessKey
-					} else if !s.handler.limiter.Allow(key.ID, key.RPMLimit).Allowed {
+					} else if limitDecision, err := s.handler.limiter.Allow(s.ctx, key.ID, key.RPMLimit); err != nil {
+						value = limitStateFailureReason(err)
+					} else if !limitDecision.Allowed {
 						value = reasonAccessKeyRateLimited
 					}
 					recorder := s.newTurnRecorder(turn)

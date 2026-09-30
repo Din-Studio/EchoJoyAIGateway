@@ -147,7 +147,7 @@ func TestWebsocketQuotaCountsConcurrentTurnsOnceWithoutReservation(t *testing.T)
 	limiter := &recordingAccessKeyRPMLimiter{}
 	h.limiter = limiter
 	runtime := accessquota.NewRuntime()
-	h.accessQuota = runtime
+	h.accessQuota = NewLocalAccessQuotaGate(h.manager, runtime)
 	if err := runtime.Reconcile(map[uint][]accessquota.Rule{1: {{ID: 1, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 4}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestWebsocketStoredAndTemporaryOwnershipRemainSeparate(t *testing.T) {
 		t.Fatal("prewarm flag lost")
 	}
 	waitWebsocketLogs(t, sink, 1)
-	if _, ok := h.responseBindings.Lookup(1, "resp_1"); !ok {
+	if _, ok := lookupTestBinding(t, h, 1, "resp_1"); !ok {
 		t.Fatal("omitted store did not use native storage contract")
 	}
 	_ = first.Close()
@@ -284,7 +284,7 @@ func TestWebsocketStoredAndTemporaryOwnershipRemainSeparate(t *testing.T) {
 		t.Fatal("persistent parent or child store changed")
 	}
 	waitWebsocketLogs(t, sink, 2)
-	if _, ok := h.responseBindings.Lookup(1, "resp_2"); ok {
+	if _, ok := lookupTestBinding(t, h, 1, "resp_2"); ok {
 		t.Fatal("store:false escaped into persistent index")
 	}
 	_ = second.Close()

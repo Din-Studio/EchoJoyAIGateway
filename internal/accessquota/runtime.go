@@ -2,6 +2,7 @@
 package accessquota
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -15,6 +16,10 @@ const (
 	MaxPeriodSeconds int64 = 365 * 24 * 60 * 60
 	MaxPeriodicRules       = 10
 )
+
+// ErrStaleRules reports that the caller's rule definitions are older than the
+// state owned by another writer, so the request must retry on a newer snapshot.
+var ErrStaleRules = errors.New("access quota rules are older than the shared state")
 
 type Kind string
 
@@ -332,21 +337,35 @@ func (runtime *Runtime) Complete(ticket Ticket, costNanoUSD int64) CompletionRes
 }
 
 func (runtime *Runtime) Snapshot(accessKeyID uint, now time.Time) View {
-	view := View{ObservedAtMS: now.UnixMilli(), Allowed: true, Recoverable: true, Rules: []RuleView{}}
 	entry := runtime.lockEntry(accessKeyID)
 	if entry == nil {
-		return view
+		return viewLocked(nil, now.UnixMilli())
 	}
 	defer entry.mu.Unlock()
-	view.Rules = make([]RuleView, 0, len(entry.rules))
-	for _, rule := range entry.rules {
-		view.Rules = append(view.Rules, ruleViewLocked(rule, view.ObservedAtMS))
+	return viewLocked(entry, now.UnixMilli())
+}
+
+// DecisionFor evaluates externally owned rule state with the same rules as
+// Runtime.Check. A rule without a state entry is treated as never used.
+func DecisionFor(rules []Rule, states map[uint]RestoredState, nowMS int64) Decision {
+	return decisionLocked(entryFromStates(rules, states), nowMS)
+}
+
+// ViewFor projects externally owned rule state with the same rules as
+// Runtime.Snapshot. A rule without a state entry is treated as never used.
+func ViewFor(rules []Rule, states map[uint]RestoredState, now time.Time) View {
+	return viewLocked(entryFromStates(rules, states), now.UnixMilli())
+}
+
+// ValidateRestoredState verifies that persisted state is a legal state of rule.
+func ValidateRestoredState(rule Rule, state RestoredState) error {
+	if err := validateRestoredState(state); err != nil {
+		return err
 	}
-	decision := decisionLocked(entry, view.ObservedAtMS)
-	view.Allowed = decision.Allowed
-	view.Recoverable = decision.Recoverable
-	view.NextAvailableAtMS = cloneInt64(decision.NextAvailableAtMS)
-	return view
+	if state.RuleID != rule.ID || state.RuleRevision != rule.Revision {
+		return fmt.Errorf("restore access quota rule %d: state identity or revision mismatch", rule.ID)
+	}
+	return applyRestoredState(&runtimeRule{definition: rule}, state)
 }
 
 func (runtime *Runtime) DirtySnapshots(limit int) []RestoredState {
@@ -592,6 +611,40 @@ func cloneRuntimeState(target, source *runtimeRule) {
 	target.windowGeneration = source.windowGeneration
 	target.snapshotVersion = source.snapshotVersion
 	target.dirty = source.dirty
+}
+
+func entryFromStates(rules []Rule, states map[uint]RestoredState) *accessKeyEntry {
+	sorted := append([]Rule(nil), rules...)
+	sortRules(sorted)
+	entry := newAccessKeyEntry(sorted)
+	for _, rule := range entry.rules {
+		state, exists := states[rule.definition.ID]
+		if !exists {
+			continue
+		}
+		rule.usedNanoUSD = state.UsedNanoUSD
+		rule.windowStartedAtMS = cloneInt64(state.WindowStartedAtMS)
+		rule.windowEndsAtMS = cloneInt64(state.WindowEndsAtMS)
+		rule.windowGeneration = state.WindowGeneration
+		rule.snapshotVersion = state.SnapshotVersion
+	}
+	return entry
+}
+
+func viewLocked(entry *accessKeyEntry, nowMS int64) View {
+	view := View{ObservedAtMS: nowMS, Allowed: true, Recoverable: true, Rules: []RuleView{}}
+	if entry == nil || len(entry.rules) == 0 {
+		return view
+	}
+	view.Rules = make([]RuleView, 0, len(entry.rules))
+	for _, rule := range entry.rules {
+		view.Rules = append(view.Rules, ruleViewLocked(rule, nowMS))
+	}
+	decision := decisionLocked(entry, nowMS)
+	view.Allowed = decision.Allowed
+	view.Recoverable = decision.Recoverable
+	view.NextAvailableAtMS = cloneInt64(decision.NextAvailableAtMS)
+	return view
 }
 
 func decisionLocked(entry *accessKeyEntry, nowMS int64) Decision {

@@ -43,3 +43,46 @@ func TestConfigRejectsProtectedContinuationOverrides(t *testing.T) {
 		t.Fatal("preset can rewrite continuation identity")
 	}
 }
+
+func TestCompiledEntryFingerprintTracksOnlyItsOwnConfiguration(t *testing.T) {
+	names := map[string]struct{}{"gpt-5.6-luna": {}, "gpt-5.6-terra": {}, "gpt-5.6-sol": {}, "gpt-6-astra": {}}
+	build := func(edit func(*Config)) map[string]string {
+		t.Helper()
+		config := DefaultConfig()
+		other := Template()
+		other.ID, other.Name = "other", "other"
+		config.Models = []Entry{Template(), other}
+		if edit != nil {
+			edit(&config)
+		}
+		compiled, err := Compile(config, names)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fingerprints := map[string]string{}
+		for _, name := range []string{"auto", "other"} {
+			entry, exists := compiled.Lookup(name)
+			if !exists || entry.Fingerprint == "" {
+				t.Fatalf("entry %q fingerprint missing: %#v", name, entry)
+			}
+			fingerprints[name] = entry.Fingerprint
+		}
+		return fingerprints
+	}
+
+	base := build(nil)
+	if again := build(nil); again["auto"] != base["auto"] || again["other"] != base["other"] {
+		t.Fatalf("recompiled fingerprints = %v, want %v", again, base)
+	}
+	presetEdited := build(func(config *Config) { config.Models[0].Presets[0].Description = "changed" })
+	if presetEdited["auto"] == base["auto"] || presetEdited["other"] != base["other"] {
+		t.Fatalf("after editing auto's preset: %v, base %v", presetEdited, base)
+	}
+	otherEdited := build(func(config *Config) {
+		config.Models[1].Presets[0].Description = "changed"
+		config.TimeoutSeconds = 9
+	})
+	if otherEdited["auto"] != base["auto"] {
+		t.Fatalf("auto fingerprint changed with an unrelated edit: %v, base %v", otherEdited, base)
+	}
+}

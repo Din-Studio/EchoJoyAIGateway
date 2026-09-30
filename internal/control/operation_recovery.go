@@ -22,7 +22,6 @@ const (
 	operationResultRetention        = 7 * 24 * time.Hour
 	operationRecoveryInitialBackoff = 250 * time.Millisecond
 	operationRecoveryMaximumBackoff = 30 * time.Second
-	operationCompactionInterval     = time.Hour
 )
 
 type recoveryPendingData struct {
@@ -120,7 +119,7 @@ func (s *Service) compactCompletedOperationsLocked(
 		cutoffMS = 0
 	}
 	var rowsAffected int64
-	err = s.withControlTransaction(ctx, func(tx *gorm.DB) error {
+	err = s.withBookkeepingTransaction(ctx, func(tx *gorm.DB) error {
 		result := tx.Model(&models.ControlOperation{}).
 			Where("completed_at_ms IS NOT NULL").
 			Where("completed_at_ms <= ?", cutoffMS).
@@ -142,13 +141,10 @@ func (s *Service) compactCompletedOperationsLocked(
 	return rowsAffected, err
 }
 
-// RunOperationRecovery drains failures signaled by mutation requests and
-// periodically compacts terminal results. Retries are bounded and stop with
-// the application context.
+// RunOperationRecovery drains failures signaled by mutation requests. Retries
+// are bounded and stop with the application context. Terminal results are
+// compacted by the control runtime's hourly retention sweep.
 func (s *Service) RunOperationRecovery(ctx context.Context) {
-	compactionTicker := time.NewTicker(operationCompactionInterval)
-	defer compactionTicker.Stop()
-
 	var retryTimer *time.Timer
 	var retry <-chan time.Time
 	backoff := operationRecoveryInitialBackoff
@@ -197,17 +193,6 @@ func (s *Service) RunOperationRecovery(ctx context.Context) {
 			retryTimer = nil
 			retry = nil
 			drain()
-		case now := <-compactionTicker.C:
-			if _, err := s.CompactCompletedOperations(ctx, now); err != nil &&
-				ctx.Err() == nil {
-				utils.LogPlaneBestEffort(
-					logrus.StandardLogger(),
-					logrus.WarnLevel,
-					utils.LogPlaneControl,
-					nil,
-					"Operation result compaction failed",
-				)
-			}
 		}
 	}
 }

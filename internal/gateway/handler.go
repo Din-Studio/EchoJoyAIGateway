@@ -63,8 +63,23 @@ type AttemptForwarder interface {
 	ForwardStream(context.Context, ForwardInput, http.ResponseWriter) UpstreamResult
 }
 
+// AccessKeyRPMLimiter decides per-AccessKey RPM admission. An error means the
+// limiter state is unavailable and the request must not be forwarded.
 type AccessKeyRPMLimiter interface {
-	Allow(accessKeyID uint, limit int64) ratelimit.LimitDecision
+	Allow(ctx context.Context, accessKeyID uint, limit int64) (ratelimit.LimitDecision, error)
+}
+
+// ResponseBindingStore owns Responses ownership: the in-process index in
+// single-instance mode and the shared Redis index in cluster mode.
+type ResponseBindingStore interface {
+	Lookup(ctx context.Context, accessKeyID uint, responseID string) (state.ResponseBinding, bool, error)
+	Record(
+		ctx context.Context,
+		accessKeyID uint,
+		responseID string,
+		ref state.CredentialRef,
+		autoSelections ...*automodel.Selection,
+	) (bool, error)
 }
 
 // PriceTableProvider exposes the currently published immutable price table.
@@ -87,6 +102,7 @@ type runtimeCredentialRegistry interface {
 	IncrFailure(credentialID uint) (int, bool)
 	SetBlacklistedWithChange(credentialID uint) (exists bool, changed bool)
 	ClearFailure(credentialID uint) bool
+	CredentialFailureCount(credentialID uint) (int, bool)
 }
 
 type Handler struct {
@@ -108,7 +124,8 @@ type Handler struct {
 	limiter             AccessKeyRPMLimiter
 	requestLogSink      telemetry.RequestLogSink
 	priceTables         PriceTableProvider
-	accessQuota         *accessquota.Runtime
+	accessQuota         AccessQuotaGate
+	sharedHealth        state.SharedCredentialHealthStore
 	newRequestID        func() (string, error)
 	requestNow          func() time.Time
 	now                 func() time.Time
@@ -118,8 +135,8 @@ type Handler struct {
 	authFailureEvents   *utils.RateLimitedEventCounter
 	routeNotFoundEvents *utils.RateLimitedEventCounter
 	lifecycle           *httplifecycle.Coordinator
-	affinityCache       *affinity.Cache
-	responseBindings    *state.ResponseBindings
+	affinity            AffinityStore
+	responseBindings    ResponseBindingStore
 	websocketLimits     websocketLimits
 	websocketBudget     websocketBudget
 }
@@ -177,7 +194,7 @@ func NewHandler(
 		manager:         manager, channels: channels, subscriptions: subscriptions, registry: registry, encryption: encryptionService,
 		forwarder: forwarder, dialects: dialects, stats: stats, mutations: mutations,
 		limiter: limiter, requestLogSink: requestLogSink, priceTables: priceTables,
-		affinityCache:    affinity.NewCache(),
+		affinity:         affinity.NewCache(),
 		responseBindings: state.NewResponseBindings(),
 		websocketLimits:  defaultWebsocketLimits(),
 		newRequestID:     newRequestID,
@@ -197,7 +214,7 @@ func NewHandler(
 	}
 	for _, runtime := range accessQuotas {
 		if runtime != nil {
-			handler.accessQuota = runtime
+			handler.accessQuota = NewLocalAccessQuotaGate(manager, runtime)
 			break
 		}
 	}
@@ -220,9 +237,11 @@ func NewHandlerWithLifecycle(
 	limiter AccessKeyRPMLimiter,
 	requestLogSink telemetry.RequestLogSink,
 	priceTables PriceTableProvider,
-	accessQuota *accessquota.Runtime,
+	accessQuota AccessQuotaGate,
+	sharedHealth state.SharedCredentialHealthStore,
 	lifecycle *httplifecycle.Coordinator,
-	responseBindings *state.ResponseBindings,
+	responseBindings ResponseBindingStore,
+	affinityStore AffinityStore,
 ) *Handler {
 	handler := NewHandler(
 		manager,
@@ -235,8 +254,11 @@ func NewHandlerWithLifecycle(
 		limiter,
 		requestLogSink,
 		priceTables,
-		accessQuota,
 	)
+	if accessQuota != nil {
+		handler.accessQuota = accessQuota
+	}
+	handler.sharedHealth = sharedHealth
 	if channelRegistry != nil {
 		handler.channels = channelRegistry
 	}
@@ -244,14 +266,19 @@ func NewHandlerWithLifecycle(
 		handler.subscriptions = subscriptions
 	}
 	handler.lifecycle = lifecycle
-	handler.responseBindings = responseBindings
+	if responseBindings != nil {
+		handler.responseBindings = responseBindings
+	}
+	if affinityStore != nil {
+		handler.affinity = affinityStore
+	}
 	return handler
 }
 
 type unlimitedAccessKeyRPMLimiter struct{}
 
-func (unlimitedAccessKeyRPMLimiter) Allow(uint, int64) ratelimit.LimitDecision {
-	return ratelimit.LimitDecision{Allowed: true}
+func (unlimitedAccessKeyRPMLimiter) Allow(context.Context, uint, int64) (ratelimit.LimitDecision, error) {
+	return ratelimit.LimitDecision{Allowed: true}, nil
 }
 
 type requestAccessQuotaAdmission struct {
@@ -316,6 +343,11 @@ func (handler *Handler) applyDecisionEffectWithBlacklistPolicy(
 	blacklistThreshold int,
 	model string,
 ) {
+	if handler.sharedHealth != nil && handler.applySharedDecisionEffect(
+		ref, credentialVersion, decision, statusCode, attemptNow, blacklistThreshold, model,
+	) {
+		return
+	}
 	credentialID := ref.ID
 	switch decision.Effect {
 	case health.EffectCooldownModel:
@@ -373,7 +405,94 @@ func (handler *Handler) applyDecisionEffectWithBlacklistPolicy(
 	}
 }
 
+// applySharedDecisionEffect writes one health effect through the cluster
+// store outside every process lock. It returns false after a store failure so
+// the caller applies the local fallback, which at least keeps this instance
+// away from the failing credential.
+func (handler *Handler) applySharedDecisionEffect(
+	ref state.CredentialRef,
+	credentialVersion uint64,
+	decision health.Decision,
+	statusCode int,
+	attemptNow time.Time,
+	blacklistThreshold int,
+	model string,
+) bool {
+	var apply func(context.Context) (state.SharedHealthResult, error)
+	switch decision.Effect {
+	case health.EffectCooldownModel:
+		apply = func(ctx context.Context) (state.SharedHealthResult, error) {
+			return handler.sharedHealth.CooldownModel(ctx, ref, model, decision.CooldownUntil, attemptNow)
+		}
+	case health.EffectCooldownCredential:
+		apply = func(ctx context.Context) (state.SharedHealthResult, error) {
+			return handler.sharedHealth.CooldownCredential(ctx, ref, decision.CooldownUntil, credentialVersion)
+		}
+	case health.EffectRecordCredentialFailure:
+		apply = func(ctx context.Context) (state.SharedHealthResult, error) {
+			return handler.sharedHealth.RecordFailure(ctx, ref, blacklistThreshold)
+		}
+	default:
+		return true
+	}
+	if !handler.credentialTargetCurrent(ref) {
+		return true
+	}
+	result, err := apply(context.Background())
+	if err != nil {
+		handler.logSharedHealthUnavailable(ref.ID, string(decision.Effect), err)
+		return false
+	}
+	credentialID := ref.ID
+	switch decision.Effect {
+	case health.EffectCooldownModel:
+		if result.Accepted {
+			handler.stats.RecordProblem(credentialID, decision.Category, statusCode, attemptNow)
+		}
+		if result.Changed {
+			utils.LogPlaneBestEffort(handler.logger, logrus.WarnLevel, utils.LogPlaneData,
+				logrus.Fields{"event": "model_cooldown", "credential_id": credentialID, "model": model,
+					"cooldown_until": decision.CooldownUntil, "status_code": statusCode}, "Upstream model entered cooldown")
+		}
+	case health.EffectCooldownCredential:
+		if !result.Accepted {
+			return true
+		}
+		handler.stats.RecordProblem(credentialID, decision.Category, statusCode, attemptNow)
+		if result.Changed {
+			handler.logCredentialCooldown(credentialID, decision.Category, statusCode)
+		}
+	case health.EffectRecordCredentialFailure:
+		handler.stats.RecordFailure(credentialID, decision.Category, statusCode, attemptNow)
+		if result.BecameBlacklisted {
+			handler.logCredentialBlacklisted(credentialID, result.FailureCount, decision.Category, statusCode)
+		}
+	}
+	return true
+}
+
+func (handler *Handler) logSharedHealthUnavailable(credentialID uint, op string, err error) {
+	utils.LogPlaneBestEffort(handler.logger, logrus.WarnLevel, utils.LogPlaneData,
+		logrus.Fields{"event": "credential_health.redis_unavailable", "credential_id": credentialID,
+			"op": op, "error": err.Error()}, "Shared credential health is unavailable; applying the change locally")
+}
+
 func (handler *Handler) recordCredentialSuccess(ref state.CredentialRef, at time.Time) {
+	if handler.sharedHealth != nil {
+		if !handler.credentialTargetCurrent(ref) {
+			return
+		}
+		// Healthy traffic stays off Redis: only a mirrored failure streak
+		// needs clearing.
+		if failures, _ := handler.registry.CredentialFailureCount(ref.ID); failures > 0 {
+			if _, err := handler.sharedHealth.ClearFailure(context.Background(), ref); err != nil {
+				handler.logSharedHealthUnavailable(ref.ID, "clear_failure", err)
+				handler.mutateCredentialForTarget(ref, func() { handler.registry.ClearFailure(ref.ID) })
+			}
+		}
+		handler.stats.RecordSuccess(ref.ID, at)
+		return
+	}
 	handler.mutateCredentialForTarget(ref, func() {
 		if handler.registry.ClearFailure(ref.ID) {
 			handler.stats.RecordSuccess(ref.ID, at)
@@ -384,17 +503,22 @@ func (handler *Handler) recordCredentialSuccess(ref state.CredentialRef, at time
 func (handler *Handler) mutateCredentialForTarget(ref state.CredentialRef, mutate func()) {
 	apply := func() {
 		// 与配置变更共用凭据锁，避免校验后再切换目标；同目标的令牌刷新不影响结果归属。
-		current, exists := handler.registry.CredentialRef(ref.ID)
-		if !exists || current.GroupID != ref.GroupID || current.IdentityGeneration != ref.IdentityGeneration {
-			return
+		if handler.credentialTargetCurrent(ref) {
+			mutate()
 		}
-		mutate()
 	}
 	if handler.mutations == nil {
 		apply()
 	} else {
 		handler.mutations.Do(ref.ID, apply)
 	}
+}
+
+// credentialTargetCurrent reports whether ref still names the credential's
+// current group and identity, so a result is never attributed to a moved key.
+func (handler *Handler) credentialTargetCurrent(ref state.CredentialRef) bool {
+	current, exists := handler.registry.CredentialRef(ref.ID)
+	return exists && current.GroupID == ref.GroupID && current.IdentityGeneration == ref.IdentityGeneration
 }
 
 func retryAttemptLimit(retryCount int) int {
@@ -467,38 +591,38 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 				ginContext.Writer.Status(),
 			)
 			if quotaAdmission != nil && quotaAdmission.admitted && handler.accessQuota != nil {
-				completion := handler.accessQuota.Complete(
+				handler.completeAccessQuota(
+					ginContext.Request.Context(),
+					accessKey.ID,
 					quotaAdmission.ticket,
 					recorder.estimatedCostNanoUSD(),
 				)
-				handler.logAccessQuotaCompletionFault(accessKey.ID, completion)
 			}
 			recorder.emit()
 		}()
 	}
 
 	if quotaAdmission != nil && handler.accessQuota != nil {
-		quotaDecision := accessquota.Decision{}
-		if quotaAdmission.snapshot == nil {
-			quotaDecision = handler.accessQuota.Check(accessKey.ID, handler.quotaNow())
-		} else {
-			var current bool
-			quotaDecision, current = handler.checkAccessQuotaForSnapshot(
-				quotaAdmission.snapshot,
-				accessKey.ID,
-				handler.quotaNow(),
-			)
-			if !current {
-				handler.completeConfigurationChanged(ginContext, recorder)
-				return
-			}
+		quotaDecision, err := handler.accessQuota.Check(
+			ginContext.Request.Context(),
+			quotaAdmission.snapshot,
+			accessKey.ID,
+			handler.quotaNow(),
+		)
+		if err != nil {
+			handler.completeLimitStateFailure(ginContext, recorder, err)
+			return
 		}
 		if !quotaDecision.Allowed {
 			handler.completeAccessQuotaReason(ginContext, recorder, quotaDecision)
 			return
 		}
 	}
-	limitDecision := handler.limiter.Allow(accessKey.ID, accessKey.RPMLimit)
+	limitDecision, err := handler.limiter.Allow(ginContext.Request.Context(), accessKey.ID, accessKey.RPMLimit)
+	if err != nil {
+		handler.completeLimitStateFailure(ginContext, recorder, err)
+		return
+	}
 	if !limitDecision.Allowed {
 		ginContext.Writer.Header().Set(
 			"Retry-After",
@@ -603,9 +727,18 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 	}
 	recorder.setClientModel(model)
 	var boundAuto *automodel.Selection
+	var binding state.ResponseBinding
 	autoQuery := scheduler.Query{}
 	if metadata.PreviousResponseID != "" {
-		binding, found := handler.responseBindings.Lookup(accessKey.ID, metadata.PreviousResponseID)
+		var found bool
+		var failure *reason
+		binding, found, failure = handler.lookupResponseBinding(
+			ginContext.Request.Context(), accessKey.ID, metadata.PreviousResponseID,
+		)
+		if failure != nil {
+			handler.completeReason(ginContext, recorder, *failure)
+			return
+		}
 		if !found {
 			handler.completeReason(ginContext, recorder, reasonResponseBindingNotFound)
 			return
@@ -619,7 +752,7 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 		ctx := ginContext.Request.Context()
 		var failure *reason
 		parsed, metadata, recorder.autoDecision, failure = handler.prepareAutoModel(ctx, snapshot, accessKey, selectedDialect, parsed, metadata, boundAuto, func() *reason {
-			return handler.admitAutoQuota(snapshot, quotaAdmission)
+			return handler.admitAutoQuota(ctx, snapshot, quotaAdmission)
 		}, autoQuery)
 		if failure != nil {
 			handler.completeReason(ginContext, recorder, *failure)
@@ -659,11 +792,6 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 	query.AllowedCredentialRefs = allowedCredentialRefs
 	var requestAffinity requestAffinity
 	if metadata.PreviousResponseID != "" {
-		binding, found := handler.responseBindings.Lookup(accessKey.ID, metadata.PreviousResponseID)
-		if !found {
-			handler.completeReason(ginContext, recorder, reasonResponseBindingNotFound)
-			return
-		}
 		query.AllowedCredentialIDs = map[uint]struct{}{binding.CredentialID: {}}
 		query.AllowedCredentialRefs = map[uint]state.CredentialRef{
 			binding.CredentialID: {
@@ -673,6 +801,7 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 		}
 	} else {
 		requestAffinity = handler.resolveRequestAffinity(
+			ginContext.Request.Context(),
 			snapshot, accessKey.ID, selectedRoute.Protocol, metadata.AffinityPrefix, allowedCredentialRefs, metadata.PromptCacheKey,
 		)
 		query.PreferredCredentialID = requestAffinity.preferredCredentialID
@@ -698,45 +827,6 @@ func (handler *Handler) quotaNow() time.Time {
 		return handler.now()
 	}
 	return time.Now()
-}
-
-func (handler *Handler) checkAccessQuotaForSnapshot(
-	snapshot *state.ConfigSnapshot,
-	accessKeyID uint,
-	now time.Time,
-) (accessquota.Decision, bool) {
-	var decision accessquota.Decision
-	if handler == nil || handler.manager == nil || handler.accessQuota == nil || snapshot == nil {
-		return decision, false
-	}
-	current := handler.manager.WithCurrentSnapshotRead(func(currentSnapshot *state.ConfigSnapshot) bool {
-		if currentSnapshot != snapshot {
-			return false
-		}
-		decision = handler.accessQuota.Check(accessKeyID, now)
-		return true
-	})
-	return decision, current
-}
-
-func (handler *Handler) admitAccessQuotaForSnapshot(
-	snapshot *state.ConfigSnapshot,
-	accessKeyID uint,
-	now time.Time,
-) (accessquota.Ticket, accessquota.Decision, bool) {
-	var ticket accessquota.Ticket
-	var decision accessquota.Decision
-	if handler == nil || handler.manager == nil || handler.accessQuota == nil || snapshot == nil {
-		return ticket, decision, false
-	}
-	current := handler.manager.WithCurrentSnapshotRead(func(currentSnapshot *state.ConfigSnapshot) bool {
-		if currentSnapshot != snapshot {
-			return false
-		}
-		ticket, decision = handler.accessQuota.Admit(accessKeyID, now)
-		return true
-	})
-	return ticket, decision, current
 }
 
 func (handler *Handler) logAccessQuotaCompletionFault(
@@ -1166,24 +1256,15 @@ func (handler *Handler) executeAttempts(
 			continue
 		}
 		if quotaAdmission != nil && !quotaAdmission.admitted && handler.accessQuota != nil {
-			var ticket accessquota.Ticket
-			var decision accessquota.Decision
-			if quotaAdmission.snapshot == nil {
-				ticket, decision = handler.accessQuota.Admit(
-					quotaAdmission.accessKeyID,
-					handler.quotaNow(),
-				)
-			} else {
-				var current bool
-				ticket, decision, current = handler.admitAccessQuotaForSnapshot(
-					quotaAdmission.snapshot,
-					quotaAdmission.accessKeyID,
-					handler.quotaNow(),
-				)
-				if !current {
-					handler.completeConfigurationChanged(ginContext, recorder)
-					return
-				}
+			ticket, decision, err := handler.accessQuota.Admit(
+				ginContext.Request.Context(),
+				quotaAdmission.snapshot,
+				quotaAdmission.accessKeyID,
+				handler.quotaNow(),
+			)
+			if err != nil {
+				handler.completeLimitStateFailure(ginContext, recorder, err)
+				return
 			}
 			if !decision.Allowed {
 				handler.completeAccessQuotaReason(ginContext, recorder, decision)
@@ -1235,7 +1316,7 @@ func (handler *Handler) executeAttempts(
 			ProxyFingerprint:       proxyFingerprint,
 			ForceCredentialRefresh: forceCredentialRefresh,
 			ContinuityKey:          requestAffinity.continuityKey,
-			OnResponse:             handler.responseBindingObserver(recorder.accessKeyID, selection, ref, prepared.request, recorder.autoSelection()),
+			OnResponse:             handler.responseBindingObserver(ginContext.Request.Context(), recorder.accessKeyID, selection, ref, prepared.request, recorder.autoSelection()),
 			OnFirstResponse: func() {
 				recorder.recordFirstResponse()
 			},
@@ -1264,11 +1345,7 @@ func (handler *Handler) executeAttempts(
 			if input.OnResponse != nil {
 				if err := input.OnResponse(result.Body); err != nil {
 					result.Err = err
-					result.ExecutionError = &execution.ErrorEvidence{
-						Kind: execution.ErrorKindInternal, OriginHint: execution.ErrorOriginInternal,
-						ScopeHint: execution.ErrorScopeRequest, Code: "response_binding_conflict",
-						Summary: "Response ownership could not be recorded.", ReplaySafety: execution.ReplaySafetyUnknown,
-					}
+					result.ExecutionError = responseOwnershipEvidence(err)
 				}
 			}
 		}
@@ -1528,6 +1605,8 @@ func transportReason(result UpstreamResult) reason {
 	case result.DispatchState == execution.DispatchNotSent && result.ExecutionError != nil &&
 		result.ExecutionError.Kind == execution.ErrorKindInvalidRequest:
 		return reasonInvalidProtocolRequest
+	case errors.Is(result.Err, errResponseOwnershipUnavailable):
+		return reasonClusterStateUnavailable
 	case errors.Is(result.Err, ErrUpstreamProtocol):
 		return reasonUpstreamProtocol
 	case isTimeoutError(result.Err):

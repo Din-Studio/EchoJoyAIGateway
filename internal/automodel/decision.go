@@ -28,7 +28,7 @@ type Selection struct {
 	PresetName         string          `json:"preset_name"`
 	TargetModel        string          `json:"target_model"`
 	ParameterOverrides json.RawMessage `json:"parameter_overrides"`
-	ConfigRevision     uint64          `json:"config_revision"`
+	ConfigFingerprint  string          `json:"config_fingerprint,omitempty"`
 	TaskFingerprint    string          `json:"task_fingerprint,omitempty"`
 }
 

@@ -39,7 +39,7 @@ func TestHandlerBlocksAllDataPlaneRoutesUntilPeriodicQuotaRecovers(t *testing.T)
 		t.Fatalf("Admit() = %#v", decision)
 	}
 	runtime.Complete(ticket, 100)
-	handler.accessQuota = runtime
+	handler.accessQuota = NewLocalAccessQuotaGate(handler.manager, runtime)
 	handler.now = func() time.Time { return windowStart.Add(time.Minute) }
 
 	for _, test := range []struct {
@@ -96,7 +96,7 @@ func TestHandlerTotalQuotaBlockIsNotRetryableAndReturnsEveryBlocker(t *testing.T
 	now := time.Unix(4_000, 0)
 	ticket, _ := runtime.Admit(1, now)
 	runtime.Complete(ticket, 100)
-	handler.accessQuota = runtime
+	handler.accessQuota = NewLocalAccessQuotaGate(handler.manager, runtime)
 	handler.now = func() time.Time { return now.Add(time.Minute) }
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
@@ -138,7 +138,7 @@ func TestHandlerStartsPeriodicWindowOnlyAtFirstGatewayExecutionAttempt(t *testin
 	noCandidateEngine, noCandidateHandler, _, _ := newRequestLogHandlerTestRuntime(
 		t, &scriptedForwarder{}, &recordingAccessKeyRPMLimiter{}, &recordingRequestLogSink{},
 	)
-	noCandidateHandler.accessQuota = runtime
+	noCandidateHandler.accessQuota = NewLocalAccessQuotaGate(noCandidateHandler.manager, runtime)
 	noCandidateHandler.now = func() time.Time { return now }
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o"}`))
 	request.Header.Set("Authorization", "Bearer gl-client")
@@ -153,7 +153,7 @@ func TestHandlerStartsPeriodicWindowOnlyAtFirstGatewayExecutionAttempt(t *testin
 	engine, handler, _, _ := newRequestLogHandlerTestRuntime(
 		t, forwarder, &recordingAccessKeyRPMLimiter{}, &recordingRequestLogSink{}, "sk-first",
 	)
-	handler.accessQuota = runtime
+	handler.accessQuota = NewLocalAccessQuotaGate(handler.manager, runtime)
 	handler.now = func() time.Time { return now }
 	request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o"}`))
 	request.Header.Set("Authorization", "Bearer gl-client")
@@ -185,7 +185,7 @@ func TestHandlerAccountsFinalEstimateWhenRequestIDGenerationFails(t *testing.T) 
 	if _, err := manager.Publish(input); err != nil {
 		t.Fatal(err)
 	}
-	handler.accessQuota = runtime
+	handler.accessQuota = NewLocalAccessQuotaGate(handler.manager, runtime)
 	handler.priceTables = &mutableGatewayPriceTableProvider{table: mustGatewayPriceTable(t, 2_000_000_000, true)}
 	handler.newRequestID = func() (string, error) { return "", errors.New("entropy unavailable") }
 	handler.requestNow = func() time.Time { return time.Unix(3_000, 0) }
@@ -239,7 +239,7 @@ func TestHandlerRejectsStaleSnapshotBeforeQuotaCheck(t *testing.T) {
 		t.Fatalf("Admit() = %#v", decision)
 	}
 	runtime.Complete(ticket, 100)
-	handler.accessQuota = runtime
+	handler.accessQuota = NewLocalAccessQuotaGate(handler.manager, runtime)
 
 	context, response := prepareAuthenticatedGatewayRequest(t, handler, http.MethodGet, "/v1/models", nil)
 	if _, err := manager.Publish(gatewayAccessQuotaCompileInput(handler, []accessquota.Rule{{
@@ -285,7 +285,7 @@ func TestHandlerRejectsSnapshotChangedBetweenQuotaCheckAndAdmit(t *testing.T) {
 	if !decision.Allowed {
 		t.Fatalf("second Admit() = %#v", decision)
 	}
-	handler.accessQuota = runtime
+	handler.accessQuota = NewLocalAccessQuotaGate(handler.manager, runtime)
 
 	body := newBlockingRequestBody(`{"model":"gpt-4o"}`, nil)
 	context, response := prepareAuthenticatedGatewayRequest(

@@ -304,7 +304,7 @@ func mustNewEngine(t *testing.T) *gin.Engine {
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
-	registry, err := httproute.NewRegistry(HTTPModule())
+	registry, err := httproute.NewRegistry(HTTPModule(nil))
 	if err != nil {
 		t.Fatalf("NewRegistry(system) error = %v", err)
 	}

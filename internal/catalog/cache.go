@@ -61,10 +61,15 @@ func LoadCache(path string) (CachedCatalog, error) {
 	if err != nil {
 		return CachedCatalog{}, fmt.Errorf("read catalog cache: %w", err)
 	}
+	return DecodeCache(contents)
+}
+
+// DecodeCache fully revalidates an encoded last-known-good document, the same
+// bytes LoadCache reads from disk and EncodeCache produces.
+func DecodeCache(contents []byte) (CachedCatalog, error) {
 	if int64(len(contents)) > maxCacheFileBytes {
 		return CachedCatalog{}, fmt.Errorf("catalog cache exceeds size limit")
 	}
-
 	if _, err := decodeCanonicalObject(contents, "catalog cache envelope", cacheEnvelopeCanonicalFields); err != nil {
 		return CachedCatalog{}, fmt.Errorf("validate catalog cache envelope: %w", err)
 	}
@@ -107,6 +112,24 @@ func LoadCache(path string) (CachedCatalog, error) {
 	}, nil
 }
 
+// EncodeCache encodes a fully validated and internally consistent 200 response
+// as a last-known-good document that DecodeCache accepts.
+func EncodeCache(result SyncResult) ([]byte, error) {
+	document, err := cacheDocumentForResult(result)
+	if err != nil {
+		return nil, err
+	}
+	contents, err := json.Marshal(document)
+	if err != nil {
+		return nil, fmt.Errorf("encode catalog cache: %w", err)
+	}
+	contents = append(contents, '\n')
+	if int64(len(contents)) > maxCacheFileBytes {
+		return nil, fmt.Errorf("encoded catalog cache exceeds size limit")
+	}
+	return contents, nil
+}
+
 // StoreCache durably replaces the last-known-good document only for a fully
 // validated and internally consistent 200 response.
 func StoreCache(path string, result SyncResult) error {
@@ -125,17 +148,9 @@ func storeCache(
 	if replace == nil || syncDirectory == nil {
 		return fmt.Errorf("catalog cache durability functions are required")
 	}
-	document, err := cacheDocumentForResult(result)
+	contents, err := EncodeCache(result)
 	if err != nil {
 		return err
-	}
-	contents, err := json.Marshal(document)
-	if err != nil {
-		return fmt.Errorf("encode catalog cache: %w", err)
-	}
-	contents = append(contents, '\n')
-	if int64(len(contents)) > maxCacheFileBytes {
-		return fmt.Errorf("encoded catalog cache exceeds size limit")
 	}
 
 	directory := filepath.Dir(path)

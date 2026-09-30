@@ -22,8 +22,8 @@ func TestCapabilitiesForDriverPreserveDatabaseTransactionSemantics(t *testing.T)
 			"SET TRANSACTION ISOLATION LEVEL REPEATABLE READ",
 			"START TRANSACTION WITH CONSISTENT SNAPSHOT",
 		}},
-		{name: "postgres", driver: "postgres", writeSQL: []string{"BEGIN"}, readSQL: []string{"BEGIN ISOLATION LEVEL REPEATABLE READ"}},
-		{name: "postgresql alias", driver: "postgresql", writeSQL: []string{"BEGIN"}, readSQL: []string{"BEGIN ISOLATION LEVEL REPEATABLE READ"}},
+		{name: "postgres", driver: "postgres", writeSQL: []string{"BEGIN ISOLATION LEVEL READ COMMITTED"}, readSQL: []string{"BEGIN ISOLATION LEVEL REPEATABLE READ"}},
+		{name: "postgresql alias", driver: "postgresql", writeSQL: []string{"BEGIN ISOLATION LEVEL READ COMMITTED"}, readSQL: []string{"BEGIN ISOLATION LEVEL REPEATABLE READ"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

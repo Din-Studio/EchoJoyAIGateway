@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -250,6 +251,7 @@ func TestHandlerIgnoresAffinityAfterCredentialIdentityChanges(t *testing.T) {
 	prefix := []byte(`{"v":1,"user":["hello"]}`)
 	oldRef := state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}
 	initial := handler.resolveRequestAffinity(
+		context.Background(),
 		snapshot,
 		1,
 		protocol.OpenAICompletions,
@@ -260,15 +262,18 @@ func TestHandlerIgnoresAffinityAfterCredentialIdentityChanges(t *testing.T) {
 	if initial.preferredCredentialID != 0 || !initial.key.Valid() {
 		t.Fatalf("initial affinity = %#v, want valid miss", initial)
 	}
-	if !handler.affinityCache.RecordSuccess(
+	if recorded, err := handler.affinity.RecordSuccess(
+		context.Background(),
+		initial.policy,
 		initial.key,
 		initial.observation,
 		affinity.Target{GroupID: 1, CredentialID: 1, IdentityGeneration: 1},
-	) {
+	); err != nil || !recorded {
 		t.Fatal("RecordSuccess() = false, want cached identity")
 	}
 
 	hit := handler.resolveRequestAffinity(
+		context.Background(),
 		snapshot,
 		1,
 		protocol.OpenAICompletions,
@@ -282,6 +287,7 @@ func TestHandlerIgnoresAffinityAfterCredentialIdentityChanges(t *testing.T) {
 	changedRef := oldRef
 	changedRef.IdentityGeneration = 2
 	stale := handler.resolveRequestAffinity(
+		context.Background(),
 		snapshot,
 		1,
 		protocol.OpenAICompletions,
@@ -299,6 +305,7 @@ func TestHandlerDerivesPrivateContinuityWithoutReenablingDisabledAffinity(t *tes
 	snapshot := manager.Current()
 	snapshot.Settings.AffinityCapacity = 0
 	resolved := handler.resolveRequestAffinity(
+		context.Background(),
 		snapshot,
 		1,
 		protocol.OpenAICompletions,

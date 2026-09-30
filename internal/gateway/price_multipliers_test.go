@@ -40,7 +40,7 @@ func TestHandlerFreezesPriceMultipliersAndAccountsTheSameEstimate(t *testing.T) 
 			if err := runtime.Reconcile(map[uint][]accessquota.Rule{1: rules}); err != nil {
 				t.Fatal(err)
 			}
-			handler.accessQuota = runtime
+			handler.accessQuota = NewLocalAccessQuotaGate(handler.manager, runtime)
 			table, err := pricing.NewTable([]pricing.Rule{{
 				Identity: pricing.Identity{ChannelID: "openai", ModelID: "gpt-4o"},
 				Prices: pricing.Prices{

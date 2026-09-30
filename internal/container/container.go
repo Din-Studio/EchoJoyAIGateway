@@ -11,9 +11,11 @@ import (
 	"gorm.io/gorm"
 
 	"gpt-load/internal/accessquota"
+	"gpt-load/internal/affinity"
 	"gpt-load/internal/app"
 	"gpt-load/internal/catalog"
 	"gpt-load/internal/channel"
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/control"
 	"gpt-load/internal/dialect"
 	"gpt-load/internal/execution"
@@ -61,12 +63,28 @@ func BuildContainer() (*dig.Container, error) {
 			}
 			return db, err
 		},
+		cluster.NewClient,
+		cluster.NewConfigEventBus,
+		control.NewClusterConfigSync,
+		app.NewReadinessProbe,
 		httplifecycle.NewCoordinator,
 		app.NewEngineWithLifecycle,
 		webui.NewServer,
-		state.NewCredentialRegistry,
-		state.NewResponseBindings,
-		accessquota.NewRuntime,
+		newCredentialRegistry,
+		cluster.NewCredentialHealth,
+		cluster.NewRefreshLease,
+		cluster.NewJobLease,
+		cluster.NewCatalogStore,
+		cluster.NewAuthFailures,
+		newSharedCredentialHealthStore,
+		newResponseBindings,
+		newResponseBindingStore,
+		newAffinityStore,
+		newAccessQuotaRuntime,
+		func(client *cluster.Client, db *gorm.DB) *cluster.AccessQuota {
+			return cluster.NewAccessQuota(client, requestlog.AccessQuotaStateReader{DB: db})
+		},
+		newAccessQuotaGate,
 		channel.CompileRegistry,
 		control.NewPriceRuntime,
 		control.NewCatalogBootstrap,
@@ -74,9 +92,7 @@ func BuildContainer() (*dig.Container, error) {
 		health.NewStatsStore,
 		health.NewMutationCoordinator,
 		ratelimit.NewAccessKeyRPM,
-		func(limiter *ratelimit.AccessKeyRPM) gateway.AccessKeyRPMLimiter {
-			return limiter
-		},
+		newAccessKeyRPMLimiter,
 		func(manager *state.Manager) requestlog.RetentionPolicyProvider {
 			return retentionSnapshotProvider{manager: manager}
 		},
@@ -88,9 +104,13 @@ func BuildContainer() (*dig.Container, error) {
 			redactor *redact.Redactor,
 			retention requestlog.RetentionPolicyProvider,
 			quotaRuntime *accessquota.Runtime,
+			sharedQuota *cluster.AccessQuota,
 			subscriptionCredentials *subscription.CredentialManager,
 		) *requestlog.Service {
 			service := requestlog.NewService(db, redactor, retention, quotaRuntime)
+			if sharedQuota != nil {
+				service.SetAccessQuotaCheckpointSource(sharedQuota)
+			}
 			service.SetPassiveQuotaFlusher(subscriptionCredentials)
 			return service
 		},
@@ -120,8 +140,11 @@ func BuildContainer() (*dig.Container, error) {
 			registry *state.CredentialRegistry,
 			stats *health.StatsStore,
 			responseBindings *state.ResponseBindings,
+			credentialHealth *cluster.CredentialHealth,
 		) app.RuntimeStateCheckpoint {
-			return app.NewFileRuntimeStateCheckpoint(cfg.DataDir, registry, stats, responseBindings)
+			return app.NewFileRuntimeStateCheckpoint(
+				cfg.DataDir, registry, stats, responseBindings, newCredentialHealthHydrator(credentialHealth),
+			)
 		},
 		control.NewRuntime,
 		func(runtime *control.Runtime) app.ControlRuntime { return runtime },
@@ -197,8 +220,9 @@ func BuildContainer() (*dig.Container, error) {
 			cfg *config.Config,
 			service *control.Service,
 			checker *releasecheck.Checker,
+			sharedAuthFailures *cluster.AuthFailures,
 		) *control.Server {
-			return control.NewServerWithReleaseUpdateChecker(cfg, service, checker)
+			return control.NewServerWithReleaseUpdateChecker(cfg, service, checker, sharedAuthFailures)
 		},
 		newHTTPRegistry,
 		func(
@@ -227,6 +251,9 @@ func BuildContainer() (*dig.Container, error) {
 		if err := dependencyContainer.Provide(provider); err != nil {
 			return nil, err
 		}
+	}
+	if err := dependencyContainer.Invoke(coordinateSubscriptionRefresh); err != nil {
+		return nil, fmt.Errorf("coordinate subscription refresh: %w", err)
 	}
 	if err := dependencyContainer.Invoke(func(
 		engine *gin.Engine,
@@ -257,6 +284,111 @@ func newSystemOutboundProxyProvider(manager *state.Manager) httpclient.OutboundP
 		}
 		return fallback
 	}
+}
+
+// newAccessQuotaRuntime owns in-process quota state only in single-instance
+// mode; cluster mode keeps it in Redis, so loaders and checkpoints skip it.
+func newAccessQuotaRuntime(client *cluster.Client) *accessquota.Runtime {
+	if client != nil {
+		return nil
+	}
+	return accessquota.NewRuntime()
+}
+
+// newResponseBindings owns in-process Responses ownership only in
+// single-instance mode; cluster mode keeps it in Redis, so the checkpoint
+// file skips it.
+func newResponseBindings(client *cluster.Client) *state.ResponseBindings {
+	if client != nil {
+		return nil
+	}
+	return state.NewResponseBindings()
+}
+
+// newResponseBindingStore selects the shared Redis ownership index in cluster
+// mode and the checkpointed in-process index otherwise.
+func newResponseBindingStore(
+	cfg *config.Config,
+	client *cluster.Client,
+	local *state.ResponseBindings,
+) gateway.ResponseBindingStore {
+	if shared := cluster.NewResponseBindings(client, cfg.Cluster.ResponseBindingTTL); shared != nil {
+		return shared
+	}
+	return local
+}
+
+// newAffinityStore selects the shared Redis soft-affinity store in cluster
+// mode and the in-process cache otherwise.
+func newAffinityStore(client *cluster.Client) gateway.AffinityStore {
+	if shared := cluster.NewAffinity(client); shared != nil {
+		return shared
+	}
+	return affinity.NewCache()
+}
+
+// newAccessQuotaGate selects the shared Redis gate in cluster mode and the
+// snapshot-pinned in-process gate otherwise, never boxing a nil pointer.
+func newAccessQuotaGate(
+	shared *cluster.AccessQuota,
+	manager *state.Manager,
+	runtime *accessquota.Runtime,
+) gateway.AccessQuotaGate {
+	if shared != nil {
+		return shared
+	}
+	return gateway.NewLocalAccessQuotaGate(manager, runtime)
+}
+
+// newCredentialRegistry mirrors cluster-shared credential health when
+// cluster mode is enabled, before any credential is loaded.
+func newCredentialRegistry(client *cluster.Client) *state.CredentialRegistry {
+	registry := state.NewCredentialRegistry()
+	if client != nil {
+		registry.EnableSharedHealth()
+	}
+	return registry
+}
+
+// newSharedCredentialHealthStore exposes the Redis health store in cluster
+// mode and nil otherwise, never boxing a nil pointer.
+func newSharedCredentialHealthStore(shared *cluster.CredentialHealth) state.SharedCredentialHealthStore {
+	if shared == nil {
+		return nil
+	}
+	return shared
+}
+
+// newCredentialHealthHydrator restores health from Redis instead of the
+// checkpoint file in cluster mode.
+func newCredentialHealthHydrator(shared *cluster.CredentialHealth) app.CredentialHealthHydrator {
+	if shared == nil {
+		return nil
+	}
+	return shared
+}
+
+// coordinateSubscriptionRefresh makes subscription refreshes cluster-wide
+// single flight; it leaves the manager untouched in single-instance mode.
+func coordinateSubscriptionRefresh(
+	credentials *subscription.CredentialManager,
+	lease *cluster.RefreshLease,
+	shared *cluster.CredentialHealth,
+	service *control.Service,
+) {
+	if lease == nil || shared == nil {
+		return
+	}
+	credentials.SetClusterCoordination(lease, shared, service)
+}
+
+// newAccessKeyRPMLimiter selects the shared Redis window in cluster mode and
+// the in-process window otherwise.
+func newAccessKeyRPMLimiter(client *cluster.Client, local *ratelimit.AccessKeyRPM) gateway.AccessKeyRPMLimiter {
+	if shared := cluster.NewAccessKeyRPM(client); shared != nil {
+		return shared
+	}
+	return local
 }
 
 type runtimeSnapshotReconciler struct {
@@ -298,9 +430,6 @@ func (reconciler runtimeSnapshotReconciler) ReconcileConfigSnapshot(snapshot *st
 	if reconciler.adapters == nil {
 		return fmt.Errorf("reconcile provider runtimes: adapter registry is unavailable")
 	}
-	if reconciler.accessQuota == nil {
-		return fmt.Errorf("reconcile access key cost limits: runtime is unavailable")
-	}
 	targets := make([]provideradapter.RuntimeTarget, 0)
 	if snapshot != nil {
 		targets = make([]provideradapter.RuntimeTarget, 0, len(snapshot.Groups))
@@ -314,6 +443,11 @@ func (reconciler runtimeSnapshotReconciler) ReconcileConfigSnapshot(snapshot *st
 	if err := reconciler.adapters.ReconcileTargets(targets); err != nil {
 		return err
 	}
+	if reconciler.accessQuota == nil {
+		// Cluster mode keeps quota state in Redis; state.Compile has already
+		// validated the rule definitions.
+		return nil
+	}
 	return reconciler.accessQuota.Reconcile(snapshot.AccessQuotaDefinitions())
 }
 
@@ -321,9 +455,10 @@ func newHTTPRegistry(
 	gatewayHandler *gateway.Handler,
 	controlServer *control.Server,
 	webUIServer *webui.Server,
+	probe app.ReadinessProbe,
 ) (*httproute.Registry, error) {
 	return httproute.NewRegistry(
-		app.HTTPModule(),
+		app.HTTPModule(probe),
 		controlServer.HTTPModule(),
 		gatewayHandler.HTTPModule(),
 		webUIServer.HTTPModule(),

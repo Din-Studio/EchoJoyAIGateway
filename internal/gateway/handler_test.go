@@ -1942,6 +1942,10 @@ func (panicRuntimeRegistry) SetModelCooldown(state.CredentialRef, string, time.T
 	panic("model endpoint mutated cooldown")
 }
 
+func (panicRuntimeRegistry) CredentialFailureCount(uint) (int, bool) {
+	panic("model endpoint read failure count")
+}
+
 func (panicRuntimeRegistry) SchedulingState() *state.SchedulingState {
 	panic("unexpected registry access")
 }

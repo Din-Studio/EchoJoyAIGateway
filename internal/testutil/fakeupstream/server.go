@@ -203,6 +203,11 @@ func dialectForPath(requestPath string) (string, bool) {
 	return "", false
 }
 
+// Fixture 返回内嵌的 golden fixture，供需要无限重复响应的工具（如 clusterbench）复用。
+func Fixture(dialect, name string) ([]byte, error) {
+	return readEmbeddedFixture(dialect, name)
+}
+
 func readEmbeddedFixture(dialect, name string) ([]byte, error) {
 	name = filepath.ToSlash(name)
 	name = strings.ReplaceAll(name, `\`, "/")

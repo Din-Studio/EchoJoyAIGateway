@@ -114,7 +114,7 @@ func (s *Server) authenticate() gin.HandlerFunc {
 			// AccessKey 成功只授权本次请求，不清除同一来源的管理密钥失败记录。
 			decision = authDecision{authorized: principal.Type == controlPrincipalAccessKey}
 		} else {
-			decision = s.authFailures.evaluate(peer, credentialValid)
+			decision = s.evaluateAuthFailure(c.Request.Context(), peer, credentialValid)
 		}
 		if !credentialValid {
 			s.logControlAuthFailed(peer, accessKeyMatch)

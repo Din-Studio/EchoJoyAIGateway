@@ -2447,6 +2447,7 @@ func TestSettingsHTTPFiltersPrivateRowsAndDoesNotLogValues(t *testing.T) {
 		fixture.priceRuntime,
 		fixture.catalogRuntime,
 		nil,
+		nil,
 		fixture.encryption,
 		fixture.service.executor,
 		nil,
@@ -2456,6 +2457,9 @@ func TestSettingsHTTPFiltersPrivateRowsAndDoesNotLogValues(t *testing.T) {
 		fixture.stats,
 		fixture.mutations,
 		fixture.requestLogStats,
+		nil,
+		nil,
+		nil,
 		nil,
 	)
 	brokenEngine := gin.New()

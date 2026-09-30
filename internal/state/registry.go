@@ -47,6 +47,10 @@ type CredentialEntry struct {
 	ProxyFingerprint        string
 	quotaRemaining          *float64
 	quotaResetAt            time.Time
+	// sharedEpoch and sharedVersion order the cluster health state this
+	// entry mirrors; both stay empty in single-instance mode.
+	sharedEpoch   string
+	sharedVersion uint64
 }
 
 type CredentialMeta struct {
@@ -76,6 +80,7 @@ type CredentialRegistry struct {
 	mu               sync.RWMutex
 	buckets          map[uint]map[uint]*CredentialEntry
 	credentialGroups map[uint]uint
+	sharedHealth     bool
 }
 
 func NewCredentialRegistry() *CredentialRegistry {
@@ -146,7 +151,7 @@ func (r *CredentialRegistry) ReplaceCredentials(entries []CredentialEntry) error
 	r.mu.Lock()
 	for groupID, bucket := range buckets {
 		for id, entry := range bucket {
-			preserveModelCooldowns(entry, r.buckets[groupID][id])
+			r.preserveHealthLocked(entry, r.buckets[groupID][id])
 		}
 	}
 	r.buckets = buckets
@@ -185,7 +190,7 @@ func (r *CredentialRegistry) ApplyCredentialImport(groupID uint, entries []Crede
 			r.buckets[groupID] = make(map[uint]*CredentialEntry)
 		}
 		cloned := cloneCredentialEntry(entry)
-		preserveModelCooldowns(&cloned, r.buckets[groupID][entry.ID])
+		r.preserveHealthLocked(&cloned, r.buckets[groupID][entry.ID])
 		r.buckets[groupID][entry.ID] = &cloned
 		r.credentialGroups[entry.ID] = groupID
 		r.scheduling.SyncCredential(runtimeView(r.buckets[groupID][entry.ID]))
@@ -310,7 +315,7 @@ func (r *CredentialRegistry) ReconcileGroup(groupID uint, entries []CredentialEn
 			continue
 		}
 		cloned := cloneCredentialEntry(desired)
-		preserveModelCooldowns(&cloned, previous[desired.ID])
+		r.preserveHealthLocked(&cloned, previous[desired.ID])
 		next[desired.ID] = &cloned
 	}
 	for credentialID := range previous {
@@ -534,13 +539,17 @@ func (r *CredentialRegistry) SetCredentialAuthState(credentialID uint, authState
 	if !ok {
 		return false
 	}
-	entry.AuthState = authState.normalize()
+	setEntryAuthStateLocked(entry, authState)
 	r.scheduling.SyncCredential(runtimeView(entry))
+	return true
+}
+
+func setEntryAuthStateLocked(entry *CredentialEntry, authState CredentialAuthState) {
+	entry.AuthState = authState.normalize()
 	if entry.AuthState != CredentialAuthStateReady {
 		entry.quotaRemaining = nil
 		entry.quotaResetAt = time.Time{}
 	}
-	return true
 }
 
 // CredentialAuthStateOf returns the runtime auth state of one credential.
@@ -623,15 +632,7 @@ func (r *CredentialRegistry) ActiveEncryptedCredentialDataIfMatch(ref Credential
 		return "", false
 	}
 	entry, ok := r.buckets[groupID][ref.ID]
-	if !ok ||
-		entry.ID != ref.ID ||
-		entry.GroupID != ref.GroupID ||
-		entry.Version != ref.Version ||
-		entry.IdentityGeneration != ref.IdentityGeneration ||
-		entry.Fingerprint != ref.Fingerprint ||
-		entry.EncryptedValue != ref.EncryptedValue ||
-		entry.EncryptedProxy != ref.EncryptedProxy ||
-		entry.ProxyFingerprint != ref.ProxyFingerprint ||
+	if !ok || !sameCredentialIdentity(entry, ref) ||
 		entry.Status != CredentialStatusActive || entry.AuthState.normalize() != CredentialAuthStateReady {
 		return "", false
 	}
@@ -970,10 +971,7 @@ func (r *CredentialRegistry) restoreRuntimeStateIfMatch(
 	}
 	entry, ok := r.buckets[groupID][ref.ID]
 	if !ok || entry.Status != CredentialStatusActive || !entry.Blacklisted ||
-		entry.GroupID != ref.GroupID || entry.Version != ref.Version ||
-		entry.IdentityGeneration != ref.IdentityGeneration ||
-		entry.Fingerprint != ref.Fingerprint || entry.EncryptedValue != ref.EncryptedValue ||
-		entry.EncryptedProxy != ref.EncryptedProxy || entry.ProxyFingerprint != ref.ProxyFingerprint ||
+		!sameCredentialIdentity(entry, ref) ||
 		entry.FailureGeneration != ref.FailureGeneration ||
 		cooldownUntil != nil && !entry.CooldownUntil.Equal(*cooldownUntil) {
 		return false

@@ -9,14 +9,14 @@ import (
 func TestAutoTaskCacheIsolationExpiryAndCapacity(t *testing.T) {
 	var cache autoTaskCache
 	now := time.Unix(1000, 0)
-	key := autoTaskKey{accessKeyID: 1, entryID: "auto", revision: 1, fingerprint: "task"}
+	key := autoTaskKey{accessKeyID: 1, entryID: "auto", configFingerprint: "v1", fingerprint: "task"}
 	preset := autoTaskPreset{presetID: "high", prewarm: true}
 	cache.record(key, preset, now)
 	for _, other := range []autoTaskKey{
-		{accessKeyID: 2, entryID: "auto", revision: 1, fingerprint: "task"},
-		{accessKeyID: 1, entryID: "other", revision: 1, fingerprint: "task"},
-		{accessKeyID: 1, entryID: "auto", revision: 2, fingerprint: "task"},
-		{accessKeyID: 1, entryID: "auto", revision: 1, fingerprint: "new task"},
+		{accessKeyID: 2, entryID: "auto", configFingerprint: "v1", fingerprint: "task"},
+		{accessKeyID: 1, entryID: "other", configFingerprint: "v1", fingerprint: "task"},
+		{accessKeyID: 1, entryID: "auto", configFingerprint: "v2", fingerprint: "task"},
+		{accessKeyID: 1, entryID: "auto", configFingerprint: "v1", fingerprint: "new task"},
 	} {
 		if _, found := cache.lookup(other, now); found {
 			t.Fatalf("cross-boundary cache hit: %#v", other)

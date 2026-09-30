@@ -1,15 +1,35 @@
 package gateway
 
 import (
+	"context"
+
+	"github.com/sirupsen/logrus"
+
 	"gpt-load/internal/affinity"
+	"gpt-load/internal/platform/utils"
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/scheduler"
 	"gpt-load/internal/state"
 	"gpt-load/internal/telemetry"
 )
 
+// AffinityStore remembers soft credential preferences: the in-process cache
+// in single-instance mode and the shared Redis store in cluster mode. Both
+// are advisory, so a failing store only removes the preference.
+type AffinityStore interface {
+	Lookup(ctx context.Context, policy affinity.Policy, key affinity.Key) (affinity.Observation, error)
+	RecordSuccess(
+		ctx context.Context,
+		policy affinity.Policy,
+		key affinity.Key,
+		observed affinity.Observation,
+		target affinity.Target,
+	) (bool, error)
+}
+
 type requestAffinity struct {
 	key                   affinity.Key
+	policy                affinity.Policy
 	observation           affinity.Observation
 	preferredCredentialID uint
 	continuityKey         string
@@ -17,6 +37,7 @@ type requestAffinity struct {
 }
 
 func (handler *Handler) resolveRequestAffinity(
+	ctx context.Context,
 	snapshot *state.ConfigSnapshot,
 	accessKeyID uint,
 	clientProtocol protocol.Protocol,
@@ -39,20 +60,24 @@ func (handler *Handler) resolveRequestAffinity(
 		key = affinity.DerivePromptCacheKey(handler.encryption, accessKeyID, clientProtocol, promptCacheKey)
 		result.kind = telemetry.AffinityPromptCacheKey
 	}
-	if handler.affinityCache == nil ||
-		!handler.affinityCache.Configure(
-			snapshot.Revision,
-			snapshot.Settings.AffinityCapacity,
-			snapshot.Settings.AffinityTTL,
-		) {
+	policy := affinity.Policy{
+		Revision: snapshot.Revision,
+		Capacity: snapshot.Settings.AffinityCapacity,
+		TTL:      snapshot.Settings.AffinityTTL,
+	}
+	if handler.affinity == nil || !key.Valid() || !policy.Valid() {
 		return result
 	}
-	if !key.Valid() {
+	observation, err := handler.affinity.Lookup(ctx, policy, key)
+	if err != nil {
+		utils.LogPlaneBestEffort(handler.logger, logrus.WarnLevel, utils.LogPlaneData,
+			logrus.Fields{"event": "affinity.redis_unavailable", "op": "lookup", "error": err.Error()},
+			"Shared soft affinity is unavailable; scheduling without a preference")
 		return result
 	}
-	result.key = key
-	observation := handler.affinityCache.Lookup(key)
 	resolved := result
+	resolved.key = key
+	resolved.policy = policy
 	resolved.observation = observation
 	if !observation.Found() {
 		return resolved
@@ -76,11 +101,14 @@ func (handler *Handler) recordAffinitySuccess(
 	selection scheduler.Selection,
 	ref state.CredentialRef,
 ) {
-	if handler == nil || handler.affinityCache == nil || !request.key.Valid() ||
+	if handler == nil || handler.affinity == nil || !request.key.Valid() ||
 		!selection.Group.AffinityEnabled {
 		return
 	}
-	handler.affinityCache.RecordSuccess(
+	// 响应已完成；客户端断开不应阻止学习，调用由共享存储自身的超时约束。
+	_, err := handler.affinity.RecordSuccess(
+		context.Background(),
+		request.policy,
 		request.key,
 		request.observation,
 		affinity.Target{
@@ -88,4 +116,10 @@ func (handler *Handler) recordAffinitySuccess(
 			IdentityGeneration: ref.IdentityGeneration,
 		},
 	)
+	if err != nil {
+		utils.LogPlaneBestEffort(handler.logger, logrus.WarnLevel, utils.LogPlaneData,
+			logrus.Fields{"event": "affinity.redis_unavailable", "op": "record",
+				"credential_id": selection.CredentialID, "error": err.Error()},
+			"Shared soft affinity is unavailable; the success was not learned")
+	}
 }

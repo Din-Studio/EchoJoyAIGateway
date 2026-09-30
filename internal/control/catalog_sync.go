@@ -15,6 +15,7 @@ import (
 	"gorm.io/gorm"
 
 	"gpt-load/internal/catalog"
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/platform/config"
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/platform/utils"
@@ -48,20 +49,7 @@ type CatalogBootstrap struct {
 }
 
 func loadCatalogBootstrap(cachePath string) *CatalogBootstrap {
-	bootstrap := &CatalogBootstrap{
-		Runtime:   &catalog.Runtime{},
-		CachePath: cachePath,
-	}
-	bootstrapOutcome := "empty"
-	official, officialErr := catalog.OfficialSnapshot()
-	if officialErr != nil {
-		logrus.WithField("component", "official_catalog").Error(
-			"Embedded official catalog is unavailable",
-		)
-	} else {
-		bootstrap.Runtime.Publish(official)
-		bootstrapOutcome = "official_only"
-	}
+	bootstrap, outcome := officialCatalogBootstrap(cachePath)
 	cached, err := catalog.LoadCache(cachePath)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -69,20 +57,64 @@ func loadCatalogBootstrap(cachePath string) *CatalogBootstrap {
 				"Models.dev catalog cache is unavailable; starting with the official catalog only",
 			)
 		}
-		logrus.WithFields(logrus.Fields{
-			"event":   "startup.catalog_load",
-			"outcome": bootstrapOutcome,
-		}).Info("catalog runtime loaded")
+		logCatalogBootstrap(outcome)
 		return bootstrap
 	}
+	bootstrap.adopt(cached)
+	logCatalogBootstrap("last_known_good")
+	return bootstrap
+}
+
+// loadSharedCatalogBootstrap starts a cluster instance from the catalog its
+// peers share instead of a per-instance cache file.
+func loadSharedCatalogBootstrap(ctx context.Context, shared *cluster.CatalogStore) *CatalogBootstrap {
+	bootstrap, outcome := officialCatalogBootstrap("")
+	document, err := shared.Load(ctx)
+	var cached catalog.CachedCatalog
+	if err == nil {
+		cached, err = catalog.DecodeCache(document)
+	}
+	if err != nil {
+		if !errors.Is(err, cluster.ErrCatalogMissing) {
+			logrus.WithError(err).WithField("component", "models_dev_catalog").Warn(
+				"Shared Models.dev catalog is unavailable; starting with the official catalog only",
+			)
+		}
+		logCatalogBootstrap(outcome)
+		return bootstrap
+	}
+	bootstrap.adopt(cached)
+	logCatalogBootstrap("shared_last_known_good")
+	return bootstrap
+}
+
+func officialCatalogBootstrap(cachePath string) (*CatalogBootstrap, string) {
+	bootstrap := &CatalogBootstrap{
+		Runtime:   &catalog.Runtime{},
+		CachePath: cachePath,
+	}
+	official, err := catalog.OfficialSnapshot()
+	if err != nil {
+		logrus.WithField("component", "official_catalog").Error(
+			"Embedded official catalog is unavailable",
+		)
+		return bootstrap, "empty"
+	}
+	bootstrap.Runtime.Publish(official)
+	return bootstrap, "official_only"
+}
+
+func (bootstrap *CatalogBootstrap) adopt(cached catalog.CachedCatalog) {
 	bootstrap.Runtime.Publish(cached.Snapshot)
 	bootstrap.Metadata = cached.Metadata
 	bootstrap.HasLKG = true
+}
+
+func logCatalogBootstrap(outcome string) {
 	logrus.WithFields(logrus.Fields{
 		"event":   "startup.catalog_load",
-		"outcome": "last_known_good",
+		"outcome": outcome,
 	}).Info("catalog runtime loaded")
-	return bootstrap
 }
 
 func newCatalogBootstrap(dataDir string) *CatalogBootstrap {
@@ -146,6 +178,10 @@ type CatalogSyncCoordinator struct {
 	service   *Service
 	client    catalogSyncClient
 	cachePath string
+	// shared replaces the cache file in cluster mode; jobLease lets one
+	// instance run each period's automatic sync. Both are nil otherwise.
+	shared   *cluster.CatalogStore
+	jobLease *cluster.JobLease
 
 	mu       sync.Mutex
 	metadata catalog.Metadata
@@ -196,9 +232,13 @@ func newCatalogSyncCoordinator(
 }
 
 // NewCatalogBootstrap merges the embedded official catalog with the durable
-// Models.dev last-known-good catalog without doing network I/O. Missing or
-// invalid cache files retain the official catalog generation.
-func NewCatalogBootstrap(cfg *config.Config) *CatalogBootstrap {
+// Models.dev last-known-good catalog without doing network I/O to Models.dev.
+// In cluster mode the last-known-good catalog is the one shared through Redis.
+// Missing or invalid documents retain the official catalog generation.
+func NewCatalogBootstrap(cfg *config.Config, shared *cluster.CatalogStore) *CatalogBootstrap {
+	if shared != nil {
+		return loadSharedCatalogBootstrap(context.Background(), shared)
+	}
 	dataDir := "."
 	if cfg != nil && cfg.DataDir != "" {
 		dataDir = cfg.DataDir
@@ -207,22 +247,28 @@ func NewCatalogBootstrap(cfg *config.Config) *CatalogBootstrap {
 }
 
 // NewCatalogSyncCoordinator wires the fixed Models.dev client to the shared
-// service/runtime publication boundary.
+// service/runtime publication boundary. In cluster mode the catalog is stored
+// in and adopted from Redis, and automatic syncs are claimed per period.
 func NewCatalogSyncCoordinator(
 	service *Service,
 	client *catalog.Client,
 	bootstrap *CatalogBootstrap,
+	shared *cluster.CatalogStore,
+	jobLease *cluster.JobLease,
 ) *CatalogSyncCoordinator {
 	if bootstrap == nil {
 		bootstrap = &CatalogBootstrap{Runtime: &catalog.Runtime{}}
 	}
-	return newCatalogSyncCoordinator(
+	coordinator := newCatalogSyncCoordinator(
 		service,
 		client,
 		bootstrap.CachePath,
 		bootstrap.Metadata,
 		bootstrap.HasLKG,
 	)
+	coordinator.shared = shared
+	coordinator.jobLease = jobLease
+	return coordinator
 }
 
 func (coordinator *CatalogSyncCoordinator) Run(ctx context.Context) {
@@ -240,7 +286,7 @@ func (coordinator *CatalogSyncCoordinator) Run(ctx context.Context) {
 	results := make(chan catalogAutomaticResult, 4)
 	launch := func(trigger CatalogSyncTrigger) {
 		go func() {
-			_, err := coordinator.Sync(ctx, trigger)
+			err := coordinator.syncAutomatically(ctx, trigger)
 			select {
 			case results <- catalogAutomaticResult{err: err}:
 			case <-ctx.Done():
@@ -296,6 +342,77 @@ func (coordinator *CatalogSyncCoordinator) Run(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// syncAutomatically claims startup and periodic syncs so one instance fetches
+// each period. An instance without a last-known-good catalog syncs unclaimed:
+// no shared catalog exists yet, and waiting on a crashed claimant would leave
+// the cluster on the official catalog for most of a day.
+func (coordinator *CatalogSyncCoordinator) syncAutomatically(
+	ctx context.Context,
+	trigger CatalogSyncTrigger,
+) error {
+	claimed := trigger == CatalogSyncStartup || trigger == CatalogSyncPeriodic
+	if !claimed || !coordinator.hasLastKnownGood() {
+		_, err := coordinator.Sync(ctx, trigger)
+		return err
+	}
+	var err error
+	coordinator.jobLease.RunOncePerPeriod(ctx, "catalog-sync", modelsDevSyncInterval, func(ctx context.Context) error {
+		_, err = coordinator.Sync(ctx, trigger)
+		return err
+	})
+	return err
+}
+
+// adoptSharedCatalog publishes a catalog a peer stored in Redis when it is
+// newer than this instance's. The peer already reconciled model prices in the
+// database, so adoption only replaces the in-memory catalog.
+func (coordinator *CatalogSyncCoordinator) adoptSharedCatalog(ctx context.Context) error {
+	if coordinator == nil || coordinator.shared == nil ||
+		coordinator.service == nil || coordinator.service.catalogRuntime == nil {
+		return nil
+	}
+	fetchedAt, err := coordinator.shared.FetchedAt(ctx)
+	if errors.Is(err, cluster.ErrCatalogMissing) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !coordinator.sharedCatalogIsNewer(fetchedAt) {
+		return nil
+	}
+	document, err := coordinator.shared.Load(ctx)
+	if err != nil {
+		return err
+	}
+	cached, err := catalog.DecodeCache(document)
+	if err != nil {
+		return fmt.Errorf("decode shared catalog: %w", err)
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.pending != nil ||
+		cached.Metadata.SuccessfulFetchAtMillis <= coordinator.metadata.SuccessfulFetchAtMillis {
+		return nil
+	}
+	coordinator.service.catalogRuntime.Publish(cached.Snapshot)
+	coordinator.metadata = cached.Metadata
+	coordinator.hasLKG = true
+	logrus.WithFields(logrus.Fields{
+		"event":                  "models_dev_catalog_adopted",
+		"successful_fetch_at_ms": cached.Metadata.SuccessfulFetchAtMillis,
+	}).Info("adopted the Models.dev catalog shared by the cluster")
+	return nil
+}
+
+// sharedCatalogIsNewer skips adoption while this instance holds a newer
+// pending result of its own.
+func (coordinator *CatalogSyncCoordinator) sharedCatalogIsNewer(fetchedAtMS int64) bool {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	return coordinator.pending == nil && fetchedAtMS > coordinator.metadata.SuccessfulFetchAtMillis
 }
 
 func (coordinator *CatalogSyncCoordinator) shutdown() {
@@ -553,7 +670,7 @@ func (coordinator *CatalogSyncCoordinator) executeSync(
 	if result.Snapshot == nil || len(result.RawJSON) == 0 {
 		return coordinator.failureStatus(trigger, metadata), fmt.Errorf("catalog sync returned an invalid successful result")
 	}
-	if err := coordinator.storeCache(coordinator.cachePath, result); err != nil {
+	if err := coordinator.storeLastKnownGood(ctx, result); err != nil {
 		return coordinator.failureStatus(trigger, metadata), err
 	}
 	if err := ctx.Err(); err != nil {
@@ -575,6 +692,19 @@ func (coordinator *CatalogSyncCoordinator) executeSync(
 	coordinator.pending = nil
 	coordinator.mu.Unlock()
 	return catalogSyncSuccessStatus(trigger, result.Metadata, false), nil
+}
+
+// storeLastKnownGood persists a validated 200 result before it is applied:
+// to the shared Redis document in cluster mode, otherwise to the cache file.
+func (coordinator *CatalogSyncCoordinator) storeLastKnownGood(ctx context.Context, result catalog.SyncResult) error {
+	if coordinator.shared == nil {
+		return coordinator.storeCache(coordinator.cachePath, result)
+	}
+	document, err := catalog.EncodeCache(result)
+	if err != nil {
+		return err
+	}
+	return coordinator.shared.Store(ctx, document, result.Metadata.SuccessfulFetchAtMillis)
 }
 
 func catalogSyncSuccessStatus(

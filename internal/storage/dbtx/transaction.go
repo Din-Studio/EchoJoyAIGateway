@@ -88,6 +88,7 @@ const (
 	BeginSQLiteImmediate         BeginMode = "sqlite_immediate"
 	BeginMySQLConsistentSnapshot BeginMode = "mysql_consistent_snapshot"
 	BeginPostgresRepeatableRead  BeginMode = "postgres_repeatable_read"
+	BeginPostgresReadCommitted   BeginMode = "postgres_read_committed"
 )
 
 // CapabilitiesForDriver maps the GORM driver name to the transaction
@@ -108,9 +109,14 @@ func CapabilitiesForDriver(driverName string) (Capabilities, error) {
 			ReadBegin:  BeginMySQLConsistentSnapshot,
 		}, nil
 	case "postgres", "postgresql":
+		// Write transactions pin READ COMMITTED explicitly: the incremental
+		// ON CONFLICT DO UPDATE upserts in requestlog rely on PostgreSQL
+		// re-evaluating the assignment against the latest committed row, and
+		// a server whose default_transaction_isolation was raised would
+		// otherwise turn concurrent writers into serialization failures.
 		return Capabilities{
 			Driver:     "postgres",
-			WriteBegin: BeginStandard,
+			WriteBegin: BeginPostgresReadCommitted,
 			ReadBegin:  BeginPostgresRepeatableRead,
 		}, nil
 	default:
@@ -270,6 +276,8 @@ func (capabilities Capabilities) beginStatements(mode Mode) ([]string, error) {
 		}, nil
 	case BeginPostgresRepeatableRead:
 		return []string{"BEGIN ISOLATION LEVEL REPEATABLE READ"}, nil
+	case BeginPostgresReadCommitted:
+		return []string{"BEGIN ISOLATION LEVEL READ COMMITTED"}, nil
 	default:
 		return nil, &Error{
 			Phase: PhaseDriver,

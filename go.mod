@@ -3,6 +3,7 @@ module gpt-load
 go 1.27.0
 
 require (
+	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/andybalholm/brotli v1.2.3
 	github.com/buger/jsonparser v1.6.1
 	github.com/gin-gonic/gin v1.12.0
@@ -12,6 +13,7 @@ require (
 	github.com/klauspost/compress v1.20.0
 	github.com/maximhq/bifrost/core v1.9.0
 	github.com/nicksnyder/go-i18n/v2 v2.6.1
+	github.com/redis/go-redis/v9 v9.19.0
 	github.com/router-for-me/CLIProxyAPI/v7/gptload-embedded v0.0.0
 	github.com/sirupsen/logrus v1.10.2
 	github.com/tidwall/gjson v1.19.0
@@ -97,7 +99,6 @@ require (
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.1 // indirect
-	github.com/redis/go-redis/v9 v9.19.0 // indirect
 	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/router-for-me/CLIProxyAPI/v7 v7.3.6 // indirect
@@ -114,6 +115,7 @@ require (
 	github.com/valyala/fasthttp v1.74.0 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.1 // indirect
 	go.starlark.net v0.0.0-20260102030733-3fee463870c9 // indirect
 	go.uber.org/atomic v1.11.0 // indirect

@@ -1404,3 +1404,16 @@ func TestBuildContainerDoesNotRedirectTrailingSlashGatewayRoute(t *testing.T) {
 		t.Fatalf("resolve engine: %v", err)
 	}
 }
+
+func TestBuildContainerRejectsRedisAddrsWithoutPostgres(t *testing.T) {
+	t.Setenv("AUTH_KEY", "test-auth-key")
+	t.Setenv("DATA_DIR", t.TempDir())
+	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	t.Setenv("REDIS_ADDRS", "127.0.0.1:1")
+
+	_, err := BuildContainer()
+	if err == nil || !strings.Contains(err.Error(), "REDIS_ADDRS requires a PostgreSQL DATABASE_DSN") {
+		t.Fatalf("BuildContainer() error = %v, want PostgreSQL requirement", err)
+	}
+}

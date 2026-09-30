@@ -118,12 +118,18 @@ type controlledOperationRecovery struct {
 }
 
 type controlledStageCleaner struct {
-	calls chan time.Time
+	calls       chan time.Time
+	compactions chan time.Time
 }
 
 func (cleaner *controlledStageCleaner) CleanupCredentialStages(_ context.Context, now time.Time) error {
 	cleaner.calls <- now
 	return nil
+}
+
+func (cleaner *controlledStageCleaner) CompactCompletedOperations(_ context.Context, now time.Time) (int64, error) {
+	cleaner.compactions <- now
+	return 0, nil
 }
 
 func (recovery *controlledOperationRecovery) RunOperationRecovery(ctx context.Context) {
@@ -214,15 +220,15 @@ func TestRuntimeSweepsRequestLogsImmediatelyAndHourlyWithoutOverlap(t *testing.T
 	}
 }
 
-func TestRuntimeSweepsCredentialStagesWithoutRequestLogCleaner(t *testing.T) {
+func TestRuntimeSweepsCredentialStagesAndCompactsOperationsWithoutRequestLogCleaner(t *testing.T) {
 	t.Parallel()
 	base := time.Date(2026, time.August, 13, 8, 0, 0, 0, time.UTC)
 	validationTicker := newFakeRuntimeTicker()
 	retentionTicker := newFakeRuntimeTicker()
 	created := make(chan time.Duration, 3)
 	runtime := newTestRuntime(newFakeValidationSweep(false), validationTicker, created, func() time.Time { return base })
-	cleaner := &controlledStageCleaner{calls: make(chan time.Time, 2)}
-	runtime.stageCleaner = cleaner
+	cleaner := &controlledStageCleaner{calls: make(chan time.Time, 2), compactions: make(chan time.Time, 2)}
+	runtime.controlCleaner = cleaner
 	runtime.newTicker = func(interval time.Duration) runtimeTicker {
 		created <- interval
 		switch interval {
@@ -243,6 +249,12 @@ func TestRuntimeSweepsCredentialStagesWithoutRequestLogCleaner(t *testing.T) {
 	if got := awaitValue(t, cleaner.calls); !got.Equal(base) {
 		t.Fatalf("cleanup time = %v", got)
 	}
+	if got := awaitValue(t, cleaner.compactions); !got.Equal(base) {
+		t.Fatalf("compaction time = %v", got)
+	}
+	retentionTicker.ticks <- base.Add(time.Hour)
+	_ = awaitValue(t, cleaner.calls)
+	_ = awaitValue(t, cleaner.compactions)
 	stopRuntime(t, cancel, done)
 	awaitSignal(t, retentionTicker.stopped)
 }
@@ -497,4 +509,31 @@ func newTestRuntime(validator validationSweep, validationTicker *fakeRuntimeTick
 			return validationTicker
 		},
 	}
+}
+
+type fakeConfigSyncRuntime struct {
+	started chan struct{}
+	stopped chan struct{}
+}
+
+func (fake *fakeConfigSyncRuntime) Run(ctx context.Context) {
+	close(fake.started)
+	<-ctx.Done()
+	close(fake.stopped)
+}
+
+func TestRuntimeRunsConfigSyncUntilCancel(t *testing.T) {
+	fake := &fakeConfigSyncRuntime{started: make(chan struct{}), stopped: make(chan struct{})}
+	runtime, _, _ := newRuntimeHarness(nil, time.Now)
+	runtime.configSync = fake
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runtime.Run(ctx)
+	}()
+	awaitSignal(t, fake.started)
+	cancel()
+	awaitSignal(t, fake.stopped)
+	awaitSignal(t, done)
 }

@@ -120,3 +120,46 @@ func persistAccessQuotaSnapshot(
 		snapshot.SnapshotVersion,
 	)
 }
+
+// AccessQuotaStateReader reads persisted rule checkpoints so cluster mode can
+// hydrate shared quota state that Redis does not hold.
+type AccessQuotaStateReader struct {
+	DB *gorm.DB
+}
+
+// ReadAccessQuotaStates returns the checkpoint of every listed rule that still
+// has one. A rule without a row is omitted.
+func (reader AccessQuotaStateReader) ReadAccessQuotaStates(
+	ctx context.Context,
+	ruleIDs []uint,
+) ([]accessquota.RestoredState, error) {
+	if len(ruleIDs) == 0 {
+		return nil, nil
+	}
+	if reader.DB == nil {
+		return nil, fmt.Errorf("read access key cost limit states: database is nil")
+	}
+	var rows []struct {
+		models.AccessKeyCostLimitState
+		AccessKeyID uint
+	}
+	if err := reader.DB.WithContext(ctx).
+		Table(models.AccessKeyCostLimitState{}.TableName()+" AS s").
+		Select("s.*, r.access_key_id").
+		Joins("JOIN "+models.AccessKeyCostLimitRule{}.TableName()+" AS r ON r.id = s.rule_id").
+		Where("s.rule_id IN ?", ruleIDs).
+		Order("s.rule_id ASC").
+		Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("read access key cost limit states: %w", err)
+	}
+	states := make([]accessquota.RestoredState, 0, len(rows))
+	for _, row := range rows {
+		states = append(states, accessquota.RestoredState{
+			AccessKeyID: row.AccessKeyID, RuleID: row.RuleID,
+			RuleRevision: row.RuleRevision, UsedNanoUSD: row.UsedNanoUSD,
+			WindowStartedAtMS: row.WindowStartedAtMS, WindowEndsAtMS: row.WindowEndsAtMS,
+			WindowGeneration: row.WindowGeneration, SnapshotVersion: row.SnapshotVersion,
+		})
+	}
+	return states, nil
+}

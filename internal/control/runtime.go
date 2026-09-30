@@ -9,9 +9,11 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"gpt-load/internal/channel"
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/health"
 	"gpt-load/internal/platform/encryption"
+	"gpt-load/internal/platform/utils"
 	"gpt-load/internal/state"
 )
 
@@ -33,14 +35,21 @@ type catalogSyncRuntime interface {
 	Run(context.Context)
 }
 
+type configSyncRuntime interface {
+	Run(context.Context)
+}
+
 // RequestLogCleaner is the control-owned scheduling view of request log
 // retention. The requestlog package owns all cleanup semantics.
 type RequestLogCleaner interface {
 	Sweep(context.Context, time.Time)
 }
 
-type credentialStageCleaner interface {
+// controlRetentionCleaner is the control-owned hourly cleanup of shared
+// database state: expired credential stages and compacted operation results.
+type controlRetentionCleaner interface {
 	CleanupCredentialStages(context.Context, time.Time) error
+	CompactCompletedOperations(context.Context, time.Time) (int64, error)
 }
 
 type runtimeTicker interface {
@@ -64,11 +73,14 @@ type Runtime struct {
 	registry           *state.CredentialRegistry
 	validator          validationSweep
 	requestLogCleaner  RequestLogCleaner
-	stageCleaner       credentialStageCleaner
+	controlCleaner     controlRetentionCleaner
 	operationRecovery  operationRecoveryRuntime
 	catalogSync        catalogSyncRuntime
+	configSync         configSyncRuntime
+	credentialHealth   configSyncRuntime
 	oauthCallback      *OAuthCallbackManager
 	manager            *state.Manager
+	jobLease           *cluster.JobLease
 	validationInterval time.Duration
 	validationJitter   func() time.Duration
 	now                func() time.Time
@@ -86,14 +98,18 @@ func NewRuntime(
 	requestLogCleaner RequestLogCleaner,
 	operationRecovery *Service,
 	catalogSync *CatalogSyncCoordinator,
+	configSync *ClusterConfigSync,
+	credentialHealth *cluster.CredentialHealth,
+	jobLease *cluster.JobLease,
 ) *Runtime {
 	runtime := &Runtime{
 		registry:           registry,
 		requestLogCleaner:  requestLogCleaner,
-		stageCleaner:       operationRecovery,
+		controlCleaner:     operationRecovery,
 		operationRecovery:  operationRecovery,
 		catalogSync:        catalogSync,
 		manager:            manager,
+		jobLease:           jobLease,
 		validationInterval: defaultValidationInterval,
 		validationJitter: func() time.Duration {
 			return time.Duration(rand.Int64N(int64(maxValidationJitter) + 1))
@@ -106,7 +122,10 @@ func NewRuntime(
 	if operationRecovery != nil {
 		runtime.oauthCallback = operationRecovery.oauthCallback
 	}
-	runtime.validator = newValidationWorker(
+	if configSync != nil {
+		runtime.configSync = configSync
+	}
+	worker := newValidationWorker(
 		manager,
 		registry,
 		stats,
@@ -115,6 +134,11 @@ func NewRuntime(
 		channelRegistry,
 		executor,
 	)
+	if credentialHealth != nil {
+		runtime.credentialHealth = credentialHealth
+		worker.sharedHealth = credentialHealth
+	}
+	runtime.validator = worker
 	return runtime
 }
 
@@ -131,7 +155,7 @@ func (runtime *Runtime) Run(ctx context.Context) {
 		defer wait.Done()
 		runtime.runValidation(ctx, validationTicker, currentValidationInterval, validationUpdates)
 	}()
-	if runtime.requestLogCleaner != nil || runtime.stageCleaner != nil {
+	if runtime.requestLogCleaner != nil || runtime.controlCleaner != nil {
 		retentionTicker := runtime.newTicker(retentionInterval)
 		wait.Add(1)
 		go func() {
@@ -151,6 +175,20 @@ func (runtime *Runtime) Run(ctx context.Context) {
 		go func() {
 			defer wait.Done()
 			runtime.catalogSync.Run(ctx)
+		}()
+	}
+	if runtime.configSync != nil {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			runtime.configSync.Run(ctx)
+		}()
+	}
+	if runtime.credentialHealth != nil {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			runtime.credentialHealth.Run(ctx)
 		}()
 	}
 	if runtime.oauthCallback != nil {
@@ -188,7 +226,10 @@ func (runtime *Runtime) runValidation(
 				return
 			}
 			if runtime.validator != nil {
-				runtime.validator.Validate(ctx)
+				runtime.jobLease.RunOncePerPeriod(ctx, "validation", interval, func(ctx context.Context) error {
+					runtime.validator.Validate(ctx)
+					return nil
+				})
 			}
 		}
 	}
@@ -243,12 +284,32 @@ func (runtime *Runtime) sweepRetention(ctx context.Context, now time.Time) {
 	if runtime.registry != nil {
 		runtime.registry.ExpireModelCooldowns(now)
 	}
+	runtime.jobLease.RunOncePerPeriod(ctx, "retention", retentionInterval, func(ctx context.Context) error {
+		runtime.cleanSharedState(ctx, now)
+		return nil
+	})
+}
+
+// cleanSharedState deletes and compacts expired shared database rows. Every
+// step is conditioned on row state, so a failure simply waits for the next
+// period.
+func (runtime *Runtime) cleanSharedState(ctx context.Context, now time.Time) {
 	if runtime.requestLogCleaner != nil {
 		runtime.requestLogCleaner.Sweep(ctx, now)
 	}
-	if runtime.stageCleaner != nil {
-		if err := runtime.stageCleaner.CleanupCredentialStages(ctx, now); err != nil {
-			logrus.WithError(err).WithField("event", "control.credential_stage_cleanup_failed").Warn("credential stage cleanup failed")
-		}
+	if runtime.controlCleaner == nil {
+		return
+	}
+	if err := runtime.controlCleaner.CleanupCredentialStages(ctx, now); err != nil {
+		logrus.WithError(err).WithField("event", "control.credential_stage_cleanup_failed").Warn("credential stage cleanup failed")
+	}
+	if _, err := runtime.controlCleaner.CompactCompletedOperations(ctx, now); err != nil && ctx.Err() == nil {
+		utils.LogPlaneBestEffort(
+			logrus.StandardLogger(),
+			logrus.WarnLevel,
+			utils.LogPlaneControl,
+			nil,
+			"Operation result compaction failed",
+		)
 	}
 }

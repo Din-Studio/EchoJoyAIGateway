@@ -46,6 +46,7 @@ func TestSystemUpdateHTTPChecksOnDemandWithoutAffectingHome(t *testing.T) {
 		&config.Config{AuthKey: "test-auth-key"},
 		fixture.service,
 		checker,
+		nil,
 	)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
@@ -103,6 +104,7 @@ func TestSystemUpdateHTTPReturnsNullForSuccessfulNoUpdate(t *testing.T) {
 		&config.Config{AuthKey: "test-auth-key"},
 		fixture.service,
 		checker,
+		nil,
 	)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
@@ -131,6 +133,7 @@ func TestSystemUpdateHTTPHidesUpstreamFailureBehindBadGateway(t *testing.T) {
 		&config.Config{AuthKey: "test-auth-key"},
 		fixture.service,
 		checker,
+		nil,
 	)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
@@ -156,6 +159,7 @@ func TestSystemUpdateHTTPRejectsAccessKeyAndInvalidQueryBeforeCheck(t *testing.T
 		&config.Config{AuthKey: "test-auth-key"},
 		fixture.service,
 		checker,
+		nil,
 	)
 	engine := gin.New()
 	server.RegisterRoutes(engine)

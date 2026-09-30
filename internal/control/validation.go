@@ -59,6 +59,9 @@ type validationWorker struct {
 	decryptor credentialDecryptor
 	channels  *channel.Registry
 	executor  execution.Executor
+	// sharedHealth, when set, recovers through the cluster store after the
+	// publication boundary is released.
+	sharedHealth state.SharedCredentialHealthStore
 }
 
 type groupValidationSignature [sha256.Size]byte
@@ -206,7 +209,8 @@ func (worker *validationWorker) validateRef(ctx context.Context, snapshot *state
 	}
 
 	// This callback follows Manager publishMu -> coordinator stripe ->
-	// Registry/Stats locks. Keep it to current reads, pure signature work, and
+	// Registry/Stats locks. With a shared store it only compares the target
+	// signature; the store write follows once publishMu is released. Keep it to current reads, pure signature work, and
 	// coordinated recover/reset; decrypt, probe, DB/network, and logging stay
 	// outside the publication boundary.
 	recovered := worker.snapshots.WithCurrentSnapshot(func(current *state.ConfigSnapshot) bool {
@@ -222,6 +226,9 @@ func (worker *validationWorker) validateRef(ctx context.Context, snapshot *state
 			return false
 		}
 
+		if worker.sharedHealth != nil {
+			return true
+		}
 		var matched bool
 		worker.mutations.Do(ref.ID, func() {
 			matched = worker.registry.RecoverIfMatch(ref)
@@ -231,6 +238,13 @@ func (worker *validationWorker) validateRef(ctx context.Context, snapshot *state
 		})
 		return matched
 	})
+	if recovered && worker.sharedHealth != nil {
+		result, err := worker.sharedHealth.RecoverIfMatch(ctx, ref, nil)
+		recovered = err == nil && result.Accepted
+		if recovered {
+			worker.stats.Reset(ref.ID)
+		}
+	}
 	if !recovered && ctx.Err() == nil {
 		logValidationFailure(ref, string(executed.protocol), "conditional_recover")
 		return

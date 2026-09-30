@@ -215,6 +215,7 @@ func newServiceFixtureWithDatabase(t *testing.T, db *gorm.DB) serviceFixture {
 		priceRuntime,
 		catalogRuntime,
 		nil,
+		nil,
 		keyService,
 		controlHTTPExecutor{},
 		subscriptionCredentials,
@@ -225,6 +226,9 @@ func newServiceFixtureWithDatabase(t *testing.T, db *gorm.DB) serviceFixture {
 		mutations,
 		requestLogStats,
 		accessQuota,
+		nil,
+		nil,
+		nil,
 		channelRegistry,
 	)
 	installCodexControlTestHooks(service)

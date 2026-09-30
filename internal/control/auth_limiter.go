@@ -1,8 +1,13 @@
 package control
 
 import (
+	"context"
 	"sync"
 	"time"
+
+	"github.com/sirupsen/logrus"
+
+	"gpt-load/internal/cluster"
 )
 
 const (
@@ -105,4 +110,32 @@ func retainRecentFailures(values []time.Time, cutoff time.Time) []time.Time {
 		}
 	}
 	return retained
+}
+
+var sharedAuthFailurePolicy = cluster.AuthFailurePolicy{
+	Window:       authFailureWindow,
+	Limit:        authFailureLimit,
+	LockDuration: authLockDuration,
+}
+
+// evaluateAuthFailure applies the admin lockout: shared by every instance in
+// cluster mode, falling back to this instance's limiter while Redis is
+// unavailable so admins can still sign in and failures stay throttled.
+func (s *Server) evaluateAuthFailure(ctx context.Context, peer string, credentialValid bool) authDecision {
+	if s.sharedAuthFailures != nil {
+		shared, err := s.sharedAuthFailures.Evaluate(ctx, peer, credentialValid, sharedAuthFailurePolicy, s.now())
+		if err == nil {
+			return authDecision{
+				authorized:  credentialValid,
+				retryAfter:  shared.RetryAfter,
+				newlyLocked: shared.NewlyLocked,
+			}
+		}
+		if total, shouldLog := s.sharedAuthErrors.Observe(); shouldLog {
+			logrus.WithError(err).WithFields(logrus.Fields{
+				"event": "control.auth_limiter_redis_unavailable", "total": total,
+			}).Warn("shared admin auth lockout is unavailable; using this instance's limiter")
+		}
+	}
+	return s.authFailures.evaluate(peer, credentialValid)
 }

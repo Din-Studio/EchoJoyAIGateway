@@ -21,6 +21,11 @@ type RuntimeStateCheckpoint interface {
 	Save(context.Context) error
 }
 
+// CredentialHealthHydrator restores credential health from the cluster store.
+type CredentialHealthHydrator interface {
+	Hydrate(context.Context) error
+}
+
 type runtimeStateCheckpointDocument struct {
 	Credentials []state.CredentialRuntimeCheckpoint `json:"credentials,omitempty"`
 	Stats       []health.StatsRuntimeCheckpoint     `json:"stats,omitempty"`
@@ -36,6 +41,10 @@ type FileRuntimeStateCheckpoint struct {
 	registry         *state.CredentialRegistry
 	stats            *health.StatsStore
 	responseBindings *state.ResponseBindings
+	// credentialHealth, set in cluster mode, owns credential health, and
+	// responseBindings is nil there because Redis owns Responses ownership,
+	// so the file keeps only this instance's scheduling and stats.
+	credentialHealth CredentialHealthHydrator
 	removeFile       func(string) error
 }
 
@@ -44,12 +53,14 @@ func NewFileRuntimeStateCheckpoint(
 	registry *state.CredentialRegistry,
 	stats *health.StatsStore,
 	responseBindings *state.ResponseBindings,
+	credentialHealth CredentialHealthHydrator,
 ) *FileRuntimeStateCheckpoint {
 	return &FileRuntimeStateCheckpoint{
 		path:             filepath.Join(dataDir, runtimeStateCheckpointFileName),
 		registry:         registry,
 		stats:            stats,
 		responseBindings: responseBindings,
+		credentialHealth: credentialHealth,
 		removeFile:       os.Remove,
 	}
 }
@@ -60,6 +71,16 @@ func (checkpoint *FileRuntimeStateCheckpoint) Restore(ctx context.Context) error
 	if err := contextError(ctx); err != nil {
 		return err
 	}
+	err := checkpoint.restoreFile()
+	if checkpoint.credentialHealth != nil {
+		if hydrateErr := checkpoint.credentialHealth.Hydrate(ctx); hydrateErr != nil {
+			err = errors.Join(err, fmt.Errorf("hydrate shared credential health: %w", hydrateErr))
+		}
+	}
+	return err
+}
+
+func (checkpoint *FileRuntimeStateCheckpoint) restoreFile() error {
 	raw, err := os.ReadFile(checkpoint.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -76,7 +97,9 @@ func (checkpoint *FileRuntimeStateCheckpoint) Restore(ctx context.Context) error
 		return fmt.Errorf("decode runtime state checkpoint: %w", err)
 	}
 	if checkpoint.registry != nil {
-		checkpoint.registry.RestoreRuntimeCheckpoint(document.Credentials)
+		if checkpoint.credentialHealth == nil {
+			checkpoint.registry.RestoreRuntimeCheckpoint(document.Credentials)
+		}
 		if document.Scheduling != nil {
 			checkpoint.registry.SchedulingState().RestoreCheckpoint(*document.Scheduling)
 		}
@@ -101,7 +124,9 @@ func (checkpoint *FileRuntimeStateCheckpoint) Save(ctx context.Context) error {
 	}
 	document := runtimeStateCheckpointDocument{}
 	if checkpoint.registry != nil {
-		document.Credentials = checkpoint.registry.CaptureRuntimeCheckpoint()
+		if checkpoint.credentialHealth == nil {
+			document.Credentials = checkpoint.registry.CaptureRuntimeCheckpoint()
+		}
 		scheduling := checkpoint.registry.SchedulingState().CaptureCheckpoint()
 		document.Scheduling = &scheduling
 	}

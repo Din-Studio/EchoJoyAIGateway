@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"gpt-load/internal/app"
+	"gpt-load/internal/automodel"
 	"gpt-load/internal/channel"
 	"gpt-load/internal/dialect"
 	"gpt-load/internal/execution"
@@ -92,7 +93,7 @@ func TestResponsesContinuationUsesNativeStorageCapabilities(t *testing.T) {
 				}
 			}
 			assertAffinityHits(t, sink.snapshot(), []bool{false, true, true})
-			if _, ok := handler.responseBindings.Lookup(1, "response-3"); ok {
+			if _, ok := lookupTestBinding(t, handler, 1, "response-3"); ok {
 				t.Fatal("store:false registered a new continuation ID")
 			}
 		})
@@ -291,13 +292,13 @@ func TestResponsesContinuationResumesFromRuntimeCheckpoint(t *testing.T) {
 	before, engine, _ := newContinuationFixture(t, &scriptedForwarder{results: []UpstreamResult{storedResponse("before-restart")}})
 	serveContinuation(t, engine, "gl-client", `{"model":"gpt-4o","input":"initial"}`, http.StatusOK)
 	dir := t.TempDir()
-	checkpoint := app.NewFileRuntimeStateCheckpoint(dir, nil, nil, before.responseBindings)
+	checkpoint := app.NewFileRuntimeStateCheckpoint(dir, nil, nil, before.responseBindings.(*state.ResponseBindings), nil)
 	if err := checkpoint.Save(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	forwarder := &scriptedForwarder{results: []UpstreamResult{storedResponse("new-root"), storedResponse("continued")}}
 	after, restarted, _ := newContinuationFixture(t, forwarder)
-	if err := app.NewFileRuntimeStateCheckpoint(dir, nil, nil, after.responseBindings).Restore(context.Background()); err != nil {
+	if err := app.NewFileRuntimeStateCheckpoint(dir, nil, nil, after.responseBindings.(*state.ResponseBindings), nil).Restore(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	serveContinuation(t, restarted, "gl-client", `{"model":"gpt-4o","input":"another root"}`, http.StatusOK)
@@ -414,4 +415,29 @@ func TestResponsesPromptCacheKeyAffinityAndHardContinuationPriority(t *testing.T
 			t.Fatalf("event %d kind=%q want=%q", i, sink.snapshot()[i].AffinityKind, want)
 		}
 	}
+}
+
+func recordTestBinding(
+	t *testing.T,
+	handler *Handler,
+	accessKeyID uint,
+	responseID string,
+	ref state.CredentialRef,
+	autoSelections ...*automodel.Selection,
+) bool {
+	t.Helper()
+	recorded, err := handler.responseBindings.Record(context.Background(), accessKeyID, responseID, ref, autoSelections...)
+	if err != nil {
+		t.Errorf("Record() error = %v", err)
+	}
+	return recorded
+}
+
+func lookupTestBinding(t *testing.T, handler *Handler, accessKeyID uint, responseID string) (state.ResponseBinding, bool) {
+	t.Helper()
+	binding, found, err := handler.responseBindings.Lookup(context.Background(), accessKeyID, responseID)
+	if err != nil {
+		t.Errorf("Lookup() error = %v", err)
+	}
+	return binding, found
 }
