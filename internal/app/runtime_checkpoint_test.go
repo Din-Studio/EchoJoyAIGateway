@@ -54,7 +54,7 @@ func (fake runtimeCheckpointFake) Save(ctx context.Context) error {
 }
 
 func TestAppRestoresCheckpointAfterRuntimeRecovery(t *testing.T) {
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -102,7 +102,7 @@ func TestAppLogsCheckpointRestoreFailureOnce(t *testing.T) {
 		t.Fatalf("write malformed checkpoint fixture: %v", err)
 	}
 
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -139,7 +139,7 @@ func TestAppLogsCheckpointRestoreFailureOnce(t *testing.T) {
 }
 
 func TestAppSavesCheckpointBeforeRequestLogsAndUsesIndependentContext(t *testing.T) {
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}

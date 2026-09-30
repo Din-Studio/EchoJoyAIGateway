@@ -32,7 +32,7 @@ func TestNewReadinessProbeIsNilWithoutClusterClient(t *testing.T) {
 }
 
 func TestReadinessProbeChecksDatabaseAndRedis(t *testing.T) {
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	gormpostgres "gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -26,6 +27,10 @@ const (
 	RedisAddrEnv = "GPT_LOAD_REDIS_TEST_ADDR"
 
 	missingDependencyHint = "; run `make test-deps` and export it (see CONTRIBUTING.md)"
+
+	// sessionExitWait bounds how long cleanup waits for closed connections'
+	// backends before dropping the database.
+	sessionExitWait = 100 * time.Millisecond
 )
 
 var (
@@ -93,7 +98,7 @@ func NewDatabase(t testing.TB) string {
 	if templateErr != nil {
 		t.Fatalf("create migrated PostgreSQL test template: %v", templateErr)
 	}
-	return createDatabase(t, baseDSN, "TEMPLATE "+quoteIdentifier(templateName))
+	return createDatabase(t, baseDSN, "TEMPLATE "+quoteIdentifier(templateName)+" STRATEGY FILE_COPY")
 }
 
 // NewEmptyDatabase creates an isolated database without any schema and returns
@@ -127,6 +132,7 @@ func createDatabase(t testing.TB, baseDSN, clause string) string {
 		t.Fatalf("create PostgreSQL test database: %v", err)
 	}
 	t.Cleanup(func() {
+		waitForSessionsToExit(name)
 		if err := adminExec(baseDSN, "DROP DATABASE IF EXISTS "+quoteIdentifier(name)+" WITH (FORCE)"); err != nil {
 			t.Errorf("drop PostgreSQL test database %s: %v", name, err)
 		}
@@ -136,6 +142,22 @@ func createDatabase(t testing.TB, baseDSN, clause string) string {
 		t.Fatalf("build PostgreSQL test DSN: %v", err)
 	}
 	return dsn
+}
+
+// waitForSessionsToExit gives the backends of just-closed pools a moment to
+// exit. DROP DATABASE ... WITH (FORCE) sleeps 100ms whenever a session is still
+// alive, which would otherwise dominate every short test. Sessions a test left
+// open are still terminated by FORCE once the wait gives up.
+func waitForSessionsToExit(name string) {
+	deadline := time.Now().Add(sessionExitWait)
+	for time.Now().Before(deadline) {
+		var sessions int64
+		if err := admin.Raw("SELECT count(*) FROM pg_stat_activity WHERE datname = ?", name).
+			Scan(&sessions).Error; err != nil || sessions == 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func createTemplate(baseDSN string) (string, error) {

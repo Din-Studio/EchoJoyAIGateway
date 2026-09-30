@@ -105,7 +105,7 @@ func TestAppStopShutsDownExecutionRuntime(t *testing.T) {
 }
 
 func TestAppStartsExecutionRuntimeBeforeListen(t *testing.T) {
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -155,7 +155,7 @@ func TestAppStartsExecutionRuntimeBeforeListen(t *testing.T) {
 }
 
 func TestAppExecutionRuntimeStartFailureStopsBeforeListen(t *testing.T) {
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -601,7 +601,7 @@ func TestAppStartBootstrapsAfterMigrationBeforeRuntimeLoad(t *testing.T) {
 }
 
 func TestAppStartDrainsCommittedOperationsAfterRuntimeLoadBeforeListen(t *testing.T) {
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -644,7 +644,7 @@ func TestAppStartDrainsCommittedOperationsAfterRuntimeLoadBeforeListen(t *testin
 }
 
 func TestAppStartRejectsBootstrapFailureBeforeRuntimeLoadAndListen(t *testing.T) {
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -684,7 +684,7 @@ func TestAppStartRejectsBootstrapFailureBeforeRuntimeLoadAndListen(t *testing.T)
 }
 
 func TestAppStartRejectsRuntimeStateLoadFailureBeforeListen(t *testing.T) {
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -722,7 +722,7 @@ func TestAppStartRejectsRuntimeStateLoadFailureBeforeListen(t *testing.T) {
 }
 
 func TestAppReportsUnexpectedHTTPServeFailure(t *testing.T) {
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -756,7 +756,7 @@ func TestAppReportsUnexpectedHTTPServeFailure(t *testing.T) {
 }
 
 func TestAppStartsControlRuntimeAfterInitialization(t *testing.T) {
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -791,7 +791,7 @@ func TestAppStartsControlRuntimeAfterInitialization(t *testing.T) {
 }
 
 func TestAppDoesNotStartControlRuntimeWhenLoadFails(t *testing.T) {
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -825,7 +825,7 @@ func TestAppDoesNotStartControlRuntimeWhenListenFails(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = occupied.Close() })
 
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -854,7 +854,7 @@ func TestAppDoesNotStartControlRuntimeWhenListenFails(t *testing.T) {
 }
 
 func TestAppStopCancelsAndWaitsForControlRuntime(t *testing.T) {
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -913,7 +913,7 @@ func TestAppStopClosesListenerBeforeHTTPServerRegistersIt(t *testing.T) {
 }
 
 func TestAppStopHonorsDeadlineWhileWaitingForControlRuntime(t *testing.T) {
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -961,7 +961,7 @@ func TestAppStopHonorsDeadlineWhileWaitingForControlRuntime(t *testing.T) {
 }
 
 func TestAppStartsRequestLogAfterListenBeforeHTTPServe(t *testing.T) {
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -1034,7 +1034,7 @@ func TestAppStartsRequestLogAfterListenBeforeHTTPServe(t *testing.T) {
 }
 
 func TestAppRequestLogStartFailureClosesListenerWithoutServing(t *testing.T) {
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -1109,7 +1109,7 @@ func TestAppRequestLogStartFailureClosesListenerWithoutServing(t *testing.T) {
 }
 
 func TestAppStopDrainsRequestLogAfterLastHandlerEmitBeforeDatabaseClose(t *testing.T) {
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -1210,7 +1210,7 @@ func TestAppStopDrainsRequestLogAfterLastHandlerEmitBeforeDatabaseClose(t *testi
 }
 
 func TestAppStopDeadlineJoinsRequestLogErrorAndClosesDatabase(t *testing.T) {
-	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
