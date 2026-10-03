@@ -8,11 +8,10 @@ import (
 func TestSelfHostedCIKeepsPlatformGatesAndLocalCaches(t *testing.T) {
 	ci := readRepositoryFile(t, ".github/workflows/ci.yml")
 	for job, runner := range map[string]string{
-		"test":                   "[self-hosted, macOS, ARM64]",
-		"race-tests":             "[self-hosted, Linux, ARM64]",
-		"race-cpa":               "[self-hosted, Linux, ARM64]",
-		"database-contract":      "[self-hosted, Linux, ARM64]",
-		"windows-encryption-acl": "[self-hosted, Windows, X64]",
+		"test":              "[self-hosted, macOS, ARM64]",
+		"race-tests":        "[self-hosted, Linux, ARM64]",
+		"race-cpa":          "[self-hosted, Linux, ARM64]",
+		"database-contract": "[self-hosted, Linux, ARM64]",
 	} {
 		block := workflowJobBlock(t, ci, job)
 		if !strings.Contains(block, "runs-on: "+runner) {
@@ -82,12 +81,6 @@ func TestReleaseUsesSelfHostedValidationAndHostedPublicationRunners(t *testing.T
 			t.Errorf("%s is not assigned to the GitHub-hosted Ubuntu runner", job)
 		}
 	}
-	for _, job := range []string{"build-windows-setup", "windows-installer-smoke"} {
-		block := workflowJobBlock(t, content, job)
-		if !strings.Contains(block, "runs-on: windows-2025") {
-			t.Errorf("%s is not assigned to the GitHub-hosted Windows runner", job)
-		}
-	}
 	for _, test := range []struct {
 		job      string
 		required []string
@@ -97,19 +90,6 @@ func TestReleaseUsesSelfHostedValidationAndHostedPublicationRunners(t *testing.T
 			required: []string{
 				"runner: ubuntu-24.04\n            goarch: amd64",
 				"runner: ubuntu-24.04\n            goarch: arm64",
-				"runner: macos-15\n            goarch: amd64",
-				"runner: macos-15\n            goarch: arm64",
-				"runner: windows-2025\n            goarch: amd64",
-			},
-		},
-		{
-			job: "native-artifact-smoke",
-			required: []string{
-				"runner: ubuntu-24.04\n            filename: gpt-load-linux-amd64",
-				"runner: ubuntu-24.04-arm\n            filename: gpt-load-linux-arm64",
-				"runner: macos-15-intel\n            filename: gpt-load-macos-amd64",
-				"runner: macos-15\n            filename: gpt-load-macos-arm64",
-				"runner: windows-2025\n            filename: gpt-load-windows-amd64.exe",
 			},
 		},
 		{

@@ -36,6 +36,17 @@ make test    # 运行 Go 单元测试 / run Go unit tests
 make check   # 完整验收门禁 / the full acceptance gate
 ```
 
+网关只以容器形式部署，运行时依赖 PostgreSQL 和 Redis。本地运行网关时可以复用 `make test-deps` 拉起的依赖，并在 `.env` 中设置 `DATABASE_DSN`、`REDIS_ADDRS`、`AUTH_KEY` 和 `ENCRYPTION_KEY`：
+
+The gateway is deployed as a container only and depends on PostgreSQL and Redis at runtime. To run it locally, reuse the dependencies started by `make test-deps` and set `DATABASE_DSN`, `REDIS_ADDRS`, `AUTH_KEY`, and `ENCRYPTION_KEY` in `.env`:
+
+```text
+DATABASE_DSN=postgres://postgres:postgres@127.0.0.1:55432/gpt_load?sslmode=disable
+REDIS_ADDRS=127.0.0.1:56379
+AUTH_KEY=<openssl rand -hex 32>
+ENCRYPTION_KEY=<openssl rand -hex 32>
+```
+
 `make check` 覆盖 gofmt、`go mod tidy -diff`、`go vet`、前端 lint / format / build、Go 构建与全量单元测试。
 
 `make check` covers gofmt, `go mod tidy -diff`, `go vet`, web lint / format / build, the Go build, and the full unit test suite.
@@ -78,6 +89,18 @@ Race tests for that module run in CI; per repository convention they are not run
 3. Run `make check` before submitting; if you cannot, say why and what remains unverified.
 4. Fill in `.github/pull_request_template.md` honestly, including the checklist.
 5. When a change affects user-visible capabilities, **all three READMEs (`README.md`, `README_CN.md`, `README_JP.md`) must be updated together**.
+
+## 合并 upstream / Merging upstream
+
+本 fork 只提供容器 + PostgreSQL + Redis 的部署形态，已删除 upstream 的 Windows 服务、安装包、原生二进制发布脚本，以及后续阶段删除的 SQLite / MySQL 代码。合并 upstream 时：
+
+- upstream 修改了本 fork 已删除的文件（modify/delete 冲突）时，一律保持删除。
+- 数据库方言分支只保留 PostgreSQL 分支。
+
+This fork ships only the container + PostgreSQL + Redis deployment. It has removed upstream's Windows service, installer, and native binary release scripts, and later phases remove the SQLite / MySQL code. When merging upstream:
+
+- If upstream changed a file this fork deleted (a modify/delete conflict), keep it deleted.
+- For database dialect branches, keep only the PostgreSQL branch.
 
 ## Commit 规范 / Commit convention
 

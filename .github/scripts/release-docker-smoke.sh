@@ -36,7 +36,8 @@ container="gpt-load-release-smoke-${suffix}"
 probe="gpt-load-release-probe-${suffix}"
 fake_container="gpt-load-release-fake-${suffix}"
 fake_alias="fake-upstream"
-volume="gpt-load-release-smoke-${suffix}"
+postgres_container="gpt-load-release-postgres-${suffix}"
+redis_container="gpt-load-release-redis-${suffix}"
 network="gpt-load-release-network-${suffix}"
 app_port="${RELEASE_SMOKE_APP_PORT:-0}"
 task_tmp="$(mktemp -d)"
@@ -57,14 +58,13 @@ trap cleanup_temp EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for target in "${container}" "${probe}" "${fake_container}"; do
+for target in "${container}" "${probe}" "${fake_container}" "${postgres_container}" "${redis_container}"; do
   if docker container inspect "${target}" >/dev/null 2>&1; then
     printf 'task container already exists: %s\n' "${target}" >&4
     exit 1
   fi
 done
 if docker image inspect "${image}" >/dev/null 2>&1 ||
-  docker volume inspect "${volume}" >/dev/null 2>&1 ||
   docker network inspect "${network}" >/dev/null 2>&1; then
   printf 'task owned Docker resource already exists\n' >&4
   exit 1
@@ -72,8 +72,9 @@ fi
 
 cleanup() {
   local exit_code=$?
-  docker rm -f "${container}" "${probe}" "${fake_container}" >/dev/null 2>&1 || true
-  docker volume rm "${volume}" >/dev/null 2>&1 || true
+  # -v 同时删除 PostgreSQL/Redis 镜像声明的匿名数据卷。
+  docker rm -f -v "${container}" "${probe}" "${fake_container}" "${postgres_container}" "${redis_container}" \
+    >/dev/null 2>&1 || true
   docker network rm "${network}" >/dev/null 2>&1 || true
   docker image rm "${image}" >/dev/null 2>&1 || true
   rm -rf "${task_tmp}"
@@ -167,10 +168,7 @@ docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${image}" |
   grep -Fx 'HOST=0.0.0.0' >/dev/null
 
 smoke_stage="probe-container-filesystem"
-docker network create "${network}" >/dev/null
-docker volume create "${volume}" >/dev/null
 docker run --name "${probe}" \
-  --volume "${volume}:/app/data" \
   --entrypoint /bin/sh \
   "${image}" -ceu '
     test "$(id -u):$(id -g)" = "10001:10001"
@@ -179,11 +177,47 @@ docker run --name "${probe}" \
     test -r /app/licenses/Apache-2.0.txt
     test -r /app/licenses/MIT.txt
     test -r /app/licenses/MPL-2.0.txt
-    printf canary >/app/data/release-write-canary
-    test "$(cat /app/data/release-write-canary)" = canary
-    rm /app/data/release-write-canary
   '
 docker rm "${probe}" >/dev/null
+
+smoke_stage="start-cluster-dependencies"
+# 网关容器不挂卷：状态全部在 PostgreSQL 与 Redis 中，密钥只经环境变量传入。
+# 用 `--env NAME` 从环境继承取值，避免密钥出现在 docker 命令行里。
+postgres_password="$(openssl rand -hex 24)"
+auth_key="$(openssl rand -hex 32)"
+encryption_key="$(openssl rand -hex 32)"
+export POSTGRES_USER=gpt_load
+export POSTGRES_DB=gpt_load
+export POSTGRES_PASSWORD="${postgres_password}"
+export DATABASE_DSN="postgres://gpt_load:${postgres_password}@postgres:5432/gpt_load?sslmode=disable"
+export REDIS_ADDRS="redis:6379"
+export AUTH_KEY="${auth_key}"
+export ENCRYPTION_KEY="${encryption_key}"
+docker network create "${network}" >/dev/null
+docker run -d \
+  --name "${postgres_container}" \
+  --network "${network}" \
+  --network-alias postgres \
+  --env POSTGRES_USER \
+  --env POSTGRES_DB \
+  --env POSTGRES_PASSWORD \
+  postgres:18-alpine >/dev/null
+docker run -d \
+  --name "${redis_container}" \
+  --network "${network}" \
+  --network-alias redis \
+  redis:7.4-alpine redis-server --maxmemory-policy noeviction --appendonly yes >/dev/null
+dependencies_ready=false
+for _ in $(seq 1 120); do
+  # 官方镜像初始化时会先起一个只监听本地 socket 的临时实例，必须经 TCP 探测。
+  if docker exec "${postgres_container}" pg_isready -h 127.0.0.1 -U gpt_load -d gpt_load >/dev/null 2>&1 &&
+    test "$(docker exec "${redis_container}" redis-cli ping 2>/dev/null)" = "PONG"; then
+    dependencies_ready=true
+    break
+  fi
+  sleep 0.5
+done
+test "${dependencies_ready}" = true
 
 smoke_stage="start-fake-upstream"
 docker run -d \
@@ -209,7 +243,10 @@ start_container() {
     --name "${container}" \
     --network "${network}" \
     --publish "127.0.0.1:${app_port}:3001" \
-    --volume "${volume}:/app/data" \
+    --env DATABASE_DSN \
+    --env REDIS_ADDRS \
+    --env AUTH_KEY \
+    --env ENCRYPTION_KEY \
     "${image}" >/dev/null
   # Docker 原子分配可用端口；重建容器后也重新查询，避免多个 Runner 抢占端口。
   local binding
@@ -265,26 +302,19 @@ wait_for_health
 smoke_stage="verify-first-container"
 first_container_id="$(docker inspect -f '{{.Id}}' "${container}")"
 test "$(docker exec "${container}" id -u):$(docker exec "${container}" id -g)" = "10001:10001"
-test "$(docker exec "${container}" printenv DATA_DIR)" = "/app/data"
 test "$(docker exec "${container}" printenv HOST)" = "0.0.0.0"
+test "$(docker inspect -f '{{len .Mounts}}' "${container}")" = "0"
 
-for asset in auth.key encryption.key gpt-load.db; do
-  docker exec "${container}" test -f "/app/data/${asset}"
-done
-auth_key="$(docker exec "${container}" cat /app/data/auth.key)"
-encryption_key="$(docker exec "${container}" cat /app/data/encryption.key)"
-test -n "${auth_key}"
-test -n "${encryption_key}"
-auth_hash_before="$(docker exec "${container}" sha256sum /app/data/auth.key | awk '{print $1}')"
-encryption_hash_before="$(
-  docker exec "${container}" sha256sum /app/data/encryption.key | awk '{print $1}'
-)"
-
-node -e '
-  const fs=require("fs");
-  const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
-  if(value.version!==process.argv[2]) process.exit(1);
-' "${task_tmp}/health.json" "${release_version}"
+assert_cluster_health() {
+  node -e '
+    const fs=require("fs");
+    const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+    if(value.version!==process.argv[2]) process.exit(1);
+    const checks=value.checks;
+    if(!checks||checks.database!=="ok"||checks.redis!=="ok") process.exit(1);
+  ' "${task_tmp}/health.json" "${release_version}"
+}
+assert_cluster_health
 curl -fsS "${base_url}/" | grep -F '<div id="app"></div>' >/dev/null
 test "$(curl -sS -o /dev/null -w '%{http_code}' "${base_url}/api/usage")" = "401"
 test "$(
@@ -413,10 +443,6 @@ for _ in $(seq 1 80); do
   sleep 0.25
 done
 test "${usage_complete}" = true
-test "$(docker exec "${container}" stat -c '%a' /app/data)" = "700"
-for asset in auth.key encryption.key gpt-load.db gpt-load.db-wal gpt-load.db-shm; do
-  test "$(docker exec "${container}" stat -c '%a' "/app/data/${asset}")" = "600"
-done
 
 smoke_stage="stop-first-container"
 docker stop --time 15 "${container}" >/dev/null
@@ -426,21 +452,13 @@ test "$(docker inspect -f '{{.State.OOMKilled}}' "${container}")" = "false"
 docker rm "${container}" >/dev/null
 
 smoke_stage="restart-container"
+# 新建的容器没有任何本地状态，下面的 API 断言证明状态完全来自同一组 PostgreSQL/Redis。
 start_container
 wait_for_health
 smoke_stage="verify-restored-state"
 second_container_id="$(docker inspect -f '{{.Id}}' "${container}")"
 test "${first_container_id}" != "${second_container_id}"
-restored_auth_key="$(docker exec "${container}" cat /app/data/auth.key)"
-restored_encryption_key="$(docker exec "${container}" cat /app/data/encryption.key)"
-test "${restored_auth_key}" = "${auth_key}"
-test "${restored_encryption_key}" = "${encryption_key}"
-test "$(
-  docker exec "${container}" sha256sum /app/data/auth.key | awk '{print $1}'
-)" = "${auth_hash_before}"
-test "$(
-  docker exec "${container}" sha256sum /app/data/encryption.key | awk '{print $1}'
-)" = "${encryption_hash_before}"
+assert_cluster_health
 
 api_get "/api/groups" >"${task_tmp}/groups-second.json"
 api_get "${model_price_list_path}" >"${task_tmp}/prices-second.json"
@@ -502,20 +520,19 @@ summary_file="${task_tmp}/summary.txt"
   printf 'configured_user=10001:10001\n'
   printf 'image_and_container_host=0.0.0.0\n'
   printf 'direct_docker_run_publish_reachable=true\n'
-  printf 'managed_data_dir_mode=0700\n'
-  printf 'managed_recovery_set_mode=0600\n'
-  printf 'write_delete_canary=true\n'
-  printf 'generated_assets=true\n'
+  printf 'cluster_dependencies=postgresql,redis\n'
+  printf 'health_checks=database:ok,redis:ok\n'
+  printf 'gateway_container_mounts=0\n'
   printf 'unauthenticated_management_and_data_plane=401\n'
   printf 'complete_usage_tokens=7,5,12\n'
-  printf 'same_volume_restart=true\n'
+  printf 'stateless_container_restart=true\n'
   printf 'first_container_id=%s\n' "${first_container_id:0:12}"
   printf 'second_container_id=%s\n' "${second_container_id:0:12}"
   printf 'graceful_stop_exit=0\n'
 } >"${summary_file}"
 
-secret_labels=(auth_key encryption_key access_key credential_secret)
-secret_values=("${auth_key}" "${encryption_key}" "${access_key}" "${credential_secret}")
+secret_labels=(auth_key encryption_key postgres_password access_key credential_secret)
+secret_values=("${auth_key}" "${encryption_key}" "${postgres_password}" "${access_key}" "${credential_secret}")
 for index in "${!secret_labels[@]}"; do
   secret_label="${secret_labels[${index}]}"
   secret_value="${secret_values[${index}]}"

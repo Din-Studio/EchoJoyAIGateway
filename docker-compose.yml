@@ -1,3 +1,10 @@
+# 单副本集群：1 个 GPT-Load + PostgreSQL + 单节点 Redis。
+#
+#   cp .env.example .env    # 设置 AUTH_KEY、ENCRYPTION_KEY、POSTGRES_PASSWORD
+#   docker compose up -d
+#
+# 网关容器不挂卷，状态全部在 PostgreSQL 与 Redis 中。多副本部署见 docker-compose.cluster.yml。
+
 services:
   gpt-load:
     image: ghcr.io/tbphp/gpt-load:2
@@ -10,21 +17,58 @@ services:
       - "${OAUTH_CALLBACK_BIND_ADDRESS:-${HOST:-127.0.0.1}}:54545:54545"
       - "${OAUTH_CALLBACK_BIND_ADDRESS:-${HOST:-127.0.0.1}}:51121:51121"
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       HOST: 0.0.0.0
       PORT: ${PORT:-3001}
-      DATA_DIR: /app/data
+      DATABASE_DSN: postgres://gpt_load:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/gpt_load?sslmode=disable
+      REDIS_ADDRS: redis:6379
+      AUTH_KEY: ${AUTH_KEY:?set AUTH_KEY in .env}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY in .env}
     restart: always
-    volumes:
-      - gpt-load-data:/app/data
     stop_grace_period: ${CONTAINER_STOP_GRACE_PERIOD:-15s}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       test: wget -q --spider -T 10 -O /dev/null http://localhost:${PORT:-3001}/health
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+      start_interval: 2s
+
+  postgres:
+    image: postgres:18-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: gpt_load
+      POSTGRES_DB: gpt_load
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: pg_isready -h 127.0.0.1 -U gpt_load -d gpt_load
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Redis 保存 Responses 归属与额度计数，必须持久化且不能驱逐键。
+  redis:
+    image: redis:7.4-alpine
+    restart: always
+    command: redis-server --maxmemory-policy noeviction --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: redis-cli ping
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
 volumes:
-  gpt-load-data:
+  postgres-data:
+  redis-data:

@@ -65,7 +65,7 @@ Your application only needs one base URL and one AccessKey. Providers, accounts,
 - **One gateway, native protocols** — Manage official APIs, cloud platforms, model services, and compatible relays together while clients keep their OpenAI, Anthropic, or Gemini native interfaces.
 - **One mechanism for API keys and subscriptions** — Codex, Claude, Antigravity, Grok, and API-key channels share credential management, scheduling, and health handling.
 - **Scheduling and failure isolation built in** — Multi-credential scheduling, configurable weights, retries, cooldown, blacklisting, and session affinity reduce the impact of overloaded or failing credentials.
-- **Observable, self-hosted, and simple to deploy** — Inspect health, routes, logs, usage, and cost estimates in an embedded UI backed by SQLite, MySQL, or PostgreSQL with local credential encryption.
+- **Observable, self-hosted, and simple to deploy** — Inspect health, routes, logs, usage, and cost estimates in an embedded UI backed by PostgreSQL and Redis, with credentials encrypted at rest.
 
 ## Quick start
 
@@ -74,31 +74,29 @@ Your application only needs one base URL and one AccessKey. Providers, accounts,
 
 ### 1. Start the service
 
-Requires Docker and Docker Compose.
+Requires Docker and Docker Compose v2.24 or later.
 
 ```bash
 git clone --depth 1 https://github.com/tbphp/gpt-load.git
 cd gpt-load
 
 cp .env.example .env
+# Fill in AUTH_KEY, ENCRYPTION_KEY, and POSTGRES_PASSWORD in .env;
+# generate each value with: openssl rand -hex 32
 docker compose up -d
 ```
 
-Confirm the service is up:
+Compose refuses to start and names the missing variable if any of the three is empty. Confirm the service is up:
 
 ```bash
 curl --fail http://127.0.0.1:3001/health
 ```
 
-The first start generates a management key. Read it and store it safely:
+The response reports `"checks": {"database": "ok", "redis": "ok"}` once GPT-Load reaches PostgreSQL and Redis; it returns 503 with the reason while either is unavailable.
 
-```bash
-docker compose exec gpt-load sh -c 'cat /app/data/auth.key'
-```
+Open <http://127.0.0.1:3001> and sign in to the console with your `AUTH_KEY`.
 
-Open <http://127.0.0.1:3001> and sign in to the console with that key.
-
-> You can also set `AUTH_KEY` explicitly in `.env` before starting. By default the service listens on the loopback address only and is not exposed to the internet.
+> By default the service listens on the loopback address only and is not exposed to the internet.
 
 ### 2. Initial configuration
 
@@ -156,22 +154,14 @@ Rerank uses the independent `rerank` protocol through `POST /v1/rerank` on the O
 
 ## Deployment and data
 
-Docker Compose uses application-managed SQLite by default. Data lives in the `gpt-load-data` named volume and includes the database, `auth.key`, and `encryption.key`.
+GPT-Load runs as a container that depends on PostgreSQL and Redis. `docker-compose.yml` starts one GPT-Load replica, PostgreSQL, and a single Redis node; for several replicas behind a load balancer, see [Multi-replica deployment](#multi-replica-deployment-experimental).
+
+The GPT-Load container is stateless and mounts no volume: configuration and usage live in PostgreSQL, and shared runtime state lives in Redis. Compose keeps both in the `postgres-data` and `redis-data` named volumes, and Redis runs with AOF persistence and `maxmemory-policy noeviction`.
 
 > [!IMPORTANT]
-> `encryption.key` decrypts channel credentials. When backing up or migrating, the database and the key **must be kept together**. Once the key is lost or replaced, existing encrypted credentials cannot be recovered, and this version does not support master key rotation.
+> `ENCRYPTION_KEY` decrypts channel credentials. Back up PostgreSQL and `ENCRYPTION_KEY` **together**. Once the key is lost or replaced, existing encrypted credentials cannot be recovered, and this version does not support master key rotation.
 
-<details>
-<summary>Using an external database</summary>
-
-Use the unified `DATABASE_DSN` to connect SQLite, MySQL, or PostgreSQL:
-
-```text
-mysql://user:password@db.example:3306/gpt_load?charset=utf8mb4&collation=utf8mb4_bin
-postgres://user:password@db.example:5432/gpt_load?sslmode=require
-```
-
-</details>
+To use an existing PostgreSQL or Redis instead of the bundled services, override `DATABASE_DSN` (for example `postgres://user:password@db.example:5432/gpt_load?sslmode=require`) and `REDIS_ADDRS` in the `gpt-load` service.
 
 Common operations:
 
@@ -181,37 +171,18 @@ docker compose pull && docker compose up -d   # update to the latest 2.x image
 docker compose stop         # stop the service
 ```
 
-The official Compose file uses `ghcr.io/tbphp/gpt-load:2`. Before GA, `2` tracks verified 2.0 Beta and RC releases; after GA, it tracks stable 2.x releases only. Exact image tags omit the Git tag's `v` prefix (for example, `2.0.0-beta.25`), while `2.0-beta` remains the 2.0 Beta channel. `latest` remains on 1.x.
-
-<details>
-<summary>Using a native binary</summary>
-
-Download the build for your platform from [GitHub Releases](https://github.com/tbphp/gpt-load/releases), and verify it against the bundled `SHA256SUMS` first:
-
-```bash
-chmod +x ./gpt-load-linux-amd64
-
-HOST=127.0.0.1 DATA_DIR=./data ./gpt-load-linux-amd64
-```
-
-Then open <http://127.0.0.1:3001>. Portable builds are provided for five targets across Linux, macOS (amd64 / arm64), and Windows; `gpt-load-windows-amd64.exe` keeps running in the foreground as before.
-
-Windows desktop users can instead download `gpt-load-windows-setup.exe`. After one administrator approval, Setup installs and starts a low-privilege Windows service, enables automatic startup, and creates desktop and Start Menu shortcuts to the GPT-Load management page. Setup displays the generated management key before it finishes; save it before closing the page. The protected copy remains at `%ProgramData%\GPT-Load\data\auth.key`. Service configuration and its `.env` live in `%ProgramData%\GPT-Load`, with persistent data in `%ProgramData%\GPT-Load\data`.
-
-Installing a newer Setup stops the service gracefully before updating it. Windows uninstall removes the program and service but preserves data. Advanced users can still manage an installed service with `gpt-load-windows-amd64.exe service start|stop|restart|status`.
-
-</details>
+The official Compose file uses `ghcr.io/tbphp/gpt-load:2`. Before GA, `2` tracks verified 2.0 Beta and RC releases; after GA, it tracks stable 2.x releases only. Exact image tags omit the Git tag's `v` prefix (for example, `2.0.0-beta.25`), while `2.0-beta` remains the 2.0 Beta channel. `latest` remains on 1.x. GPT-Load is distributed as a container image only.
 
 ### Environment configuration
 
-At startup, the application reads `.env` in the current directory; existing process environment variables take precedence. Unless noted otherwise, changes require restarting the process or container; see [`.env.example`](.env.example) for the common configuration template.
+Compose passes `.env` to the container, and the values set in the Compose file take precedence. Unless noted otherwise, changes require restarting the process or container; see [`.env.example`](.env.example) for the common configuration template.
 
 <details>
 <summary>Show all environment variables</summary>
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `HOST` | `127.0.0.1` | Native listening address, and the default host address for Compose's main port and OAuth callback ports; Compose always listens on `0.0.0.0` inside the container. |
+| `HOST` | `127.0.0.1` | Default host address for Compose's main port and OAuth callback ports; Compose always listens on `0.0.0.0` inside the container. |
 | `PORT` | `3001` | HTTP service port, must be `1–65535`; Compose also uses it for the container port, host publishing, and health check. |
 | `BIND_ADDRESS` | Empty, inherits `HOST` | Compose only; overrides the host publishing address for the main service port without changing OAuth callback ports. |
 | `OAUTH_CALLBACK_BIND_ADDRESS` | Empty, inherits `HOST` | Compose only; overrides the host publishing address for the fixed OAuth callback ports `1455`, `54545`, and `51121`. |
@@ -219,41 +190,39 @@ At startup, the application reads `.env` in the current directory; existing proc
 | `CONTAINER_STOP_GRACE_PERIOD` | `15s` | Docker duration to wait before Compose force-stops the container; should be longer than `GRACEFUL_SHUTDOWN_TIMEOUT`. |
 | `READ_TIMEOUT` | `60` | HTTP request read timeout, positive integer in seconds. |
 | `IDLE_TIMEOUT` | `120` | HTTP keep-alive idle connection timeout, positive integer in seconds. |
-| `DATA_DIR` | `./data` | Directory for the managed database, `auth.key`, `encryption.key`, and runtime state; official Compose uses `/app/data`, while the Windows Setup service uses `%ProgramData%\GPT-Load\data`. |
-| `DATABASE_DSN` | Empty, uses `${DATA_DIR}/gpt-load.db` | Empty uses application-managed SQLite; non-empty values support SQLite paths or URLs, MySQL URLs, and PostgreSQL URLs, and are treated as operator-managed external databases. Container file paths must be inside a mounted directory. |
-| `DATABASE_MAX_OPEN_CONNECTIONS` | `10` | Maximum open connections for MySQL and PostgreSQL, positive integer. SQLite always uses one connection. |
-| `DATABASE_MAX_IDLE_CONNECTIONS` | `5` | Maximum idle connections for MySQL and PostgreSQL, positive integer and no greater than `DATABASE_MAX_OPEN_CONNECTIONS`. SQLite always uses one connection. |
-| `AUTH_KEY` | Empty, reads or generates `${DATA_DIR}/auth.key` | Bearer key for the management UI and `/api` management API, not a data-plane AccessKey. |
-| `ENCRYPTION_KEY` | Empty, reads or generates `${DATA_DIR}/encryption.key` | Encrypts channel credentials; changing or losing it makes existing credentials undecryptable, so back it up with the database. |
+| `DATABASE_DSN` | Required | PostgreSQL URL. The default Compose file points it at the bundled `postgres` service. |
+| `DATABASE_MAX_OPEN_CONNECTIONS` | `10` | Maximum open PostgreSQL connections per replica, positive integer. |
+| `DATABASE_MAX_IDLE_CONNECTIONS` | `5` | Maximum idle PostgreSQL connections per replica, positive integer and no greater than `DATABASE_MAX_OPEN_CONNECTIONS`. |
+| `AUTH_KEY` | Required | Bearer key for the management UI and `/api` management API, not a data-plane AccessKey. Every replica must share it. |
+| `ENCRYPTION_KEY` | Required | Encrypts channel credentials; changing or losing it makes existing credentials undecryptable, so back it up with PostgreSQL. Every replica must share it. |
 | `HTTP_PROXY` | Empty | Environment proxy for HTTP upstream requests. |
 | `HTTPS_PROXY` | Empty | Environment proxy for HTTPS upstream requests. |
 | `NO_PROXY` | Empty | Comma-separated hosts, domains, or IPs that bypass the environment proxy. |
 | `LOG_LEVEL` | `info` | Supports `panic`, `fatal`, `error`, `warn`, `warning`, `info`, `debug`, and `trace`; invalid values warn and fall back to `info`. |
 | `LOG_FORMAT` | `text` | Supports `text` and `json`; any other value fails startup. |
 | `MODELS_DEV_AUTO_SYNC_ENABLED` | Unset, initial default `true` | When unset, uses the persisted management UI setting; when set, forces Models.dev auto-sync on or off and makes the same UI option read-only. |
-| `REDIS_ADDRS` | Empty, cluster mode disabled | Comma-separated Redis addresses. Setting it enables the experimental cluster mode, which requires a PostgreSQL `DATABASE_DSN` and explicit `AUTH_KEY` and `ENCRYPTION_KEY`; Redis must be reachable at startup. List every node address for Redis Cluster. |
-| `REDIS_PASSWORD` | Empty | Redis password used in cluster mode. |
-| `REDIS_TLS` | `false` | Connects to Redis over TLS in cluster mode. |
-| `REDIS_KEY_PREFIX` | `gl` | Prefix for every Redis key and channel in cluster mode; must not contain whitespace or end with `:`. |
-| `INSTANCE_ID` | `<hostname>-<random>` | Identifies this process in cluster events; must be unique per instance. |
-| `RESPONSE_BINDING_TTL` | `720h` | Cluster mode only. How long Responses ownership (`previous_response_id` continuation) stays in Redis; at least `1m`. |
+| `REDIS_ADDRS` | Required | Comma-separated Redis addresses; Redis must be reachable at startup. A single address is a single node; list every node address for Redis Cluster. The default Compose file uses `redis:6379`. |
+| `REDIS_PASSWORD` | Empty | Redis password. |
+| `REDIS_TLS` | `false` | Connects to Redis over TLS. |
+| `REDIS_KEY_PREFIX` | `gl` | Prefix for every Redis key and channel; must not contain whitespace or end with `:`. |
+| `INSTANCE_ID` | `<hostname>-<random>` | Identifies this replica in cluster events; must be unique per replica. |
+| `RESPONSE_BINDING_TTL` | `720h` | How long Responses ownership (`previous_response_id` continuation) stays in Redis; at least `1m`. |
 
 Environment proxies apply only when no proxy is specified on the credential, group, or global settings.
 
 </details>
 
-## Cluster deployment (experimental)
+## Multi-replica deployment (experimental)
 
-With `REDIS_ADDRS` set, several GPT-Load instances share one PostgreSQL database and one Redis, so you can scale out behind a load balancer. Without it, GPT-Load runs as a single instance and behaves as before.
+Several GPT-Load replicas can share one PostgreSQL database and one Redis, so you can scale out behind a load balancer. The default `docker-compose.yml` is the same topology with one replica.
 
 ### Requirements
 
-- PostgreSQL, verified on 18. Cluster mode does not support SQLite or MySQL.
+- PostgreSQL, verified on 18.
 - Redis 7.0 or later, verified on 7.4, either a single node or a Redis Cluster. For a Redis Cluster, `REDIS_ADDRS` must list every primary; a single address is treated as a single node and fails when data lives on another node.
 - Configure Redis with `maxmemory-policy noeviction`; AOF persistence is recommended.
 - Every instance must set the same `AUTH_KEY` and `ENCRYPTION_KEY` explicitly. `INSTANCE_ID` must be unique per instance and defaults to `<hostname>-<random>`.
 - Keep instance clocks synchronized with NTP.
-- Give each instance its own `DATA_DIR`; its checkpoint holds that instance's scheduling and statistics state.
 
 ### Start the Compose sample
 
@@ -266,14 +235,14 @@ docker compose -f docker-compose.cluster.yml up -d
 curl --fail http://127.0.0.1:3001/health
 ```
 
-nginx is published on `HOST` (default `127.0.0.1`) and `PORT` (default `3001`). To add a replica, copy a `gpt-load-N` service (change `INSTANCE_ID` and the data volume) and add a line to the `upstream` block in `deploy/cluster/nginx.conf`. The sample Redis has no replicas, so losing any node makes shared state unavailable; in production, use a managed Redis or give each primary a replica.
+nginx is published on `HOST` (default `127.0.0.1`) and `PORT` (default `3001`). To add a replica, copy a `gpt-load-N` service (change `INSTANCE_ID`) and add a line to the `upstream` block in `deploy/cluster/nginx.conf`. The sample Redis has no replicas, so losing any node makes shared state unavailable; in production, use a managed Redis or give each primary a replica.
 
 ### Load balancer requirements
 
 - Sticky sessions are not needed.
 - Native Responses WebSocket (`GET /v1/responses`) needs the `Upgrade` and `Connection` headers forwarded and `Host` passed through unchanged, because the gateway checks the browser's `Origin` against it.
 - Disable response buffering so SSE is forwarded chunk by chunk, and set a read timeout long enough for long generations and WebSocket sessions; the sample uses one hour.
-- Use `GET /health` as the readiness probe. In cluster mode it checks both the database and Redis and returns 503 with the reason when either is unavailable.
+- Use `GET /health` as the readiness probe. It checks both the database and Redis and returns 503 with the reason when either is unavailable.
 
 See `deploy/cluster/nginx.conf` for the complete configuration.
 
@@ -288,13 +257,13 @@ The Codex, Claude, and Antigravity OAuth clients call back to `localhost` on a f
 ### Shared behavior and known limitations
 
 - Instances share configuration changes, AccessKey RPM limits and cost limits, credential health (cooldown, blacklist, failure counts, model cooldown), subscription auth state, Responses ownership (`previous_response_id` continuation), and soft affinity, so the load balancer needs no sticky sessions. Configuration changes usually reach other instances within 1 s, and a 30 s poll catches any missed notification. Each subscription account is refreshed on only one instance at a time.
-- Retention cleanup, operation result compaction, validation probes, and automatic Models.dev syncs run on only one instance per period; manual syncs and syncs triggered by group or setting changes run on the instance that received the change. The Models.dev catalog is shared through Redis (about the size of the raw catalog, at most 32 MiB) instead of `DATA_DIR/models.dev.catalog.json`; on the first cluster start each instance fetches it once.
+- Retention cleanup, operation result compaction, validation probes, and automatic Models.dev syncs run on only one instance per period; manual syncs and syncs triggered by group or setting changes run on the instance that received the change. The Models.dev catalog is shared through Redis (about the size of the raw catalog, at most 32 MiB); on the first start each instance fetches it once.
 - Admin authentication lockout applies to every instance and is keyed by the TCP peer address. Behind a load balancer that is the load balancer's address, so all administrators share one counter; restrict where the admin UI can be reached at the network layer. While Redis is unavailable each instance counts failures on its own.
-- In cluster mode `affinity_capacity` has no effect and configuration changes do not clear soft affinity; a shorter `affinity_ttl` still applies to existing entries immediately.
-- Responses created before switching to cluster mode, or while a rolling upgrade still runs older instances, cannot be continued on instances that do not hold them.
+- `affinity_capacity` has no effect and configuration changes do not clear soft affinity; a shorter `affinity_ttl` still applies to existing entries immediately.
+- Responses created while a rolling upgrade still runs older instances cannot be continued on instances that do not hold them.
 - When Redis is unavailable, requests from AccessKeys with an RPM or cost limit fail with 503 `cluster_state_unavailable` instead of being forwarded. Continuation requests and `store` Responses also fail with 503 (the response is withheld rather than delivered with an ID no instance can continue). Soft affinity falls back to normal scheduling. Credential health changes apply locally first and are replaced by the Redis state once Redis is reachable again.
 - If Redis loses data, cost usage falls back to the last database checkpoint (about 1 s old).
-- Cost limits are checked against settled costs, and a request's cost is settled after its response is sent (one extra Redis round trip in cluster mode). A request sent right after the previous response, like requests already in flight, can therefore push usage slightly past the limit; single-instance mode behaves the same with a shorter window.
+- Cost limits are checked against settled costs, and a request's cost is settled after its response is sent (one extra Redis round trip). A request sent right after the previous response, like requests already in flight, can therefore push usage slightly past the limit.
 - Memory budget: each stored response keeps one Redis key for `RESPONSE_BINDING_TTL`, about 0.25 KB (about 0.5 KB with an automatic model selection), and each soft-affinity entry about 0.3 KB for `affinity_ttl`. Budget roughly daily `store` responses × TTL in days × 0.25–0.5 KB.
 - The credential health statistics page and the scheduling fairness ledger show this instance's view.
 - If the instance refreshing a subscription account crashes, the account is marked `outcome_unknown` within about 60 s (lease TTL plus one poll interval) and needs a manual recovery.
@@ -305,20 +274,19 @@ The Codex, Claude, and Antigravity OAuth clients call back to `localhost` on a f
 These commands run on the same sample and need Docker and Compose v2.24 or later:
 
 - `make cluster-e2e` runs the database and Redis contract tests against a real three-node Redis Cluster, then checks that RPM limits admit exactly the limit, cost limits never overshoot, configuration changes propagate within 1 s, and WebSocket connects through nginx. CI runs it on every pull request.
-- `make bench-cluster` adds a throughput and p99 latency comparison between the three-replica cluster and a single instance. Each gateway is limited to one CPU by default (`GATEWAY_CPUS`) and every container shares the host, so run it on a host with at least 8 CPUs.
+- `make bench-cluster` adds a throughput and p99 latency comparison between the three-replica cluster and a single gateway. Each gateway is limited to one CPU by default (`GATEWAY_CPUS`) and every container shares the host, so run it on a host with at least 8 CPUs.
 
 ## Production considerations
 
 - The service listens on `127.0.0.1` only by default. For remote access, expose it through a controlled network or a TLS reverse proxy, and configure ACLs and firewall rules.
 - Manage `AUTH_KEY` and `ENCRYPTION_KEY` carefully. Never commit real keys to a repository, log, screenshot, or public issue.
-- 2.0 runs as a **single application instance** by default; for multiple instances, see [Cluster deployment (experimental)](#cluster-deployment-experimental).
+- The default Compose file runs **one replica**; for several replicas, see [Multi-replica deployment (experimental)](#multi-replica-deployment-experimental).
 - Usage and cost are **estimates** derived from upstream responses. They support operational analysis and capacity planning, and do not equal a provider invoice or a financial reconciliation.
 - Subscription channels depend on upstream OAuth and compatibility protocols and may change as upstreams change. Only connect accounts you are entitled to use, and follow each provider's terms.
 - HTTP Responses continuation with `previous_response_id` automatically uses native Responses routes that declare upstream-managed storage: currently `openai`, `gpt_load`, `xai`, `newapi`, `cliproxyapi`, and `sub2api`. Ownership is isolated by AccessKey and pins the original credential when current routing permits, independently of soft affinity; actual state availability depends on the upstream. Stateless and converted responses are not registered as persistent state. Unknown IDs, including IDs created before upgrading or outside this gateway, are rejected. Group parameter overrides cannot change this field.
 - Native Responses WebSocket uses `GET /v1/responses` on the same port. Admission follows declared upstream capabilities for OpenAI, xAI, Codex, and compatible native CPA/sub2api and GPT-Load endpoints. Clients may include the boolean `stream:true/false`; both values still use the WS event stream. Each turn checks current permissions, rate and cost limits, and routing, with separate usage and cost records. One connection keeps one upstream identity; there is no HTTP fallback or conversation-history replay.
 - `responses_websocket_enabled` defaults to enabled. An explicit group setting overrides the global value; otherwise the group inherits it. Disabling immediately closes affected WS connections and interrupts generation without affecting HTTP/SSE. Re-enabling does not restore the old connection's temporary state.
 - Full `stream_id` multiplexing and forks are enabled for OpenAI and GPT-Load cascades that support them end to end. The other channels above run serially and reject named streams. Prewarming sends `generate:false` upstream. Codex continuation requires the original live connection: `store:true` and restoration by an old ID on a new connection are unsupported. Persistent continuation on other channels depends on storage capabilities and valid ownership. Existing [Codex SDK proxy, reading, and shutdown limits](third_party/cpaembedded/README.md#codex-websocket-session) still apply.
-- In single-instance mode, response bindings stay in memory for up to 30 days, with limits of 100,000 entries and 16 MiB of ID text; older entries are evicted when capacity is reached. A successful checkpoint during normal shutdown allows restoration from the same data directory. Crash recovery and continued upstream state availability are not guaranteed.
 - `conversation` and other existing resource IDs are outside this ownership routing scope and still depend on a single credential or upstream resource sharing across credentials.
 
 ## Moving from 1.x
@@ -326,7 +294,7 @@ These commands run on the same sample and need Docker and Compose v2.24 or later
 > [!WARNING]
 > GPT-Load 2.0 is a complete rewrite. It **cannot** open, import, or migrate 1.x data in place.
 
-Deploy 2.0 with its own database, `DATA_DIR`, port, and Docker volume. Cut traffic over only after verification, and keep the original 1.x deployment until the rollback window closes. Documentation for the 1.4.x maintenance line is at the [official docs](https://www.gpt-load.com/docs).
+Deploy 2.0 with its own database, port, and Docker volumes. Cut traffic over only after verification, and keep the original 1.x deployment until the rollback window closes. Documentation for the 1.4.x maintenance line is at the [official docs](https://www.gpt-load.com/docs).
 
 ## Open-source dependencies
 
