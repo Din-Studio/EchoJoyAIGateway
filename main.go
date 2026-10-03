@@ -35,8 +35,6 @@ func dispatchCommand(args []string, stdout, stderr io.Writer) int {
 	case "migrate-keys":
 		fmt.Fprintln(stderr, "migrate-keys will be available in a later release")
 		return 1
-	case "service":
-		return dispatchServiceCommand(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "Unknown command: %s\n", args[0])
 		fmt.Fprintln(stderr, "Run 'gpt-load help' for usage.")
@@ -50,12 +48,6 @@ func printHelp(output io.Writer) {
 	fmt.Fprintln(output, "Usage:")
 	fmt.Fprintln(output, "  gpt-load                    Start the gateway")
 	fmt.Fprintln(output, "  gpt-load help               Display this help message")
-	fmt.Fprintln(output)
-	fmt.Fprintln(output, "Windows Service Commands:")
-	fmt.Fprintln(output, "  gpt-load service start      Start the Windows service")
-	fmt.Fprintln(output, "  gpt-load service stop       Stop the Windows service")
-	fmt.Fprintln(output, "  gpt-load service restart    Restart the Windows service")
-	fmt.Fprintln(output, "  gpt-load service status     Display the Windows service status")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Deferred Commands:")
 	fmt.Fprintln(output, "  migrate-keys      Key rotation support will be available in a later release")

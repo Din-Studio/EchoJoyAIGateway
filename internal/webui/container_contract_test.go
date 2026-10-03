@@ -9,6 +9,11 @@ import (
 	"testing"
 )
 
+// composeRequiredDotEnv 提供默认 compose 用 ${VAR:?} 声明的必填值，否则 compose config 直接失败。
+const composeRequiredDotEnv = "POSTGRES_PASSWORD=compose-test-postgres\n" +
+	"AUTH_KEY=compose-test-auth\n" +
+	"ENCRYPTION_KEY=compose-test-encryption\n"
+
 func TestComposeShellPortOverridesDotEnvEverywhere(t *testing.T) {
 	t.Setenv("HOST", "")
 	t.Setenv("BIND_ADDRESS", "")
@@ -22,7 +27,7 @@ func TestComposeShellPortOverridesDotEnvEverywhere(t *testing.T) {
 	); err != nil {
 		t.Fatalf("write temporary Compose file: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(projectDir, ".env"), []byte("PORT=3001\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(projectDir, ".env"), []byte(composeRequiredDotEnv+"PORT=3001\n"), 0o600); err != nil {
 		t.Fatalf("write temporary .env: %v", err)
 	}
 
@@ -137,7 +142,7 @@ func TestComposeHostBindingsInheritHostAndAllowIndependentOverrides(t *testing.T
 			}
 			if err := os.WriteFile(
 				filepath.Join(projectDir, ".env"),
-				[]byte(strings.Join(environmentLines, "\n")+"\n"),
+				[]byte(composeRequiredDotEnv+strings.Join(environmentLines, "\n")+"\n"),
 				0o600,
 			); err != nil {
 				t.Fatalf("write temporary .env: %v", err)
@@ -345,7 +350,6 @@ func TestDockerfileDistributesDeclaredThirdPartyLicenseTexts(t *testing.T) {
 	content := readRepositoryFile(t, "Dockerfile")
 	for _, required := range []string{
 		"COPY LICENSES/Apache-2.0.txt /app/licenses/Apache-2.0.txt",
-		"COPY LICENSES/Inno-Setup.txt /app/licenses/Inno-Setup.txt",
 		"COPY LICENSES/MIT.txt /app/licenses/MIT.txt",
 		"COPY LICENSES/MPL-2.0.txt /app/licenses/MPL-2.0.txt",
 	} {
@@ -369,7 +373,7 @@ func TestComposeBindsLoopbackAndConfiguresContainerAllInterfaces(t *testing.T) {
 	); err != nil {
 		t.Fatalf("write temporary Compose file: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(projectDir, ".env"), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(projectDir, ".env"), []byte(composeRequiredDotEnv), 0o600); err != nil {
 		t.Fatalf("write temporary .env: %v", err)
 	}
 
@@ -417,7 +421,7 @@ func TestComposeBindsLoopbackAndConfiguresContainerAllInterfaces(t *testing.T) {
 	}
 }
 
-func TestComposeProjectsHaveIndependentNamesApplicationPortsAndVolumes(t *testing.T) {
+func TestComposeProjectsHaveIndependentNamesApplicationPortsAndDatabaseVolumes(t *testing.T) {
 	t.Setenv("HOST", "")
 	t.Setenv("BIND_ADDRESS", "")
 	t.Setenv("OAUTH_CALLBACK_BIND_ADDRESS", "")
@@ -431,7 +435,7 @@ func TestComposeProjectsHaveIndependentNamesApplicationPortsAndVolumes(t *testin
 	); err != nil {
 		t.Fatalf("write temporary Compose file: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(projectDir, ".env"), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(projectDir, ".env"), []byte(composeRequiredDotEnv), 0o600); err != nil {
 		t.Fatalf("write temporary .env: %v", err)
 	}
 
@@ -503,17 +507,17 @@ func TestComposeProjectsHaveIndependentNamesApplicationPortsAndVolumes(t *testin
 			service.Ports[3].HostIP != "127.0.0.1" {
 			t.Fatalf("resolved project %s ports = %#v", item.projectName, service.Ports)
 		}
-		wantVolume := item.projectName + "_gpt-load-data"
-		if got := item.config.Volumes["gpt-load-data"].Name; got != wantVolume {
+		wantVolume := item.projectName + "_postgres-data"
+		if got := item.config.Volumes["postgres-data"].Name; got != wantVolume {
 			t.Fatalf("resolved project %s volume = %q, want %q", item.projectName, got, wantVolume)
 		}
 	}
-	if first.Volumes["gpt-load-data"].Name == second.Volumes["gpt-load-data"].Name {
-		t.Fatal("different Compose projects resolve the same named volume")
+	if first.Volumes["postgres-data"].Name == second.Volumes["postgres-data"].Name {
+		t.Fatal("different Compose projects resolve the same named database volume")
 	}
 }
 
-func TestComposeResolvesNamedVolumeContainerPathsAndMajorChannelImage(t *testing.T) {
+func TestComposeRunsStatelessGatewayOnPostgresAndRedisWithMajorChannelImage(t *testing.T) {
 	t.Setenv("DATA_DIR", "/host/path/must-not-reach-container")
 	t.Setenv("DATABASE_DSN", "/host/database/must-not-reach-container.db")
 
@@ -525,7 +529,7 @@ func TestComposeResolvesNamedVolumeContainerPathsAndMajorChannelImage(t *testing
 	); err != nil {
 		t.Fatalf("write temporary Compose file: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(projectDir, ".env"), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(projectDir, ".env"), []byte(composeRequiredDotEnv), 0o600); err != nil {
 		t.Fatalf("write temporary .env: %v", err)
 	}
 
@@ -538,6 +542,11 @@ func TestComposeResolvesNamedVolumeContainerPathsAndMajorChannelImage(t *testing
 		t.Fatalf("docker compose config: %v\n%s", err, output)
 	}
 
+	type composeVolume struct {
+		Type   string `json:"type"`
+		Source string `json:"source"`
+		Target string `json:"target"`
+	}
 	var resolved struct {
 		Services map[string]struct {
 			Image           string            `json:"image"`
@@ -545,11 +554,10 @@ func TestComposeResolvesNamedVolumeContainerPathsAndMajorChannelImage(t *testing
 			Privileged      bool              `json:"privileged"`
 			StopGracePeriod string            `json:"stop_grace_period"`
 			Healthcheck     map[string]any    `json:"healthcheck"`
-			Volumes         []struct {
-				Type   string `json:"type"`
-				Source string `json:"source"`
-				Target string `json:"target"`
-			} `json:"volumes"`
+			DependsOn       map[string]struct {
+				Condition string `json:"condition"`
+			} `json:"depends_on"`
+			Volumes []composeVolume `json:"volumes"`
 		} `json:"services"`
 		Volumes map[string]any `json:"volumes"`
 	}
@@ -564,11 +572,24 @@ func TestComposeResolvesNamedVolumeContainerPathsAndMajorChannelImage(t *testing
 	if service.Image != "ghcr.io/tbphp/gpt-load:2" {
 		t.Fatalf("resolved image = %q, want ghcr.io/tbphp/gpt-load:2", service.Image)
 	}
-	if service.Environment["DATA_DIR"] != "/app/data" {
-		t.Fatalf("resolved DATA_DIR = %q, want /app/data", service.Environment["DATA_DIR"])
+	if dataDir, ok := service.Environment["DATA_DIR"]; ok {
+		t.Fatalf("resolved DATA_DIR = %q, want the stateless gateway to leave it unset", dataDir)
 	}
-	if databaseDSN, ok := service.Environment["DATABASE_DSN"]; ok {
-		t.Fatalf("resolved DATABASE_DSN = %q, want managed default to remain unset", databaseDSN)
+	wantDSN := "postgres://gpt_load:compose-test-postgres@postgres:5432/gpt_load?sslmode=disable"
+	if got := service.Environment["DATABASE_DSN"]; got != wantDSN {
+		t.Fatalf("resolved DATABASE_DSN = %q, want %q", got, wantDSN)
+	}
+	if got := service.Environment["REDIS_ADDRS"]; got != "redis:6379" {
+		t.Fatalf("resolved REDIS_ADDRS = %q, want redis:6379", got)
+	}
+	if service.Environment["AUTH_KEY"] != "compose-test-auth" ||
+		service.Environment["ENCRYPTION_KEY"] != "compose-test-encryption" {
+		t.Fatalf("resolved secrets do not come from .env: %#v", service.Environment)
+	}
+	for _, dependency := range []string{"postgres", "redis"} {
+		if got := service.DependsOn[dependency].Condition; got != "service_healthy" {
+			t.Fatalf("gpt-load depends_on %s condition = %q, want service_healthy", dependency, got)
+		}
 	}
 	if service.Privileged {
 		t.Fatal("resolved Compose enables privileged mode")
@@ -579,20 +600,71 @@ func TestComposeResolvesNamedVolumeContainerPathsAndMajorChannelImage(t *testing
 	if len(service.Healthcheck) == 0 {
 		t.Fatal("resolved Compose lacks a healthcheck")
 	}
-	if len(service.Volumes) != 1 {
-		t.Fatalf("resolved volume count = %d, want 1", len(service.Volumes))
+	if len(service.Volumes) != 0 {
+		t.Fatalf("resolved gateway volumes = %#v, want a stateless gateway container", service.Volumes)
 	}
-	volume := service.Volumes[0]
-	if volume.Type != "volume" || volume.Source != "gpt-load-data" || volume.Target != "/app/data" {
-		t.Fatalf("resolved volume = %#v, want named gpt-load-data mounted at /app/data", volume)
-	}
-	if _, ok := resolved.Volumes["gpt-load-data"]; !ok {
-		t.Fatal("resolved Compose lacks top-level gpt-load-data volume")
-	}
-	for _, volume := range service.Volumes {
-		if strings.Contains(volume.Source, "docker.sock") ||
-			strings.Contains(volume.Target, "docker.sock") {
-			t.Fatal("resolved Compose mounts the Docker socket")
+	for name, want := range map[string]composeVolume{
+		"postgres": {Type: "volume", Source: "postgres-data", Target: "/var/lib/postgresql"},
+		"redis":    {Type: "volume", Source: "redis-data", Target: "/data"},
+	} {
+		dependency := resolved.Services[name]
+		if len(dependency.Volumes) != 1 || dependency.Volumes[0] != want {
+			t.Fatalf("resolved %s volumes = %#v, want %#v", name, dependency.Volumes, want)
 		}
+		if len(dependency.Healthcheck) == 0 {
+			t.Fatalf("resolved %s lacks a healthcheck", name)
+		}
+		if _, ok := resolved.Volumes[want.Source]; !ok {
+			t.Fatalf("resolved Compose lacks top-level %s volume", want.Source)
+		}
+	}
+	for _, item := range resolved.Services {
+		for _, volume := range item.Volumes {
+			if strings.Contains(volume.Source, "docker.sock") ||
+				strings.Contains(volume.Target, "docker.sock") {
+				t.Fatal("resolved Compose mounts the Docker socket")
+			}
+		}
+	}
+}
+
+func TestComposeRejectsMissingRequiredSecrets(t *testing.T) {
+	for _, missing := range []string{"POSTGRES_PASSWORD", "AUTH_KEY", "ENCRYPTION_KEY"} {
+		t.Run(missing, func(t *testing.T) {
+			projectDir := t.TempDir()
+			if err := os.WriteFile(
+				filepath.Join(projectDir, "docker-compose.yml"),
+				[]byte(readRepositoryFile(t, "docker-compose.yml")),
+				0o600,
+			); err != nil {
+				t.Fatalf("write temporary Compose file: %v", err)
+			}
+			var dotEnv strings.Builder
+			for _, line := range strings.Split(strings.TrimSpace(composeRequiredDotEnv), "\n") {
+				if !strings.HasPrefix(line, missing+"=") {
+					dotEnv.WriteString(line + "\n")
+				}
+			}
+			if err := os.WriteFile(filepath.Join(projectDir, ".env"), []byte(dotEnv.String()), 0o600); err != nil {
+				t.Fatalf("write temporary .env: %v", err)
+			}
+
+			command := exec.Command("docker", "compose", "config", "--quiet")
+			command.Dir = projectDir
+			commandEnvironment := make([]string, 0, len(os.Environ()))
+			for _, entry := range os.Environ() {
+				if key, _, _ := strings.Cut(entry, "="); key != missing {
+					commandEnvironment = append(commandEnvironment, entry)
+				}
+			}
+			command.Env = commandEnvironment
+			output, err := command.CombinedOutput()
+			if err == nil {
+				t.Fatalf("docker compose config succeeded without %s", missing)
+			}
+			if !strings.Contains(string(output), missing) {
+				t.Fatalf("docker compose config error does not name %s:\n%s", missing, output)
+			}
+		})
 	}
 }

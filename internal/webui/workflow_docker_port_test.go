@@ -49,10 +49,32 @@ func TestDockerSmokeCancellationCleansOnlyOwnedResources(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, owned := range []string{"rm -f gpt-load-release-smoke-review-1-2", "volume rm gpt-load-release-smoke-review-1-2", "network rm gpt-load-release-network-review-1-2", "image rm gpt-load-release-smoke:review-1-2"} {
+			removedContainers := map[string]bool{}
+			for _, line := range strings.Split(string(cleanup), "\n") {
+				if fields := strings.Fields(line); len(fields) > 3 && fields[0] == "rm" && fields[1] == "-f" && fields[2] == "-v" {
+					for _, name := range fields[3:] {
+						removedContainers[name] = true
+					}
+				}
+			}
+			for _, owned := range []string{
+				"gpt-load-release-smoke-review-1-2",
+				"gpt-load-release-probe-review-1-2",
+				"gpt-load-release-fake-review-1-2",
+				"gpt-load-release-postgres-review-1-2",
+				"gpt-load-release-redis-review-1-2",
+			} {
+				if !removedContainers[owned] {
+					t.Fatalf("cancellation did not remove container %s: %s", owned, cleanup)
+				}
+			}
+			for _, owned := range []string{"network rm gpt-load-release-network-review-1-2", "image rm gpt-load-release-smoke:review-1-2"} {
 				if !strings.Contains(string(cleanup), owned) {
 					t.Fatalf("cancellation did not clean %s: %s", owned, cleanup)
 				}
+			}
+			if strings.Contains(string(cleanup), "volume") {
+				t.Fatalf("cancellation still manages a gateway volume: %s", cleanup)
 			}
 		})
 	}
@@ -103,7 +125,6 @@ func TestDockerSmokeDiscoversLoopbackPortOnEveryContainerStart(t *testing.T) {
 			script := `set -euo pipefail
 container=container
 network=network
-volume=volume
 image=image
 starts=0
 docker() {

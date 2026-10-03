@@ -19,7 +19,7 @@ func TestReleaseWorkflowParallelizesIndependentBuildStages(t *testing.T) {
 	}
 
 	binaryJob := workflowJobBlock(t, content, "build-binaries")
-	for _, required := range []string{"verify-and-build-web", "max-parallel: 5"} {
+	for _, required := range []string{"verify-and-build-web", "max-parallel: 2"} {
 		if !strings.Contains(binaryJob, required) {
 			t.Fatalf("binary build job does not contain %q:\n%s", required, binaryJob)
 		}
@@ -37,10 +37,13 @@ func TestReleaseWorkflowParallelizesIndependentBuildStages(t *testing.T) {
 		}
 	}
 	checksumJob := workflowJobBlock(t, content, "package-checksums")
-	for _, required := range []string{"build-binaries", "package-metadata", "name: release-metadata"} {
+	for _, required := range []string{"needs: package-metadata", "name: release-metadata"} {
 		if !strings.Contains(checksumJob, required) {
 			t.Fatalf("checksum job does not contain %q:\n%s", required, checksumJob)
 		}
+	}
+	if strings.Contains(checksumJob, "build-binaries") || strings.Contains(checksumJob, "binary-gpt-load-") {
+		t.Fatalf("checksum job still packages image-only binaries as release assets:\n%s", checksumJob)
 	}
 
 	preflight := workflowJobBlock(t, content, "publication-preflight")

@@ -3,7 +3,7 @@
 #   cp .env.example .env    # 设置 AUTH_KEY、ENCRYPTION_KEY、POSTGRES_PASSWORD
 #   docker compose -f docker-compose.cluster.yml up -d
 #
-# 扩容：复制一个 gpt-load-N 服务（改 INSTANCE_ID 与数据卷），并在
+# 扩容：复制一个 gpt-load-N 服务并修改 INSTANCE_ID，再在
 # deploy/cluster/nginx.conf 的 upstream 中加一行。样例的 Redis 没有副本，
 # 生产环境请使用托管 Redis 或为每个主节点配置副本。
 
@@ -15,7 +15,6 @@ x-gpt-load: &gpt-load
   environment: &gpt-load-env
     HOST: 0.0.0.0
     PORT: "3001"
-    DATA_DIR: /app/data
     DATABASE_DSN: postgres://gpt_load:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/gpt_load?sslmode=disable
     REDIS_ADDRS: redis-1:6379,redis-2:6379,redis-3:6379
     AUTH_KEY: ${AUTH_KEY:?set AUTH_KEY in .env; every instance must share it}
@@ -72,24 +71,18 @@ services:
     environment:
       <<: *gpt-load-env
       INSTANCE_ID: gpt-load-1
-    volumes:
-      - gpt-load-1-data:/app/data
 
   gpt-load-2:
     <<: *gpt-load
     environment:
       <<: *gpt-load-env
       INSTANCE_ID: gpt-load-2
-    volumes:
-      - gpt-load-2-data:/app/data
 
   gpt-load-3:
     <<: *gpt-load
     environment:
       <<: *gpt-load-env
       INSTANCE_ID: gpt-load-3
-    volumes:
-      - gpt-load-3-data:/app/data
 
   redis-1:
     <<: *redis
@@ -160,9 +153,6 @@ services:
       retries: 20
 
 volumes:
-  gpt-load-1-data:
-  gpt-load-2-data:
-  gpt-load-3-data:
   redis-1-data:
   redis-2-data:
   redis-3-data:
