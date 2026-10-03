@@ -16,6 +16,7 @@ import (
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/state"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 func TestGetGroupModelsReturnsClientNamesAndPricingStatus(t *testing.T) {
@@ -498,7 +499,7 @@ func TestUpdateGroupModelsFailuresDoNotPublish(t *testing.T) {
 	})
 
 	t.Run("commit failure", func(t *testing.T) {
-		fixture, dsn := newFileServiceFixture(t)
+		fixture := newServiceFixture(t)
 		created, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 			ChannelID: channel.OpenAICompatible,
 			Params:    json.RawMessage(`{"base_url":"https://commit-failure-models.example.com/v1"}`),
@@ -514,7 +515,7 @@ func TestUpdateGroupModelsFailuresDoNotPublish(t *testing.T) {
 		beforeRevision := fixture.manager.Current().Revision
 		beforeRegistry := fixture.registry.Snapshot()
 		beforeModels := loadCreatedGroupModels(t, fixture, created.GroupID)
-		releaseReader := holdRollbackJournalReadLock(t, fixture.db, dsn)
+		releaseReader := pgtest.FailOnCommit(t, fixture.db, "groups", "forced commit failure")
 
 		_, err = fixture.service.UpdateGroupModels(t.Context(), created.GroupID, GroupModelsUpdateRequest{
 			Models: optionalGroupModels{

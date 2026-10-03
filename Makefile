@@ -25,12 +25,20 @@ run: _web-build ## Build the Web UI and run the application
 build: _web-build ## Build the Web UI and application binary
 	$(GO) build -o $(APP) .
 
+GPT_LOAD_DATABASE_TEST_DSN ?= postgres://postgres:postgres@127.0.0.1:55432/gpt_load?sslmode=disable
+GPT_LOAD_REDIS_TEST_ADDR ?= 127.0.0.1:56379
+export GPT_LOAD_DATABASE_TEST_DSN GPT_LOAD_REDIS_TEST_ADDR
+
+.PHONY: test-deps
+test-deps: ## Start the PostgreSQL and Redis the Go tests use (needs Docker)
+	docker compose -f tools/testdeps/compose.yml up -d --wait
+
 .PHONY: test
-test: ## Run Go unit tests
+test: test-deps ## Run Go unit tests
 	$(GO) test -count=1 . ./internal/... ./tools/...
 
 .PHONY: check
-check: _web-deps ## Run source checks and build
+check: _web-deps test-deps ## Run source checks and build
 	@go_root="$$($(GO) env GOROOT)"; formatted_files="$$("$${go_root}/bin/gofmt" -l .)"; test -z "$${formatted_files}"
 	$(GO) mod tidy -diff
 	$(GO) vet ./...

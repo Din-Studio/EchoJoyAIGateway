@@ -3,8 +3,6 @@ package requestlog
 import (
 	"context"
 	"fmt"
-	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +14,7 @@ import (
 	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/telemetry"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 // TestExternalDatabaseRequestLogLifecycle covers the request-log write,
@@ -23,10 +22,7 @@ import (
 // PostgreSQL servers. Unit tests cover each branch; this keeps driver SQL and
 // transaction differences inside the release contract.
 func TestExternalDatabaseRequestLogLifecycle(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := pgtest.DSN(t)
 
 	db, err := storage.OpenWithSource(dsn, config.DatabaseSourceExternal)
 	if err != nil {

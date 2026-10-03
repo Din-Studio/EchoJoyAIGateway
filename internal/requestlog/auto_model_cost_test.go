@@ -28,7 +28,7 @@ func TestAutoDecisionLogKeepsAnswerCostAndStripsOverridePayload(t *testing.T) {
 }
 
 func TestDecisionFeeIsCountedGloballyOnceAndExcludedFromGroup(t *testing.T) {
-	db, _ := openRequestLogFileDB(t)
+	db := openRequestLogQueryDB(t)
 	event := testEvent("00000000-0000-4000-8000-000000000593")
 	event.AutoDecision = &automodel.Decision{Selection: automodel.Selection{EntryID: "auto", EntryName: "auto", PresetID: "medium", TargetModel: "upstream-model"}, Source: "jev", Status: "selected", Provider: "openrouter", RequestedModel: "~typesafe/jev-latest", PromptVersion: automodel.PromptVersion, Called: true, CostState: "priced", PricingCompleteness: "complete", EstimatedCostNanoUSD: 84000}
 	row := mustMapEvent(t, redact.New(), event)

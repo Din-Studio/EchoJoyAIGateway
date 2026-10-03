@@ -10,12 +10,13 @@ import (
 
 	"gpt-load/internal/httplifecycle"
 	"gpt-load/internal/storage"
+	"gpt-load/internal/testutil/pgtest"
 
 	"github.com/gin-gonic/gin"
 )
 
 func TestAppStopWaitsForTrackedControlHandler(t *testing.T) {
-	db, err := storage.Open(":memory:")
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}
@@ -81,7 +82,7 @@ func TestAppStopWaitsForTrackedControlHandler(t *testing.T) {
 }
 
 func TestAppStopCancelsTrackedControlHandlerAndStartsExecutionShutdown(t *testing.T) {
-	db, err := storage.Open(":memory:")
+	db, err := storage.Open(pgtest.NewDatabase(t))
 	if err != nil {
 		t.Fatalf("storage.Open() error = %v", err)
 	}

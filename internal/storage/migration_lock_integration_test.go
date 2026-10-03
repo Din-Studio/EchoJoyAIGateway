@@ -3,22 +3,18 @@ package storage
 import (
 	"context"
 	"errors"
-	"os"
-	"strings"
 	"testing"
 	"time"
 
 	"gpt-load/internal/platform/config"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 // TestExternalPostgresMigrationLockTimesOut is opt-in with the external
 // database matrix. It holds the process-level advisory lock on one pinned
 // connection and verifies a second connection observes its context deadline.
 func TestExternalPostgresMigrationLockTimesOut(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := pgtest.DSN(t)
 	db, err := OpenWithSource(dsn, config.DatabaseSourceExternal)
 	if err != nil {
 		t.Fatalf("OpenWithSource() error = %v", err)

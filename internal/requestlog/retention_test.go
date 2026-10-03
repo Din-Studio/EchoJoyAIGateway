@@ -16,6 +16,7 @@ import (
 	"gpt-load/internal/platform/redact"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/telemetry"
+	"gpt-load/internal/testutil/pgtest"
 	"gpt-load/internal/usage"
 )
 
@@ -202,13 +203,7 @@ func TestRetentionSweepKeepsUsageStatsWhenRequestLogDeleteFails(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("create expired UsageStat: %v", err)
 	}
-	if err := db.Exec(`CREATE TRIGGER fail_request_log_retention_delete
-		BEFORE DELETE ON request_logs
-		BEGIN
-			SELECT RAISE(FAIL, 'forced request log retention delete failure');
-		END`).Error; err != nil {
-		t.Fatalf("create request log delete trigger: %v", err)
-	}
+	pgtest.FailOn(t, db, "request_logs", "DELETE", "", "forced request log retention delete failure")
 
 	service.Sweep(context.Background(), now)
 

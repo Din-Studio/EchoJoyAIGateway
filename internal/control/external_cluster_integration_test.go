@@ -22,7 +22,7 @@ type clusterContractInstance struct {
 
 func newClusterContractInstance(t *testing.T, dsn, redisAddr, keyPrefix, instanceID string) clusterContractInstance {
 	t.Helper()
-	fixture := newServiceFixtureWithDSN(t, dsn)
+	fixture := newExternalServiceFixture(t, dsn)
 	client, err := cluster.NewClient(&config.Config{Cluster: config.ClusterConfig{
 		RedisAddrs: redisTestAddrs(redisAddr), RedisKeyPrefix: keyPrefix, InstanceID: instanceID,
 	}})
@@ -68,21 +68,7 @@ func awaitGroupVisible(t *testing.T, instance clusterContractInstance, groupID u
 // state survives the reload, and a lost Redis event is recovered by polling.
 func TestExternalClusterConfigPropagation(t *testing.T) {
 	// 不标记 t.Parallel()：依赖 GPT_LOAD_DATABASE_TEST_DSN 的共享外部数据库。
-	dsn := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
-	redisAddr := strings.TrimSpace(os.Getenv("GPT_LOAD_REDIS_TEST_ADDR"))
-	if redisAddr == "" {
-		t.Skip("GPT_LOAD_REDIS_TEST_ADDR is not set")
-	}
-	database, err := config.ParseDatabaseDSN(dsn)
-	if err != nil {
-		t.Fatalf("ParseDatabaseDSN() error = %v", err)
-	}
-	if database.Driver != config.DatabaseDriverPostgreSQL {
-		t.Skipf("cluster mode requires PostgreSQL, got %s", database.Driver)
-	}
+	dsn, redisAddr := externalClusterTarget(t)
 
 	keyPrefix := fmt.Sprintf("gltest-%d-%d", os.Getpid(), time.Now().UnixNano())
 	instanceA := newClusterContractInstance(t, dsn, redisAddr, keyPrefix, "node-a")

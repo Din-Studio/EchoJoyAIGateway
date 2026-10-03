@@ -191,12 +191,7 @@ func TestBranchAndReleaseWorkflowsRunRaceInParallelGates(t *testing.T) {
 	if strings.Contains(testJob, "go test -race") {
 		t.Fatal("branch static job still runs race tests serially")
 	}
-	assertWorkflowGateStep(
-		t,
-		workflowJobBlock(t, content, "race-tests"),
-		"Run race-enabled tests",
-		"go test -race -vet=off -count=1 -timeout=15m . ./internal/... ./tools/...",
-	)
+	assertRaceTestsStep(t, workflowJobBlock(t, content, "race-tests"))
 	branchCPA := workflowStepBlock(
 		t,
 		workflowJobBlock(t, content, "race-cpa"),
@@ -220,12 +215,7 @@ func TestBranchAndReleaseWorkflowsRunRaceInParallelGates(t *testing.T) {
 	if strings.Contains(releaseStaticJob, "go test -race") {
 		t.Fatal("release static job still runs race tests serially")
 	}
-	assertWorkflowGateStep(
-		t,
-		workflowJobBlock(t, releaseContent, "race-tests"),
-		"Run race-enabled tests",
-		"go test -race -vet=off -count=1 -timeout=15m . ./internal/... ./tools/...",
-	)
+	assertRaceTestsStep(t, workflowJobBlock(t, releaseContent, "race-tests"))
 	releaseCPA := workflowStepBlock(
 		t,
 		workflowJobBlock(t, releaseContent, "race-cpa"),
@@ -250,8 +240,15 @@ func TestWindowsCIExecutesManagedStorageACLTests(t *testing.T) {
 	assertWorkflowGateStep(
 		t,
 		job,
-		"Test Windows secure file and storage ACLs",
-		"go test -v -count=1 ./internal/platform/securefile ./internal/platform/encryption ./internal/storage",
+		"Test Windows secure file ACLs",
+		"go test -v -count=1 ./internal/platform/securefile ./internal/platform/encryption",
+	)
+	// Other storage tests need PostgreSQL, which this runner does not provide.
+	assertWorkflowGateStep(
+		t,
+		job,
+		"Test Windows storage ACLs",
+		"go test -v -count=1 -run Windows ./internal/storage",
 	)
 	assertWorkflowGateStep(
 		t,
@@ -2776,6 +2773,29 @@ func workflowStepBlock(t *testing.T, job, name string) string {
 		}
 	}
 	return strings.Join(lines[start:end], "\n")
+}
+
+// assertRaceTestsStep pins the race gate: the PostgreSQL and Redis service
+// addresses are the only additions to the fixed race command.
+func assertRaceTestsStep(t *testing.T, job string) {
+	t.Helper()
+	const name = "Run race-enabled tests"
+	step := strings.TrimSuffix(workflowStepBlock(t, job, name), "\n")
+	want := strings.Join([]string{
+		"      - name: " + name,
+		"        env:",
+		"          GPT_LOAD_DATABASE_TEST_DSN: postgres://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/gpt_load?sslmode=disable",
+		"          GPT_LOAD_REDIS_TEST_ADDR: 127.0.0.1:${{ job.services.redis.ports['6379'] }}",
+		"        run: go test -race -vet=off -count=1 -timeout=15m . ./internal/... ./tools/...",
+	}, "\n")
+	if step != want {
+		t.Fatalf("workflow gate %s block does not match strict allowlist:\ngot:\n%s\nwant:\n%s", name, step, want)
+	}
+	for _, service := range []string{"      postgres:\n        image: postgres:18", "      redis:\n        image: redis:7"} {
+		if !strings.Contains(job, service) {
+			t.Fatalf("race-tests does not mount service %q", service)
+		}
+	}
 }
 
 func assertWorkflowGateStep(t *testing.T, job, name, wantRun string) {

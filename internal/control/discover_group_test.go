@@ -27,7 +27,7 @@ import (
 
 func TestDiscoveryUsesSingleReadSnapshot(t *testing.T) {
 	t.Parallel()
-	fixture, dsn := newFileServiceFixture(t)
+	fixture, dsn := newServiceFixtureWithSecondDSN(t)
 	group := seedPersistedDiscoveryGroup(t, fixture, true, models.JSON(`{}`))
 	group.Name = "discovery-snapshot-old"
 	group.Params = models.JSON(`{"base_url":"https://discovery-old.example/v1"}`)
@@ -141,7 +141,7 @@ func TestDiscoveryUsesSingleReadSnapshot(t *testing.T) {
 			t.Fatalf("concurrent version update error = %v", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("discovery read blocked WAL writer")
+		t.Fatal("discovery read blocked writer")
 	}
 	close(releaseReader)
 
@@ -176,7 +176,7 @@ func TestDiscoveryUsesSingleReadSnapshot(t *testing.T) {
 
 func TestDiscoveryReleasesReadSnapshotBeforeDecrypt(t *testing.T) {
 	t.Parallel()
-	fixture, _ := newFileServiceFixture(t)
+	fixture := newServiceFixture(t)
 	group := seedPersistedDiscoveryGroup(t, fixture, true, models.JSON(`{}`))
 	seedPersistedDiscoveryCredential(
 		t,

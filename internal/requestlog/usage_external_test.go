@@ -2,8 +2,6 @@ package requestlog
 
 import (
 	"fmt"
-	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -12,14 +10,12 @@ import (
 	"gpt-load/internal/platform/config"
 	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 // 与现有数据库合同共用入口，在真实驱动上验证混合查询和多天分桶 SQL。
 func TestExternalDatabaseUsageExactWindow(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := pgtest.DSN(t)
 	db, err := storage.OpenWithSource(dsn, config.DatabaseSourceExternal)
 	if err != nil {
 		t.Fatal(err)

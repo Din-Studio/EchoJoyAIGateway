@@ -2,32 +2,19 @@ package storage
 
 import (
 	"fmt"
-	"os"
 	"testing"
 
 	"gorm.io/gorm"
 )
 
-func TestValidationProtocolMigrationContract(t *testing.T) {
-	t.Parallel()
-	testValidationProtocolMigration(t, openInternalMigrationTestDatabase)
-}
-
 func TestExternalValidationProtocolMigrationContract(t *testing.T) {
-	dsn := os.Getenv("GPT_LOAD_DATABASE_TEST_DSN")
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
-	testValidationProtocolMigration(t, func(t *testing.T) *gorm.DB { return openExternalIncrementalMigrationDatabase(t, dsn) })
+	testValidationProtocolMigration(t, externalMigrationContract(t))
 }
 
 func testValidationProtocolMigration(t *testing.T, open func(*testing.T) *gorm.DB) {
 	for _, scenario := range []string{"fresh", "upgrade", "interrupted"} {
 		t.Run(scenario, func(t *testing.T) {
 			db := open(t)
-			if db.Dialector.Name() == "sqlite" {
-				t.Parallel()
-			}
 			if scenario != "fresh" {
 				if err := applyMigrationRegistry(db, migrations[:12]); err != nil {
 					t.Fatal(err)

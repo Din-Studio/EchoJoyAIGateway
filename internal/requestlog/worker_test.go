@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	gormsqlite "github.com/glebarez/sqlite"
 	gormmysql "gorm.io/driver/mysql"
 	gormpostgres "gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -26,6 +25,7 @@ import (
 	"gpt-load/internal/pricing"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/telemetry"
+	"gpt-load/internal/testutil/pgtest"
 	"gpt-load/internal/usage"
 )
 
@@ -42,15 +42,6 @@ func TestUsageStatUpsertUsesDialectSpecificGORMConflictSQL(t *testing.T) {
 		mustContain    []string
 		mustNotContain []string
 	}{
-		{
-			name:      "sqlite",
-			dialector: gormsqlite.Open(":memory:"),
-			mustContain: []string{
-				"ON CONFLICT",
-				"`request_count`=CASE WHEN `usage_stats`.`request_count` > 9223372036854775806 THEN -1 ELSE `usage_stats`.`request_count` + 1 END",
-			},
-			mustNotContain: []string{"ON DUPLICATE KEY UPDATE", "excluded"},
-		},
 		{
 			name: "mysql",
 			dialector: gormmysql.New(gormmysql.Config{
@@ -940,15 +931,7 @@ func TestWriteBatchRollsBackRequestLogsAndStatsOnFailure(t *testing.T) {
 
 	t.Run("RequestLog insert", func(t *testing.T) {
 		db := openRequestLogQueryDB(t)
-		if err := db.Exec(`
-			CREATE TRIGGER reject_request_log
-			BEFORE INSERT ON request_logs
-			BEGIN
-			  SELECT RAISE(ABORT, 'request log rejected');
-			END
-		`).Error; err != nil {
-			t.Fatalf("create trigger: %v", err)
-		}
+		pgtest.FailOn(t, db, "request_logs", "INSERT", "", "request log rejected")
 		if err := (&gormBatchWriter{db: db}).WriteBatch(context.Background(), []models.RequestLog{newRow()}); err == nil {
 			t.Fatal("WriteBatch() error = nil, want RequestLog insert failure")
 		}
@@ -956,34 +939,21 @@ func TestWriteBatchRollsBackRequestLogsAndStatsOnFailure(t *testing.T) {
 		assertUsageJournalCount(t, db, 0)
 	})
 
-	// 写入路径不再读取现有统计行；不兼容的现有列值由数据库在增量 upsert 时拒绝。
-	t.Run("existing UsageStat incompatible column", func(t *testing.T) {
+	// 写入路径不再读取现有统计行；损坏的现有列值由数据库在增量 upsert 时拒绝。
+	t.Run("existing UsageStat corrupt column", func(t *testing.T) {
 		db := openRequestLogQueryDB(t)
 		row := newRow()
 		hourMS := row.CompletedAtMS - row.CompletedAtMS%3_600_000
-		const invalidRequestCount = "not-an-integer"
-		if err := db.Exec(`PRAGMA ignore_check_constraints = ON`).Error; err != nil {
-			t.Fatalf("disable SQLite CHECK constraints: %v", err)
-		}
-		if err := db.Exec(`
-			INSERT INTO usage_stats (
-				bucket_start_ms, access_key_id, group_id, model,
-				request_count, success_count, estimated_cost_nano_usd
-			) VALUES (?, ?, ?, ?, ?, ?, ?)
-		`,
-			hourMS,
-			row.AccessKeyID,
-			row.GroupID,
-			row.ClientModel,
-			invalidRequestCount,
-			7,
-			3_500_000_000,
-		).Error; err != nil {
-			t.Fatalf("insert incompatible UsageStat: %v", err)
-		}
-		if err := db.Exec(`PRAGMA ignore_check_constraints = OFF`).Error; err != nil {
-			t.Fatalf("restore SQLite CHECK constraints: %v", err)
-		}
+		const corruptRequestCount = -5
+		createCorruptUsageStats(t, db, models.UsageStat{
+			BucketStartMS:        hourMS,
+			AccessKeyID:          row.AccessKeyID,
+			GroupID:              row.GroupID,
+			Model:                row.ClientModel,
+			RequestCount:         corruptRequestCount,
+			SuccessCount:         7,
+			EstimatedCostNanoUSD: 3_500_000_000,
+		})
 
 		err := (&gormBatchWriter{db: db}).WriteBatch(
 			context.Background(),
@@ -995,24 +965,14 @@ func TestWriteBatchRollsBackRequestLogsAndStatsOnFailure(t *testing.T) {
 		assertRequestLogAndUsageStatCounts(t, db, 0, 1)
 		assertUsageJournalCount(t, db, 0)
 
-		var persisted struct {
-			RequestCount         string `gorm:"column:request_count"`
-			SuccessCount         int64  `gorm:"column:success_count"`
-			EstimatedCostNanoUSD int64  `gorm:"column:estimated_cost_nano_usd"`
+		var persisted models.UsageStat
+		if err := db.Where(
+			"bucket_start_ms = ? AND access_key_id = ? AND group_id = ? AND model = ?",
+			hourMS, row.AccessKeyID, row.GroupID, row.ClientModel,
+		).Take(&persisted).Error; err != nil {
+			t.Fatalf("read corrupt UsageStat after rollback: %v", err)
 		}
-		if err := db.Raw(`
-			SELECT
-				CAST(request_count AS TEXT) AS request_count,
-				success_count,
-				estimated_cost_nano_usd
-			FROM usage_stats
-			WHERE bucket_start_ms = ? AND access_key_id = ?
-				AND group_id = ? AND model = ?
-		`, hourMS, row.AccessKeyID, row.GroupID, row.ClientModel).
-			Scan(&persisted).Error; err != nil {
-			t.Fatalf("read incompatible UsageStat after rollback: %v", err)
-		}
-		if persisted.RequestCount != invalidRequestCount ||
+		if persisted.RequestCount != corruptRequestCount ||
 			persisted.SuccessCount != 7 ||
 			persisted.EstimatedCostNanoUSD != 3_500_000_000 {
 			t.Fatalf("existing UsageStat changed after upsert rejection: %+v", persisted)
@@ -1021,15 +981,7 @@ func TestWriteBatchRollsBackRequestLogsAndStatsOnFailure(t *testing.T) {
 
 	t.Run("UsageStat UPSERT", func(t *testing.T) {
 		db := openRequestLogQueryDB(t)
-		if err := db.Exec(`
-			CREATE TRIGGER reject_usage_stat
-			BEFORE INSERT ON usage_stats
-			BEGIN
-			  SELECT RAISE(ABORT, 'usage stat rejected');
-			END
-		`).Error; err != nil {
-			t.Fatalf("create trigger: %v", err)
-		}
+		pgtest.FailOn(t, db, "usage_stats", "INSERT", "", "usage stat rejected")
 		if err := (&gormBatchWriter{db: db}).WriteBatch(context.Background(), []models.RequestLog{newRow()}); err == nil {
 			t.Fatal("WriteBatch() error = nil, want UsageStat UPSERT failure")
 		}
@@ -1038,11 +990,11 @@ func TestWriteBatchRollsBackRequestLogsAndStatsOnFailure(t *testing.T) {
 	})
 
 	t.Run("commit", func(t *testing.T) {
-		db, dsn := openRequestLogFileDB(t)
-		release := holdRequestLogRollbackJournalReadLock(t, db, dsn)
+		db := openRequestLogQueryDB(t)
+		release := pgtest.FailOnCommit(t, db, "request_logs", "request log commit rejected")
 		err := (&gormBatchWriter{db: db}).WriteBatch(context.Background(), []models.RequestLog{newRow()})
-		if err == nil {
-			t.Fatal("WriteBatch() error = nil, want COMMIT failure")
+		if err == nil || !strings.Contains(err.Error(), "request log commit rejected") {
+			t.Fatalf("WriteBatch() error = %v, want COMMIT failure", err)
 		}
 		release()
 		assertRequestLogAndUsageStatCounts(t, db, 0, 0)
@@ -1157,24 +1109,31 @@ func TestWriteBatchRejectsIntegerAndCostOverflow(t *testing.T) {
 func TestWriteBatchRollsBackEarlierBucketWhenLaterUpsertFails(t *testing.T) {
 	db := openRequestLogQueryDB(t)
 	hour := time.Date(2026, time.July, 24, 16, 0, 0, 0, time.UTC)
+	// The second sorted bucket is rejected only after the first one was
+	// upserted, so the rollback must also undo an already applied bucket.
+	if err := db.Exec(`
+		CREATE FUNCTION reject_second_bucket() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF COALESCE((
+				SELECT request_count
+				FROM usage_stats
+				WHERE bucket_start_ms = NEW.bucket_start_ms
+					AND access_key_id = NEW.access_key_id
+					AND group_id = NEW.group_id
+					AND model = 'model-a'
+			), 0) <> 1 THEN
+				RAISE EXCEPTION 'first bucket was not upserted';
+			END IF;
+			RAISE EXCEPTION 'second bucket rejected';
+		END
+		$$`).Error; err != nil {
+		t.Fatalf("create ordered rejection function: %v", err)
+	}
 	if err := db.Exec(`
 		CREATE TRIGGER reject_second_bucket
 		BEFORE INSERT ON usage_stats
-		WHEN NEW.model = 'model-b'
-		BEGIN
-		  SELECT CASE
-		    WHEN COALESCE((
-		      SELECT request_count
-		      FROM usage_stats
-		      WHERE bucket_start_ms = NEW.bucket_start_ms
-		        AND access_key_id = NEW.access_key_id
-		        AND group_id = NEW.group_id
-		        AND model = 'model-a'
-		    ), 0) != 1
-		    THEN RAISE(ABORT, 'first bucket was not upserted')
-		  END;
-		  SELECT RAISE(ABORT, 'second bucket rejected');
-		END
+		FOR EACH ROW WHEN (NEW.model = 'model-b')
+		EXECUTE FUNCTION reject_second_bucket()
 	`).Error; err != nil {
 		t.Fatalf("create ordered rejection trigger: %v", err)
 	}
@@ -1255,13 +1214,7 @@ func TestWriteBatchRollsBackUsageJournalWithFailedRequestLogTransaction(t *testi
 	row.UncachedInputTokens = 12
 	row.OutputTokens = 3
 
-	if err := db.Exec(`CREATE TRIGGER reject_journal_request_log
-		BEFORE INSERT ON request_logs
-		BEGIN
-			SELECT RAISE(FAIL, 'forced request log failure');
-		END`).Error; err != nil {
-		t.Fatalf("create rejection trigger: %v", err)
-	}
+	pgtest.FailOn(t, db, "request_logs", "INSERT", "", "forced request log failure")
 	writer := &gormBatchWriter{db: db}
 	if err := writer.WriteBatch(context.Background(), []models.RequestLog{row}); err == nil {
 		t.Fatal("WriteBatch() error = nil, want request log transaction failure")

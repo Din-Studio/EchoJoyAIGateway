@@ -40,6 +40,17 @@ make check   # 完整验收门禁 / the full acceptance gate
 
 `make check` covers gofmt, `go mod tidy -diff`, `go vet`, web lint / format / build, the Go build, and the full unit test suite.
 
+Go 测试跑在真实的 PostgreSQL 和 Redis 上，需要 Docker。`make test` / `make check` 会先执行 `make test-deps`，通过 `tools/testdeps/compose.yml` 拉起这两个依赖（只绑定本机回环地址，数据放在内存盘）。直接运行 `go test` 时需要先 `make test-deps`，再导出两个环境变量；缺少它们时，依赖数据库的测试会直接失败，而不是跳过：
+
+Go tests run against real PostgreSQL and Redis and need Docker. `make test` / `make check` first run `make test-deps`, which starts both through `tools/testdeps/compose.yml` (bound to loopback only, data on tmpfs). To run `go test` directly, run `make test-deps` and export the two variables below; without them, database-backed tests fail instead of being skipped:
+
+```bash
+make test-deps
+export GPT_LOAD_DATABASE_TEST_DSN='postgres://postgres:postgres@127.0.0.1:55432/gpt_load?sslmode=disable'
+export GPT_LOAD_REDIS_TEST_ADDR='127.0.0.1:56379'
+go test ./internal/control
+```
+
 `third_party/cpaembedded` 是独立 Go module，**不在 `make check` 覆盖范围内**。改动该目录时请额外执行：
 
 `third_party/cpaembedded` is a separate Go module and is **not covered by `make check`**. When changing it, also run:

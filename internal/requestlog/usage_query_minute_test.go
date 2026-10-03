@@ -235,7 +235,7 @@ func TestQueryUsageMinuteFiltersFinalAttributionAndAccessKey(t *testing.T) {
 }
 
 func TestQueryUsageMinuteUsesOneReadSnapshot(t *testing.T) {
-	db, dsn := openRequestLogFileDB(t)
+	db, dsn := openRequestLogDBWithDSN(t)
 	start := time.Date(2026, time.September, 7, 13, 2, 0, 0, time.UTC)
 	row := aggregationRow(aggregationRequestID(400), start, 7, "before")
 	if err := db.Create(&row).Error; err != nil {

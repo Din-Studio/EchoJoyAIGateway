@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -18,11 +16,7 @@ import (
 // TestExternalDatabaseReservedIdentifierQueries verifies that runtime query
 // scopes quote table and column names which are reserved by supported drivers.
 func TestExternalDatabaseReservedIdentifierQueries(t *testing.T) {
-	// 不标记 t.Parallel()：依赖 GPT_LOAD_DATABASE_TEST_DSN 的共享外部数据库。
-	dsn := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := externalDatabaseDSN(t)
 	db := openControlTestDBWithDSN(t, dsn)
 
 	if err := homeCredentialRowsScope(db).Find(&[]homeCredentialRow{}).Error; err != nil {
@@ -39,14 +33,10 @@ func TestExternalDatabaseReservedIdentifierQueries(t *testing.T) {
 // retained-rule two-phase period move obeys the real MySQL/PostgreSQL unique
 // index while preserving IDs and resetting each changed revision.
 func TestExternalDatabaseAccessKeyCostLimitPeriodPermutation(t *testing.T) {
-	// 不标记 t.Parallel()：依赖 GPT_LOAD_DATABASE_TEST_DSN 的共享外部数据库，并发执行有唯一索引冲突等正确性风险。
-	dsn := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := externalDatabaseDSN(t)
 	assertAccessKeyCostLimitPeriodPermutation(
 		t,
-		newServiceFixtureWithDSN(t, dsn),
+		newExternalServiceFixture(t, dsn),
 		[]int64{300, 600, 900},
 		[]int64{600, 900, 300},
 	)
@@ -57,13 +47,9 @@ func TestExternalDatabaseAccessKeyCostLimitPeriodPermutation(t *testing.T) {
 // global model price, and removing the final reference cleans only the
 // automatic row.
 func TestExternalDatabaseGroupPriceReconciliation(t *testing.T) {
-	// 不标记 t.Parallel()：依赖 GPT_LOAD_DATABASE_TEST_DSN 的共享外部数据库，并发执行有唯一索引冲突等正确性风险。
-	dsn := strings.TrimSpace(os.Getenv("GPT_LOAD_DATABASE_TEST_DSN"))
-	if dsn == "" {
-		t.Skip("GPT_LOAD_DATABASE_TEST_DSN is not set")
-	}
+	dsn := externalDatabaseDSN(t)
 
-	fixture := newServiceFixtureWithDSN(t, dsn)
+	fixture := newExternalServiceFixture(t, dsn)
 	suffix := time.Now().UnixNano()
 	modelID := fmt.Sprintf("external-control-model-%d", suffix)
 	create := func(name, upstreamURL string) GroupCreateResult {

@@ -15,12 +15,13 @@ import (
 
 	"gpt-load/internal/platform/httproute"
 	"gpt-load/internal/platform/i18n"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 func TestBuildContainerExposesUnifiedRouteCatalog(t *testing.T) {
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 	if err := i18n.Init(); err != nil {
 		t.Fatalf("i18n.Init() error = %v", err)
@@ -558,7 +559,7 @@ func newRouteContractEngine(t *testing.T) *gin.Engine {
 	t.Helper()
 	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
+	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
 	if err := i18n.Init(); err != nil {
 		t.Fatalf("i18n.Init() error = %v", err)

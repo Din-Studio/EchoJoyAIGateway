@@ -14,7 +14,7 @@ import (
 	"gpt-load/internal/pricing"
 	"gpt-load/internal/state"
 	"gpt-load/internal/storage/models"
-	"gpt-load/internal/testutil/sqlitetest"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 // clusterPair models two instances sharing one database with independent
@@ -26,10 +26,10 @@ type clusterPair struct {
 
 func newClusterPair(t *testing.T) clusterPair {
 	t.Helper()
-	db := sqlitetest.OpenMigrated(t)
+	dsn := pgtest.NewDatabase(t)
 	pair := clusterPair{
-		a: newServiceFixtureWithDatabase(t, db),
-		b: newServiceFixtureWithDatabase(t, db),
+		a: newServiceFixtureWithDSN(t, dsn),
+		b: newServiceFixtureWithDSN(t, dsn),
 	}
 	pair.a.service.clusterEvents = &recordingConfigEventPublisher{}
 	pair.b.service.clusterEvents = &recordingConfigEventPublisher{}

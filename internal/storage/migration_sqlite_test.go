@@ -7,7 +7,15 @@ import (
 )
 
 func TestSQLiteMigrationRejectsOrphansAndRestoresForeignKeys(t *testing.T) {
-	db := openInternalMigrationTestDatabase(t)
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	entry := migration{
 		ID: "0001_foreign_key_probe",
 		Up: func(tx *gorm.DB) error {

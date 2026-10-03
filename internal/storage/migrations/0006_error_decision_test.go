@@ -105,18 +105,10 @@ func TestErrorDecisionMigrationPreservesAttemptIndexesAndForeignKey(t *testing.T
 			t.Fatalf("request_log_attempts index %q is missing", index)
 		}
 	}
-	var foreignKeys []struct {
-		Table    string
-		From     string
-		To       string
-		OnDelete string `gorm:"column:on_delete"`
-	}
-	if err := db.Raw("PRAGMA foreign_key_list('request_log_attempts')").Scan(&foreignKeys).Error; err != nil {
-		t.Fatal(err)
-	}
-	if len(foreignKeys) != 1 || foreignKeys[0].Table != "request_logs" ||
-		foreignKeys[0].From != "request_id" || foreignKeys[0].To != "id" ||
-		foreignKeys[0].OnDelete != "CASCADE" {
-		t.Fatalf("request_log_attempts foreign keys = %#v", foreignKeys)
+	attemptForeignKeys := foreignKeys(t, db, "request_log_attempts")
+	if len(attemptForeignKeys) != 1 || attemptForeignKeys[0].Table != "request_logs" ||
+		attemptForeignKeys[0].From != "request_id" || attemptForeignKeys[0].To != "id" ||
+		attemptForeignKeys[0].OnDelete != "CASCADE" {
+		t.Fatalf("request_log_attempts foreign keys = %#v", attemptForeignKeys)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/state"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 type decryptCountingEncryption struct {
@@ -140,16 +141,11 @@ func TestAccessKeyMetadataFailsClosedForInvalidPersistedSuffix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAccessKey() error = %v", err)
 	}
-	if err := fixture.db.Exec("PRAGMA ignore_check_constraints = ON").Error; err != nil {
-		t.Fatalf("disable check constraints: %v", err)
-	}
+	pgtest.DropConstraints(t, fixture.db, "access_keys", 'c')
 	if err := fixture.db.Model(&models.AccessKey{}).
 		Where("id = ?", created.ID).
 		UpdateColumn("key_suffix", "bad ").Error; err != nil {
 		t.Fatalf("set invalid suffix: %v", err)
-	}
-	if err := fixture.db.Exec("PRAGMA ignore_check_constraints = OFF").Error; err != nil {
-		t.Fatalf("restore check constraints: %v", err)
 	}
 
 	if collection, err := fixture.service.ListAccessKeyCollection(

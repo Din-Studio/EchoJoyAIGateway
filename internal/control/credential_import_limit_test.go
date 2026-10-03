@@ -11,7 +11,7 @@ import (
 )
 
 func TestAPIKeyImportAccepts5000AndReplaysWithoutDuplicates(t *testing.T) {
-	fixture, _ := newFileServiceFixture(t)
+	fixture := newServiceFixture(t)
 	groupID := createGroupForCredentialImport(t, fixture, "sk-synthetic-existing")
 	if err := fixture.service.DeleteGroupCredential(t.Context(), groupID, fixture.registry.Snapshot()[0].ID); err != nil {
 		t.Fatalf("remove seed credential: %v", err)
@@ -27,7 +27,7 @@ func TestAPIKeyImportAccepts5000AndReplaysWithoutDuplicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("import 5000 API keys: %v", err)
 	}
-	t.Logf("file-backed SQLite synchronous import of 5000 synthetic API keys: %s", elapsed)
+	t.Logf("PostgreSQL synchronous import of 5000 synthetic API keys: %s", elapsed)
 	if first.GroupID != groupID || first.CredentialsAdded != 5000 || first.CredentialsDuplicated != 0 {
 		t.Fatalf("import result = %#v, want 5000 added and 0 duplicates", first)
 	}
@@ -57,7 +57,7 @@ func TestAPIKeyImportAccepts5000AndReplaysWithoutDuplicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("download 5000 API keys: %v", err)
 	}
-	t.Logf("file-backed SQLite synchronous download of 5000 synthetic API keys: %s", elapsed)
+	t.Logf("PostgreSQL synchronous download of 5000 synthetic API keys: %s", elapsed)
 	if download.CredentialCount != 5000 || len(download.Files) != 1 {
 		t.Fatalf("download credential/file count = %d/%d, want 5000/1", download.CredentialCount, len(download.Files))
 	}

@@ -169,7 +169,7 @@ func TestQueryCredentialWindowUsageTreatsLongTermHourlyStatsAsRetained(t *testin
 }
 
 func TestQueryCredentialWindowUsageUsesOneReadSnapshot(t *testing.T) {
-	db, dsn := openRequestLogFileDB(t)
+	db, dsn := openRequestLogDBWithDSN(t)
 	service := newRequestLogTestService(db)
 	now := time.Date(2026, time.August, 14, 12, 25, 0, 0, time.UTC)
 	service.now = func() time.Time { return now }

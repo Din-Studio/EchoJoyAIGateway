@@ -20,6 +20,7 @@ import (
 	"gpt-load/internal/channel"
 	"gpt-load/internal/pricing"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/pgtest"
 )
 
 type catalogSyncClientFunc func(context.Context, catalog.Metadata) (catalog.SyncResult, error)
@@ -249,15 +250,7 @@ func TestApplyCatalogSnapshotFailureDoesNotLogPriorityWarningOrPublishRuntime(t 
 		"openai": catalogProviderFixture("openai", "Old", "gpt", 1),
 	}}
 	fixture.catalogRuntime.Publish(oldSnapshot)
-	if err := fixture.db.Exec(`
-		CREATE TRIGGER reject_priority_warning_reconcile
-		BEFORE UPDATE ON model_prices
-		BEGIN
-			SELECT RAISE(ABORT, 'forced catalog reconciliation failure');
-		END
-	`).Error; err != nil {
-		t.Fatal(err)
-	}
+	pgtest.FailOn(t, fixture.db, "model_prices", "UPDATE", "", "forced catalog reconciliation failure")
 	var logs bytes.Buffer
 	standardLogger := logrus.StandardLogger()
 	previousOutput := standardLogger.Out
@@ -1326,15 +1319,7 @@ func TestCatalogSyncReconcileFailurePublishesNeitherRuntimeAndKeepsPendingLKG(t 
 		"openai": catalogProviderFixture("openai", "Old", "gpt", 1),
 	}}
 	fixture.catalogRuntime.Publish(oldSnapshot)
-	if err := fixture.db.Exec(`
-		CREATE TRIGGER reject_catalog_price_update
-		BEFORE UPDATE ON model_prices
-		BEGIN
-			SELECT RAISE(ABORT, 'forced catalog reconciliation failure');
-		END
-	`).Error; err != nil {
-		t.Fatal(err)
-	}
+	pgtest.FailOn(t, fixture.db, "model_prices", "UPDATE", "", "forced catalog reconciliation failure")
 
 	result := catalogResultFixture(4000, "new-etag", map[string]catalog.Provider{
 		"openai": catalogProviderFixture("openai", "New", "gpt", 9),

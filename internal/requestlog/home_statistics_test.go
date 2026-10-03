@@ -208,7 +208,7 @@ func TestQueryHomeStatisticsScopesAccessKeyAndOnlyReturnsModelRankings(t *testin
 }
 
 func TestQueryHomeStatisticsUsesOneReadSnapshot(t *testing.T) {
-	db, dsn := openRequestLogFileDB(t)
+	db, dsn := openRequestLogDBWithDSN(t)
 	const bucketStartMS int64 = 1_784_894_400_000
 	createUsageStats(
 		t,
