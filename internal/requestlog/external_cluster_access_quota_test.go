@@ -187,8 +187,9 @@ func TestExternalClusterAccessKeyRPMExact(t *testing.T) {
 	// A call that outlasts the 200ms per-call state timeout may still have
 	// been admitted by Redis, so its burst has no exact count. Loaded
 	// machines and port-forwarded Redis occasionally stall a round trip that
-	// long, so such a burst is retried on a fresh access key.
-	const attempts = 5
+	// long, so such a burst is retried on a fresh access key. Stalls come in
+	// load spikes, so the retries back off to outlast one.
+	const attempts = 8
 	for accessKeyID := uint(1); ; accessKeyID++ {
 		admitted, err := admitRPMBurst(limiters, accessKeyID)
 		if err == nil {
@@ -201,6 +202,7 @@ func TestExternalClusterAccessKeyRPMExact(t *testing.T) {
 			t.Fatalf("every burst hit a Redis error, last: %v", err)
 		}
 		t.Logf("burst on access key %d: %v; retrying on a fresh key", accessKeyID, err)
+		time.Sleep(time.Duration(accessKeyID) * 250 * time.Millisecond)
 	}
 }
 
