@@ -8,8 +8,7 @@ import (
 )
 
 func TestExternalAffinityKindMigrationContract(t *testing.T) {
-	dsn := externalMigrationContractDSN(t)
-	testAffinityKindMigration(t, func(t *testing.T) *gorm.DB { return openExternalIncrementalMigrationDatabase(t, dsn) })
+	testAffinityKindMigration(t, externalMigrationContract(t))
 }
 func testAffinityKindMigration(t *testing.T, open func(*testing.T) *gorm.DB) {
 	for _, scenario := range []string{"fresh", "upgrade", "interrupted"} {

@@ -30,8 +30,7 @@ func TestQuotaHistoryMigrationCreatesQueryableHistory(t *testing.T) {
 }
 
 func TestExternalQuotaHistoryMigrationContract(t *testing.T) {
-	dsn := externalMigrationContractDSN(t)
-	testQuotaHistoryMigration(t, func(t *testing.T) *gorm.DB { return openExternalIncrementalMigrationDatabase(t, dsn) })
+	testQuotaHistoryMigration(t, externalMigrationContract(t))
 }
 
 func testQuotaHistoryMigration(t *testing.T, open func(*testing.T) *gorm.DB) {

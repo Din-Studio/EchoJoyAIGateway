@@ -8,8 +8,7 @@ import (
 )
 
 func TestExternalValidationProtocolMigrationContract(t *testing.T) {
-	dsn := externalMigrationContractDSN(t)
-	testValidationProtocolMigration(t, func(t *testing.T) *gorm.DB { return openExternalIncrementalMigrationDatabase(t, dsn) })
+	testValidationProtocolMigration(t, externalMigrationContract(t))
 }
 
 func testValidationProtocolMigration(t *testing.T, open func(*testing.T) *gorm.DB) {

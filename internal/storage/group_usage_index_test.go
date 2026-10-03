@@ -8,6 +8,7 @@ import (
 )
 
 func TestGroupUsageIndexSupportsPageWindowLookup(t *testing.T) {
+	t.Parallel()
 	db := openEmptyTestDatabase(t)
 	if err := applyMigrations(db); err != nil {
 		t.Fatal(err)

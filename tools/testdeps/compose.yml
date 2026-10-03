@@ -6,8 +6,9 @@ services:
   postgres:
     image: postgres:18-alpine
     # 迁移校验反复查询 information_schema 视图，规划是测试库最主要的 CPU 开销；
-    # 收紧 join/from_collapse_limit 可以缩短这类视图的规划时间。
-    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off", "-c", "max_connections=500", "-c", "jit=off", "-c", "join_collapse_limit=1", "-c", "from_collapse_limit=1"]
+    # 收紧 join/from_collapse_limit、关闭 hash/merge join 可以缩短这类视图的规划时间。
+    # 测试数据量很小，嵌套循环足以应对业务查询。
+    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off", "-c", "max_connections=500", "-c", "jit=off", "-c", "join_collapse_limit=1", "-c", "from_collapse_limit=1", "-c", "enable_hashjoin=off", "-c", "enable_mergejoin=off"]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres

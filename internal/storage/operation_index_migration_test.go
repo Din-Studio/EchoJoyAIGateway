@@ -8,10 +8,7 @@ import (
 )
 
 func TestExternalOperationIndexMigrationContract(t *testing.T) {
-	dsn := externalMigrationContractDSN(t)
-	testOperationIndexMigration(t, func(t *testing.T) *gorm.DB {
-		return openExternalIncrementalMigrationDatabase(t, dsn)
-	})
+	testOperationIndexMigration(t, externalMigrationContract(t))
 }
 
 func testOperationIndexMigration(t *testing.T, open func(*testing.T) *gorm.DB) {

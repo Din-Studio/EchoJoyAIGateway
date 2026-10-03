@@ -24,8 +24,7 @@ func TestPriceMultiplierMigrationAddsConfigurationColumns(t *testing.T) {
 }
 
 func TestExternalPriceMultiplierMigrationContract(t *testing.T) {
-	dsn := externalMigrationContractDSN(t)
-	testPriceMultiplierMigrationContract(t, func(t *testing.T) *gorm.DB { return openExternalIncrementalMigrationDatabase(t, dsn) })
+	testPriceMultiplierMigrationContract(t, externalMigrationContract(t))
 }
 
 func testPriceMultiplierMigrationContract(t *testing.T, open func(*testing.T) *gorm.DB) {

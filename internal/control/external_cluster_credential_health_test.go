@@ -41,6 +41,23 @@ func externalClusterTarget(t *testing.T) (string, string) {
 	return dsn, pgtest.RedisAddr(t)
 }
 
+// externalDatabaseDSN returns the database a database-only external contract
+// runs on. PostgreSQL gets an isolated migrated clone, so the contract runs in
+// parallel; other drivers share GPT_LOAD_DATABASE_TEST_DSN and stay serial.
+func externalDatabaseDSN(t *testing.T) string {
+	t.Helper()
+	dsn := pgtest.DSN(t)
+	database, err := config.ParseDatabaseDSN(dsn)
+	if err != nil {
+		t.Fatalf("ParseDatabaseDSN() error = %v", err)
+	}
+	if database.Driver != config.DatabaseDriverPostgreSQL {
+		return dsn
+	}
+	t.Parallel()
+	return pgtest.NewDatabase(t)
+}
+
 // healthContractInstance is one simulated process with shared credential
 // health: its own registry mirror, Redis store, and background loops.
 type healthContractInstance struct {

@@ -12,8 +12,7 @@ import (
 )
 
 func TestExternalModelCooldownMigrationContract(t *testing.T) {
-	dsn := externalMigrationContractDSN(t)
-	testModelCooldownMigration(t, func(t *testing.T) *gorm.DB { return openExternalIncrementalMigrationDatabase(t, dsn) })
+	testModelCooldownMigration(t, externalMigrationContract(t))
 }
 
 func TestExternalModelCooldownMigrationRecoversConstraintReplacement(t *testing.T) {

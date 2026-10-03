@@ -92,6 +92,7 @@ func TestExternalDatabaseMySQLInterruptedBaselineRecovery(t *testing.T) {
 
 func TestExternalDatabaseIncrementalMigrations(t *testing.T) {
 	rawDSN := pgtest.DSN(t)
+	runParallelOnPostgres(t, rawDSN)
 	db := openExternalIncrementalMigrationDatabase(t, rawDSN)
 	if err := db.AutoMigrate(&schemaMigration{}); err != nil {
 		t.Fatalf("create migration ledger: %v", err)
@@ -236,17 +237,33 @@ func openExternalIncrementalMigrationDatabase(t *testing.T, rawDSN string) *gorm
 	return db
 }
 
-// externalMigrationContractDSN returns the external test DSN and runs the
-// contract in parallel on PostgreSQL, where each contract database has its
-// own migration lock. MySQL's GET_LOCK is server-wide, so contracts stay
-// serial there.
-func externalMigrationContractDSN(t *testing.T) string {
+// externalMigrationContract returns the database opener for one contract's
+// scenarios. The contract and each of its scenarios run in parallel where
+// runParallelOnPostgres allows it.
+func externalMigrationContract(t *testing.T) func(*testing.T) *gorm.DB {
 	t.Helper()
 	dsn := pgtest.DSN(t)
-	if scheme := strings.ToLower(mustParseURL(t, dsn).Scheme); scheme == "postgres" || scheme == "postgresql" {
+	parallel := runParallelOnPostgres(t, dsn)
+	return func(t *testing.T) *gorm.DB {
+		t.Helper()
+		if parallel {
+			t.Parallel()
+		}
+		return openExternalIncrementalMigrationDatabase(t, dsn)
+	}
+}
+
+// runParallelOnPostgres marks t parallel when dsn names PostgreSQL, where every
+// incremental migration database has its own migration lock. MySQL's GET_LOCK
+// is server-wide, so tests stay serial there.
+func runParallelOnPostgres(t *testing.T, dsn string) bool {
+	t.Helper()
+	scheme := strings.ToLower(mustParseURL(t, dsn).Scheme)
+	parallel := scheme == "postgres" || scheme == "postgresql"
+	if parallel {
 		t.Parallel()
 	}
-	return dsn
+	return parallel
 }
 
 func mustParseURL(t *testing.T, raw string) url.URL {

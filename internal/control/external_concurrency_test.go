@@ -11,7 +11,6 @@ import (
 
 	"gpt-load/internal/channel"
 	"gpt-load/internal/storage/models"
-	"gpt-load/internal/testutil/pgtest"
 )
 
 // TestExternalDatabaseConcurrentIdempotentOperation proves the cross-instance
@@ -19,8 +18,7 @@ import (
 // submitting the same Idempotency-Key at the same time both receive the same
 // committed result, create one resource, and leave one completed operation row.
 func TestExternalDatabaseConcurrentIdempotentOperation(t *testing.T) {
-	// 不标记 t.Parallel()：依赖 GPT_LOAD_DATABASE_TEST_DSN 的共享外部数据库，并发执行有唯一索引冲突等正确性风险。
-	dsn := pgtest.DSN(t)
+	dsn := externalDatabaseDSN(t)
 	instances := []serviceFixture{newExternalServiceFixture(t, dsn), newExternalServiceFixture(t, dsn)}
 	control := instances[0].db
 

@@ -10,8 +10,7 @@ import (
 )
 
 func TestExternalCustomAccessKeyMigrationContract(t *testing.T) {
-	dsn := externalMigrationContractDSN(t)
-	testCustomAccessKeyMigration(t, func(t *testing.T) *gorm.DB { return openExternalIncrementalMigrationDatabase(t, dsn) })
+	testCustomAccessKeyMigration(t, externalMigrationContract(t))
 }
 
 func testCustomAccessKeyMigration(t *testing.T, open func(*testing.T) *gorm.DB) {
