@@ -28,19 +28,18 @@ func (policy Policy) Valid() bool {
 // Observation is a store lookup used for conditional success updates.
 type Observation struct {
 	Target Target
-	found  bool
 	// token is the stored value a shared store compares before overwriting.
 	token string
 }
 
 func (observation Observation) Found() bool {
-	return observation.found
+	return observation.token != ""
 }
 
 // SharedObservation records what a shared store saw. An empty token means no
 // live mapping was observed.
 func SharedObservation(target Target, token string) Observation {
-	return Observation{Target: target, found: token != "", token: token}
+	return Observation{Target: target, token: token}
 }
 
 // Token returns the stored value observed by a shared store.

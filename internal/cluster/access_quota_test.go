@@ -124,7 +124,7 @@ func (scenario quotaScenario) complete(ticket accessquota.Ticket, cost int64, no
 	if err != nil {
 		scenario.t.Fatalf("Complete() error = %v", err)
 	}
-	got := fmt.Sprintf("complete: fault=%q overflow=%d\n", result.Fault, scenario.quota.Stats().OverflowFaultTotal) +
+	got := fmt.Sprintf("complete: fault=%q\n", result.Fault) +
 		scenario.observe(now)
 	assertQuotaText(scenario.t, fmt.Sprintf("Complete(%d)", cost), got, want)
 }
@@ -156,7 +156,7 @@ decision: allowed=true recoverable=true next=- blocking=[]
 check: allowed=true recoverable=true next=- blocking=[]
 view: at=1787222220123 allowed=true recoverable=true next=- rules=[10@1 used=0 left=100 available window=-..-#0; 11@1 used=0 left=20 available window=1787222220123..1787240220123#1; 12@1 used=0 left=30 available window=1787222220123..1787308620123#1]`)
 	scenario.complete(ticket, 20, started.Add(time.Second), `
-complete: fault="" overflow=0
+complete: fault=""
 check: allowed=false recoverable=true next=1787240220123 blocking=[11@1 used=20 left=0 exhausted window=1787222220123..1787240220123#1]
 view: at=1787222221123 allowed=false recoverable=true next=1787240220123 rules=[10@1 used=20 left=80 available window=-..-#0; 11@1 used=20 left=0 exhausted window=1787222220123..1787240220123#1; 12@1 used=20 left=10 available window=1787222220123..1787308620123#1]`)
 	// The 5h window is exhausted.
@@ -177,7 +177,7 @@ decision: allowed=true recoverable=true next=- blocking=[]
 check: allowed=true recoverable=true next=- blocking=[]
 view: at=1787240220123 allowed=true recoverable=true next=- rules=[10@1 used=20 left=80 available window=-..-#0; 11@1 used=0 left=20 available window=1787240220123..1787258220123#2; 12@1 used=20 left=10 available window=1787222220123..1787308620123#1]`)
 	scenario.complete(ticket, 15, boundary, `
-complete: fault="" overflow=0
+complete: fault=""
 check: allowed=false recoverable=true next=1787308620123 blocking=[12@1 used=35 left=0 exhausted window=1787222220123..1787308620123#1]
 view: at=1787240220123 allowed=false recoverable=true next=1787308620123 rules=[10@1 used=35 left=65 available window=-..-#0; 11@1 used=15 left=5 available window=1787240220123..1787258220123#2; 12@1 used=35 left=0 exhausted window=1787222220123..1787308620123#1]`)
 	scenario.check(started.Add(25*time.Hour), `
@@ -189,12 +189,12 @@ decision: allowed=true recoverable=true next=- blocking=[]
 check: allowed=true recoverable=true next=- blocking=[]
 view: at=1787312220123 allowed=true recoverable=true next=- rules=[10@1 used=35 left=65 available window=-..-#0; 11@1 used=0 left=20 available window=1787312220123..1787330220123#3; 12@1 used=0 left=30 available window=1787312220123..1787398620123#2]`)
 	scenario.complete(ticket, 0, started.Add(25*time.Hour), `
-complete: fault="" overflow=0
+complete: fault=""
 check: allowed=true recoverable=true next=- blocking=[]
 view: at=1787312220123 allowed=true recoverable=true next=- rules=[10@1 used=35 left=65 available window=-..-#0; 11@1 used=0 left=20 available window=1787312220123..1787330220123#3; 12@1 used=0 left=30 available window=1787312220123..1787398620123#2]`)
 	// The total quota is exhausted.
 	scenario.complete(ticket, 100, started.Add(25*time.Hour), `
-complete: fault="" overflow=0
+complete: fault=""
 check: allowed=false recoverable=false next=- blocking=[10@1 used=135 left=0 exhausted window=-..-#0; 11@1 used=100 left=0 exhausted window=1787312220123..1787330220123#3; 12@1 used=100 left=0 exhausted window=1787312220123..1787398620123#2]
 view: at=1787312220123 allowed=false recoverable=false next=- rules=[10@1 used=135 left=0 exhausted window=-..-#0; 11@1 used=100 left=0 exhausted window=1787312220123..1787330220123#3; 12@1 used=100 left=0 exhausted window=1787312220123..1787398620123#2]`)
 	scenario.admit(started.Add(26*time.Hour), `
@@ -226,7 +226,7 @@ check: allowed=false recoverable=true next=1787398620123 blocking=[11@1 used=100
 view: at=1787319420123 allowed=false recoverable=true next=1787398620123 rules=[10@2 used=0 left=100 available window=-..-#0; 11@1 used=100 left=0 exhausted window=1787312220123..1787330220123#3; 12@1 used=100 left=0 exhausted window=1787312220123..1787398620123#2]`)
 	// The stale ticket is ignored for the reset rule.
 	scenario.complete(oldTicket, 50, now, `
-complete: fault="" overflow=0
+complete: fault=""
 check: allowed=false recoverable=true next=1787398620123 blocking=[11@1 used=150 left=0 exhausted window=1787312220123..1787330220123#3; 12@1 used=150 left=0 exhausted window=1787312220123..1787398620123#2]
 view: at=1787319420123 allowed=false recoverable=true next=1787398620123 rules=[10@2 used=0 left=100 available window=-..-#0; 11@1 used=150 left=0 exhausted window=1787312220123..1787330220123#3; 12@1 used=150 left=0 exhausted window=1787312220123..1787398620123#2]`)
 	if _, err := scenario.quota.Check(t.Context(), oldSnapshot, 1, now); !errors.Is(err, accessquota.ErrStaleRules) {
@@ -238,7 +238,7 @@ decision: allowed=false recoverable=true next=1787398620123 blocking=[11@1 used=
 check: allowed=false recoverable=true next=1787398620123 blocking=[11@1 used=150 left=0 exhausted window=1787312220123..1787330220123#3; 12@1 used=150 left=0 exhausted window=1787312220123..1787398620123#2]
 view: at=1787319420123 allowed=false recoverable=true next=1787398620123 rules=[10@2 used=0 left=100 available window=-..-#0; 11@1 used=150 left=0 exhausted window=1787312220123..1787330220123#3; 12@1 used=150 left=0 exhausted window=1787312220123..1787398620123#2]`)
 	scenario.complete(ticket, 7, now, `
-complete: fault="" overflow=0
+complete: fault=""
 check: allowed=false recoverable=true next=1787398620123 blocking=[11@1 used=150 left=0 exhausted window=1787312220123..1787330220123#3; 12@1 used=150 left=0 exhausted window=1787312220123..1787398620123#2]
 view: at=1787319420123 allowed=false recoverable=true next=1787398620123 rules=[10@2 used=0 left=100 available window=-..-#0; 11@1 used=150 left=0 exhausted window=1787312220123..1787330220123#3; 12@1 used=150 left=0 exhausted window=1787312220123..1787398620123#2]`)
 }
@@ -257,7 +257,7 @@ func TestAccessQuotaSaturatesAtLimit(t *testing.T) {
 check: allowed=true recoverable=true next=- blocking=[]
 view: at=1000000 allowed=true recoverable=true next=- rules=[20@1 used=9223372036854775804 left=2 available window=-..-#0]`,
 			wantAfter: `
-complete: fault="" overflow=0
+complete: fault=""
 check: allowed=true recoverable=true next=- blocking=[]
 view: at=1000000 allowed=true recoverable=true next=- rules=[20@1 used=9223372036854775805 left=1 available window=-..-#0]`,
 		},
@@ -267,7 +267,7 @@ view: at=1000000 allowed=true recoverable=true next=- rules=[20@1 used=922337203
 check: allowed=true recoverable=true next=- blocking=[]
 view: at=1000000 allowed=true recoverable=true next=- rules=[20@1 used=9223372036854775804 left=2 available window=-..-#0]`,
 			wantAfter: `
-complete: fault="" overflow=0
+complete: fault=""
 check: allowed=false recoverable=false next=- blocking=[20@1 used=9223372036854775806 left=0 exhausted window=-..-#0]
 view: at=1000000 allowed=false recoverable=false next=- rules=[20@1 used=9223372036854775806 left=0 exhausted window=-..-#0]`,
 		},
@@ -277,7 +277,7 @@ view: at=1000000 allowed=false recoverable=false next=- rules=[20@1 used=9223372
 check: allowed=true recoverable=true next=- blocking=[]
 view: at=1000000 allowed=true recoverable=true next=- rules=[20@1 used=9223372036854775804 left=2 available window=-..-#0]`,
 			wantAfter: `
-complete: fault="" overflow=0
+complete: fault=""
 check: allowed=false recoverable=false next=- blocking=[20@1 used=9223372036854775807 left=0 exhausted window=-..-#0]
 view: at=1000000 allowed=false recoverable=false next=- rules=[20@1 used=9223372036854775807 left=0 exhausted window=-..-#0]`,
 		},
@@ -287,7 +287,7 @@ view: at=1000000 allowed=false recoverable=false next=- rules=[20@1 used=9223372
 check: allowed=true recoverable=true next=- blocking=[]
 view: at=1000000 allowed=true recoverable=true next=- rules=[20@1 used=9223372036854775804 left=2 available window=-..-#0]`,
 			wantAfter: `
-complete: fault="overflow" overflow=1
+complete: fault="overflow"
 check: allowed=false recoverable=false next=- blocking=[20@1 used=9223372036854775807 left=0 exhausted window=-..-#0]
 view: at=1000000 allowed=false recoverable=false next=- rules=[20@1 used=9223372036854775807 left=0 exhausted window=-..-#0]`,
 		},
@@ -297,7 +297,7 @@ view: at=1000000 allowed=false recoverable=false next=- rules=[20@1 used=9223372
 check: allowed=false recoverable=false next=- blocking=[20@1 used=9223372036854775807 left=0 exhausted window=-..-#0]
 view: at=1000000 allowed=false recoverable=false next=- rules=[20@1 used=9223372036854775807 left=0 exhausted window=-..-#0]`,
 			wantAfter: `
-complete: fault="overflow" overflow=1
+complete: fault="overflow"
 check: allowed=false recoverable=false next=- blocking=[20@1 used=9223372036854775807 left=0 exhausted window=-..-#0]
 view: at=1000000 allowed=false recoverable=false next=- rules=[20@1 used=9223372036854775807 left=0 exhausted window=-..-#0]`,
 		},
@@ -307,7 +307,7 @@ view: at=1000000 allowed=false recoverable=false next=- rules=[20@1 used=9223372
 check: allowed=true recoverable=true next=- blocking=[]
 view: at=1000000 allowed=true recoverable=true next=- rules=[20@1 used=10 left=9223372036854775796 available window=-..-#0]`,
 			wantAfter: `
-complete: fault="negative_estimate" overflow=1
+complete: fault="negative_estimate"
 check: allowed=false recoverable=false next=- blocking=[20@1 used=9223372036854775807 left=0 exhausted window=-..-#0]
 view: at=1000000 allowed=false recoverable=false next=- rules=[20@1 used=9223372036854775807 left=0 exhausted window=-..-#0]`,
 		},

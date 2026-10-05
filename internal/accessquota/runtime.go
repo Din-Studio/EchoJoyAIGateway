@@ -89,10 +89,6 @@ type View struct {
 	Rules             []RuleView
 }
 
-type Stats struct {
-	OverflowFaultTotal uint64
-}
-
 type CompletionFault string
 
 const (
