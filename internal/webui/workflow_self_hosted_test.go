@@ -74,7 +74,7 @@ func TestReleaseUsesSelfHostedValidationAndHostedPublicationRunners(t *testing.T
 	for _, job := range []string{
 		"validate-tag", "verify-and-build-web", "package-metadata", "package-checksums", "docker-smoke",
 		"publication-preflight", "publish-images", "publish-github", "post-publish-image-smoke",
-		"post-publish-verify", "promote-image-channels", "deploy-render", "reconcile-publication",
+		"post-publish-verify", "promote-image-channels", "reconcile-publication",
 	} {
 		block := workflowJobBlock(t, content, job)
 		if !strings.Contains(block, "runs-on: ubuntu-24.04") {
@@ -116,15 +116,6 @@ func TestReleaseUsesSelfHostedValidationAndHostedPublicationRunners(t *testing.T
 	for _, required := range []string{"preserve_order: true", "overwrite_files: false"} {
 		if !strings.Contains(publishGitHub, required) {
 			t.Errorf("GitHub Release asset upload does not contain %q", required)
-		}
-	}
-	deployRender := workflowJobBlock(t, content, "deploy-render")
-	for _, required := range []string{
-		"cli_${RENDER_CLI_VERSION}_linux_amd64.zip",
-		"3b3f1f839ef36b81f12d84ac7288f1c96f9f7519b39c53fe6f866612f704e7cd",
-	} {
-		if !strings.Contains(deployRender, required) {
-			t.Errorf("Render deployment does not contain %q", required)
 		}
 	}
 }
