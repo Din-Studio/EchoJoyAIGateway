@@ -1,8 +1,6 @@
 package config
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +44,11 @@ func TestLoadRequiresEachStartupVariable(t *testing.T) {
 		},
 		{name: "missing auth key", prepare: func(t *testing.T) { t.Setenv("AUTH_KEY", "") }, wantErr: "AUTH_KEY is required"},
 		{
+			name:    "auth key with whitespace",
+			prepare: func(t *testing.T) { t.Setenv("AUTH_KEY", "admin key") },
+			wantErr: "AUTH_KEY must not contain whitespace",
+		},
+		{
 			name:    "missing encryption key",
 			prepare: func(t *testing.T) { t.Setenv("ENCRYPTION_KEY", "") },
 			wantErr: "ENCRYPTION_KEY is required",
@@ -54,16 +57,11 @@ func TestLoadRequiresEachStartupVariable(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			setRequiredEnv(t)
-			dataDir := filepath.Join(t.TempDir(), "data")
-			t.Setenv("DATA_DIR", dataDir)
 			tc.prepare(t)
 
 			_, err := Load()
 			if err == nil || !strings.HasPrefix(err.Error(), tc.wantErr) {
 				t.Fatalf("Load() error = %v, want %q", err, tc.wantErr)
-			}
-			if _, statErr := os.Stat(dataDir); !os.IsNotExist(statErr) {
-				t.Fatalf("DATA_DIR prepared before required variables were validated: %v", statErr)
 			}
 		})
 	}

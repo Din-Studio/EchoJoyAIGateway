@@ -13,20 +13,12 @@ import (
 func TestSystemInfoResponseContainsOnlySafeMetadata(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{
-		DataDir:     "./safe-data",
 		DatabaseDSN: "file:distinctive-secret-dsn",
 		DatabaseMetadata: config.DatabaseMetadata{
 			Source: config.DatabaseSourceExternal,
 		},
 		AuthKey:       "distinctive-auth-secret",
 		EncryptionKey: "distinctive-encryption-secret",
-		AuthKeyMetadata: config.SecretMetadata{
-			Source: config.SecretSourceKeyFile,
-			Path:   "safe-data/auth.key",
-		},
-		EncryptionKeyMetadata: config.SecretMetadata{
-			Source: config.SecretSourceEnvironment,
-		},
 	}
 
 	encoded, err := json.Marshal(newSystemInfoResponse(cfg))
@@ -55,10 +47,9 @@ func TestSystemInfoResponseContainsOnlySafeMetadata(t *testing.T) {
 			"database":      "sqlite",
 			"distribution":  "single_binary",
 		},
-		"data_dir": "./safe-data",
 		"auth_key": map[string]any{
-			"source": "key_file",
-			"path":   "safe-data/auth.key",
+			"source": "environment",
+			"path":   nil,
 		},
 		"encryption": map[string]any{
 			"enabled": true,
@@ -73,14 +64,7 @@ func TestSystemInfoResponseContainsOnlySafeMetadata(t *testing.T) {
 
 func TestSystemInfoResponseUsesNullPathsForEnvironmentSources(t *testing.T) {
 	t.Parallel()
-	encoded, err := json.Marshal(newSystemInfoResponse(&config.Config{
-		AuthKeyMetadata: config.SecretMetadata{
-			Source: config.SecretSourceEnvironment,
-		},
-		EncryptionKeyMetadata: config.SecretMetadata{
-			Source: config.SecretSourceEnvironment,
-		},
-	}))
+	encoded, err := json.Marshal(newSystemInfoResponse(&config.Config{}))
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}

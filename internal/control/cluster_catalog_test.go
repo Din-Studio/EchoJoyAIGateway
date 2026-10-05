@@ -36,7 +36,7 @@ func newClusterCatalogInstance(
 	bootstrap := loadSharedCatalogBootstrap(t.Context(), shared)
 	fixture.service.catalogRuntime.Publish(bootstrap.Runtime.Load())
 	coordinator := newCatalogSyncCoordinator(
-		fixture.service, client, "", bootstrap.Metadata, bootstrap.HasLKG,
+		fixture.service, client, bootstrap.Metadata, bootstrap.HasLKG,
 		shared, cluster.NewJobLease(redis),
 	)
 	applied := &atomic.Int32{}

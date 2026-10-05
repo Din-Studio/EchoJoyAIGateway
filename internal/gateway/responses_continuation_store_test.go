@@ -15,16 +15,24 @@ import (
 
 	"gpt-load/internal/automodel"
 	"gpt-load/internal/channel"
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/state"
+	"gpt-load/internal/testutil/clustertest"
 )
 
 var errTestSharedStore = errors.New("redis: connection refused")
 
-// scriptedBindingStore wraps the in-process index and injects shared-store
-// failures so gateway failure semantics can be observed without Redis.
+func newTestResponseBindings(t *testing.T) *cluster.ResponseBindings {
+	t.Helper()
+	_, client := clustertest.NewClient(t)
+	return cluster.NewResponseBindings(client, testResponseBindingTTL)
+}
+
+// scriptedBindingStore wraps a Redis-backed store and injects shared-store
+// failures so gateway failure semantics can be observed.
 type scriptedBindingStore struct {
-	local     *state.ResponseBindings
+	local     *cluster.ResponseBindings
 	lookupErr error
 	recordErr error
 	lookups   atomic.Int32
@@ -54,7 +62,7 @@ func (store *scriptedBindingStore) Record(
 func TestResponsesContinuationLookupFailureIsClusterStateUnavailable(t *testing.T) {
 	forwarder := &scriptedForwarder{results: []UpstreamResult{storedResponse("first")}}
 	handler, engine, _ := newContinuationFixture(t, forwarder)
-	handler.responseBindings = &scriptedBindingStore{local: state.NewResponseBindings(), lookupErr: errTestSharedStore}
+	handler.responseBindings = &scriptedBindingStore{local: newTestResponseBindings(t), lookupErr: errTestSharedStore}
 
 	response := serveContinuation(t, engine, "gl-client", `{"model":"gpt-4o","previous_response_id":"first","input":"continue"}`, http.StatusServiceUnavailable)
 	if !bytes.Contains(response.Body.Bytes(), []byte("cluster_state_unavailable")) {
@@ -68,7 +76,7 @@ func TestResponsesContinuationLookupFailureIsClusterStateUnavailable(t *testing.
 func TestResponsesContinuationLooksUpOwnershipOnce(t *testing.T) {
 	forwarder := &scriptedForwarder{results: []UpstreamResult{storedResponse("first"), storedResponse("second")}}
 	handler, engine, _ := newContinuationFixture(t, forwarder)
-	store := &scriptedBindingStore{local: state.NewResponseBindings()}
+	store := &scriptedBindingStore{local: newTestResponseBindings(t)}
 	handler.responseBindings = store
 
 	serveContinuation(t, engine, "gl-client", `{"model":"gpt-4o","input":"initial"}`, http.StatusOK)
@@ -82,7 +90,7 @@ func TestResponsesOwnershipStoreFailureWithholdsJSONResponseWithoutPenalty(t *te
 	forwarder := &scriptedForwarder{results: []UpstreamResult{storedResponse("first"), storedResponse("retried")}}
 	handler, engine, _ := newContinuationFixture(t, forwarder)
 	handler.manager.Current().Settings.RetryCount = 3
-	handler.responseBindings = &scriptedBindingStore{local: state.NewResponseBindings(), recordErr: errTestSharedStore}
+	handler.responseBindings = &scriptedBindingStore{local: newTestResponseBindings(t), recordErr: errTestSharedStore}
 
 	response := serveContinuation(t, engine, "gl-client", `{"model":"gpt-4o","input":"initial"}`, http.StatusServiceUnavailable)
 	if bytes.Contains(response.Body.Bytes(), []byte("first")) ||
@@ -115,7 +123,7 @@ func TestResponsesOwnershipStoreFailureWithholdsSSEResponseWithoutPenalty(t *tes
 	handler, engine, _ := newContinuationFixture(t, NewExecutionForwarder(executor))
 	setContinuationChannel(t, handler, channel.NewAPI, "https://upstream.example")
 	handler.manager.Current().Settings.RetryCount = 3
-	handler.responseBindings = &scriptedBindingStore{local: state.NewResponseBindings(), recordErr: errTestSharedStore}
+	handler.responseBindings = &scriptedBindingStore{local: newTestResponseBindings(t), recordErr: errTestSharedStore}
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-4o","input":"initial","stream":true}`))
 	request.Header.Set("Authorization", "Bearer gl-client")
@@ -171,7 +179,7 @@ func TestWebsocketOwnershipStoreFailureWithholdsResponseWithoutPenalty(t *testin
 	h, engine, _ := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
 	sink := &recordingRequestLogSink{}
 	h.requestLogSink = sink
-	h.responseBindings = &scriptedBindingStore{local: state.NewResponseBindings(), recordErr: errTestSharedStore}
+	h.responseBindings = &scriptedBindingStore{local: newTestResponseBindings(t), recordErr: errTestSharedStore}
 	server := httptest.NewServer(engine)
 	defer server.Close()
 
@@ -197,7 +205,7 @@ func TestWebsocketContinuationLookupFailureIsClusterStateUnavailable(t *testing.
 	}))
 	defer upstream.Close()
 	h, engine, _ := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
-	h.responseBindings = &scriptedBindingStore{local: state.NewResponseBindings(), lookupErr: errTestSharedStore}
+	h.responseBindings = &scriptedBindingStore{local: newTestResponseBindings(t), lookupErr: errTestSharedStore}
 	server := httptest.NewServer(engine)
 	defer server.Close()
 

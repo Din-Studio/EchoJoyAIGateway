@@ -19,10 +19,9 @@ import (
 // reloadCommittedConfig re-reads the persisted configuration committed by any
 // cluster instance and applies it locally while preserving runtime state:
 // credential health (cooldowns, blacklist, failure counts, auth state, model
-// cooldowns) survives through ReconcileGroup, access-key quota counters
-// survive through the snapshot reconciler, and the soft-affinity cache is only
-// invalidated when the compiled snapshot actually changed. It returns the
-// cluster revision that was applied.
+// cooldowns) survives through ReconcileGroup, while access-key quota counters
+// and soft affinity live in Redis and are untouched. It returns the cluster
+// revision that was applied.
 func (s *Service) reloadCommittedConfig(ctx context.Context) (uint64, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

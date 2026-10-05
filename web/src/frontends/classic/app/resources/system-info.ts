@@ -27,7 +27,6 @@ export interface SystemInfoDto {
     database: DatabaseDriver
     distribution: 'single_binary'
   }
-  data_dir: string
   auth_key: SecretSourceInfo
   encryption: SecretSourceInfo & { enabled: true }
 }
@@ -67,7 +66,7 @@ function projectSecretSource(value: unknown, includeEnabled: boolean): SecretSou
 
 export function projectSystemInfo(value: unknown): SystemInfoDto {
   const record = projectRecord(value)
-  assertExactFields(record, ['version', 'deployment', 'data_dir', 'auth_key', 'encryption'])
+  assertExactFields(record, ['version', 'deployment', 'auth_key', 'encryption'])
   const deployment = projectRecord(record.deployment)
   assertExactFields(deployment, ['instance_mode', 'database', 'distribution'])
   if (
@@ -85,7 +84,6 @@ export function projectSystemInfo(value: unknown): SystemInfoDto {
       database,
       distribution: 'single_binary',
     },
-    data_dir: projectNonBlankTrimmedString(record.data_dir),
     auth_key: projectSecretSource(record.auth_key, false),
     encryption: { enabled: true, ...encryption },
   }

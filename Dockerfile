@@ -48,13 +48,9 @@ RUN apk add --no-cache libcrypto3=3.5.8-r0 libssl3=3.5.8-r0 \
     && apk add --no-cache ca-certificates tzdata \
     && update-ca-certificates \
     && addgroup -S -g 10001 gpt-load \
-    && adduser -S -D -H -u 10001 -G gpt-load gpt-load \
-    && mkdir -p /app/data \
-    && chown 10001:10001 /app/data \
-    && chmod 0700 /app/data
+    && adduser -S -D -H -u 10001 -G gpt-load gpt-load
 
 ENV HOST=0.0.0.0
-ENV DATA_DIR=/app/data
 COPY LICENSE THIRD_PARTY_NOTICES.md /app/licenses/
 COPY LICENSES/Apache-2.0.txt /app/licenses/Apache-2.0.txt
 COPY LICENSES/MIT.txt /app/licenses/MIT.txt

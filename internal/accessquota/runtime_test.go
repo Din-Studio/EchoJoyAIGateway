@@ -1,475 +1,117 @@
 package accessquota
 
 import (
-	"math"
-	"reflect"
-	"sync"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
 
-func TestRuntimeAppliesTotalAndActivityTriggeredPeriodicLimits(t *testing.T) {
-	runtime := NewRuntime()
-	if err := runtime.Reconcile(map[uint][]Rule{1: {
-		{ID: 10, Revision: 1, Kind: KindTotal, LimitNanoUSD: 100},
-		{ID: 11, Revision: 1, Kind: KindPeriodic, LimitNanoUSD: 20, PeriodSeconds: 5 * 60 * 60},
-		{ID: 12, Revision: 1, Kind: KindPeriodic, LimitNanoUSD: 30, PeriodSeconds: 24 * 60 * 60},
-	}}); err != nil {
-		t.Fatalf("Reconcile() error = %v", err)
-	}
-
-	started := time.Date(2026, time.August, 20, 10, 37, 0, 0, time.UTC)
-	ticket, decision := runtime.Admit(1, started)
-	if !decision.Allowed || len(ticket.Rules) != 3 {
-		t.Fatalf("Admit() = ticket %#v decision %#v", ticket, decision)
-	}
-	runtime.Complete(ticket, 20)
-
-	decision = runtime.Check(1, started.Add(time.Hour))
-	if decision.Allowed || !decision.Recoverable || len(decision.BlockingRules) != 1 ||
-		decision.BlockingRules[0].ID != 11 {
-		t.Fatalf("Check(5h exhausted) = %#v", decision)
-	}
-	want5HEnd := started.Add(5 * time.Hour).UnixMilli()
-	if decision.NextAvailableAtMS == nil || *decision.NextAvailableAtMS != want5HEnd {
-		t.Fatalf("next available = %v, want %d", decision.NextAvailableAtMS, want5HEnd)
-	}
-
-	atBoundary := started.Add(5 * time.Hour)
-	if decision = runtime.Check(1, atBoundary); !decision.Allowed {
-		t.Fatalf("Check(at boundary) = %#v, want allowed", decision)
-	}
-	view := runtime.Snapshot(1, atBoundary)
-	period5H := ruleViewByID(t, view.Rules, 11)
-	if period5H.Status != RuleStatusInactive || period5H.UsedNanoUSD != 0 ||
-		period5H.WindowStartedAtMS != nil || period5H.WindowEndsAtMS != nil {
-		t.Fatalf("expired 5h view = %#v", period5H)
-	}
-
-	secondStart := time.Date(2026, time.August, 20, 18, 20, 0, 0, time.UTC)
-	secondTicket, decision := runtime.Admit(1, secondStart)
-	if !decision.Allowed {
-		t.Fatalf("second Admit() decision = %#v", decision)
-	}
-	runtime.Complete(secondTicket, 10)
-	decision = runtime.Check(1, secondStart.Add(time.Minute))
-	if decision.Allowed || len(decision.BlockingRules) != 1 || decision.BlockingRules[0].ID != 12 {
-		t.Fatalf("Check(24h exhausted) = %#v", decision)
-	}
-	view = runtime.Snapshot(1, secondStart.Add(time.Minute))
-	if total := ruleViewByID(t, view.Rules, 10); total.UsedNanoUSD != 30 {
-		t.Fatalf("total used = %d, want 30", total.UsedNanoUSD)
-	}
-	if period := ruleViewByID(t, view.Rules, 11); period.UsedNanoUSD != 10 {
-		t.Fatalf("new 5h used = %d, want 10", period.UsedNanoUSD)
-	}
-}
-
-func TestRuntimeReturnsEveryBlockingRuleAndLatestPeriodicRecovery(t *testing.T) {
-	runtime := NewRuntime()
-	if err := runtime.Reconcile(map[uint][]Rule{1: {
-		{ID: 10, Revision: 1, Kind: KindTotal, LimitNanoUSD: 100},
-		{ID: 11, Revision: 1, Kind: KindPeriodic, LimitNanoUSD: 20, PeriodSeconds: 5 * 60 * 60},
-		{ID: 12, Revision: 1, Kind: KindPeriodic, LimitNanoUSD: 30, PeriodSeconds: 24 * 60 * 60},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	start := time.Date(2026, time.August, 20, 10, 0, 0, 0, time.UTC)
-	ticket, _ := runtime.Admit(1, start)
-	runtime.Complete(ticket, 30)
-	decision := runtime.Check(1, start.Add(time.Minute))
-	if decision.Allowed || !decision.Recoverable || len(decision.BlockingRules) != 2 ||
-		decision.BlockingRules[0].ID != 11 || decision.BlockingRules[1].ID != 12 ||
-		decision.NextAvailableAtMS == nil ||
-		*decision.NextAvailableAtMS != start.Add(24*time.Hour).UnixMilli() {
-		t.Fatalf("periodic blockers = %#v", decision)
-	}
-
-	runtime.Complete(ticket, 70)
-	decision = runtime.Check(1, start.Add(time.Minute))
-	if decision.Allowed || decision.Recoverable || decision.NextAvailableAtMS != nil ||
-		len(decision.BlockingRules) != 3 || decision.BlockingRules[0].ID != 10 {
-		t.Fatalf("total and periodic blockers = %#v", decision)
-	}
-}
-
-func TestRuntimePreservesExpiredGenerationUntilNextAdmit(t *testing.T) {
-	runtime := NewRuntime()
-	if err := runtime.Reconcile(map[uint][]Rule{1: {
-		{ID: 20, Revision: 1, Kind: KindTotal, LimitNanoUSD: 100},
-		{ID: 21, Revision: 1, Kind: KindPeriodic, LimitNanoUSD: 20, PeriodSeconds: 60},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	start := time.Date(2026, time.August, 20, 10, 0, 0, 0, time.UTC)
-	oldTicket, _ := runtime.Admit(1, start)
-	if decision := runtime.Check(1, start.Add(time.Minute)); !decision.Allowed {
-		t.Fatalf("expired Check() = %#v", decision)
-	}
-	runtime.Complete(oldTicket, 7)
-
-	newTicket, decision := runtime.Admit(1, start.Add(2*time.Minute))
-	if !decision.Allowed {
-		t.Fatalf("new Admit() = %#v", decision)
-	}
-	runtime.Complete(oldTicket, 5)
-	runtime.Complete(newTicket, 3)
-
-	view := runtime.Snapshot(1, start.Add(2*time.Minute))
-	if total := ruleViewByID(t, view.Rules, 20); total.UsedNanoUSD != 15 {
-		t.Fatalf("total used = %d, want 15", total.UsedNanoUSD)
-	}
-	periodic := ruleViewByID(t, view.Rules, 21)
-	if periodic.UsedNanoUSD != 3 || periodic.WindowGeneration != 2 {
-		t.Fatalf("new periodic state = %#v, want used 3 generation 2", periodic)
-	}
-}
-
-func TestRuntimeReconcilePreservesAmountStateAndInvalidatesNewRevisionTickets(t *testing.T) {
-	runtime := NewRuntime()
-	if err := runtime.Reconcile(map[uint][]Rule{1: {
-		{ID: 30, Revision: 1, Kind: KindTotal, LimitNanoUSD: 100},
-		{ID: 31, Revision: 1, Kind: KindPeriodic, LimitNanoUSD: 50, PeriodSeconds: 300},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Date(2026, time.August, 20, 11, 0, 0, 0, time.UTC)
-	oldTicket, _ := runtime.Admit(1, now)
-	runtime.Complete(oldTicket, 40)
-
-	if err := runtime.Reconcile(map[uint][]Rule{1: {
-		{ID: 30, Revision: 1, Kind: KindTotal, LimitNanoUSD: 35},
-		{ID: 31, Revision: 2, Kind: KindPeriodic, LimitNanoUSD: 50, PeriodSeconds: 600},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	if decision := runtime.Check(1, now); decision.Allowed || decision.BlockingRules[0].ID != 30 {
-		t.Fatalf("Check(after amount decrease) = %#v", decision)
-	}
-	runtime.Complete(oldTicket, 5)
-	view := runtime.Snapshot(1, now)
-	if total := ruleViewByID(t, view.Rules, 30); total.UsedNanoUSD != 45 {
-		t.Fatalf("total used = %d, want 45", total.UsedNanoUSD)
-	}
-	if periodic := ruleViewByID(t, view.Rules, 31); periodic.UsedNanoUSD != 0 || periodic.Status != RuleStatusInactive {
-		t.Fatalf("new periodic revision = %#v", periodic)
-	}
-}
-
-func TestRuntimeReconcilePreservesConcurrentCompletions(t *testing.T) {
-	const (
-		writerCount          = 8
-		completionsPerWriter = 2_000
-	)
-	definitions := map[uint][]Rule{1: {{
-		ID: 32, Revision: 1, Kind: KindTotal, LimitNanoUSD: 1_000_000_000,
-	}}}
-	runtime := NewRuntime()
-	if err := runtime.Reconcile(definitions); err != nil {
-		t.Fatal(err)
-	}
-	ticket, decision := runtime.Admit(1, time.Now())
-	if !decision.Allowed {
-		t.Fatalf("Admit() = %#v", decision)
-	}
-
-	start := make(chan struct{})
-	stopReconcile := make(chan struct{})
-	var writers sync.WaitGroup
-	writers.Add(writerCount)
-	for range writerCount {
-		go func() {
-			defer writers.Done()
-			<-start
-			for range completionsPerWriter {
-				runtime.Complete(ticket, 1)
-			}
-		}()
-	}
-	var reconciler sync.WaitGroup
-	reconciler.Add(1)
-	go func() {
-		defer reconciler.Done()
-		<-start
-		for {
-			select {
-			case <-stopReconcile:
-				return
-			default:
-				if err := runtime.Reconcile(definitions); err != nil {
-					t.Errorf("Reconcile() error = %v", err)
-					return
-				}
-			}
-		}
-	}()
-
-	close(start)
-	writers.Wait()
-	close(stopReconcile)
-	reconciler.Wait()
-	view := runtime.Snapshot(1, time.Now())
-	want := int64(writerCount * completionsPerWriter)
-	if got := ruleViewByID(t, view.Rules, 32).UsedNanoUSD; got != want {
-		t.Fatalf("concurrent used = %d, want %d", got, want)
-	}
-}
-
-func TestRuntimeRestoreRequiresExactRuleStateAndKeepsActiveWindow(t *testing.T) {
-	start := time.Date(2026, time.August, 20, 12, 0, 0, 0, time.UTC)
-	end := start.Add(time.Hour)
-	runtime := NewRuntime()
-	if err := runtime.Restore([]RestoredState{{
-		AccessKeyID: 1, RuleID: 40, RuleRevision: 1, UsedNanoUSD: 7,
-		WindowStartedAtMS: ptrInt64(start.UnixMilli()), WindowEndsAtMS: ptrInt64(end.UnixMilli()),
-		WindowGeneration: 3, SnapshotVersion: 9,
-	}}); err != nil {
-		t.Fatalf("Restore() error = %v", err)
-	}
-	if err := runtime.Reconcile(map[uint][]Rule{1: {{
-		ID: 40, Revision: 1, Kind: KindPeriodic, LimitNanoUSD: 10, PeriodSeconds: 3600,
-	}}}); err != nil {
-		t.Fatalf("Reconcile(restored) error = %v", err)
-	}
-	view := runtime.Snapshot(1, start.Add(time.Minute))
-	periodic := ruleViewByID(t, view.Rules, 40)
-	if periodic.UsedNanoUSD != 7 || periodic.WindowGeneration != 3 || periodic.WindowEndsAtMS == nil ||
-		*periodic.WindowEndsAtMS != end.UnixMilli() {
-		t.Fatalf("restored periodic = %#v", periodic)
-	}
-
-	missing := NewRuntime()
-	if err := missing.Restore(nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := missing.Reconcile(map[uint][]Rule{1: {{
-		ID: 41, Revision: 1, Kind: KindTotal, LimitNanoUSD: 10,
-	}}}); err == nil {
-		t.Fatal("Reconcile(missing state) error = nil")
-	}
-
-	orphan := NewRuntime()
-	if err := orphan.Restore([]RestoredState{{
-		AccessKeyID: 1, RuleID: 99, RuleRevision: 1, SnapshotVersion: 1,
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := orphan.Reconcile(nil); err == nil {
-		t.Fatal("Reconcile(orphan state) error = nil")
-	}
-}
-
-func TestRuntimeRestoreRejectsImpossiblePeriodicState(t *testing.T) {
-	tests := []struct {
-		name  string
-		state RestoredState
-	}{
-		{
-			name: "inactive state with used amount",
-			state: RestoredState{
-				AccessKeyID: 1, RuleID: 42, RuleRevision: 1, UsedNanoUSD: 1,
-				SnapshotVersion: 1,
-			},
-		},
-		{
-			name: "window duration differs from rule",
-			state: RestoredState{
-				AccessKeyID: 1, RuleID: 42, RuleRevision: 1, UsedNanoUSD: 1,
-				WindowStartedAtMS: ptrInt64(1_000), WindowEndsAtMS: ptrInt64(601_000),
-				WindowGeneration: 1, SnapshotVersion: 1,
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			runtime := NewRuntime()
-			if err := runtime.Restore([]RestoredState{test.state}); err != nil {
-				t.Fatalf("Restore() error = %v", err)
-			}
-			if err := runtime.Reconcile(map[uint][]Rule{1: {{
-				ID: 42, Revision: 1, Kind: KindPeriodic, LimitNanoUSD: 10, PeriodSeconds: 300,
-			}}}); err == nil {
-				t.Fatal("Reconcile() error = nil")
-			}
-		})
-	}
-}
-
-func TestRuntimeRestoreAcceptsExpiredPeriodicPhysicalWindow(t *testing.T) {
-	start := time.Date(2026, time.August, 20, 12, 0, 0, 0, time.UTC)
-	end := start.Add(5 * time.Minute)
-	runtime := NewRuntime()
-	if err := runtime.Restore([]RestoredState{{
-		AccessKeyID: 1, RuleID: 43, RuleRevision: 1, UsedNanoUSD: 7,
-		WindowStartedAtMS: ptrInt64(start.UnixMilli()), WindowEndsAtMS: ptrInt64(end.UnixMilli()),
-		WindowGeneration: 2, SnapshotVersion: 3,
-	}}); err != nil {
-		t.Fatalf("Restore() error = %v", err)
-	}
-	if err := runtime.Reconcile(map[uint][]Rule{1: {{
-		ID: 43, Revision: 1, Kind: KindPeriodic, LimitNanoUSD: 10, PeriodSeconds: 300,
-	}}}); err != nil {
-		t.Fatalf("Reconcile() error = %v", err)
-	}
-
-	view := ruleViewByID(t, runtime.Snapshot(1, end.Add(time.Minute)).Rules, 43)
-	if view.Status != RuleStatusInactive || view.UsedNanoUSD != 0 || view.WindowGeneration != 2 {
-		t.Fatalf("expired periodic view = %#v", view)
-	}
-}
-
-func TestRuntimeDirtySnapshotsAckOnlyPersistedVersion(t *testing.T) {
-	runtime := NewRuntime()
-	if err := runtime.Reconcile(map[uint][]Rule{1: {{
-		ID: 50, Revision: 1, Kind: KindTotal, LimitNanoUSD: 100,
-	}}}); err != nil {
-		t.Fatal(err)
-	}
-	ticket, _ := runtime.Admit(1, time.Now())
-	runtime.Complete(ticket, 10)
-	first := runtime.DirtySnapshots(10)
-	if len(first) != 1 || first[0].UsedNanoUSD != 10 {
-		t.Fatalf("DirtySnapshots() = %#v", first)
-	}
-	runtime.Complete(ticket, 5)
-	runtime.Ack(1, 50, 1, first[0].SnapshotVersion)
-	second := runtime.DirtySnapshots(10)
-	if len(second) != 1 || second[0].UsedNanoUSD != 15 ||
-		second[0].SnapshotVersion <= first[0].SnapshotVersion {
-		t.Fatalf("dirty after old Ack = %#v", second)
-	}
-	runtime.Ack(1, 50, 1, second[0].SnapshotVersion)
-	if got := runtime.DirtySnapshots(10); len(got) != 0 {
-		t.Fatalf("dirty after current Ack = %#v", got)
-	}
-}
-
-func TestRuntimeNotifiesCheckpointWorkerAfterDirtyStateChanges(t *testing.T) {
-	runtime := NewRuntime()
-	if err := runtime.Reconcile(map[uint][]Rule{1: {
-		{ID: 11, Revision: 1, Kind: KindPeriodic, LimitNanoUSD: 100, PeriodSeconds: 300},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	notifications := 0
-	runtime.SetDirtyNotifier(func() { notifications++ })
-	ticket, decision := runtime.Admit(1, time.Unix(100, 0))
-	if !decision.Allowed {
-		t.Fatalf("Admit() decision = %#v", decision)
-	}
-	runtime.Complete(ticket, 1)
-	if notifications != 2 {
-		t.Fatalf("checkpoint notifications = %d, want 2", notifications)
-	}
-}
-
-func TestRuntimeSaturatesInvalidAndOverflowingCosts(t *testing.T) {
-	for _, test := range []struct {
-		cost      int64
-		wantFault CompletionFault
-	}{
-		{cost: -1, wantFault: CompletionFaultNegativeEstimate},
-		{cost: 10, wantFault: CompletionFaultOverflow},
-	} {
-		t.Run(time.Duration(test.cost).String(), func(t *testing.T) {
-			runtime := NewRuntime()
-			if err := runtime.Reconcile(map[uint][]Rule{1: {{
-				ID: 60, Revision: 1, Kind: KindTotal, LimitNanoUSD: math.MaxInt64,
-			}}}); err != nil {
-				t.Fatal(err)
-			}
-			ticket, _ := runtime.Admit(1, time.Now())
-			if test.cost > 0 {
-				runtime.Complete(ticket, math.MaxInt64-5)
-			}
-			completion := runtime.Complete(ticket, test.cost)
-			if completion.Fault != test.wantFault {
-				t.Fatalf("Complete() = %#v, want fault %q", completion, test.wantFault)
-			}
-			view := runtime.Snapshot(1, time.Now())
-			if got := ruleViewByID(t, view.Rules, 60).UsedNanoUSD; got != math.MaxInt64 {
-				t.Fatalf("used = %d, want MaxInt64", got)
-			}
-			if decision := runtime.Check(1, time.Now()); decision.Allowed {
-				t.Fatalf("Check() = %#v, want blocked", decision)
-			}
-			if got := runtime.Stats().OverflowFaultTotal; got != 1 {
-				t.Fatalf("OverflowFaultTotal = %d, want 1", got)
-			}
-		})
-	}
-}
-
-func ruleViewByID(t *testing.T, rules []RuleView, id uint) RuleView {
-	t.Helper()
-	for _, rule := range rules {
-		if rule.ID == id {
-			return rule
-		}
-	}
-	t.Fatalf("rule %d not found in %#v", id, rules)
-	return RuleView{}
-}
-
 func ptrInt64(value int64) *int64 { return &value }
 
-func runtimeStates(t *testing.T, runtime *Runtime, accessKeyID uint) map[uint]RestoredState {
-	t.Helper()
-	entry := runtime.lockEntry(accessKeyID)
-	if entry == nil {
-		t.Fatalf("access key %d has no runtime entry", accessKeyID)
+func summarizeQuotaRules(rules []RuleView) string {
+	parts := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		parts = append(parts, fmt.Sprintf("%d %s used=%d left=%d gen=%d",
+			rule.ID, rule.Status, rule.UsedNanoUSD, rule.RemainingNanoUSD, rule.WindowGeneration))
 	}
-	defer entry.mu.Unlock()
-	states := make(map[uint]RestoredState, len(entry.rules))
-	for _, rule := range entry.rules {
-		states[rule.definition.ID] = restoredState(accessKeyID, rule)
-	}
-	return states
+	return "[" + strings.Join(parts, "; ") + "]"
 }
 
-func TestDecisionForAndViewForMatchRuntime(t *testing.T) {
-	// Rules are deliberately unsorted: the pure functions must order them like the runtime.
+func summarizeQuotaNext(next *int64) string {
+	if next == nil {
+		return "-"
+	}
+	return fmt.Sprint(*next)
+}
+
+func TestDecisionForAndViewForEvaluateRuleStates(t *testing.T) {
+	// Rules are deliberately unsorted: the total rule comes first, then periodic rules by period.
 	rules := []Rule{
 		{ID: 12, Revision: 1, Kind: KindPeriodic, LimitNanoUSD: 30, PeriodSeconds: 24 * 60 * 60},
 		{ID: 11, Revision: 1, Kind: KindPeriodic, LimitNanoUSD: 20, PeriodSeconds: 5 * 60 * 60},
 		{ID: 10, Revision: 1, Kind: KindTotal, LimitNanoUSD: 100},
 	}
-	runtime := NewRuntime()
-	if err := runtime.Reconcile(map[uint][]Rule{1: rules}); err != nil {
-		t.Fatalf("Reconcile() error = %v", err)
-	}
 	started := time.Date(2026, time.August, 20, 10, 37, 0, 0, time.UTC)
-	assertSame := func(label string, now time.Time) {
-		t.Helper()
-		states := runtimeStates(t, runtime, 1)
-		if got, want := DecisionFor(rules, states, now.UnixMilli()), runtime.Check(1, now); !reflect.DeepEqual(got, want) {
-			t.Fatalf("%s: DecisionFor() = %#v, want %#v", label, got, want)
-		}
-		if got, want := ViewFor(rules, states, now), runtime.Snapshot(1, now); !reflect.DeepEqual(got, want) {
-			t.Fatalf("%s: ViewFor() = %#v, want %#v", label, got, want)
-		}
+	at := func(offset time.Duration) *int64 { return ptrInt64(started.Add(offset).UnixMilli()) }
+	firstWindows := map[uint]RestoredState{
+		10: {AccessKeyID: 1, RuleID: 10, RuleRevision: 1, UsedNanoUSD: 25, SnapshotVersion: 2},
+		11: {AccessKeyID: 1, RuleID: 11, RuleRevision: 1, UsedNanoUSD: 25, WindowStartedAtMS: at(0),
+			WindowEndsAtMS: at(5 * time.Hour), WindowGeneration: 1, SnapshotVersion: 3},
+		12: {AccessKeyID: 1, RuleID: 12, RuleRevision: 1, UsedNanoUSD: 25, WindowStartedAtMS: at(0),
+			WindowEndsAtMS: at(24 * time.Hour), WindowGeneration: 1, SnapshotVersion: 3},
+	}
+	exhausted := map[uint]RestoredState{
+		10: {AccessKeyID: 1, RuleID: 10, RuleRevision: 1, UsedNanoUSD: 125, SnapshotVersion: 3},
+		11: {AccessKeyID: 1, RuleID: 11, RuleRevision: 1, UsedNanoUSD: 100, WindowStartedAtMS: at(25 * time.Hour),
+			WindowEndsAtMS: at(30 * time.Hour), WindowGeneration: 2, SnapshotVersion: 5},
+		12: {AccessKeyID: 1, RuleID: 12, RuleRevision: 1, UsedNanoUSD: 100, WindowStartedAtMS: at(25 * time.Hour),
+			WindowEndsAtMS: at(49 * time.Hour), WindowGeneration: 2, SnapshotVersion: 5},
+	}
+	for _, test := range []struct {
+		name            string
+		now             time.Time
+		states          map[uint]RestoredState
+		wantAllowed     bool
+		wantRecoverable bool
+		wantNext        string
+		wantBlocking    []uint
+		wantRules       string
+	}{
+		{
+			name: "no state", now: started, wantAllowed: true, wantRecoverable: true, wantNext: "-",
+			wantRules: "[10 available used=0 left=100 gen=0; 11 inactive used=0 left=20 gen=0; 12 inactive used=0 left=30 gen=0]",
+		},
+		{
+			name: "5h window exhausted", now: started.Add(time.Hour), states: firstWindows,
+			wantRecoverable: true, wantNext: fmt.Sprint(*at(5 * time.Hour)), wantBlocking: []uint{11},
+			wantRules: "[10 available used=25 left=75 gen=0; 11 exhausted used=25 left=0 gen=1; 12 available used=25 left=5 gen=1]",
+		},
+		{
+			name: "5h window expired", now: started.Add(5 * time.Hour), states: firstWindows,
+			wantAllowed: true, wantRecoverable: true, wantNext: "-",
+			wantRules: "[10 available used=25 left=75 gen=0; 11 inactive used=0 left=20 gen=1; 12 available used=25 left=5 gen=1]",
+		},
+		{
+			name: "all periodic windows expired", now: started.Add(25 * time.Hour), states: firstWindows,
+			wantAllowed: true, wantRecoverable: true, wantNext: "-",
+			wantRules: "[10 available used=25 left=75 gen=0; 11 inactive used=0 left=20 gen=1; 12 inactive used=0 left=30 gen=1]",
+		},
+		{
+			name: "total exhausted", now: started.Add(26 * time.Hour), states: exhausted,
+			wantNext: "-", wantBlocking: []uint{10, 11, 12},
+			wantRules: "[10 exhausted used=125 left=0 gen=0; 11 exhausted used=100 left=0 gen=2; 12 exhausted used=100 left=0 gen=2]",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decision := DecisionFor(rules, test.states, test.now.UnixMilli())
+			blocking := make([]uint, 0, len(decision.BlockingRules))
+			for _, rule := range decision.BlockingRules {
+				blocking = append(blocking, rule.ID)
+			}
+			if decision.Allowed != test.wantAllowed || decision.Recoverable != test.wantRecoverable ||
+				summarizeQuotaNext(decision.NextAvailableAtMS) != test.wantNext ||
+				fmt.Sprint(blocking) != fmt.Sprint(append([]uint{}, test.wantBlocking...)) {
+				t.Fatalf("DecisionFor() = allowed %t recoverable %t next %s blocking %v",
+					decision.Allowed, decision.Recoverable, summarizeQuotaNext(decision.NextAvailableAtMS), blocking)
+			}
+			view := ViewFor(rules, test.states, test.now)
+			if view.ObservedAtMS != test.now.UnixMilli() || view.Allowed != test.wantAllowed ||
+				view.Recoverable != test.wantRecoverable || summarizeQuotaNext(view.NextAvailableAtMS) != test.wantNext {
+				t.Fatalf("ViewFor() = %#v", view)
+			}
+			if got := summarizeQuotaRules(view.Rules); got != test.wantRules {
+				t.Fatalf("ViewFor() rules = %s, want %s", got, test.wantRules)
+			}
+		})
 	}
 
-	assertSame("inactive", started)
-	ticket, _ := runtime.Admit(1, started)
-	runtime.Complete(ticket, 25)
-	assertSame("both periodic windows exhausted in progress", started.Add(time.Hour))
-	assertSame("5h window expired", started.Add(5*time.Hour))
-	assertSame("all periodic windows expired", started.Add(25*time.Hour))
-	ticket, _ = runtime.Admit(1, started.Add(25*time.Hour))
-	runtime.Complete(ticket, 100)
-	assertSame("total exhausted", started.Add(26*time.Hour))
-
-	if got := DecisionFor(rules, nil, started.UnixMilli()); !got.Allowed || len(got.BlockingRules) != 0 {
-		t.Fatalf("DecisionFor(no state) = %#v, want allowed", got)
-	}
 	if got := ViewFor(nil, nil, started); !got.Allowed || len(got.Rules) != 0 {
 		t.Fatalf("ViewFor(no rules) = %#v, want empty allowed view", got)
 	}
 }
 
-func TestValidateRestoredStateMatchesRestoreRules(t *testing.T) {
+func TestValidateRestoredStateRejectsImpossibleStates(t *testing.T) {
 	periodic := Rule{ID: 11, Revision: 2, Kind: KindPeriodic, LimitNanoUSD: 20, PeriodSeconds: 60}
 	start, end, wrongEnd := int64(1000), int64(61000), int64(2000)
 	valid := RestoredState{
@@ -485,6 +127,11 @@ func TestValidateRestoredStateMatchesRestoreRules(t *testing.T) {
 		"zero version":      func() RestoredState { s := valid; s.SnapshotVersion = 0; return s }(),
 		"wrong duration":    func() RestoredState { s := valid; s.WindowEndsAtMS = &wrongEnd; return s }(),
 		"no generation":     func() RestoredState { s := valid; s.WindowGeneration = 0; return s }(),
+		"inactive with usage": func() RestoredState {
+			s := valid
+			s.WindowStartedAtMS, s.WindowEndsAtMS, s.WindowGeneration = nil, nil, 0
+			return s
+		}(),
 	}
 	for name, state := range invalid {
 		if err := ValidateRestoredState(periodic, state); err == nil {

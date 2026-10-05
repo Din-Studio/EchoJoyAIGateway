@@ -26,7 +26,7 @@ func TestModelPriceSyncRouteSanitizesFailure(t *testing.T) {
 	client := catalogSyncClientFunc(func(context.Context, catalog.Metadata) (catalog.SyncResult, error) {
 		return catalog.SyncResult{}, errors.New(rawFailure)
 	})
-	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, catalog.Metadata{
 		CheckedAtMillis: 100, SuccessfulFetchAtMillis: 90,
 	}, true)
 	coordinator.now = func() time.Time { return time.UnixMilli(250) }

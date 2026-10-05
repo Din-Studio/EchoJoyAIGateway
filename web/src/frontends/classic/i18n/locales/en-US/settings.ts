@@ -196,7 +196,6 @@ export default {
         postgres: 'PostgreSQL',
       },
       singleBinary: 'Single binary',
-      dataDir: 'Data directory',
       authKey: 'AUTH_KEY source',
       encryption: 'Encryption',
       enabled: 'Enabled',

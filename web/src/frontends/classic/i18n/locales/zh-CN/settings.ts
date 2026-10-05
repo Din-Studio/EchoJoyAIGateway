@@ -180,7 +180,6 @@ export default {
         postgres: 'PostgreSQL',
       },
       singleBinary: '单二进制',
-      dataDir: '数据目录',
       authKey: 'AUTH_KEY 来源',
       encryption: '静态加密',
       enabled: '已启用',

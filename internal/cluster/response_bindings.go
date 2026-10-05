@@ -69,7 +69,7 @@ func (bindings *ResponseBindings) Lookup(
 }
 
 // Record registers ownership before the response is delivered. A conflicting
-// owner is rejected and never overwritten, matching the in-process index.
+// owner is rejected and never overwritten.
 func (bindings *ResponseBindings) Record(
 	ctx context.Context,
 	accessKeyID uint,

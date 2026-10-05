@@ -189,7 +189,6 @@ export default {
         postgres: 'PostgreSQL',
       },
       singleBinary: '単一バイナリ',
-      dataDir: 'データディレクトリ',
       authKey: 'AUTH_KEY の取得元',
       encryption: '暗号化',
       enabled: '有効',

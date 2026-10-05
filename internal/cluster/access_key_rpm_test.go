@@ -26,39 +26,37 @@ func (clock *rpmClock) advance(duration time.Duration) {
 	clock.mu.Unlock()
 }
 
-func TestAccessKeyRPMMatchesInMemoryLimiter(t *testing.T) {
+func TestAccessKeyRPMSlidingWindow(t *testing.T) {
 	_, client := newTestClient(t)
 	clock := &rpmClock{now: time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)}
 	shared := NewAccessKeyRPM(client)
 	shared.now = clock.current
-	local := ratelimit.NewAccessKeyRPMWithClock(clock.current)
 
 	steps := []struct {
 		advance time.Duration
 		limit   int64
+		want    ratelimit.LimitDecision
 	}{
-		{0, 3}, {100 * time.Millisecond, 3}, {200 * time.Millisecond, 3},
-		{300 * time.Millisecond, 3},                // rejected: window full
-		{10 * time.Second, 3},                      // rejected with a shorter Retry-After
-		{49*time.Second + 400*time.Millisecond, 3}, // first entry exactly 60 s old expires
-		{0, 3},
-		{time.Second, 5}, // limit raised
-		{0, 5},
-		{0, 2}, // limit lowered below the current count
-		{61 * time.Second, 2},
+		{0, 3, ratelimit.LimitDecision{Allowed: true}},
+		{100 * time.Millisecond, 3, ratelimit.LimitDecision{Allowed: true}},
+		{200 * time.Millisecond, 3, ratelimit.LimitDecision{Allowed: true}},
+		{300 * time.Millisecond, 3, ratelimit.LimitDecision{RetryAfter: time.Minute}},      // window full
+		{10 * time.Second, 3, ratelimit.LimitDecision{RetryAfter: 50 * time.Second}},       // shorter Retry-After
+		{49*time.Second + 400*time.Millisecond, 3, ratelimit.LimitDecision{Allowed: true}}, // first entry exactly 60 s old expires
+		{0, 3, ratelimit.LimitDecision{RetryAfter: time.Second}},
+		{time.Second, 5, ratelimit.LimitDecision{Allowed: true}}, // limit raised
+		{0, 5, ratelimit.LimitDecision{Allowed: true}},
+		{0, 2, ratelimit.LimitDecision{RetryAfter: time.Minute}}, // limit lowered below the current count
+		{61 * time.Second, 2, ratelimit.LimitDecision{Allowed: true}},
 	}
 	for index, step := range steps {
 		clock.advance(step.advance)
-		want, err := local.Allow(t.Context(), 9, step.limit)
-		if err != nil {
-			t.Fatal(err)
-		}
 		got, err := shared.Allow(t.Context(), 9, step.limit)
 		if err != nil {
 			t.Fatalf("step %d: Allow() error = %v", index, err)
 		}
-		if got != want {
-			t.Fatalf("step %d: Allow() = %#v, want %#v", index, got, want)
+		if got != step.want {
+			t.Fatalf("step %d: Allow() = %#v, want %#v", index, got, step.want)
 		}
 	}
 }

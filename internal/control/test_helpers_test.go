@@ -348,14 +348,13 @@ func newTestCatalogSyncCoordinator(
 	t testing.TB,
 	service *Service,
 	client catalogSyncClient,
-	cachePath string,
 	metadata catalog.Metadata,
 	hasLKG bool,
 ) *CatalogSyncCoordinator {
 	t.Helper()
 	_, redis := clustertest.NewClient(t)
 	return newCatalogSyncCoordinator(
-		service, client, cachePath, metadata, hasLKG,
+		service, client, metadata, hasLKG,
 		cluster.NewCatalogStore(redis), cluster.NewJobLease(redis),
 	)
 }

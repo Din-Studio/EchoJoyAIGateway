@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
 	"sync"
 	"time"
@@ -21,8 +19,6 @@ import (
 	"gpt-load/internal/pricing"
 	"gpt-load/internal/storage/models"
 )
-
-const modelsDevCatalogCacheName = "models.dev.catalog.json"
 
 const (
 	modelsDevSyncInterval  = 24 * time.Hour
@@ -41,33 +37,15 @@ const (
 )
 
 type CatalogBootstrap struct {
-	Runtime   *catalog.Runtime
-	CachePath string
-	Metadata  catalog.Metadata
-	HasLKG    bool
-}
-
-func loadCatalogBootstrap(cachePath string) *CatalogBootstrap {
-	bootstrap, outcome := officialCatalogBootstrap(cachePath)
-	cached, err := catalog.LoadCache(cachePath)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			logrus.WithField("component", "models_dev_catalog").Warn(
-				"Models.dev catalog cache is unavailable; starting with the official catalog only",
-			)
-		}
-		logCatalogBootstrap(outcome)
-		return bootstrap
-	}
-	bootstrap.adopt(cached)
-	logCatalogBootstrap("last_known_good")
-	return bootstrap
+	Runtime  *catalog.Runtime
+	Metadata catalog.Metadata
+	HasLKG   bool
 }
 
 // loadSharedCatalogBootstrap starts a cluster instance from the catalog its
-// peers share instead of a per-instance cache file.
+// peers share.
 func loadSharedCatalogBootstrap(ctx context.Context, shared *cluster.CatalogStore) *CatalogBootstrap {
-	bootstrap, outcome := officialCatalogBootstrap("")
+	bootstrap, outcome := officialCatalogBootstrap()
 	document, err := shared.Load(ctx)
 	var cached catalog.CachedCatalog
 	if err == nil {
@@ -87,11 +65,8 @@ func loadSharedCatalogBootstrap(ctx context.Context, shared *cluster.CatalogStor
 	return bootstrap
 }
 
-func officialCatalogBootstrap(cachePath string) (*CatalogBootstrap, string) {
-	bootstrap := &CatalogBootstrap{
-		Runtime:   &catalog.Runtime{},
-		CachePath: cachePath,
-	}
+func officialCatalogBootstrap() (*CatalogBootstrap, string) {
+	bootstrap := &CatalogBootstrap{Runtime: &catalog.Runtime{}}
 	official, err := catalog.OfficialSnapshot()
 	if err != nil {
 		logrus.WithField("component", "official_catalog").Error(
@@ -114,10 +89,6 @@ func logCatalogBootstrap(outcome string) {
 		"event":   "startup.catalog_load",
 		"outcome": outcome,
 	}).Info("catalog runtime loaded")
-}
-
-func newCatalogBootstrap(dataDir string) *CatalogBootstrap {
-	return loadCatalogBootstrap(filepath.Join(dataDir, modelsDevCatalogCacheName))
 }
 
 type catalogSyncClient interface {
@@ -174,9 +145,8 @@ type catalogAutomaticResult struct {
 }
 
 type CatalogSyncCoordinator struct {
-	service   *Service
-	client    catalogSyncClient
-	cachePath string
+	service *Service
+	client  catalogSyncClient
 	// shared holds the last-known-good catalog; jobLease lets one instance
 	// run each period's automatic sync.
 	shared   *cluster.CatalogStore
@@ -191,7 +161,6 @@ type CatalogSyncCoordinator struct {
 
 	processCtx    context.Context
 	shuttingDown  bool
-	storeCache    func(string, catalog.SyncResult) error
 	applySnapshot func(context.Context, *catalog.Snapshot) error
 	newTicker     func(time.Duration) runtimeTicker
 	newTimer      func(time.Duration) catalogSyncTimer
@@ -205,17 +174,15 @@ var errCatalogSyncCoordinatorStopped = errors.New("catalog sync coordinator is s
 func newCatalogSyncCoordinator(
 	service *Service,
 	client catalogSyncClient,
-	cachePath string,
 	metadata catalog.Metadata,
 	hasLKG bool,
 	shared *cluster.CatalogStore,
 	jobLease *cluster.JobLease,
 ) *CatalogSyncCoordinator {
 	coordinator := &CatalogSyncCoordinator{
-		service: service, client: client, cachePath: cachePath,
+		service: service, client: client,
 		metadata: metadata, hasLKG: hasLKG,
 		shared: shared, jobLease: jobLease,
-		storeCache: catalog.StoreCache,
 		newTicker: func(interval time.Duration) runtimeTicker {
 			return standardRuntimeTicker{ticker: time.NewTicker(interval)}
 		},
@@ -257,7 +224,6 @@ func NewCatalogSyncCoordinator(
 	return newCatalogSyncCoordinator(
 		service,
 		client,
-		bootstrap.CachePath,
 		bootstrap.Metadata,
 		bootstrap.HasLKG,
 		shared,

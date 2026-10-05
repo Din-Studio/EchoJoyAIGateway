@@ -193,11 +193,6 @@ async function checkForUpdate(): Promise<void> {
           </div>
 
           <div class="settings-system__row">
-            <dt>{{ t('settings.system.dataDir') }}</dt>
-            <dd class="settings-system__mono">{{ infoQuery.data.value.data_dir }}</dd>
-          </div>
-
-          <div class="settings-system__row">
             <dt>{{ t('settings.system.authKey') }}</dt>
             <dd class="settings-system__inline">
               <StatusBadge size="compact">{{

@@ -259,31 +259,6 @@ async function submit(): Promise<void> {
                   </template>
                 </i18n-t>
               </div>
-              <div class="ledger-login__auth-source">
-                <strong>{{ t('auth.help.fileTitle') }}</strong>
-                <i18n-t keypath="auth.help.fileDescription" tag="p">
-                  <template #path>
-                    <OverflowTooltip as="code" content="${DATA_DIR}/auth.key">
-                      ${DATA_DIR}/auth.key
-                    </OverflowTooltip>
-                  </template>
-                  <template #containerPath>
-                    <OverflowTooltip as="code" content="/app/data/auth.key">
-                      /app/data/auth.key
-                    </OverflowTooltip>
-                  </template>
-                </i18n-t>
-              </div>
-              <div class="ledger-login__auth-source">
-                <strong>{{ t('auth.help.dockerTitle') }}</strong>
-                <i18n-t keypath="auth.help.dockerDescription" tag="p">
-                  <template #command>
-                    <OverflowTooltip as="code" content="docker exec -it gpt-load sh">
-                      docker exec -it gpt-load sh
-                    </OverflowTooltip>
-                  </template>
-                </i18n-t>
-              </div>
             </div>
           </DisclosurePanel>
 

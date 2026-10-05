@@ -1,85 +1,12 @@
+// Package ratelimit defines AccessKey RPM decisions shared by the Redis
+// limiter and the gateway.
 package ratelimit
 
-import (
-	"context"
-	"sync"
-	"time"
-)
+import "time"
 
 type LimitDecision struct {
 	Allowed    bool
 	RetryAfter time.Duration
-}
-
-type timestampDeque struct {
-	values []time.Time
-	head   int
-}
-
-func (deque *timestampDeque) dropThrough(cutoff time.Time) {
-	for deque.head < len(deque.values) && !deque.values[deque.head].After(cutoff) {
-		deque.head++
-	}
-	if deque.head == len(deque.values) {
-		deque.values = deque.values[:0]
-		deque.head = 0
-	} else if deque.head > 64 && deque.head*2 >= len(deque.values) {
-		deque.values = append([]time.Time(nil), deque.values[deque.head:]...)
-		deque.head = 0
-	}
-}
-
-func (deque timestampDeque) len() int {
-	return len(deque.values) - deque.head
-}
-
-func (deque timestampDeque) at(index int) time.Time {
-	return deque.values[deque.head+index]
-}
-
-func (deque *timestampDeque) push(value time.Time) {
-	deque.values = append(deque.values, value)
-}
-
-type AccessKeyRPM struct {
-	mu          sync.Mutex
-	windows     map[uint]timestampDeque
-	now         func() time.Time
-	lastCleanup time.Time
-}
-
-func NewAccessKeyRPM() *AccessKeyRPM {
-	return NewAccessKeyRPMWithClock(time.Now)
-}
-
-// NewAccessKeyRPMWithClock builds a limiter driven by now, for contract tests
-// that compare it with other limiter implementations.
-func NewAccessKeyRPMWithClock(now func() time.Time) *AccessKeyRPM {
-	return &AccessKeyRPM{windows: make(map[uint]timestampDeque), now: now}
-}
-
-// Allow never fails; the error result satisfies limiters backed by shared state.
-func (limiter *AccessKeyRPM) Allow(_ context.Context, accessKeyID uint, limit int64) (LimitDecision, error) {
-	limiter.mu.Lock()
-	defer limiter.mu.Unlock()
-
-	now := limiter.now()
-	limiter.cleanup(now)
-	if limit <= 0 {
-		delete(limiter.windows, accessKeyID)
-		return LimitDecision{Allowed: true}, nil
-	}
-
-	window := limiter.windows[accessKeyID]
-	window.dropThrough(now.Add(-time.Minute))
-	count := window.len()
-	if int64(count) >= limit {
-		limiter.windows[accessKeyID] = window
-		return LimitDecision{Allowed: false, RetryAfter: RetryAfter(window.at(count-int(limit)), now)}, nil
-	}
-	window.push(now)
-	limiter.windows[accessKeyID] = window
-	return LimitDecision{Allowed: true}, nil
 }
 
 // RetryAfter returns when a request rejected at now may retry, given the
@@ -93,23 +20,6 @@ func RetryAfter(target, now time.Time) time.Duration {
 		retryAfter = time.Minute
 	}
 	return retryAfter
-}
-
-func (limiter *AccessKeyRPM) cleanup(now time.Time) {
-	if !limiter.lastCleanup.IsZero() && now.Sub(limiter.lastCleanup) < time.Minute {
-		return
-	}
-
-	cutoff := now.Add(-time.Minute)
-	for accessKeyID, window := range limiter.windows {
-		window.dropThrough(cutoff)
-		if window.len() == 0 {
-			delete(limiter.windows, accessKeyID)
-			continue
-		}
-		limiter.windows[accessKeyID] = window
-	}
-	limiter.lastCleanup = now
 }
 
 func ceilToSecond(duration time.Duration) time.Duration {

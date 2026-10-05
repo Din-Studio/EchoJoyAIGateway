@@ -51,7 +51,7 @@ func BuildContainer() (*dig.Container, error) {
 	providers := []any{
 		config.Load,
 		func(cfg *config.Config) (encryption.Service, error) {
-			return encryption.NewServiceWithKeyFile(cfg.EncryptionKey, cfg.DataDir)
+			return encryption.NewService(cfg.EncryptionKey)
 		},
 		func(cfg *config.Config) (*gorm.DB, error) {
 			db, err := storage.OpenConfigured(cfg)
@@ -125,14 +125,7 @@ func BuildContainer() (*dig.Container, error) {
 		func(service *requestlog.Service) app.RequestLogRuntime {
 			return service
 		},
-		func(
-			cfg *config.Config,
-			registry *state.CredentialRegistry,
-			stats *health.StatsStore,
-			credentialHealth *cluster.CredentialHealth,
-		) app.RuntimeStateCheckpoint {
-			return app.NewFileRuntimeStateCheckpoint(cfg.DataDir, registry, stats, credentialHealth)
-		},
+		func(credentialHealth *cluster.CredentialHealth) app.CredentialHealthHydrator { return credentialHealth },
 		control.NewRuntime,
 		func(runtime *control.Runtime) app.ControlRuntime { return runtime },
 		httpclient.NewHTTPClientManager,

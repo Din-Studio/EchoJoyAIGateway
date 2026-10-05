@@ -36,6 +36,16 @@ func (f runtimeStateLoaderFunc) Load(ctx context.Context) error {
 	return f(ctx)
 }
 
+type credentialHealthHydratorFunc func(context.Context) error
+
+func (f credentialHealthHydratorFunc) Hydrate(ctx context.Context) error {
+	return f(ctx)
+}
+
+func noopCredentialHealthHydrate(context.Context) error {
+	return nil
+}
+
 type startupBootstrapFunc func(context.Context) error
 
 func (f startupBootstrapFunc) EnsureInitialState(ctx context.Context) error {
@@ -124,16 +134,14 @@ func TestAppStartsExecutionRuntimeBeforeListen(t *testing.T) {
 		Config:           testConfig(t),
 		DB:               db,
 		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		CredentialHealth: credentialHealthHydratorFunc(func(context.Context) error {
+			order = append(order, "hydrate")
+			return nil
+		}),
 		RuntimeState: runtimeStateLoaderFunc(func(context.Context) error {
 			order = append(order, "runtime")
 			return nil
 		}),
-		RuntimeCheckpoint: runtimeCheckpointFake{
-			restore: func(context.Context) error {
-				order = append(order, "checkpoint")
-				return nil
-			},
-		},
 		ControlRuntime:   newControlRuntimeFake(nil, false),
 		RequestLogs:      newRequestLogRuntimeFake(nil, nil),
 		ExecutionRuntime: executionRuntime,
@@ -147,7 +155,7 @@ func TestAppStartsExecutionRuntimeBeforeListen(t *testing.T) {
 	if err := application.Start(); !errors.Is(err, listenErr) {
 		t.Fatalf("Start() error = %v, want listen error", err)
 	}
-	if want := []string{"runtime", "checkpoint", "execution", "listen"}; !slices.Equal(order, want) {
+	if want := []string{"runtime", "hydrate", "execution", "listen"}; !slices.Equal(order, want) {
 		t.Fatalf("startup order = %#v, want %#v", order, want)
 	}
 	if got := executionRuntime.startCalls.Load(); got != 1 {
@@ -171,6 +179,7 @@ func TestAppExecutionRuntimeStartFailureStopsBeforeListen(t *testing.T) {
 		Config:           testConfig(t),
 		DB:               db,
 		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
 		RuntimeState:     runtimeStateLoaderFunc(func(context.Context) error { return nil }),
 		ControlRuntime:   newControlRuntimeFake(nil, false),
 		RequestLogs:      newRequestLogRuntimeFake(nil, nil),
@@ -468,6 +477,7 @@ func TestAppStartMigratesDatabaseAndServesHTTP(t *testing.T) {
 		Config:           testConfig(t),
 		DB:               db,
 		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
 		RuntimeState:     runtimeState,
 		ControlRuntime:   newControlRuntimeFake(nil, false),
 		RequestLogs:      newRequestLogRuntimeFake(nil, nil),
@@ -530,6 +540,7 @@ func TestAppStartRejectsFirstInitializationWithExistingGroupsBeforeRuntimeLoad(t
 		Config:           testConfig(t),
 		DB:               db,
 		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
 		RuntimeState: runtimeStateLoaderFunc(func(context.Context) error {
 			runtimeLoadCalled = true
 			return nil
@@ -570,6 +581,7 @@ func TestAppStartBootstrapsAfterMigrationBeforeRuntimeLoad(t *testing.T) {
 			order = append(order, "bootstrap")
 			return nil
 		}),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
 		RuntimeState: runtimeStateLoaderFunc(func(context.Context) error {
 			order = append(order, "load")
 			return loadErr
@@ -601,6 +613,7 @@ func TestAppStartDrainsCommittedOperationsAfterRuntimeLoadBeforeListen(t *testin
 		Config:           testConfig(t),
 		DB:               db,
 		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
 		RuntimeState: runtimeStateLoaderFunc(func(context.Context) error {
 			order = append(order, "load")
 			return nil
@@ -647,6 +660,7 @@ func TestAppStartRejectsBootstrapFailureBeforeRuntimeLoadAndListen(t *testing.T)
 		StartupBootstrap: startupBootstrapFunc(func(context.Context) error {
 			return bootstrapErr
 		}),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
 		RuntimeState: runtimeStateLoaderFunc(func(context.Context) error {
 			loadCalled = true
 			return errors.New("unexpected runtime load")
@@ -687,6 +701,7 @@ func TestAppStartRejectsRuntimeStateLoadFailureBeforeListen(t *testing.T) {
 		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
 		ControlRuntime:   newControlRuntimeFake(nil, false),
 		RequestLogs:      newRequestLogRuntimeFake(nil, nil),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
 		RuntimeState: runtimeStateLoaderFunc(func(context.Context) error {
 			return loadErr
 		}),
@@ -724,6 +739,7 @@ func TestAppReportsUnexpectedHTTPServeFailure(t *testing.T) {
 		Config:           testConfig(t),
 		DB:               db,
 		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
 		RuntimeState:     runtimeState,
 		ControlRuntime:   newControlRuntimeFake(nil, false),
 		RequestLogs:      newRequestLogRuntimeFake(nil, nil),
@@ -759,6 +775,7 @@ func TestAppStartsControlRuntimeAfterInitialization(t *testing.T) {
 		Config:           testConfig(t),
 		DB:               db,
 		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
 		RuntimeState: runtimeStateLoaderFunc(func(context.Context) error {
 			close(loaded)
 			return nil
@@ -795,6 +812,7 @@ func TestAppDoesNotStartControlRuntimeWhenLoadFails(t *testing.T) {
 		Config:           testConfig(t),
 		DB:               db,
 		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
 		RuntimeState:     runtimeStateLoaderFunc(func(context.Context) error { return loadErr }),
 		ControlRuntime:   runtime,
 		RequestLogs:      newRequestLogRuntimeFake(nil, nil),
@@ -831,6 +849,7 @@ func TestAppDoesNotStartControlRuntimeWhenListenFails(t *testing.T) {
 		Config:           cfg,
 		DB:               db,
 		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
 		RuntimeState:     runtimeStateLoaderFunc(func(context.Context) error { return nil }),
 		ControlRuntime:   runtime,
 		RequestLogs:      newRequestLogRuntimeFake(nil, nil),
@@ -859,6 +878,7 @@ func TestAppStopCancelsAndWaitsForControlRuntime(t *testing.T) {
 		Config:           testConfig(t),
 		DB:               db,
 		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
 		RuntimeState:     runtimeStateLoaderFunc(func(context.Context) error { return nil }),
 		ControlRuntime:   runtime,
 		RequestLogs:      newRequestLogRuntimeFake(nil, nil),
@@ -920,6 +940,7 @@ func TestAppStopHonorsDeadlineWhileWaitingForControlRuntime(t *testing.T) {
 		Config:           testConfig(t),
 		DB:               db,
 		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
 		RuntimeState:     runtimeStateLoaderFunc(func(context.Context) error { return nil }),
 		ControlRuntime:   runtime,
 		RequestLogs:      newRequestLogRuntimeFake(nil, nil),
@@ -996,6 +1017,7 @@ func TestAppStartsRequestLogAfterListenBeforeHTTPServe(t *testing.T) {
 		Config:           cfg,
 		DB:               db,
 		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
 		RuntimeState:     runtimeStateLoaderFunc(func(context.Context) error { return nil }),
 		ControlRuntime:   controlRuntime,
 		RequestLogs:      requestLogs,
@@ -1054,6 +1076,7 @@ func TestAppRequestLogStartFailureClosesListenerWithoutServing(t *testing.T) {
 		Config:           cfg,
 		DB:               db,
 		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
 		RuntimeState:     runtimeStateLoaderFunc(func(context.Context) error { return nil }),
 		ControlRuntime:   controlRuntime,
 		RequestLogs:      requestLogs,
@@ -1156,6 +1179,7 @@ func TestAppStopDrainsRequestLogAfterLastHandlerEmitBeforeDatabaseClose(t *testi
 		Config:           testConfig(t),
 		DB:               db,
 		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
 		RuntimeState:     runtimeStateLoaderFunc(func(context.Context) error { return nil }),
 		ControlRuntime:   controlRuntime,
 		RequestLogs:      requestLogs,
@@ -1241,6 +1265,7 @@ func TestAppStopDeadlineJoinsRequestLogErrorAndClosesDatabase(t *testing.T) {
 		Config:           testConfig(t),
 		DB:               db,
 		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
 		RuntimeState:     runtimeStateLoaderFunc(func(context.Context) error { return nil }),
 		ControlRuntime:   controlRuntime,
 		RequestLogs:      requestLogs,
@@ -1307,12 +1332,106 @@ func testConfig(t *testing.T) *config.Config {
 			ReadTimeout:             2,
 			IdleTimeout:             3,
 		},
-		DataDir:       t.TempDir(),
 		EncryptionKey: "test-master-key",
 		AuthKey:       "test-auth-key",
 		Log: config.LogConfig{
 			Level:  "info",
 			Format: "text",
 		},
+	}
+}
+
+type credentialHealthLogHook struct {
+	entries []*logrus.Entry
+}
+
+func (hook *credentialHealthLogHook) Levels() []logrus.Level {
+	return logrus.AllLevels
+}
+
+func (hook *credentialHealthLogHook) Fire(entry *logrus.Entry) error {
+	if entry.Data["event"] == "startup.credential_health_hydrate" {
+		hook.entries = append(hook.entries, entry)
+	}
+	return nil
+}
+
+func TestAppHydratesCredentialHealthAfterRuntimeRecovery(t *testing.T) {
+	db, err := storage.Open(pgtest.NewDatabase(t))
+	if err != nil {
+		t.Fatalf("storage.Open() error = %v", err)
+	}
+	var order []string
+	application := NewApp(AppParams{
+		ClusterClient: testClusterClient(t),
+		Engine:        mustNewEngine(t),
+		Config:        testConfig(t),
+		DB:            db,
+		StartupBootstrap: startupBootstrapFunc(func(context.Context) error {
+			order = append(order, "bootstrap")
+			return nil
+		}),
+		RuntimeState: runtimeStateLoaderFunc(func(context.Context) error {
+			order = append(order, "runtime")
+			return nil
+		}),
+		StartupRecovery: startupRecoveryFunc(func(context.Context) error {
+			order = append(order, "recovery")
+			return nil
+		}),
+		CredentialHealth: credentialHealthHydratorFunc(func(context.Context) error {
+			order = append(order, "hydrate")
+			return nil
+		}),
+		ControlRuntime: newControlRuntimeFake(nil, false),
+		RequestLogs:    newRequestLogRuntimeFake(nil, nil),
+	})
+	cleanupApp(t, application)
+
+	if err := application.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if want := []string{"bootstrap", "runtime", "recovery", "hydrate"}; !slices.Equal(order, want) {
+		t.Fatalf("startup order = %#v, want %#v", order, want)
+	}
+}
+
+func TestAppLogsCredentialHealthHydrateFailureAndStarts(t *testing.T) {
+	db, err := storage.Open(pgtest.NewDatabase(t))
+	if err != nil {
+		t.Fatalf("storage.Open() error = %v", err)
+	}
+	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
+		Engine:           mustNewEngine(t),
+		Config:           testConfig(t),
+		DB:               db,
+		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		RuntimeState:     runtimeStateLoaderFunc(func(context.Context) error { return nil }),
+		CredentialHealth: credentialHealthHydratorFunc(func(context.Context) error {
+			return errors.New("redis unavailable")
+		}),
+		ControlRuntime: newControlRuntimeFake(nil, false),
+		RequestLogs:    newRequestLogRuntimeFake(nil, nil),
+	})
+	cleanupApp(t, application)
+
+	hook := &credentialHealthLogHook{}
+	logger := logrus.StandardLogger()
+	previousHooks := make(logrus.LevelHooks, len(logger.Hooks))
+	for level, hooks := range logger.Hooks {
+		previousHooks[level] = append([]logrus.Hook(nil), hooks...)
+	}
+	logger.AddHook(hook)
+	t.Cleanup(func() { logger.ReplaceHooks(previousHooks) })
+
+	if err := application.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if len(hook.entries) != 1 {
+		t.Fatalf("credential health hydrate log count = %d, want 1", len(hook.entries))
+	}
+	if got := hook.entries[0].Level; got != logrus.WarnLevel {
+		t.Fatalf("credential health hydrate log level = %s, want warning", got)
 	}
 }

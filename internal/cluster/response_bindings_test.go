@@ -11,92 +11,85 @@ import (
 	"gpt-load/internal/state"
 )
 
-type responseBindingStore interface {
-	Lookup(ctx context.Context, accessKeyID uint, responseID string) (state.ResponseBinding, bool, error)
-	Record(ctx context.Context, accessKeyID uint, responseID string, ref state.CredentialRef, auto ...*automodel.Selection) (bool, error)
-}
-
-func TestResponseBindingsMatchInProcessContract(t *testing.T) {
+func TestResponseBindingsContract(t *testing.T) {
 	_, client := newTestClient(t)
-	stores := map[string]responseBindingStore{
-		"in-process": state.NewResponseBindings(),
-		"redis":      NewResponseBindings(client, time.Hour),
+	store := NewResponseBindings(client, time.Hour)
+	ctx := context.Background()
+	ref := state.CredentialRef{ID: 1, GroupID: 2, IdentityGeneration: 3, Version: 9}
+	selection := &automodel.Selection{
+		EntryID: "entry", EntryName: "auto", PresetID: "high", TargetModel: "model",
+		ParameterOverrides: json.RawMessage(`[]`), ConfigFingerprint: "entry-fingerprint", TaskFingerprint: "task",
 	}
-	for name, store := range stores {
-		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
-			ref := state.CredentialRef{ID: 1, GroupID: 2, IdentityGeneration: 3, Version: 9}
-			selection := &automodel.Selection{
-				EntryID: "entry", EntryName: "auto", PresetID: "high", TargetModel: "model",
-				ParameterOverrides: json.RawMessage(`[]`), ConfigFingerprint: "entry-fingerprint", TaskFingerprint: "task",
-			}
-			record := func(accessKeyID uint, responseID string, ref state.CredentialRef, auto ...*automodel.Selection) bool {
-				t.Helper()
-				recorded, err := store.Record(ctx, accessKeyID, responseID, ref, auto...)
-				if err != nil {
-					t.Fatalf("Record() error = %v", err)
-				}
-				return recorded
-			}
-			lookup := func(accessKeyID uint, responseID string) (state.ResponseBinding, bool) {
-				t.Helper()
-				binding, found, err := store.Lookup(ctx, accessKeyID, responseID)
-				if err != nil {
-					t.Fatalf("Lookup() error = %v", err)
-				}
-				return binding, found
-			}
+	record := func(accessKeyID uint, responseID string, ref state.CredentialRef, auto ...*automodel.Selection) bool {
+		t.Helper()
+		recorded, err := store.Record(ctx, accessKeyID, responseID, ref, auto...)
+		if err != nil {
+			t.Fatalf("Record() error = %v", err)
+		}
+		return recorded
+	}
+	lookup := func(accessKeyID uint, responseID string) (state.ResponseBinding, bool) {
+		t.Helper()
+		binding, found, err := store.Lookup(ctx, accessKeyID, responseID)
+		if err != nil {
+			t.Fatalf("Lookup() error = %v", err)
+		}
+		return binding, found
+	}
 
-			if !record(1, "opaque/id", ref, selection) {
-				t.Fatal("first record rejected")
-			}
-			selection.TargetModel = "mutated after record"
-			binding, found := lookup(1, "opaque/id")
-			if !found || binding.AccessKeyID != 1 || binding.ResponseID != "opaque/id" || binding.GroupID != 2 ||
-				binding.CredentialID != 1 || binding.IdentityGeneration != 3 || binding.ExpiresAt.IsZero() ||
-				binding.AutoSelection == nil || binding.AutoSelection.TargetModel != "model" ||
-				binding.AutoSelection.TaskFingerprint != "task" || string(binding.AutoSelection.ParameterOverrides) != "[]" {
-				t.Fatalf("Lookup() = %+v, %t", binding, found)
-			}
-			selection.TargetModel = "model"
-			if !record(1, "opaque/id", ref, selection) {
-				t.Fatal("same owner rejected on repeat")
-			}
-			if record(1, "opaque/id", state.CredentialRef{ID: 5, GroupID: 2, IdentityGeneration: 6}, selection) {
-				t.Fatal("conflicting credential accepted")
-			}
-			if record(1, "opaque/id", ref) {
-				t.Fatal("conflicting auto selection accepted")
-			}
-			if binding, _ := lookup(1, "opaque/id"); binding.CredentialID != 1 {
-				t.Fatalf("conflict overwrote ownership: %+v", binding)
-			}
-			if _, found := lookup(2, "opaque/id"); found {
-				t.Fatal("another AccessKey resolved the response")
-			}
-			if !record(2, "opaque/id", state.CredentialRef{ID: 5, GroupID: 2, IdentityGeneration: 6}) {
-				t.Fatal("another AccessKey could not own the same response ID")
-			}
-			for _, invalid := range []struct {
-				accessKeyID uint
-				responseID  string
-				ref         state.CredentialRef
-			}{
-				{0, "id", ref},
-				{1, "", ref},
-				{1, "id", state.CredentialRef{GroupID: 2, IdentityGeneration: 3}},
-				{1, "id", state.CredentialRef{ID: 1, IdentityGeneration: 3}},
-				{1, "id", state.CredentialRef{ID: 1, GroupID: 2}},
-				{1, strings.Repeat("x", state.MaxResponseIDBytes+1), ref},
-			} {
-				if record(invalid.accessKeyID, invalid.responseID, invalid.ref) {
-					t.Fatalf("invalid record accepted: %+v", invalid)
-				}
-			}
-			if _, found := lookup(1, "unknown"); found {
-				t.Fatal("unknown response resolved")
-			}
-		})
+	if !record(1, "opaque/id", ref, selection) {
+		t.Fatal("first record rejected")
+	}
+	selection.TargetModel = "mutated after record"
+	binding, found := lookup(1, "opaque/id")
+	if !found || binding.AccessKeyID != 1 || binding.ResponseID != "opaque/id" || binding.GroupID != 2 ||
+		binding.CredentialID != 1 || binding.IdentityGeneration != 3 || binding.ExpiresAt.IsZero() ||
+		binding.AutoSelection == nil || binding.AutoSelection.TargetModel != "model" ||
+		binding.AutoSelection.TaskFingerprint != "task" || string(binding.AutoSelection.ParameterOverrides) != "[]" {
+		t.Fatalf("Lookup() = %+v, %t", binding, found)
+	}
+	selection.TargetModel = "model"
+	if !record(1, "opaque/id", ref, selection) {
+		t.Fatal("same owner rejected on repeat")
+	}
+	if record(1, "opaque/id", state.CredentialRef{ID: 5, GroupID: 2, IdentityGeneration: 6}, selection) {
+		t.Fatal("conflicting credential accepted")
+	}
+	if record(1, "opaque/id", ref) {
+		t.Fatal("conflicting auto selection accepted")
+	}
+	different := *selection
+	different.TaskFingerprint = "other task"
+	if record(1, "opaque/id", ref, &different) {
+		t.Fatal("different auto selection accepted")
+	}
+	if binding, _ := lookup(1, "opaque/id"); binding.CredentialID != 1 {
+		t.Fatalf("conflict overwrote ownership: %+v", binding)
+	}
+	if _, found := lookup(2, "opaque/id"); found {
+		t.Fatal("another AccessKey resolved the response")
+	}
+	if !record(2, "opaque/id", state.CredentialRef{ID: 5, GroupID: 2, IdentityGeneration: 6}) {
+		t.Fatal("another AccessKey could not own the same response ID")
+	}
+	for _, invalid := range []struct {
+		accessKeyID uint
+		responseID  string
+		ref         state.CredentialRef
+	}{
+		{0, "id", ref},
+		{1, "", ref},
+		{1, "id", state.CredentialRef{GroupID: 2, IdentityGeneration: 3}},
+		{1, "id", state.CredentialRef{ID: 1, IdentityGeneration: 3}},
+		{1, "id", state.CredentialRef{ID: 1, GroupID: 2}},
+		{1, strings.Repeat("x", state.MaxResponseIDBytes+1), ref},
+	} {
+		if record(invalid.accessKeyID, invalid.responseID, invalid.ref) {
+			t.Fatalf("invalid record accepted: %+v", invalid)
+		}
+	}
+	if _, found := lookup(1, "unknown"); found {
+		t.Fatal("unknown response resolved")
 	}
 }
 

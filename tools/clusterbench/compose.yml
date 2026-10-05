@@ -46,7 +46,6 @@ services:
       <<: *bench-env
       HOST: 0.0.0.0
       PORT: "3001"
-      DATA_DIR: /app/data
       DATABASE_DSN: postgres://gpt_load:${POSTGRES_PASSWORD}@postgres-single:5432/gpt_load?sslmode=disable
       AUTH_KEY: ${AUTH_KEY}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}

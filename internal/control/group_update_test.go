@@ -2,7 +2,6 @@ package control
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"testing"
 
 	"gpt-load/internal/catalog"
@@ -84,7 +83,6 @@ func TestGroupCatalogSyncTriggerOnlyTracksProviderAndModelIDChanges(t *testing.T
 	coordinator := newTestCatalogSyncCoordinator(t,
 		fixture.service,
 		nil,
-		filepath.Join(t.TempDir(), "catalog.json"),
 		catalog.Metadata{},
 		false,
 	)

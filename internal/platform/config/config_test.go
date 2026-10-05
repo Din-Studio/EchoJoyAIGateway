@@ -2,11 +2,7 @@ package config
 
 import (
 	"os"
-	"path/filepath"
-	"strings"
 	"testing"
-
-	"gpt-load/internal/platform/authkey"
 )
 
 func TestLoadUsesDefaultConfiguration(t *testing.T) {
@@ -32,9 +28,6 @@ func TestLoadUsesDefaultConfiguration(t *testing.T) {
 	if cfg.Server.IdleTimeout != 120 {
 		t.Fatalf("IdleTimeout = %d, want 120", cfg.Server.IdleTimeout)
 	}
-	if cfg.DataDir != "./data" {
-		t.Fatalf("DataDir = %q, want ./data", cfg.DataDir)
-	}
 	if cfg.DatabaseDSN != testPostgresDSN {
 		t.Fatalf("DatabaseDSN = %q", cfg.DatabaseDSN)
 	}
@@ -49,6 +42,10 @@ func TestLoadUsesDefaultConfiguration(t *testing.T) {
 	}
 	if cfg.Log.Level != "info" || cfg.Log.Format != "text" {
 		t.Fatalf("Log = %#v, want info/text", cfg.Log)
+	}
+	// setRequiredEnv runs Load from an empty working directory; it must stay empty.
+	if entries, err := os.ReadDir("."); err != nil || len(entries) != 0 {
+		t.Fatalf("Load() wrote local files: %v (error %v)", entries, err)
 	}
 }
 
@@ -70,7 +67,6 @@ func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("HOST", "127.0.0.1")
 	t.Setenv("PORT", "4010")
-	t.Setenv("DATA_DIR", t.TempDir())
 	t.Setenv("ENCRYPTION_KEY", "explicit-encryption-key")
 	t.Setenv("LOG_LEVEL", "debug")
 	t.Setenv("LOG_FORMAT", "json")
@@ -146,56 +142,6 @@ func boolPointer(value bool) *bool {
 	return &value
 }
 
-func TestLoadReportsEnvironmentSecretSources(t *testing.T) {
-	setRequiredEnv(t)
-	t.Setenv("AUTH_KEY", "explicit-auth")
-	t.Setenv("ENCRYPTION_KEY", "explicit-encryption")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.AuthKeyMetadata.Source != SecretSourceEnvironment ||
-		cfg.AuthKeyMetadata.Path != "" ||
-		cfg.EncryptionKeyMetadata.Source != SecretSourceEnvironment ||
-		cfg.EncryptionKeyMetadata.Path != "" {
-		t.Fatalf("metadata = %#v/%#v", cfg.AuthKeyMetadata, cfg.EncryptionKeyMetadata)
-	}
-}
-
-func TestLoadPreparesDataDirForExternalDatabaseWithExplicitSecrets(t *testing.T) {
-	setRequiredEnv(t)
-	dataDir := filepath.Join(t.TempDir(), "data")
-	t.Setenv("DATA_DIR", dataDir)
-
-	if _, err := Load(); err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	info, err := os.Stat(dataDir)
-	if err != nil {
-		t.Fatalf("stat DATA_DIR: %v", err)
-	}
-	if !info.IsDir() {
-		t.Fatalf("DATA_DIR mode = %v, want directory", info.Mode())
-	}
-}
-
-func TestLoadRejectsUnsafeDataDirForExternalDatabaseWithExplicitSecrets(t *testing.T) {
-	setRequiredEnv(t)
-	targetDir := t.TempDir()
-	dataDirLink := filepath.Join(t.TempDir(), "unsafe-data-dir")
-	if err := os.Symlink(targetDir, dataDirLink); err != nil {
-		t.Skipf("create DATA_DIR symlink: %v", err)
-	}
-	t.Setenv("DATA_DIR", dataDirLink)
-
-	if _, err := Load(); err == nil {
-		t.Fatal("Load() error = nil, want unsafe DATA_DIR rejection")
-	} else if !strings.Contains(err.Error(), "prepare DATA_DIR") {
-		t.Fatalf("Load() error = %q, want DATA_DIR preparation context", err)
-	}
-}
-
 func TestLoadClassifiesNetworkDatabaseURLs(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -267,24 +213,6 @@ func TestParseDatabaseDSNRejectsUnsupportedOrIncompleteURLs(t *testing.T) {
 	}
 }
 
-func TestLoadExplicitAuthKeyDoesNotCreateFile(t *testing.T) {
-	setRequiredEnv(t)
-	dataDir := t.TempDir()
-	t.Setenv("DATA_DIR", dataDir)
-	t.Setenv("AUTH_KEY", "explicit-auth-key")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.AuthKey != "explicit-auth-key" {
-		t.Fatalf("AuthKey = %q", cfg.AuthKey)
-	}
-	if _, err := os.Stat(filepath.Join(dataDir, authkey.FileName)); !os.IsNotExist(err) {
-		t.Fatalf("explicit AUTH_KEY created auth.key: %v", err)
-	}
-}
-
 func TestLoadRejectsInvalidRequiredAndNumericValues(t *testing.T) {
 	tests := []struct {
 		name string
@@ -323,7 +251,7 @@ func clearEnvironment(t *testing.T) {
 	t.Helper()
 	t.Chdir(t.TempDir())
 	for _, key := range []string{
-		"HOST", "PORT", "DATA_DIR", "DATABASE_DSN", "ENCRYPTION_KEY", "AUTH_KEY",
+		"HOST", "PORT", "DATABASE_DSN", "ENCRYPTION_KEY", "AUTH_KEY",
 		"LOG_LEVEL", "LOG_FORMAT", "GRACEFUL_SHUTDOWN_TIMEOUT",
 		"READ_TIMEOUT", "IDLE_TIMEOUT", "MODELS_DEV_AUTO_SYNC_ENABLED",
 		"DATABASE_MAX_OPEN_CONNECTIONS", "DATABASE_MAX_IDLE_CONNECTIONS",

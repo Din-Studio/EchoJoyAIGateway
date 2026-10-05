@@ -14,6 +14,7 @@ const (
 	systemDatabaseMySQL            = "mysql"
 	systemDatabasePostgreSQL       = "postgres"
 	systemDistributionSingleBinary = "single_binary"
+	systemSecretSourceEnvironment  = "environment"
 )
 
 type systemDeploymentResponse struct {
@@ -22,21 +23,21 @@ type systemDeploymentResponse struct {
 	Distribution string `json:"distribution"`
 }
 
+// Secrets come only from environment variables, so no source has a file path.
 type systemSecretResponse struct {
-	Source config.SecretSource `json:"source"`
-	Path   *string             `json:"path"`
+	Source string  `json:"source"`
+	Path   *string `json:"path"`
 }
 
 type systemEncryptionResponse struct {
-	Enabled bool                `json:"enabled"`
-	Source  config.SecretSource `json:"source"`
-	Path    *string             `json:"path"`
+	Enabled bool    `json:"enabled"`
+	Source  string  `json:"source"`
+	Path    *string `json:"path"`
 }
 
 type systemInfoResponse struct {
 	Version    string                   `json:"version"`
 	Deployment systemDeploymentResponse `json:"deployment"`
-	DataDir    string                   `json:"data_dir"`
 	AuthKey    systemSecretResponse     `json:"auth_key"`
 	Encryption systemEncryptionResponse `json:"encryption"`
 }
@@ -58,25 +59,12 @@ func newSystemInfoResponse(cfg *config.Config) systemInfoResponse {
 			Database:     database,
 			Distribution: systemDistributionSingleBinary,
 		},
-		DataDir: cfg.DataDir,
-		AuthKey: systemSecretResponse{
-			Source: cfg.AuthKeyMetadata.Source,
-			Path:   systemSecretPath(cfg.AuthKeyMetadata),
-		},
+		AuthKey: systemSecretResponse{Source: systemSecretSourceEnvironment},
 		Encryption: systemEncryptionResponse{
 			Enabled: true,
-			Source:  cfg.EncryptionKeyMetadata.Source,
-			Path:    systemSecretPath(cfg.EncryptionKeyMetadata),
+			Source:  systemSecretSourceEnvironment,
 		},
 	}
-}
-
-func systemSecretPath(metadata config.SecretMetadata) *string {
-	if metadata.Source != config.SecretSourceKeyFile {
-		return nil
-	}
-	path := metadata.Path
-	return &path
 }
 
 func (s *Server) handleSystemInfo(c *gin.Context) {

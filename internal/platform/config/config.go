@@ -12,17 +12,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/joho/godotenv"
-
-	"gpt-load/internal/platform/authkey"
-	"gpt-load/internal/platform/securefile"
 )
 
 const (
 	defaultHost                    = "127.0.0.1"
 	defaultPort                    = 3001
-	defaultDataDir                 = "./data"
 	defaultGracefulShutdownSeconds = 10
 	defaultReadTimeoutSeconds      = 60
 	defaultIdleTimeoutSeconds      = 120
@@ -46,21 +43,6 @@ type ServerConfig struct {
 type LogConfig struct {
 	Level  string
 	Format string
-}
-
-// SecretSource identifies the non-secret source of process key material.
-type SecretSource string
-
-const (
-	SecretSourceEnvironment SecretSource = "environment"
-	SecretSourceKeyFile     SecretSource = "key_file"
-)
-
-// SecretMetadata describes where process key material was sourced without
-// retaining the key material itself.
-type SecretMetadata struct {
-	Source SecretSource
-	Path   string
 }
 
 // DatabaseSource identifies whether the operator selected the database
@@ -128,14 +110,11 @@ type ClusterConfig struct {
 // Config contains static environment configuration for the application process.
 type Config struct {
 	Server                    ServerConfig
-	DataDir                   string
 	DatabaseDSN               string
 	DatabaseMetadata          DatabaseMetadata
 	DatabasePool              DatabasePoolConfig
 	EncryptionKey             string
 	AuthKey                   string
-	AuthKeyMetadata           SecretMetadata
-	EncryptionKeyMetadata     SecretMetadata
 	Log                       LogConfig
 	ModelsDevAutoSyncOverride *bool
 	Cluster                   ClusterConfig
@@ -146,8 +125,8 @@ type Config struct {
 // and scalar values. Concrete fields are introduced with their consumers.
 type Settings = map[string]any
 
-// Load reads process configuration from the environment and prepares the
-// application-managed DATA_DIR before any dependent resources resolve. A local
+// Load reads process configuration from the environment. Every secret comes
+// from an environment variable; the process never writes local files. A local
 // .env file is loaded when present, but existing environment variables always win.
 func Load() (*Config, error) {
 	_ = godotenv.Load()
@@ -192,8 +171,6 @@ func Load() (*Config, error) {
 		)
 	}
 
-	// Validate the required variables before DATA_DIR or key files are touched,
-	// so a misconfigured process fails without side effects.
 	cluster, err := parseClusterConfig()
 	if err != nil {
 		return nil, err
@@ -202,44 +179,21 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	explicitAuthKey := os.Getenv("AUTH_KEY")
-	if explicitAuthKey == "" {
+	authKey := os.Getenv("AUTH_KEY")
+	if authKey == "" {
 		return nil, fmt.Errorf("AUTH_KEY is required")
 	}
-	explicitEncryptionKey := os.Getenv("ENCRYPTION_KEY")
-	if explicitEncryptionKey == "" {
+	if strings.IndexFunc(authKey, unicode.IsSpace) >= 0 {
+		return nil, fmt.Errorf("AUTH_KEY must not contain whitespace")
+	}
+	encryptionKey := os.Getenv("ENCRYPTION_KEY")
+	if encryptionKey == "" {
 		return nil, fmt.Errorf("ENCRYPTION_KEY is required")
 	}
 
-	dataDir := valueOrDefault("DATA_DIR", defaultDataDir)
-	if err := securefile.PrepareManagedDataDir(dataDir); err != nil {
-		return nil, fmt.Errorf("prepare DATA_DIR: %w", err)
-	}
 	databaseMetadata := DatabaseMetadata{
 		Source: DatabaseSourceExternal,
 		Driver: database.Driver,
-	}
-
-	authKey, err := authkey.Resolve(explicitAuthKey, dataDir)
-	if err != nil {
-		return nil, err
-	}
-
-	authKeyMetadata := SecretMetadata{Source: SecretSourceEnvironment}
-	if explicitAuthKey == "" {
-		authKeyMetadata = SecretMetadata{
-			Source: SecretSourceKeyFile,
-			Path:   filepath.Join(dataDir, authkey.FileName),
-		}
-	}
-	encryptionKeyMetadata := SecretMetadata{Source: SecretSourceEnvironment}
-	if explicitEncryptionKey == "" {
-		// Keep this filename in sync with encryption.KeyFileName. Importing the
-		// encryption implementation here would violate runtime-domain boundaries.
-		encryptionKeyMetadata = SecretMetadata{
-			Source: SecretSourceKeyFile,
-			Path:   filepath.Join(dataDir, "encryption.key"),
-		}
 	}
 
 	logFormat := valueOrDefault("LOG_FORMAT", "text")
@@ -259,17 +213,14 @@ func Load() (*Config, error) {
 			ReadTimeout:             readTimeout,
 			IdleTimeout:             idleTimeout,
 		},
-		DataDir:          dataDir,
 		DatabaseDSN:      database.DSN,
 		DatabaseMetadata: databaseMetadata,
 		DatabasePool: DatabasePoolConfig{
 			MaxOpenConnections: databaseMaxOpenConnections,
 			MaxIdleConnections: databaseMaxIdleConnections,
 		},
-		EncryptionKey:         explicitEncryptionKey,
-		AuthKey:               authKey,
-		AuthKeyMetadata:       authKeyMetadata,
-		EncryptionKeyMetadata: encryptionKeyMetadata,
+		EncryptionKey: encryptionKey,
+		AuthKey:       authKey,
 		Log: LogConfig{
 			Level:  valueOrDefault("LOG_LEVEL", "info"),
 			Format: logFormat,

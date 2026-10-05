@@ -176,11 +176,6 @@ export default {
         '使用已分发的数据面访问密钥登录，只能查看这个密钥自己的首页、可用模型、请求记录和用量，不能修改任何配置',
       environmentTitle: '环境变量优先',
       environmentDescription: '如果启动实例时设置了 {key}，请使用部署系统中受保护的值',
-      fileTitle: '受管密钥文件',
-      fileDescription: '未设置环境变量时，实例读取或生成 {path}；容器默认位于 {containerPath}',
-      dockerTitle: 'Docker 实例',
-      dockerDescription:
-        '可在受控终端执行 {command} 后读取受管文件。不要把输出粘贴到日志、工单或聊天中',
     },
     recoveryPrefix: '如果服务返回无效响应，请先确认实例地址与健康状态，再',
     recoveryAction: '重新验证会话',

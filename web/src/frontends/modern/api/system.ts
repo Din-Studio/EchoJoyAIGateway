@@ -10,7 +10,6 @@ export interface SecretSourceInfo {
 export interface SystemInfo {
   version: string
   database: 'sqlite' | 'mysql' | 'postgres'
-  dataDir: string
   authKey: SecretSourceInfo
   encryption: SecretSourceInfo
 }
@@ -33,7 +32,6 @@ export async function getSystemInfo(client: ApiClient, signal: AbortSignal): Pro
   return {
     version: text(row.version),
     database: oneOf(deployment.database, ['sqlite', 'mysql', 'postgres']),
-    dataDir: text(row.data_dir),
     authKey: readSecretSource(row.auth_key),
     encryption: readSecretSource(row.encryption),
   }
