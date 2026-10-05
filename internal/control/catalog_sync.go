@@ -208,10 +208,13 @@ func newCatalogSyncCoordinator(
 	cachePath string,
 	metadata catalog.Metadata,
 	hasLKG bool,
+	shared *cluster.CatalogStore,
+	jobLease *cluster.JobLease,
 ) *CatalogSyncCoordinator {
 	coordinator := &CatalogSyncCoordinator{
 		service: service, client: client, cachePath: cachePath,
 		metadata: metadata, hasLKG: hasLKG,
+		shared: shared, jobLease: jobLease,
 		storeCache: catalog.StoreCache,
 		newTicker: func(interval time.Duration) runtimeTicker {
 			return standardRuntimeTicker{ticker: time.NewTicker(interval)}
@@ -251,16 +254,15 @@ func NewCatalogSyncCoordinator(
 	if bootstrap == nil {
 		bootstrap = &CatalogBootstrap{Runtime: &catalog.Runtime{}}
 	}
-	coordinator := newCatalogSyncCoordinator(
+	return newCatalogSyncCoordinator(
 		service,
 		client,
 		bootstrap.CachePath,
 		bootstrap.Metadata,
 		bootstrap.HasLKG,
+		shared,
+		jobLease,
 	)
-	coordinator.shared = shared
-	coordinator.jobLease = jobLease
-	return coordinator
 }
 
 func (coordinator *CatalogSyncCoordinator) Run(ctx context.Context) {

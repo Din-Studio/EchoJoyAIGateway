@@ -198,7 +198,8 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := requirePostgreSQLDSN(os.Getenv("DATABASE_DSN")); err != nil {
+	database, err := requirePostgreSQLDSN(os.Getenv("DATABASE_DSN"))
+	if err != nil {
 		return nil, err
 	}
 	explicitAuthKey := os.Getenv("AUTH_KEY")
@@ -214,37 +215,9 @@ func Load() (*Config, error) {
 	if err := securefile.PrepareManagedDataDir(dataDir); err != nil {
 		return nil, fmt.Errorf("prepare DATA_DIR: %w", err)
 	}
-	rawDatabaseDSN := strings.TrimSpace(os.Getenv("DATABASE_DSN"))
-	databaseSource := DatabaseSourceExternal
-	databaseDSN := rawDatabaseDSN
-	if rawDatabaseDSN == "" {
-		databaseSource = DatabaseSourceManaged
-		databaseDSN = filepath.Join(dataDir, "gpt-load.db")
-	}
-	database, err := ParseDatabaseDSN(databaseDSN)
-	if err != nil {
-		return nil, err
-	}
-	databaseDSN = database.DSN
 	databaseMetadata := DatabaseMetadata{
-		Source: databaseSource,
+		Source: DatabaseSourceExternal,
 		Driver: database.Driver,
-	}
-
-	if databaseSource == DatabaseSourceManaged {
-		// The empty-DATABASE_DSN path is the only application-managed database.
-		// Keep this branch explicit so future driver additions cannot silently
-		// inherit managed-file semantics.
-		if database.Driver != DatabaseDriverSQLite {
-			return nil, fmt.Errorf("managed database must use SQLite")
-		}
-	}
-	if databaseSource == DatabaseSourceExternal && database.Driver == "" {
-		return nil, fmt.Errorf("DATABASE_DSN did not select a database driver")
-	}
-
-	if databaseDSN == "" {
-		return nil, fmt.Errorf("DATABASE_DSN resolved to an empty DSN")
 	}
 
 	authKey, err := authkey.Resolve(explicitAuthKey, dataDir)
@@ -287,7 +260,7 @@ func Load() (*Config, error) {
 			IdleTimeout:             idleTimeout,
 		},
 		DataDir:          dataDir,
-		DatabaseDSN:      databaseDSN,
+		DatabaseDSN:      database.DSN,
 		DatabaseMetadata: databaseMetadata,
 		DatabasePool: DatabasePoolConfig{
 			MaxOpenConnections: databaseMaxOpenConnections,
@@ -306,20 +279,21 @@ func Load() (*Config, error) {
 	}, nil
 }
 
-// requirePostgreSQLDSN rejects an empty or non-PostgreSQL DATABASE_DSN.
-func requirePostgreSQLDSN(rawDSN string) error {
+// requirePostgreSQLDSN parses DATABASE_DSN and rejects an empty or
+// non-PostgreSQL value.
+func requirePostgreSQLDSN(rawDSN string) (DatabaseConfig, error) {
 	const message = "DATABASE_DSN is required and must be a PostgreSQL DSN"
 	if strings.TrimSpace(rawDSN) == "" {
-		return errors.New(message)
+		return DatabaseConfig{}, errors.New(message)
 	}
 	database, err := ParseDatabaseDSN(rawDSN)
 	if err != nil {
-		return fmt.Errorf("%s: %w", message, err)
+		return DatabaseConfig{}, fmt.Errorf("%s: %w", message, err)
 	}
 	if database.Driver != DatabaseDriverPostgreSQL {
-		return errors.New(message)
+		return DatabaseConfig{}, errors.New(message)
 	}
-	return nil
+	return database, nil
 }
 
 // parseClusterConfig reads the Redis variables. REDIS_DSN is a 1.x variable

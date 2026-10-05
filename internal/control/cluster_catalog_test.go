@@ -35,9 +35,10 @@ func newClusterCatalogInstance(
 	fixture := newServiceFixture(t)
 	bootstrap := loadSharedCatalogBootstrap(t.Context(), shared)
 	fixture.service.catalogRuntime.Publish(bootstrap.Runtime.Load())
-	coordinator := newCatalogSyncCoordinator(fixture.service, client, "", bootstrap.Metadata, bootstrap.HasLKG)
-	coordinator.shared = shared
-	coordinator.jobLease = cluster.NewJobLease(redis)
+	coordinator := newCatalogSyncCoordinator(
+		fixture.service, client, "", bootstrap.Metadata, bootstrap.HasLKG,
+		shared, cluster.NewJobLease(redis),
+	)
 	applied := &atomic.Int32{}
 	coordinator.applySnapshot = func(_ context.Context, snapshot *catalog.Snapshot) error {
 		applied.Add(1)

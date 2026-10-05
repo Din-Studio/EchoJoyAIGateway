@@ -70,38 +70,7 @@ func useSharedAccessQuota(t testing.TB, handler *Handler) *cluster.AccessQuota {
 // useSharedAccessQuotaOn is useSharedAccessQuota on a Redis several handlers
 // share.
 func useSharedAccessQuotaOn(client *cluster.Client, handler *Handler) *cluster.AccessQuota {
-	quota := cluster.NewAccessQuota(client, publishedQuotaCheckpoints{manager: handler.manager})
+	quota := cluster.NewAccessQuota(client, clustertest.PublishedQuotaCheckpoints{Manager: handler.manager})
 	handler.accessQuota = quota
 	return quota
-}
-
-// publishedQuotaCheckpoints models the fresh checkpoint rows the control
-// plane writes for every published cost-limit rule.
-type publishedQuotaCheckpoints struct {
-	manager *state.Manager
-}
-
-func (checkpoints publishedQuotaCheckpoints) ReadAccessQuotaStates(
-	_ context.Context,
-	ruleIDs []uint,
-) ([]accessquota.RestoredState, error) {
-	snapshot := checkpoints.manager.Current()
-	if snapshot == nil {
-		return nil, nil
-	}
-	wanted := make(map[uint]bool, len(ruleIDs))
-	for _, id := range ruleIDs {
-		wanted[id] = true
-	}
-	var rows []accessquota.RestoredState
-	for accessKeyID, key := range snapshot.AccessKeysByID {
-		for _, rule := range key.CostLimitRules {
-			if wanted[rule.ID] {
-				rows = append(rows, accessquota.RestoredState{
-					AccessKeyID: accessKeyID, RuleID: rule.ID, RuleRevision: rule.Revision, SnapshotVersion: 1,
-				})
-			}
-		}
-	}
-	return rows, nil
 }

@@ -835,21 +835,6 @@ func TestLoaderMapsAccessKeyCostLimits(t *testing.T) {
 	}
 }
 
-func TestLoaderRejectsOrphanAccessKeyCostLimitState(t *testing.T) {
-	db := openMigratedDatabase(t)
-	pgtest.DropConstraints(t, db, "access_key_cost_limit_states", 'f')
-	if err := db.Create(&models.AccessKeyCostLimitState{
-		RuleID: 999, RuleRevision: 1, SnapshotVersion: 1,
-	}).Error; err != nil {
-		t.Fatalf("create orphan state: %v", err)
-	}
-
-	err := loader.New(db, state.NewManager(), state.NewCredentialRegistry()).Load(t.Context())
-	if err == nil || !strings.Contains(err.Error(), "orphan state") {
-		t.Fatalf("Load() error = %v, want orphan state failure", err)
-	}
-}
-
 func int64Pointer(value int64) *int64 { return &value }
 
 func TestLoaderRejectsInvalidCredentialRowsWithoutPublishing(t *testing.T) {

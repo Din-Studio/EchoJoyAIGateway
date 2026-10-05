@@ -74,6 +74,7 @@ func BuildContainer() (*dig.Container, error) {
 		cluster.NewCatalogStore,
 		cluster.NewAuthFailures,
 		func(shared *cluster.CredentialHealth) state.SharedCredentialHealthStore { return shared },
+		func(lease *cluster.RefreshLease) subscription.RefreshLease { return lease },
 		func(client *cluster.Client, db *gorm.DB) *cluster.AccessQuota {
 			return cluster.NewAccessQuota(client, requestlog.AccessQuotaStateReader{DB: db})
 		},
@@ -234,8 +235,13 @@ func BuildContainer() (*dig.Container, error) {
 			return nil, err
 		}
 	}
-	if err := dependencyContainer.Invoke(coordinateSubscriptionRefresh); err != nil {
-		return nil, fmt.Errorf("coordinate subscription refresh: %w", err)
+	if err := dependencyContainer.Invoke(func(
+		credentials *subscription.CredentialManager,
+		service *control.Service,
+	) {
+		credentials.SetConfigCommitter(service)
+	}); err != nil {
+		return nil, fmt.Errorf("install subscription config committer: %w", err)
 	}
 	if err := dependencyContainer.Invoke(func(
 		engine *gin.Engine,
@@ -282,17 +288,6 @@ func newGatewaySharedState(
 		ResponseBindings: cluster.NewResponseBindings(client, cfg.Cluster.ResponseBindingTTL),
 		Affinity:         cluster.NewAffinity(client),
 	}
-}
-
-// coordinateSubscriptionRefresh makes subscription refreshes cluster-wide
-// single flight.
-func coordinateSubscriptionRefresh(
-	credentials *subscription.CredentialManager,
-	lease *cluster.RefreshLease,
-	shared *cluster.CredentialHealth,
-	service *control.Service,
-) {
-	credentials.SetClusterCoordination(lease, shared, service)
 }
 
 type runtimeSnapshotReconciler struct {

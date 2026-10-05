@@ -627,11 +627,12 @@ func newCredentialManagerFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := NewCredentialManager(db, keyService, registry, health.NewMutationCoordinator(), subscriptions)
 	_, client := clustertest.NewClient(t)
-	manager.SetClusterCoordination(
-		cluster.NewRefreshLease(client), cluster.NewCredentialHealth(client, registry), &countingCommitter{db: db},
+	manager := NewCredentialManager(
+		db, keyService, registry, health.NewMutationCoordinator(), subscriptions,
+		cluster.NewRefreshLease(client), cluster.NewCredentialHealth(client, registry),
 	)
+	manager.SetConfigCommitter(&countingCommitter{db: db})
 	return manager, db, registry, keyService, row
 }
 

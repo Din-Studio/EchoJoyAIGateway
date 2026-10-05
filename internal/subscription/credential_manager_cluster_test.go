@@ -91,13 +91,11 @@ func newClusterRefreshFixture(t *testing.T, expires time.Time) clusterRefreshFix
 	if err := registryB.ReplaceCredentials(registryEntries(registryA)); err != nil {
 		t.Fatal(err)
 	}
-	managerB := NewCredentialManager(db, keyService, registryB, health.NewMutationCoordinator(), managerA.runtime)
-
 	server := miniredis.RunT(t)
 	committer := &countingCommitter{db: db}
 	fixture := clusterRefreshFixture{db: db, keyService: keyService, row: row, server: server, committer: committer}
 	fixture.a = coordinate(t, server, "node-a", managerA, registryA, committer)
-	fixture.b = coordinate(t, server, "node-b", managerB, registryB, committer)
+	fixture.b = coordinate(t, server, "node-b", managerA, registryB, committer)
 	return fixture
 }
 
@@ -110,18 +108,24 @@ func registryEntries(registry *state.CredentialRegistry) []state.CredentialEntry
 	return entries
 }
 
+// coordinate builds one instance's manager on template's database, keys, and
+// runtime, coordinated through its own connection to the shared server.
 func coordinate(
 	t *testing.T,
 	server *miniredis.Miniredis,
 	instanceID string,
-	manager *CredentialManager,
+	template *CredentialManager,
 	registry *state.CredentialRegistry,
 	committer configCommitter,
 ) clusterManager {
 	t.Helper()
 	client := clustertest.Connect(t, server, instanceID)
 	store := cluster.NewCredentialHealth(client, registry)
-	manager.SetClusterCoordination(cluster.NewRefreshLease(client), store, committer)
+	manager := NewCredentialManager(
+		template.db, template.encryption, registry, health.NewMutationCoordinator(), template.runtime,
+		cluster.NewRefreshLease(client), store,
+	)
+	manager.SetConfigCommitter(committer)
 	return clusterManager{manager: manager, registry: registry, health: store, client: client}
 }
 

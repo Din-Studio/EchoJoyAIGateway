@@ -436,11 +436,6 @@ func (l *Loader) read(
 	if err != nil {
 		return state.CompileInput{}, nil, err
 	}
-	// Redis seeds quota state from these rows, so an orphan state still fails
-	// the load.
-	if _, err := queryCostLimitStates(ctx, l.db, rows.costLimitRules); err != nil {
-		return state.CompileInput{}, nil, err
-	}
 	entries, err := mapCredentialsWithProxy(credentials, rows.groups, l.encryption)
 	if err != nil {
 		return state.CompileInput{}, nil, err
@@ -709,36 +704,6 @@ func mapAccessKeys(
 		})
 	}
 	return result, nil
-}
-
-func queryCostLimitStates(
-	ctx context.Context,
-	db *gorm.DB,
-	rules []models.AccessKeyCostLimitRule,
-) ([]accessquota.RestoredState, error) {
-	accessKeyByRule := make(map[uint]uint, len(rules))
-	for _, rule := range rules {
-		accessKeyByRule[rule.ID] = rule.AccessKeyID
-	}
-	var rows []models.AccessKeyCostLimitState
-	if err := db.WithContext(ctx).Order("rule_id ASC").Find(&rows).Error; err != nil {
-		return nil, fmt.Errorf("query access key cost limit states: %w", err)
-	}
-	states := make([]accessquota.RestoredState, 0, len(rows))
-	for _, row := range rows {
-		accessKeyID, exists := accessKeyByRule[row.RuleID]
-		if !exists {
-			return nil, fmt.Errorf("query access key cost limit states: orphan state for rule %d", row.RuleID)
-		}
-		states = append(states, accessquota.RestoredState{
-			AccessKeyID: accessKeyID, RuleID: row.RuleID,
-			RuleRevision: row.RuleRevision, UsedNanoUSD: row.UsedNanoUSD,
-			WindowStartedAtMS: cloneInt64Pointer(row.WindowStartedAtMS),
-			WindowEndsAtMS:    cloneInt64Pointer(row.WindowEndsAtMS),
-			WindowGeneration:  row.WindowGeneration, SnapshotVersion: row.SnapshotVersion,
-		})
-	}
-	return states, nil
 }
 
 func cloneInt64Pointer(value *int64) *int64 {

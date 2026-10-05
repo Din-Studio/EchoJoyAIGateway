@@ -35,9 +35,9 @@ const (
 	refreshInProgressRetry    = 5 * time.Second
 )
 
-// refreshLease grants one cluster instance at a time the right to refresh a
+// RefreshLease grants one cluster instance at a time the right to refresh a
 // credential. Acquire does not wait; release stops renewal and frees it.
-type refreshLease interface {
+type RefreshLease interface {
 	Acquire(ctx context.Context, credentialID uint) (release func(), acquired bool, err error)
 }
 
@@ -61,8 +61,9 @@ type CredentialManager struct {
 	now            func() time.Time
 	logger         *logrus.Logger
 	passiveQuota   *passiveQuotaPending
-	// Cluster coordination, set by SetClusterCoordination.
-	lease     refreshLease
+	// lease and health make refreshes cluster-wide single flight; committer
+	// is set by SetConfigCommitter.
+	lease     RefreshLease
 	health    state.SharedCredentialHealthStore
 	committer configCommitter
 	// leaseRetryInterval and leaseWaitLimit default to the package limits.
@@ -70,17 +71,12 @@ type CredentialManager struct {
 	leaseWaitLimit     time.Duration
 }
 
-// SetClusterCoordination makes refreshes cluster-wide single flight: a
-// refresh holds the credential's lease, auth states are shared through the
-// health store, and a rotated secret is committed as a configuration change.
-// It is a setter only because the committer (the control service) depends on
-// this manager; it must be called before the manager serves requests.
-func (manager *CredentialManager) SetClusterCoordination(
-	lease refreshLease,
-	health state.SharedCredentialHealthStore,
-	committer configCommitter,
-) {
-	manager.lease, manager.health, manager.committer = lease, health, committer
+// SetConfigCommitter installs the committer through which a rotated secret is
+// committed as a configuration change, so cluster peers reload it. It is a
+// setter only because the committer (the control service) depends on this
+// manager; it must be called before the manager serves requests.
+func (manager *CredentialManager) SetConfigCommitter(committer configCommitter) {
+	manager.committer = committer
 }
 
 // Runtime returns the immutable capability registry used by this manager.
@@ -92,13 +88,16 @@ func (manager *CredentialManager) Runtime() *subscriptionruntime.Runtime {
 }
 
 // NewCredentialManager creates the shared control-plane and data-plane
-// lifecycle for all compiled subscription channels.
+// lifecycle for all compiled subscription channels. A refresh holds the
+// credential's lease, and auth states are shared through the health store.
 func NewCredentialManager(
 	db *gorm.DB,
 	encryptionService encryption.Service,
 	registry *state.CredentialRegistry,
 	mutations *health.MutationCoordinator,
 	runtime *subscriptionruntime.Runtime,
+	lease RefreshLease,
+	sharedHealth state.SharedCredentialHealthStore,
 ) *CredentialManager {
 	if mutations == nil {
 		mutations = health.NewMutationCoordinator()
@@ -106,6 +105,7 @@ func NewCredentialManager(
 	return &CredentialManager{
 		db: db, encryption: encryptionService, registry: registry, mutations: mutations,
 		runtime: runtime, passiveQuota: newPassiveQuotaPending(),
+		lease: lease, health: sharedHealth,
 		refresh: func(ctx context.Context, driver subscriptionruntime.Driver, credential subscriptionruntime.Credential) (subscriptionruntime.Credential, error) {
 			return driver.Refresh(ctx, credential)
 		},

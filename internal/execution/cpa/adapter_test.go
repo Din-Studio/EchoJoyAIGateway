@@ -21,6 +21,7 @@ import (
 	"gorm.io/gorm"
 
 	"gpt-load/internal/channel"
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/dialect"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/gateway"
@@ -39,6 +40,7 @@ import (
 	"gpt-load/internal/subscription/providers/codex"
 	providerobservation "gpt-load/internal/subscription/providers/observation"
 	subscriptionruntime "gpt-load/internal/subscription/runtime"
+	"gpt-load/internal/testutil/clustertest"
 	"gpt-load/internal/testutil/encryptiontest"
 	"gpt-load/internal/testutil/pgtest"
 )
@@ -1620,7 +1622,11 @@ func newSubscriptionAdapterFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentials := subscription.NewCredentialManager(db, keyService, registry, health.NewMutationCoordinator(), subscriptions)
+	_, client := clustertest.NewClient(t)
+	credentials := subscription.NewCredentialManager(
+		db, keyService, registry, health.NewMutationCoordinator(), subscriptions,
+		cluster.NewRefreshLease(client), cluster.NewCredentialHealth(client, registry),
+	)
 	return NewAdapter(credentials, channels), db, registry, keyService, row
 }
 

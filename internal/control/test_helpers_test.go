@@ -220,7 +220,9 @@ func newServiceFixtureWithDatabase(t *testing.T, db *gorm.DB) serviceFixture {
 	if err != nil {
 		t.Fatalf("subscriptionruntime.NewRuntime() error = %v", err)
 	}
-	subscriptionCredentials := subscription.NewCredentialManager(db, keyService, registry, mutations, subscriptions)
+	subscriptionCredentials := subscription.NewCredentialManager(
+		db, keyService, registry, mutations, subscriptions, refreshLease, sharedHealth,
+	)
 	requestLogStats := &staticRequestLogStatsReader{}
 	priceRuntime := NewPriceRuntime()
 	catalogRuntime := &catalog.Runtime{}
@@ -246,7 +248,7 @@ func newServiceFixtureWithDatabase(t *testing.T, db *gorm.DB) serviceFixture {
 		refreshLease,
 		channelRegistry,
 	)
-	subscriptionCredentials.SetClusterCoordination(refreshLease, sharedHealth, service)
+	subscriptionCredentials.SetConfigCommitter(service)
 	installCodexControlTestHooks(service)
 	// Tests opt into reset-credit upstream calls explicitly; no fixture may
 	// reach a real provider by accident.
@@ -352,10 +354,10 @@ func newTestCatalogSyncCoordinator(
 ) *CatalogSyncCoordinator {
 	t.Helper()
 	_, redis := clustertest.NewClient(t)
-	coordinator := newCatalogSyncCoordinator(service, client, cachePath, metadata, hasLKG)
-	coordinator.shared = cluster.NewCatalogStore(redis)
-	coordinator.jobLease = cluster.NewJobLease(redis)
-	return coordinator
+	return newCatalogSyncCoordinator(
+		service, client, cachePath, metadata, hasLKG,
+		cluster.NewCatalogStore(redis), cluster.NewJobLease(redis),
+	)
 }
 
 // blacklistSharedCredential records one blacklisting failure and, when
