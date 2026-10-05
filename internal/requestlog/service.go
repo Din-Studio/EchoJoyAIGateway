@@ -38,9 +38,8 @@ type passiveQuotaFlusher interface {
 	SetPassiveQuotaDirtyNotifier(notifier func())
 }
 
-// accessQuotaCheckpointSource is the dirty-rule view the worker persists:
-// the in-memory runtime in single-instance mode, or the shared Redis state
-// this instance changed in cluster mode.
+// accessQuotaCheckpointSource is the dirty-rule view the worker persists: the
+// shared Redis state this instance changed.
 type accessQuotaCheckpointSource interface {
 	HasDirty() bool
 	DirtySnapshots(ctx context.Context, limit int) ([]accessquota.RestoredState, error)
@@ -131,7 +130,6 @@ func NewService(
 	db *gorm.DB,
 	redactor *redact.Redactor,
 	retentionPolicy RetentionPolicyProvider,
-	accessQuotas ...*accessquota.Runtime,
 ) *Service {
 	service := newService(
 		&gormBatchWriter{db: db},
@@ -142,12 +140,6 @@ func NewService(
 	)
 	service.db = db
 	service.retentionPolicy = retentionPolicy
-	for _, runtime := range accessQuotas {
-		if runtime != nil {
-			service.SetAccessQuotaCheckpointSource(localAccessQuotaCheckpoints{runtime: runtime})
-			break
-		}
-	}
 	if db == nil {
 		service.startErr = fmt.Errorf("request log database is nil")
 	} else if retentionPolicy == nil {

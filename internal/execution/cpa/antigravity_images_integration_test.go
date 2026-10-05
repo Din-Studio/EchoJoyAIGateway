@@ -87,8 +87,10 @@ func newAntigravityImagesRuntime(t *testing.T) (*gin.Engine, *Adapter, *antigrav
 		t.Fatal(err)
 	}
 	observations := &antigravityImagesObservations{table: table}
+	shared, _ := newGatewaySharedState(t, manager, credentials)
 	handler := gateway.NewHandler(manager, credentials, keyService, gateway.NewExecutionForwarder(adapter),
-		dialect.NewSet(dialect.NewOpenAIImages(), dialect.NewGemini()), health.NewStatsStore(), health.NewMutationCoordinator(), nil, observations, observations)
+		dialect.NewSet(dialect.NewOpenAIImages(), dialect.NewGemini()), health.NewStatsStore(), health.NewMutationCoordinator(), nil, observations, observations,
+		shared)
 	engine := gin.New()
 	routes, err := httproute.NewRegistry(handler.HTTPModule())
 	if err != nil {

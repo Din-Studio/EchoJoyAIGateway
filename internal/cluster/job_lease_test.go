@@ -96,22 +96,3 @@ func TestJobLeaseSkipsRoundWhenRedisIsDown(t *testing.T) {
 		t.Fatal("RunOncePerPeriod() = true, want false")
 	}
 }
-
-func TestNilJobLeaseAlwaysRuns(t *testing.T) {
-	var lease *JobLease
-	runs := 0
-	for range 2 {
-		if !lease.RunOncePerPeriod(t.Context(), "retention", time.Hour, func(context.Context) error {
-			runs++
-			return errors.New("ignored")
-		}) {
-			t.Fatal("nil lease skipped the job")
-		}
-	}
-	if runs != 2 {
-		t.Fatalf("job ran %d times, want 2", runs)
-	}
-	if NewJobLease(nil) != nil {
-		t.Fatal("NewJobLease(nil) != nil")
-	}
-}

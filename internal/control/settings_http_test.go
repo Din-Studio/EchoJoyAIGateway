@@ -21,7 +21,7 @@ func TestSettingsHTTPRouteStrategyRejectsInvalidValuesWithoutMutation(t *testing
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	updated := serveLocalizedSettingsRequest(t, engine, http.MethodPut, "test-auth-key", "en-US",
 		`{"settings":{"route_strategy":"weighted_mix"}}`)
@@ -49,7 +49,7 @@ func TestSettingsHTTPRouteStrategyRejectsInvalidValuesWithoutMutation(t *testing
 		t.Fatal("invalid route strategy published a new Snapshot")
 	}
 	var rows []models.SystemSetting
-	if err := fixture.db.Find(&rows).Error; err != nil {
+	if err := fixture.db.Where("key <> ?", clusterConfigRevisionKey).Find(&rows).Error; err != nil {
 		t.Fatal(err)
 	}
 	if len(rows) != 1 || rows[0].Key != state.SettingRouteStrategy || rows[0].Value != `"weighted_mix"` {
@@ -62,7 +62,7 @@ func TestSettingsHTTPLastWriteWinsWithoutPrecondition(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	for _, body := range []string{
 		`{"settings":{"request_timeout":700}}`,
@@ -105,7 +105,7 @@ func TestSettingsHTTPUsesLocalizedNoStoreResponse(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	for _, test := range []struct {
 		language string
@@ -135,7 +135,7 @@ func TestSettingsHTTPPublicationFailureReloadsCommittedDatabaseTruth(t *testing.
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	before := fixture.manager.Current()
 	fixture.service.publishSnapshot = func(state.CompileInput) (*state.ConfigSnapshot, error) {

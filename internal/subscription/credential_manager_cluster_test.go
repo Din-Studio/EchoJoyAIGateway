@@ -15,12 +15,12 @@ import (
 	"gpt-load/internal/cluster"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/health"
-	"gpt-load/internal/platform/config"
 	"gpt-load/internal/platform/encryption"
 	"gpt-load/internal/state"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/subscription/providers/codex"
 	subscriptionruntime "gpt-load/internal/subscription/runtime"
+	"gpt-load/internal/testutil/clustertest"
 )
 
 // countingCommitter commits like control.Service.CommitCredentialState and
@@ -86,10 +86,8 @@ func newClusterRefreshFixture(t *testing.T, expires time.Time) clusterRefreshFix
 	}
 	// One connection keeps every goroutine on the same in-memory database.
 	sqlDB.SetMaxOpenConns(1)
-	registryA.EnableSharedHealth()
 
 	registryB := state.NewCredentialRegistry()
-	registryB.EnableSharedHealth()
 	if err := registryB.ReplaceCredentials(registryEntries(registryA)); err != nil {
 		t.Fatal(err)
 	}
@@ -121,13 +119,7 @@ func coordinate(
 	committer configCommitter,
 ) clusterManager {
 	t.Helper()
-	client, err := cluster.NewClient(&config.Config{Cluster: config.ClusterConfig{
-		RedisAddrs: []string{server.Addr()}, RedisKeyPrefix: "gl", InstanceID: instanceID,
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
+	client := clustertest.Connect(t, server, instanceID)
 	store := cluster.NewCredentialHealth(client, registry)
 	manager.SetClusterCoordination(cluster.NewRefreshLease(client), store, committer)
 	return clusterManager{manager: manager, registry: registry, health: store, client: client}

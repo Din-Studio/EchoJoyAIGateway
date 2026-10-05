@@ -19,7 +19,7 @@ const (
 // ClusterConfigSync keeps this instance's runtime configuration aligned with
 // control-plane commits made by any cluster instance, itself included. Redis
 // events are the fast path; polling the PostgreSQL revision is the correctness
-// path, so a lost event only costs latency. It is nil in single-instance mode.
+// path, so a lost event only costs latency.
 type ClusterConfigSync struct {
 	reload       func(context.Context) (uint64, error)
 	readRevision func(context.Context) (uint64, error)
@@ -32,12 +32,8 @@ type ClusterConfigSync struct {
 	lastApplied  atomic.Uint64
 }
 
-// NewClusterConfigSync wires the sync loop onto the control service. A nil bus
-// means cluster mode is disabled and nothing is assembled.
+// NewClusterConfigSync wires the sync loop onto the control service.
 func NewClusterConfigSync(service *Service, bus *cluster.ConfigEventBus) *ClusterConfigSync {
-	if service == nil || bus == nil {
-		return nil
-	}
 	return &ClusterConfigSync{
 		reload: func(ctx context.Context) (uint64, error) {
 			// A peer stores a new catalog before committing its prices, so
@@ -62,9 +58,6 @@ func NewClusterConfigSync(service *Service, bus *cluster.ConfigEventBus) *Cluste
 // commits made between this instance's initial load and the subscription,
 // then reloads on every peer event or when polling observes a newer revision.
 func (coordinator *ClusterConfigSync) Run(ctx context.Context) {
-	if coordinator == nil {
-		return
-	}
 	coordinator.reloadNow(ctx)
 
 	var subscriber sync.WaitGroup
@@ -94,9 +87,6 @@ func (coordinator *ClusterConfigSync) Run(ctx context.Context) {
 }
 
 func (coordinator *ClusterConfigSync) runSubscriber(ctx context.Context) {
-	if coordinator.bus == nil {
-		return
-	}
 	for {
 		err := coordinator.bus.Subscribe(ctx, func() { coordinator.pollOnceAsync(ctx) }, coordinator.handle)
 		if ctx.Err() != nil {

@@ -16,7 +16,6 @@ import (
 
 	"gpt-load/internal/catalog"
 	"gpt-load/internal/cluster"
-	"gpt-load/internal/platform/config"
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/platform/utils"
 	"gpt-load/internal/pricing"
@@ -178,8 +177,8 @@ type CatalogSyncCoordinator struct {
 	service   *Service
 	client    catalogSyncClient
 	cachePath string
-	// shared replaces the cache file in cluster mode; jobLease lets one
-	// instance run each period's automatic sync. Both are nil otherwise.
+	// shared holds the last-known-good catalog; jobLease lets one instance
+	// run each period's automatic sync.
 	shared   *cluster.CatalogStore
 	jobLease *cluster.JobLease
 
@@ -232,23 +231,16 @@ func newCatalogSyncCoordinator(
 }
 
 // NewCatalogBootstrap merges the embedded official catalog with the durable
-// Models.dev last-known-good catalog without doing network I/O to Models.dev.
-// In cluster mode the last-known-good catalog is the one shared through Redis.
-// Missing or invalid documents retain the official catalog generation.
-func NewCatalogBootstrap(cfg *config.Config, shared *cluster.CatalogStore) *CatalogBootstrap {
-	if shared != nil {
-		return loadSharedCatalogBootstrap(context.Background(), shared)
-	}
-	dataDir := "."
-	if cfg != nil && cfg.DataDir != "" {
-		dataDir = cfg.DataDir
-	}
-	return newCatalogBootstrap(dataDir)
+// Models.dev last-known-good catalog shared through Redis, without doing
+// network I/O to Models.dev. Missing or invalid documents retain the official
+// catalog generation.
+func NewCatalogBootstrap(shared *cluster.CatalogStore) *CatalogBootstrap {
+	return loadSharedCatalogBootstrap(context.Background(), shared)
 }
 
 // NewCatalogSyncCoordinator wires the fixed Models.dev client to the shared
-// service/runtime publication boundary. In cluster mode the catalog is stored
-// in and adopted from Redis, and automatic syncs are claimed per period.
+// service/runtime publication boundary. The catalog is stored in and adopted
+// from Redis, and automatic syncs are claimed per period.
 func NewCatalogSyncCoordinator(
 	service *Service,
 	client *catalog.Client,
@@ -369,8 +361,7 @@ func (coordinator *CatalogSyncCoordinator) syncAutomatically(
 // newer than this instance's. The peer already reconciled model prices in the
 // database, so adoption only replaces the in-memory catalog.
 func (coordinator *CatalogSyncCoordinator) adoptSharedCatalog(ctx context.Context) error {
-	if coordinator == nil || coordinator.shared == nil ||
-		coordinator.service == nil || coordinator.service.catalogRuntime == nil {
+	if coordinator == nil || coordinator.service == nil || coordinator.service.catalogRuntime == nil {
 		return nil
 	}
 	fetchedAt, err := coordinator.shared.FetchedAt(ctx)
@@ -694,12 +685,9 @@ func (coordinator *CatalogSyncCoordinator) executeSync(
 	return catalogSyncSuccessStatus(trigger, result.Metadata, false), nil
 }
 
-// storeLastKnownGood persists a validated 200 result before it is applied:
-// to the shared Redis document in cluster mode, otherwise to the cache file.
+// storeLastKnownGood persists a validated 200 result to the shared Redis
+// document before it is applied.
 func (coordinator *CatalogSyncCoordinator) storeLastKnownGood(ctx context.Context, result catalog.SyncResult) error {
-	if coordinator.shared == nil {
-		return coordinator.storeCache(coordinator.cachePath, result)
-	}
 	document, err := catalog.EncodeCache(result)
 	if err != nil {
 		return err

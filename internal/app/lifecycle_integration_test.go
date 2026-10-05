@@ -34,6 +34,7 @@ func TestAppStopWaitsForTrackedControlHandler(t *testing.T) {
 		c.Status(http.StatusNoContent)
 	})
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           engine,
 		Config:           testConfig(t),
 		DB:               db,
@@ -106,6 +107,7 @@ func TestAppStopCancelsTrackedControlHandlerAndStartsExecutionShutdown(t *testin
 		shutdownFunc: func() { shutdownOnce.Do(func() { close(shutdown) }) },
 	}
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           engine,
 		Config:           testConfig(t),
 		DB:               db,

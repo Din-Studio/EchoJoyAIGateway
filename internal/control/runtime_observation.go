@@ -61,28 +61,21 @@ func (service *Service) captureRuntimeObservation() (runtimeObservation, error) 
 }
 
 // accessQuotaView reads one AccessKey's cost-limit state from the shared
-// cluster store, or from the in-process runtime in single-instance mode. ok is
-// false when neither exists. Callers must not hold writeMu: the cluster store
-// performs network I/O.
+// cluster store. Callers must not hold writeMu: the cluster store performs
+// network I/O.
 func (service *Service) accessQuotaView(
 	ctx context.Context,
 	snapshot *state.ConfigSnapshot,
 	accessKeyID uint,
 	now time.Time,
-) (accessquota.View, bool, error) {
-	switch {
-	case service.clusterQuota != nil:
-		view, err := service.clusterQuota.View(ctx, snapshot, accessKeyID, now)
-		if err != nil {
-			return accessquota.View{}, false, fmt.Errorf(
-				"read access key %d cost limit state: %v: %w", accessKeyID, err, app_errors.ErrInternalServer,
-			)
-		}
-		return view, true, nil
-	case service.accessQuota != nil:
-		return service.accessQuota.Snapshot(accessKeyID, now), true, nil
+) (accessquota.View, error) {
+	view, err := service.clusterQuota.View(ctx, snapshot, accessKeyID, now)
+	if err != nil {
+		return accessquota.View{}, fmt.Errorf(
+			"read access key %d cost limit state: %v: %w", accessKeyID, err, app_errors.ErrInternalServer,
+		)
 	}
-	return accessquota.View{}, false, nil
+	return view, nil
 }
 
 func (service *Service) captureRuntimeHealthObservation() (
@@ -90,12 +83,12 @@ func (service *Service) captureRuntimeHealthObservation() (
 	error,
 ) {
 	observation, err := service.captureRuntimeHealthState()
-	if err != nil || (service.accessQuota == nil && service.clusterQuota == nil) {
+	if err != nil {
 		return observation, err
 	}
 	views := make(map[uint]accessquota.View, len(observation.snapshot.AccessKeysByID))
 	for accessKeyID := range observation.snapshot.AccessKeysByID {
-		view, _, err := service.accessQuotaView(context.Background(), observation.snapshot, accessKeyID, observation.observedAt)
+		view, err := service.accessQuotaView(context.Background(), observation.snapshot, accessKeyID, observation.observedAt)
 		if err != nil {
 			return runtimeHealthObservation{}, err
 		}

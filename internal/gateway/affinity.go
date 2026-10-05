@@ -13,9 +13,8 @@ import (
 	"gpt-load/internal/telemetry"
 )
 
-// AffinityStore remembers soft credential preferences: the in-process cache
-// in single-instance mode and the shared Redis store in cluster mode. Both
-// are advisory, so a failing store only removes the preference.
+// AffinityStore remembers soft credential preferences shared through Redis.
+// They are advisory, so a failing store only removes the preference.
 type AffinityStore interface {
 	Lookup(ctx context.Context, policy affinity.Policy, key affinity.Key) (affinity.Observation, error)
 	RecordSuccess(

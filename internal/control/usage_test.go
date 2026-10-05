@@ -30,7 +30,7 @@ func TestUsageAPIRouteUsesManagementAuthentication(t *testing.T) {
 	}
 	fixture.service.usageStats = &recordingUsageStatReader{}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/usage?"+usageTestDayQuery, nil)
 	request.Header.Set("Authorization", "Bearer test-auth-key")
@@ -767,7 +767,7 @@ func TestUsageAPIExcludesLegacyZeroAttemptAggregate(t *testing.T) {
 	fixture.service.now = func() time.Time { return now }
 	fixture.service.usageStats = requestlog.NewService(fixture.db, nil, nil)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	recorder := performUsageRequest(engine, "test-auth-key", usageTestTimeQuery(now.Add(-24*time.Hour), now))
 	if recorder.Code != http.StatusOK {
@@ -852,7 +852,7 @@ func TestUsageAPIBindsAccessKeyScopeAndRedactsProcessHealth(t *testing.T) {
 	fixture.requestLogStats.value.DroppedTotal = 100
 	fixture.requestLogStats.value.WriteFailureTotal = 50
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	recorder := performUsageRequest(engine, created.Key, usageTestTimeQuery(now.AddDate(0, 0, -7), now)+"&upstream_model=allowed-model")
 	if recorder.Code != http.StatusOK {
@@ -1007,7 +1007,7 @@ func newUsageTestEngine(
 	fixture.service.now = func() time.Time { return now }
 	fixture.service.usageStats = reader
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	return engine, fixture
 }
 

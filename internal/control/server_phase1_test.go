@@ -31,7 +31,7 @@ func TestControlRoutesRequireAuthenticationForGroupCreateAndModelDiscovery(t *te
 		},
 	})
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	for _, endpoint := range []struct {
 		name string
@@ -85,7 +85,7 @@ func TestCreateAndImportEndpointsRequireCanonicalIdempotencyKeyBeforeMutation(t 
 	fixture := newServiceFixture(t)
 	groupID := createGroupWithCredentials(t, fixture, "seed-idempotency-header")
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	tests := []struct {
 		name string
 		path string
@@ -159,7 +159,7 @@ func TestAccessKeyCreateReplayOptionsAndRevealWireContracts(t *testing.T) {
 	fixture.service.random = bytes.NewReader(make([]byte, 16))
 	fixture.service.operationRandom = bytes.NewReader(bytes.Repeat([]byte{0x73}, 16))
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	const idempotencyKey = "318f47a2-9c35-4d6e-8b1a-1234567890ab"
 
 	create := func() *httptest.ResponseRecorder {

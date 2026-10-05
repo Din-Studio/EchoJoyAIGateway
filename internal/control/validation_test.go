@@ -10,17 +10,18 @@ import (
 	"reflect"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/sirupsen/logrus"
 
 	"gpt-load/internal/channel"
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/health"
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/state"
+	"gpt-load/internal/testutil/clustertest"
 )
 
 func TestValidationWorkerUsesExplicitModelAndCanonicalRepresentativeProtocol(t *testing.T) {
@@ -107,7 +108,7 @@ func TestValidationWorkerFallsBackToEmbeddingsAfterExplicitModelRejection(t *tes
 		}
 	}
 	if got, want := worker.recorder.events(), []string{
-		"registry.recover:7",
+		"health.recover:7",
 		"stats.reset:7",
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("recovery events = %#v, want %#v", got, want)
@@ -410,7 +411,7 @@ func TestValidationWorkerProbesStructuredCloudCredential(t *testing.T) {
 		len(observed.Query) != 0 || len(observed.Body) != 0 {
 		t.Fatalf("probe attempt contains provider wire shape: %#v", observed)
 	}
-	if got, want := worker.recorder.events(), []string{"registry.recover:7", "stats.reset:7"}; !reflect.DeepEqual(got, want) {
+	if got, want := worker.recorder.events(), []string{"health.recover:7", "stats.reset:7"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("recovery events = %#v, want %#v", got, want)
 	}
 }
@@ -617,50 +618,6 @@ func TestValidationWorkerKeepsKeyBlacklistedOnDecryptOrProbeFailure(t *testing.T
 	}
 }
 
-func TestValidationWorkerCoordinatesConditionalRecoveryAndStatsReset(t *testing.T) {
-	t.Parallel()
-	probes := &validationProbeRecorder{}
-	worker := newValidationWorkerForTest(
-		validationSnapshot(map[uint]state.GroupView{1: validationGroup([]protocol.Protocol{protocol.OpenAICompletions}, "model", nil)}),
-		[]state.CredentialRef{{ID: 7, GroupID: 1, EncryptedValue: "key-7"}},
-		probes,
-	)
-	coordinator := &barrierValidationMutationCoordinator{
-		entered: make(chan struct{}), releaseEntry: make(chan struct{}),
-		observe: worker.recorder.events, observed: make(chan []string, 1),
-		releaseExit: make(chan struct{}),
-	}
-	worker.mutations = coordinator
-
-	done := make(chan struct{})
-	go func() {
-		worker.Validate(context.Background())
-		close(done)
-	}()
-
-	awaitSignal(t, coordinator.entered)
-	if got := worker.recorder.events(); len(got) != 0 {
-		t.Fatalf("recovery events before coordinator callback = %#v, want none", got)
-	}
-	close(coordinator.releaseEntry)
-	if got, want := awaitValue(t, coordinator.observed), []string{"registry.recover:7", "stats.reset:7"}; !sameValidationEvents(got, want) {
-		t.Fatalf("recovery events = %#v, want %#v", got, want)
-	}
-	select {
-	case <-done:
-		t.Fatal("validation returned before coordinator interval was released")
-	default:
-	}
-	close(coordinator.releaseExit)
-	awaitSignal(t, done)
-	if got := worker.snapshots.(*validationSnapshotRecorder).calls(); got != 1 {
-		t.Fatalf("snapshot reads = %d, want 1", got)
-	}
-	if got := worker.registry.(*validationRegistryRecorder).blacklistedCalls(); got != 1 {
-		t.Fatalf("BlacklistedCredentials calls = %d, want 1", got)
-	}
-}
-
 func TestValidationWorkerLogsSuccessfulRecovery(t *testing.T) {
 	// 不标记 t.Parallel()：本测试劫持了全局 logrus 输出/格式，与其他并行测试同时运行会互相覆盖断言。
 	var logs bytes.Buffer
@@ -726,31 +683,29 @@ func TestValidationWorkerFailureGenerationChangesDuringProbeRejectsRecovery(t *t
 	registry := state.NewCredentialRegistry()
 	if err := registry.ReplaceCredentials([]state.CredentialEntry{{
 		ID: 7, GroupID: 1, Version: 1, IdentityGeneration: 7, Fingerprint: "test-7", Status: state.CredentialStatusActive,
-		Blacklisted: true, FailureCount: 3, EncryptedValue: "key-7",
+		EncryptedValue: "key-7",
 	}}); err != nil {
 		t.Fatalf("Replace() error = %v", err)
 	}
-	stats := health.NewStatsStore()
-	stats.RecordFailure(7, health.FailureCategoryAmbiguous, 0, now)
 	probeStarted := make(chan struct{})
 	releaseProbe := make(chan struct{})
-	worker := &validationWorker{
-		snapshots: &validationSnapshotRecorder{snapshot: validationSnapshot(map[uint]state.GroupView{
-			1: validationSignatureGroup(),
-		})},
-		registry:  registry,
-		stats:     stats,
-		mutations: health.NewMutationCoordinator(),
-		decryptor: validationDecryptor{},
-		channels:  channel.NewRegistry(),
-		executor: &validationTestExecutor{
-			probes: &validationProbeRecorder{probe: func(context.Context, protocol.Protocol, string, string) error {
-				close(probeStarted)
-				<-releaseProbe
-				return nil
-			}},
+	worker := newRealRegistryValidationWorker(t, registry, &validationProbeRecorder{
+		probe: func(context.Context, protocol.Protocol, string, string) error {
+			close(probeStarted)
+			<-releaseProbe
+			return nil
 		},
+	})
+	worker.snapshots = &validationSnapshotRecorder{snapshot: validationSnapshot(map[uint]state.GroupView{
+		1: validationSignatureGroup(),
+	})}
+	sharedHealth := worker.sharedHealth
+	ref, _ := registry.CredentialRef(7)
+	if _, err := sharedHealth.RecordFailure(t.Context(), ref, 1); err != nil {
+		t.Fatalf("RecordFailure() error = %v", err)
 	}
+	stats := worker.stats.(*health.StatsStore)
+	stats.RecordFailure(7, health.FailureCategoryAmbiguous, 0, now)
 
 	done := make(chan struct{})
 	go func() {
@@ -758,17 +713,14 @@ func TestValidationWorkerFailureGenerationChangesDuringProbeRejectsRecovery(t *t
 		close(done)
 	}()
 	awaitSignal(t, probeStarted)
-	if count, ok := registry.IncrFailure(7); !ok || count != 4 {
-		t.Fatalf("IncrFailure() = %d/%t, want 4/true", count, ok)
+	if result, err := sharedHealth.RecordFailure(t.Context(), ref, 1); err != nil || result.FailureCount != 2 {
+		t.Fatalf("RecordFailure() = %#v, %v, want failure count 2", result, err)
 	}
 	close(releaseProbe)
 	awaitValidationDone(t, done)
 
-	if got, want := registry.BlacklistedCredentials(), []state.CredentialRef{{
-		ID: 7, GroupID: 1, Version: 1, IdentityGeneration: 7,
-		Fingerprint: "test-7", EncryptedValue: "key-7", FailureGeneration: 1,
-	}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("blacklisted keys = %#v, want stale recovery rejected as %#v", got, want)
+	if got := registry.BlacklistedCredentials(); len(got) != 1 || got[0].ID != 7 {
+		t.Fatalf("blacklisted keys = %#v, want stale recovery rejected", got)
 	}
 	if got, want := stats.Snapshot(7, now), (health.CredentialStats{
 		Failure: 1, Problem: 1, ConsecutiveFailure: 1, ConsecutiveProblem: 1,
@@ -865,7 +817,7 @@ func TestValidationWorkerUnrelatedSnapshotRevisionAllowsRecovery(t *testing.T) {
 	worker.Validate(context.Background())
 
 	if got, want := worker.recorder.events(), []string{
-		"registry.recover:7",
+		"health.recover:7",
 		"stats.reset:7",
 	}; !sameValidationEvents(got, want) {
 		t.Fatalf("recovery events = %#v, want unrelated revision allowed %#v", got, want)
@@ -895,156 +847,6 @@ func TestValidationSignatureRemovedOrDisabledGroupRejectsRecovery(t *testing.T) 
 				t.Fatalf("recovery events for %s Group = %#v, want none", name, got)
 			}
 		})
-	}
-}
-
-type observableValidationSnapshotSource struct {
-	manager        *state.Manager
-	callbackActive atomic.Bool
-}
-
-func (source *observableValidationSnapshotSource) Current() *state.ConfigSnapshot {
-	return source.manager.Current()
-}
-
-func (source *observableValidationSnapshotSource) WithCurrentSnapshot(
-	fn func(*state.ConfigSnapshot) bool,
-) bool {
-	return source.manager.WithCurrentSnapshot(func(snapshot *state.ConfigSnapshot) bool {
-		if !source.callbackActive.CompareAndSwap(false, true) {
-			panic("nested validation publication callback")
-		}
-		defer source.callbackActive.Store(false)
-		return fn(snapshot)
-	})
-}
-
-func (source *observableValidationSnapshotSource) active() bool {
-	return source.callbackActive.Load()
-}
-
-type publicationValidationRegistry struct {
-	delegate              *state.CredentialRegistry
-	callbackActive        func() bool
-	recoverCallbackActive chan bool
-	recoverEntered        chan struct{}
-	releaseRecover        chan struct{}
-}
-
-func (registry *publicationValidationRegistry) BlacklistedCredentials() []state.CredentialRef {
-	return registry.delegate.BlacklistedCredentials()
-}
-
-func (registry *publicationValidationRegistry) RecoverIfMatch(ref state.CredentialRef) bool {
-	registry.recoverCallbackActive <- registry.callbackActive()
-	close(registry.recoverEntered)
-	<-registry.releaseRecover
-	return registry.delegate.RecoverIfMatch(ref)
-}
-
-type publicationValidationStats struct {
-	delegate            *health.StatsStore
-	callbackActive      func() bool
-	resetCallbackActive chan bool
-	resetEntered        chan struct{}
-	releaseReset        chan struct{}
-}
-
-func (stats *publicationValidationStats) Reset(keyID uint) {
-	stats.delegate.Reset(keyID)
-	stats.resetCallbackActive <- stats.callbackActive()
-	close(stats.resetEntered)
-	<-stats.releaseReset
-}
-
-func TestValidationWorkerPublicationBoundaryBlocksPublishThroughRecoverAndReset(t *testing.T) {
-	t.Parallel()
-	manager := state.NewManager()
-	if _, err := manager.Publish(validationManagerCompileInput("https://upstream.example.com")); err != nil {
-		t.Fatalf("initial Publish() error = %v", err)
-	}
-	registry := state.NewCredentialRegistry()
-	if err := registry.ReplaceCredentials([]state.CredentialEntry{{
-		ID: 7, GroupID: 1, Version: 1, IdentityGeneration: 7, Fingerprint: "test-7", Status: state.CredentialStatusActive,
-		Blacklisted: true, FailureCount: 3, EncryptedValue: "key-7",
-	}}); err != nil {
-		t.Fatalf("Replace() error = %v", err)
-	}
-	stats := health.NewStatsStore()
-	now := time.Date(2026, time.July, 27, 12, 0, 0, 0, time.UTC)
-	stats.RecordFailure(7, health.FailureCategoryAmbiguous, 0, now)
-	snapshots := &observableValidationSnapshotSource{manager: manager}
-	blockingRegistry := &publicationValidationRegistry{
-		delegate:              registry,
-		callbackActive:        snapshots.active,
-		recoverCallbackActive: make(chan bool, 1),
-		recoverEntered:        make(chan struct{}),
-		releaseRecover:        make(chan struct{}),
-	}
-	blockingStats := &publicationValidationStats{
-		delegate:            stats,
-		callbackActive:      snapshots.active,
-		resetCallbackActive: make(chan bool, 1),
-		resetEntered:        make(chan struct{}),
-		releaseReset:        make(chan struct{}),
-	}
-	probes := &validationProbeRecorder{}
-	worker := &validationWorker{
-		snapshots: snapshots,
-		registry:  blockingRegistry,
-		stats:     blockingStats,
-		mutations: health.NewMutationCoordinator(),
-		decryptor: validationDecryptor{},
-		channels:  channel.NewRegistry(),
-		executor:  &validationTestExecutor{probes: probes},
-	}
-
-	validationDone := make(chan struct{})
-	go func() {
-		worker.Validate(context.Background())
-		close(validationDone)
-	}()
-	awaitSignal(t, blockingRegistry.recoverEntered)
-	if active := awaitValue(t, blockingRegistry.recoverCallbackActive); !active {
-		t.Fatal("RecoverIfMatch ran outside the active Manager snapshot callback")
-	}
-
-	publishAttempted := make(chan struct{})
-	publishDone := make(chan error, 1)
-	go func() {
-		close(publishAttempted)
-		_, err := manager.Publish(validationManagerCompileInput("https://changed.example.com"))
-		publishDone <- err
-	}()
-	awaitSignal(t, publishAttempted)
-	assertValidationPublishBlocked(t, publishDone, "RecoverIfMatch")
-
-	close(blockingRegistry.releaseRecover)
-	awaitSignal(t, blockingStats.resetEntered)
-	if active := awaitValue(t, blockingStats.resetCallbackActive); !active {
-		t.Fatal("Stats.Reset ran outside the active Manager snapshot callback")
-	}
-	assertValidationPublishBlocked(t, publishDone, "Stats.Reset")
-
-	close(blockingStats.releaseReset)
-	awaitValidationDone(t, validationDone)
-	select {
-	case err := <-publishDone:
-		if err != nil {
-			t.Fatalf("concurrent Publish() error = %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for Publish after validation callback returned")
-	}
-
-	if got := registry.BlacklistedCredentials(); len(got) != 0 {
-		t.Fatalf("blacklisted keys after recovery = %#v, want none", got)
-	}
-	if got := stats.Snapshot(7, now); got != (health.CredentialStats{}) {
-		t.Fatalf("stats after recovery = %#v, want reset", got)
-	}
-	if snapshots.active() {
-		t.Fatal("Manager snapshot callback remained active after validation returned")
 	}
 }
 
@@ -1119,54 +921,6 @@ func assertValidationPublishBlocked(t *testing.T, publishDone <-chan error, stag
 	}
 }
 
-type barrierValidationMutationCoordinator struct {
-	entered      chan struct{}
-	releaseEntry chan struct{}
-	observe      func() []string
-	observed     chan []string
-	releaseExit  chan struct{}
-}
-
-func (coordinator *barrierValidationMutationCoordinator) Do(_ uint, fn func()) {
-	close(coordinator.entered)
-	<-coordinator.releaseEntry
-	fn()
-	coordinator.observed <- coordinator.observe()
-	<-coordinator.releaseExit
-}
-
-func TestValidationWorkerConditionalRecoveryFailureCompletesCoordinatorInterval(t *testing.T) {
-	t.Parallel()
-	worker := newValidationWorkerForTest(
-		validationSnapshot(map[uint]state.GroupView{1: validationGroup([]protocol.Protocol{protocol.OpenAICompletions}, "model", nil)}),
-		[]state.CredentialRef{{ID: 7, GroupID: 1, EncryptedValue: "key-7"}},
-		&validationProbeRecorder{},
-	)
-	worker.registry.(*validationRegistryRecorder).recoveryOK = false
-	coordinator := &barrierValidationMutationCoordinator{
-		entered: make(chan struct{}), releaseEntry: make(chan struct{}),
-		observe: worker.recorder.events, observed: make(chan []string, 1),
-		releaseExit: make(chan struct{}),
-	}
-	worker.mutations = coordinator
-
-	done := make(chan struct{})
-	go func() {
-		worker.Validate(context.Background())
-		close(done)
-	}()
-	awaitSignal(t, coordinator.entered)
-	if got := worker.recorder.events(); len(got) != 0 {
-		t.Fatalf("recovery events before coordinator callback = %#v, want none", got)
-	}
-	close(coordinator.releaseEntry)
-	if got := awaitValue(t, coordinator.observed); len(got) != 0 {
-		t.Fatalf("recovery events = %#v, want none", got)
-	}
-	close(coordinator.releaseExit)
-	awaitSignal(t, done)
-}
-
 func TestValidationWorkerDoesNotRecoverDisabledOrReplacedKeyRef(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -1207,7 +961,7 @@ func TestValidationWorkerDoesNotRecoverDisabledOrReplacedKeyRef(t *testing.T) {
 			}
 			probeStarted := make(chan struct{})
 			releaseProbe := make(chan struct{})
-			worker := newRealRegistryValidationWorker(registry, &validationProbeRecorder{probe: func(ctx context.Context, _ protocol.Protocol, _ string, _ string) error {
+			worker := newRealRegistryValidationWorker(t, registry, &validationProbeRecorder{probe: func(ctx context.Context, _ protocol.Protocol, _ string, _ string) error {
 				close(probeStarted)
 				select {
 				case <-releaseProbe:
@@ -1479,7 +1233,10 @@ func (recorder *validationEventRecorder) events() []string {
 	return append([]string(nil), recorder.items...)
 }
 
+// validationRegistryRecorder serves the blacklist sweep and records the
+// shared health recoveries that follow it.
 type validationRegistryRecorder struct {
+	state.SharedCredentialHealthStore
 	mu              sync.Mutex
 	refs            []state.CredentialRef
 	blacklistedRead int
@@ -1494,15 +1251,18 @@ func (registry *validationRegistryRecorder) BlacklistedCredentials() []state.Cre
 	return append([]state.CredentialRef(nil), registry.refs...)
 }
 
-func (registry *validationRegistryRecorder) RecoverIfMatch(ref state.CredentialRef) bool {
+// RecoverIfMatch records the shared store recovery the worker requests.
+func (registry *validationRegistryRecorder) RecoverIfMatch(
+	_ context.Context, ref state.CredentialRef, _ *time.Time,
+) (state.SharedHealthResult, error) {
 	registry.mu.Lock()
 	recoveryOK := registry.recoveryOK
 	registry.mu.Unlock()
 	if !recoveryOK {
-		return false
+		return state.SharedHealthResult{}, nil
 	}
-	registry.recorder.add(fmt.Sprintf("registry.recover:%d", ref.ID))
-	return true
+	registry.recorder.add(fmt.Sprintf("health.recover:%d", ref.ID))
+	return state.SharedHealthResult{Accepted: true, Changed: true}, nil
 }
 
 func (registry *validationRegistryRecorder) events() []string {
@@ -1641,29 +1401,35 @@ func newValidationWorkerForTest(snapshot *state.ConfigSnapshot, refs []state.Cre
 	registry := &validationRegistryRecorder{refs: refs, recoveryOK: true, recorder: recorder}
 	return &validationTestWorker{
 		validationWorker: &validationWorker{
-			snapshots: &validationSnapshotRecorder{snapshot: snapshot},
-			registry:  registry,
-			stats:     &validationStatsRecorder{recorder: recorder},
-			mutations: health.NewMutationCoordinator(),
-			decryptor: validationDecryptor{},
-			channels:  channel.NewRegistry(),
-			executor:  &validationTestExecutor{probes: probes},
+			snapshots:    &validationSnapshotRecorder{snapshot: snapshot},
+			registry:     registry,
+			stats:        &validationStatsRecorder{recorder: recorder},
+			decryptor:    validationDecryptor{},
+			channels:     channel.NewRegistry(),
+			executor:     &validationTestExecutor{probes: probes},
+			sharedHealth: registry,
 		},
 		recorder: recorder,
 	}
 }
 
-func newRealRegistryValidationWorker(registry *state.CredentialRegistry, probes *validationProbeRecorder) *validationWorker {
+// newRealRegistryValidationWorker recovers through a Redis health store that
+// mirrors into registry.
+func newRealRegistryValidationWorker(
+	t *testing.T, registry *state.CredentialRegistry, probes *validationProbeRecorder,
+) *validationWorker {
+	t.Helper()
+	_, client := clustertest.NewClient(t)
 	return &validationWorker{
 		snapshots: &validationSnapshotRecorder{snapshot: validationSnapshot(map[uint]state.GroupView{
 			1: validationGroup([]protocol.Protocol{protocol.OpenAICompletions}, "model", nil),
 		})},
-		registry:  registry,
-		stats:     health.NewStatsStore(),
-		mutations: health.NewMutationCoordinator(),
-		decryptor: validationDecryptor{},
-		channels:  channel.NewRegistry(),
-		executor:  &validationTestExecutor{probes: probes},
+		registry:     registry,
+		stats:        health.NewStatsStore(),
+		decryptor:    validationDecryptor{},
+		channels:     channel.NewRegistry(),
+		executor:     &validationTestExecutor{probes: probes},
+		sharedHealth: cluster.NewCredentialHealth(client, registry),
 	}
 }
 

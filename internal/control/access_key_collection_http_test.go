@@ -171,7 +171,7 @@ func TestAccessKeyCollectionHTTPReturnsAuthenticatedCollectionEnvelope(t *testin
 	}
 
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 	request := httptest.NewRequest(http.MethodGet, "/api/access-keys?status=active&page=1&page_size=100", nil)
 	request.Header.Set("Authorization", "Bearer "+authTestKey)
 	request.Header.Set("Accept-Language", "en-US")
@@ -234,7 +234,7 @@ func TestAccessKeyCollectionHTTPReturnsLatestRequestTimeAndOmitsCollectionScope(
 	}
 
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 	request := httptest.NewRequest(http.MethodGet, "/api/access-keys?page=1&page_size=20", nil)
 	request.Header.Set("Authorization", "Bearer "+authTestKey)
 	request.Header.Set("Accept-Language", "en-US")
@@ -275,7 +275,7 @@ func TestAccessKeyCollectionHTTPRejectsInvalidQueryBeforeServiceAccess(t *testin
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 
 	for _, target := range []string{
 		"/api/access-keys?unknown=1",

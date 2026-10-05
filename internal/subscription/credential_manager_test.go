@@ -15,6 +15,7 @@ import (
 	"gorm.io/gorm"
 
 	"gpt-load/internal/channel"
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/health"
 	"gpt-load/internal/outboundproxy"
@@ -26,6 +27,7 @@ import (
 	subscriptionproviders "gpt-load/internal/subscription/providers"
 	"gpt-load/internal/subscription/providers/codex"
 	subscriptionruntime "gpt-load/internal/subscription/runtime"
+	"gpt-load/internal/testutil/clustertest"
 	"gpt-load/internal/testutil/encryptiontest"
 	"gpt-load/internal/testutil/pgtest"
 )
@@ -261,8 +263,10 @@ func TestCredentialManagerControlRefreshPreservesNewerCooldown(t *testing.T) {
 				RetryAfter: 30 * time.Minute,
 			}
 		}
-		if !registry.SetCooldown(row.ID, now.Add(time.Hour)) {
-			t.Fatal("SetCooldown() = false")
+		// A peer records a newer cooldown while this refresh is in flight.
+		ref, _ := registry.CredentialRef(row.ID)
+		if result, err := manager.health.CooldownCredential(t.Context(), ref, now.Add(time.Hour), 0); err != nil || !result.Accepted {
+			t.Fatalf("CooldownCredential() = %#v, %v", result, err)
 		}
 		current.AccessToken = "new-access"
 		current.Expire = now.Add(time.Hour).Format(time.RFC3339)
@@ -624,6 +628,10 @@ func newCredentialManagerFixture(
 		t.Fatal(err)
 	}
 	manager := NewCredentialManager(db, keyService, registry, health.NewMutationCoordinator(), subscriptions)
+	_, client := clustertest.NewClient(t)
+	manager.SetClusterCoordination(
+		cluster.NewRefreshLease(client), cluster.NewCredentialHealth(client, registry), &countingCommitter{db: db},
+	)
 	return manager, db, registry, keyService, row
 }
 

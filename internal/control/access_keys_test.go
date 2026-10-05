@@ -261,7 +261,7 @@ func TestListAccessKeyCollectionReturnsMaskedMetadataWithoutDecrypting(t *testin
 	}
 
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/access-keys", nil)
 	request.Header.Set("Authorization", "Bearer test-auth-key")
@@ -650,7 +650,7 @@ func TestAccessKeyEndpointsDistinguishRPMLimit(t *testing.T) {
 		}
 		fixture.service.random = bytes.NewReader(randomBytes)
 		engine := gin.New()
-		NewServer(&config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
+		newTestServer(t, &config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
 		return fixture, engine
 	}
 	serve := func(engine *gin.Engine, method, path, payload string) *httptest.ResponseRecorder {

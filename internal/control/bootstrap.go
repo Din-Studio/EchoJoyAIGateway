@@ -27,18 +27,8 @@ func (s *Service) EnsureInitialState(ctx context.Context) error {
 	var priceTable *pricing.Table
 	err := s.withControlTransaction(ctx, func(tx *gorm.DB) error {
 		nowMS := s.now().UnixMilli()
-		// In cluster mode a peer may be refreshing right now; only rows
-		// without a live refresh lease are swept, after this transaction.
-		if s.refreshLeases == nil {
-			if err := tx.Model(&models.Credential{}).
-				Where("auth_state = ?", models.CredentialAuthStateRefreshing).
-				Updates(map[string]any{
-					"auth_state":      models.CredentialAuthStateOutcomeUnknown,
-					"auth_error_code": "refresh_interrupted", "updated_at_ms": nowMS,
-				}).Error; err != nil {
-				return app_errors.ParseDBError(err)
-			}
-		}
+		// A peer may be refreshing right now, so interrupted refreshes are
+		// swept by lease after this transaction, not here.
 		if err := tx.Model(&models.CredentialStage{}).
 			Where("status = ?", models.CredentialStageExchanging).
 			Updates(map[string]any{

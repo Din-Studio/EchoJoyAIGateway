@@ -26,7 +26,7 @@ func TestModelPriceSyncRouteSanitizesFailure(t *testing.T) {
 	client := catalogSyncClientFunc(func(context.Context, catalog.Metadata) (catalog.SyncResult, error) {
 		return catalog.SyncResult{}, errors.New(rawFailure)
 	})
-	coordinator := newCatalogSyncCoordinator(fixture.service, client, "unused", catalog.Metadata{
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{
 		CheckedAtMillis: 100, SuccessfulFetchAtMillis: 90,
 	}, true)
 	coordinator.now = func() time.Time { return time.UnixMilli(250) }
@@ -35,7 +35,7 @@ func TestModelPriceSyncRouteSanitizesFailure(t *testing.T) {
 	logrus.SetOutput(&serviceLogs)
 	t.Cleanup(func() { logrus.SetOutput(previousOutput) })
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 
 	syncResponse := serveModelPriceSyncRequest(engine, authTestKey)
 	if syncResponse.Code != http.StatusBadGateway ||

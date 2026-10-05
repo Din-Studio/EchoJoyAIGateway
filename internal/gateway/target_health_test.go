@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -42,6 +43,11 @@ func TestHandlerHealthEffectsRespectSelectedTarget(t *testing.T) {
 		for _, stream := range []bool{false, true} {
 			for _, statusCode := range []int{http.StatusOK, http.StatusUnauthorized, http.StatusTooManyRequests} {
 				for _, change := range []string{"target before response", "target before mutation", "secret only"} {
+					if statusCode == http.StatusOK && change == "target before mutation" {
+						// A success without a failure streak takes no credential
+						// lock, so there is no mutation to race.
+						continue
+					}
 					t.Run(fmt.Sprintf("%s/stream=%t/status=%d/%s", upstream.channelID, stream, statusCode, change), func(t *testing.T) {
 						now := time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC)
 						result := UpstreamResult{
@@ -105,6 +111,20 @@ func TestHandlerHealthEffectsRespectSelectedTarget(t *testing.T) {
 							})
 						}
 						publish(1, 1, "https://relay.example/old")
+						// Prior failures go through the shared store, which owns health;
+						// the local fallback path records them in the registry instead.
+						recordPriorFailure := func() {
+							ref, _ := registry.CredentialRef(1)
+							if _, err := handler.sharedHealth.RecordFailure(context.Background(), ref, 0); err != nil {
+								t.Fatal(err)
+							}
+						}
+						if change == "target before mutation" {
+							// Only the local fallback takes the credential lock; the
+							// shared store guards the target by identity instead.
+							handler.sharedHealth = unavailableSharedHealth()
+							recordPriorFailure = func() { registry.IncrFailure(1) }
+						}
 						var before state.CredentialRuntimeView
 						var beforeStats health.CredentialStats
 						changeTarget := func() {
@@ -114,7 +134,7 @@ func TestHandlerHealthEffectsRespectSelectedTarget(t *testing.T) {
 								publish(2, 1, "https://relay.example/new")
 							}
 							for range 2 {
-								registry.IncrFailure(1)
+								recordPriorFailure()
 								handler.stats.RecordFailure(1, health.FailureCategoryInvalidKey, http.StatusUnauthorized, now)
 							}
 							before = registry.Snapshot()[0]

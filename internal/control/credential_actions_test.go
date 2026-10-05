@@ -53,7 +53,7 @@ func TestDownloadGroupCredentialHTTPReturnsJSONObjectAndNoStoreHeaders(t *testin
 	t.Parallel()
 	initControlI18n(t)
 	fixture, groupID, credentialID := newSubscriptionCredentialFixture(t)
-	server := NewServer(&config.Config{AuthKey: "credential-download-auth"}, fixture.service)
+	server := newTestServer(t, &config.Config{AuthKey: "credential-download-auth"}, fixture.service)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
 
@@ -132,7 +132,7 @@ func TestDownloadAllGroupCredentialsReturnsEveryAccountAndNoStoreHeaders(t *test
 		}
 	}
 
-	server := NewServer(&config.Config{AuthKey: "credential-download-all-auth"}, fixture.service)
+	server := newTestServer(t, &config.Config{AuthKey: "credential-download-all-auth"}, fixture.service)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
 	response := serveCredentialRequest(

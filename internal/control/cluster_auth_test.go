@@ -10,6 +10,7 @@ import (
 	"gpt-load/internal/cluster"
 	"gpt-load/internal/platform/config"
 	"gpt-load/internal/platform/i18n"
+	"gpt-load/internal/testutil/clustertest"
 )
 
 // newClusterAuthProbeServer assembles an instance's admin authentication the
@@ -20,7 +21,7 @@ func newClusterAuthProbeServer(t *testing.T, server *miniredis.Miniredis, instan
 		&config.Config{AuthKey: authTestKey},
 		nil,
 		nil,
-		cluster.NewAuthFailures(newJobTestClient(t, server, instanceID)),
+		cluster.NewAuthFailures(clustertest.Connect(t, server, instanceID)),
 	)
 	engine := gin.New()
 	api := engine.Group("/api")

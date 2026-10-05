@@ -227,7 +227,7 @@ func TestAuditMutationRecordsExactlyOneOutcome(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var logs bytes.Buffer
-			server := NewServer(&config.Config{AuthKey: authTestKey}, nil)
+			server := newTestServer(t, &config.Config{AuthKey: authTestKey}, nil)
 			server.logger = newControlJSONLogger(&logs)
 			engine := gin.New()
 			engine.POST(
@@ -286,7 +286,7 @@ func TestAuditMutationRecordsExactlyOneOutcome(t *testing.T) {
 func TestAuditMutationUsesSuccessfulLocatorOverride(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
-	server := NewServer(&config.Config{AuthKey: authTestKey}, nil)
+	server := newTestServer(t, &config.Config{AuthKey: authTestKey}, nil)
 	server.logger = newControlJSONLogger(&logs)
 	engine := gin.New()
 	engine.POST(
@@ -324,7 +324,7 @@ func TestAuditMutationLogsPanicThenRethrowsToRecovery(t *testing.T) {
 	t.Parallel()
 	const panicSecret = "sk-panic-audit-secret"
 	var logs bytes.Buffer
-	server := NewServer(&config.Config{AuthKey: authTestKey}, nil)
+	server := newTestServer(t, &config.Config{AuthKey: authTestKey}, nil)
 	server.logger = newControlJSONLogger(&logs)
 	engine := gin.New()
 	engine.Use(func(c *gin.Context) {
@@ -384,7 +384,7 @@ func TestAuditMutationLogsPanicThenRethrowsToRecovery(t *testing.T) {
 
 func TestAuditMutationLoggerPanicDoesNotChangeResponse(t *testing.T) {
 	t.Parallel()
-	server := NewServer(&config.Config{AuthKey: authTestKey}, nil)
+	server := newTestServer(t, &config.Config{AuthKey: authTestKey}, nil)
 	server.logger = logrus.New()
 	server.logger.AddHook(controlPanicLogHook{})
 	engine := gin.New()
@@ -419,7 +419,7 @@ func TestMutationAuditExcludesReadAndDiscoveryRoutes(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	var logs bytes.Buffer
-	server := NewServer(
+	server := newTestServer(t,
 		&config.Config{AuthKey: authTestKey},
 		fixture.service,
 	)

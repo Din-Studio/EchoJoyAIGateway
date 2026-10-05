@@ -96,7 +96,4 @@ func TestAuthFailuresReportRedisErrors(t *testing.T) {
 	if _, err := first.Evaluate(t.Context(), "192.0.2.1", false, testAuthPolicy, time.Now()); err == nil {
 		t.Fatal("Evaluate() with Redis down succeeded")
 	}
-	if NewAuthFailures(nil) != nil {
-		t.Fatal("NewAuthFailures(nil) != nil")
-	}
 }

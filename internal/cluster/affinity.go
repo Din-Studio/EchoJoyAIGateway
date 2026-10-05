@@ -37,17 +37,14 @@ return 1
 // Affinity shares soft credential preferences across instances. Unlike the
 // in-process cache it ignores Policy.Capacity (memory is bounded by the TTL)
 // and never clears on a configuration revision; a TTL change applies to
-// existing entries at lookup time. It is nil in single-instance mode.
+// existing entries at lookup time.
 type Affinity struct {
 	client *Client
 	now    func() time.Time
 }
 
-// NewAffinity returns nil when cluster mode is disabled.
+// NewAffinity builds the shared soft-affinity store.
 func NewAffinity(client *Client) *Affinity {
-	if client == nil {
-		return nil
-	}
 	return &Affinity{client: client, now: time.Now}
 }
 

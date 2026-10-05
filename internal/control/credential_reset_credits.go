@@ -211,34 +211,15 @@ func (s *Service) restoreCredentialRuntimeAfterReset(ctx context.Context, creden
 	if credentialID == 0 || s.registry == nil || s.stats == nil {
 		return false, nil
 	}
-	if s.sharedHealth != nil {
-		ref, exists := s.registry.CredentialRef(credentialID)
-		if !exists {
-			return false, nil
-		}
-		if _, err := s.sharedHealth.Restore(ctx, ref, true, true); err != nil {
-			return false, err
-		}
-		s.stats.ClearProblemState(credentialID)
-		return true, nil
+	ref, exists := s.registry.CredentialRef(credentialID)
+	if !exists {
+		return false, nil
 	}
-	restored := false
-	apply := func() {
-		if !s.registry.RestoreRuntimeState(credentialID) {
-			return
-		}
-		if !s.registry.ClearModelCooldowns(credentialID) {
-			return
-		}
-		s.stats.ClearProblemState(credentialID)
-		restored = true
+	if _, err := s.sharedHealth.Restore(ctx, ref, true, true); err != nil {
+		return false, err
 	}
-	if s.mutations == nil {
-		apply()
-	} else {
-		s.mutations.Do(credentialID, apply)
-	}
-	return restored, nil
+	s.stats.ClearProblemState(credentialID)
+	return true, nil
 }
 
 func (s *Service) beginResetCreditOperation(

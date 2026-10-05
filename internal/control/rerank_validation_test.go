@@ -35,7 +35,7 @@ func TestRerankValidationFallbackRecoversOnlyAfterSuccessfulProbe(t *testing.T) 
 			if !reflect.DeepEqual(protocols, want) {
 				t.Fatalf("probes=%v want=%v", protocols, want)
 			}
-			if status == http.StatusBadRequest && !reflect.DeepEqual(worker.recorder.events(), []string{"registry.recover:7", "stats.reset:7"}) {
+			if status == http.StatusBadRequest && !reflect.DeepEqual(worker.recorder.events(), []string{"health.recover:7", "stats.reset:7"}) {
 				t.Fatalf("events=%v", worker.recorder.events())
 			}
 			if status != http.StatusBadRequest && len(worker.recorder.events()) != 0 {

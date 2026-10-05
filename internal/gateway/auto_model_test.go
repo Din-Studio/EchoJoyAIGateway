@@ -33,12 +33,9 @@ func (call autoDecisionClient) Do(request *http.Request) (*http.Response, error)
 func TestAutoModelDecisionCostSettlesWhenAnswerFails(t *testing.T) {
 	forwarder := &scriptedForwarder{results: []UpstreamResult{{StatusCode: 400, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"error":{"message":"invalid task"}}`)}}}
 	handler, manager, _ := newHandlerForTest(t, forwarder, "key-a", "key-b")
-	configureAutoModelTest(t, handler, manager, state.FilterSet{})
-	runtime := accessquota.NewRuntime()
-	if err := runtime.Reconcile(map[uint][]accessquota.Rule{1: {{ID: 1, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 84000}}}); err != nil {
-		t.Fatal(err)
-	}
-	handler.accessQuota = NewLocalAccessQuotaGate(handler.manager, runtime)
+	configureAutoModelTest(t, handler, manager, state.FilterSet{},
+		accessquota.Rule{ID: 1, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 84000})
+	useSharedAccessQuota(t, handler)
 	calls := 0
 	handler.decisionClient = autoDecisionClient(func(*http.Request) (*http.Response, error) {
 		calls++
@@ -225,13 +222,19 @@ func autoProbeFingerprint(t *testing.T, manager *state.Manager) string {
 	return entry.Fingerprint
 }
 
-func configureAutoModelTest(t *testing.T, handler *Handler, manager *state.Manager, filters state.FilterSet) {
+func configureAutoModelTest(
+	t *testing.T,
+	handler *Handler,
+	manager *state.Manager,
+	filters state.FilterSet,
+	costLimitRules ...accessquota.Rule,
+) {
 	t.Helper()
 	config := autoModelTestConfig()
 	_, err := manager.Publish(state.CompileInput{AutoModel: &config, ChannelRegistry: channel.NewRegistry(),
 		Groups:      []state.GroupConfig{{ID: 1, Name: "openai", ChannelID: channel.OpenAI, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "gpt-4o"}, {ID: "gpt-4.1"}}, Enabled: true}},
 		Credentials: []state.CredentialConfig{{ID: 1, GroupID: 1, Status: state.CredentialStatusActive, Version: 1, IdentityGeneration: 1, Fingerprint: "credential-1"}, {ID: 2, GroupID: 1, Status: state.CredentialStatusActive, Version: 1, IdentityGeneration: 2, Fingerprint: "credential-2"}},
-		AccessKeys:  []state.AccessKeyConfig{{ID: 1, Name: "client", KeyHash: handler.encryption.Hash("gl-client"), Status: state.AccessKeyStatusActive, Filters: filters}},
+		AccessKeys:  []state.AccessKeyConfig{{ID: 1, Name: "client", KeyHash: handler.encryption.Hash("gl-client"), Status: state.AccessKeyStatusActive, Filters: filters, CostLimitRules: costLimitRules}},
 	})
 	if err != nil {
 		t.Fatal(err)

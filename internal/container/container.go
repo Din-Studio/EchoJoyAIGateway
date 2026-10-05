@@ -10,8 +10,6 @@ import (
 	"go.uber.org/dig"
 	"gorm.io/gorm"
 
-	"gpt-load/internal/accessquota"
-	"gpt-load/internal/affinity"
 	"gpt-load/internal/app"
 	"gpt-load/internal/catalog"
 	"gpt-load/internal/channel"
@@ -32,7 +30,6 @@ import (
 	"gpt-load/internal/platform/redact"
 	"gpt-load/internal/pricing"
 	"gpt-load/internal/provideradapter"
-	"gpt-load/internal/ratelimit"
 	"gpt-load/internal/releasecheck"
 	"gpt-load/internal/requestlog"
 	"gpt-load/internal/state"
@@ -70,29 +67,24 @@ func BuildContainer() (*dig.Container, error) {
 		httplifecycle.NewCoordinator,
 		app.NewEngineWithLifecycle,
 		webui.NewServer,
-		newCredentialRegistry,
+		state.NewCredentialRegistry,
 		cluster.NewCredentialHealth,
 		cluster.NewRefreshLease,
 		cluster.NewJobLease,
 		cluster.NewCatalogStore,
 		cluster.NewAuthFailures,
-		newSharedCredentialHealthStore,
-		newResponseBindings,
-		newResponseBindingStore,
-		newAffinityStore,
-		newAccessQuotaRuntime,
+		func(shared *cluster.CredentialHealth) state.SharedCredentialHealthStore { return shared },
 		func(client *cluster.Client, db *gorm.DB) *cluster.AccessQuota {
 			return cluster.NewAccessQuota(client, requestlog.AccessQuotaStateReader{DB: db})
 		},
-		newAccessQuotaGate,
+		newGatewaySharedState,
 		channel.CompileRegistry,
 		control.NewPriceRuntime,
 		control.NewCatalogBootstrap,
 		func(bootstrap *control.CatalogBootstrap) *catalog.Runtime { return bootstrap.Runtime },
 		health.NewStatsStore,
 		health.NewMutationCoordinator,
-		ratelimit.NewAccessKeyRPM,
-		newAccessKeyRPMLimiter,
+		func(client *cluster.Client) gateway.AccessKeyRPMLimiter { return cluster.NewAccessKeyRPM(client) },
 		func(manager *state.Manager) requestlog.RetentionPolicyProvider {
 			return retentionSnapshotProvider{manager: manager}
 		},
@@ -103,14 +95,11 @@ func BuildContainer() (*dig.Container, error) {
 			db *gorm.DB,
 			redactor *redact.Redactor,
 			retention requestlog.RetentionPolicyProvider,
-			quotaRuntime *accessquota.Runtime,
 			sharedQuota *cluster.AccessQuota,
 			subscriptionCredentials *subscription.CredentialManager,
 		) *requestlog.Service {
-			service := requestlog.NewService(db, redactor, retention, quotaRuntime)
-			if sharedQuota != nil {
-				service.SetAccessQuotaCheckpointSource(sharedQuota)
-			}
+			service := requestlog.NewService(db, redactor, retention)
+			service.SetAccessQuotaCheckpointSource(sharedQuota)
 			service.SetPassiveQuotaFlusher(subscriptionCredentials)
 			return service
 		},
@@ -139,12 +128,9 @@ func BuildContainer() (*dig.Container, error) {
 			cfg *config.Config,
 			registry *state.CredentialRegistry,
 			stats *health.StatsStore,
-			responseBindings *state.ResponseBindings,
 			credentialHealth *cluster.CredentialHealth,
 		) app.RuntimeStateCheckpoint {
-			return app.NewFileRuntimeStateCheckpoint(
-				cfg.DataDir, registry, stats, responseBindings, newCredentialHealthHydrator(credentialHealth),
-			)
+			return app.NewFileRuntimeStateCheckpoint(cfg.DataDir, registry, stats, credentialHealth)
 		},
 		control.NewRuntime,
 		func(runtime *control.Runtime) app.ControlRuntime { return runtime },
@@ -195,12 +181,10 @@ func BuildContainer() (*dig.Container, error) {
 		func(registry *channel.Registry) (*bifrostexecutor.RuntimeManager, error) {
 			return bifrostexecutor.NewManagedRuntime(registry)
 		},
-		func(adapters *provideradapter.Registry, quotaRuntime *accessquota.Runtime, credentials *state.CredentialRegistry) *state.Manager {
+		func(adapters *provideradapter.Registry, credentials *state.CredentialRegistry) *state.Manager {
 			manager := state.NewManager()
 			manager.SetSchedulingState(credentials.SchedulingState())
-			manager.SetSnapshotReconciler(runtimeSnapshotReconciler{
-				adapters: adapters, accessQuota: quotaRuntime,
-			})
+			manager.SetSnapshotReconciler(runtimeSnapshotReconciler{adapters: adapters})
 			return manager
 		},
 		newSubscriptionRuntime,
@@ -232,7 +216,6 @@ func BuildContainer() (*dig.Container, error) {
 			channelRegistry *channel.Registry,
 			subscriptions *subscriptionruntime.Runtime,
 			encryptionService encryption.Service,
-			quotaRuntime *accessquota.Runtime,
 		) app.RuntimeStateLoader {
 			return stateloader.NewWithCredentialValidation(
 				db,
@@ -241,7 +224,6 @@ func BuildContainer() (*dig.Container, error) {
 				channelRegistry,
 				subscriptions,
 				encryptionService,
-				quotaRuntime,
 			)
 		},
 		app.NewApp,
@@ -286,114 +268,35 @@ func newSystemOutboundProxyProvider(manager *state.Manager) httpclient.OutboundP
 	}
 }
 
-// newAccessQuotaRuntime owns in-process quota state only in single-instance
-// mode; cluster mode keeps it in Redis, so loaders and checkpoints skip it.
-func newAccessQuotaRuntime(client *cluster.Client) *accessquota.Runtime {
-	if client != nil {
-		return nil
-	}
-	return accessquota.NewRuntime()
-}
-
-// newResponseBindings owns in-process Responses ownership only in
-// single-instance mode; cluster mode keeps it in Redis, so the checkpoint
-// file skips it.
-func newResponseBindings(client *cluster.Client) *state.ResponseBindings {
-	if client != nil {
-		return nil
-	}
-	return state.NewResponseBindings()
-}
-
-// newResponseBindingStore selects the shared Redis ownership index in cluster
-// mode and the checkpointed in-process index otherwise.
-func newResponseBindingStore(
+// newGatewaySharedState assembles the Redis-backed request state the gateway
+// shares with every other instance.
+func newGatewaySharedState(
 	cfg *config.Config,
 	client *cluster.Client,
-	local *state.ResponseBindings,
-) gateway.ResponseBindingStore {
-	if shared := cluster.NewResponseBindings(client, cfg.Cluster.ResponseBindingTTL); shared != nil {
-		return shared
+	quota *cluster.AccessQuota,
+	credentialHealth *cluster.CredentialHealth,
+) gateway.SharedState {
+	return gateway.SharedState{
+		AccessQuota:      quota,
+		Health:           credentialHealth,
+		ResponseBindings: cluster.NewResponseBindings(client, cfg.Cluster.ResponseBindingTTL),
+		Affinity:         cluster.NewAffinity(client),
 	}
-	return local
-}
-
-// newAffinityStore selects the shared Redis soft-affinity store in cluster
-// mode and the in-process cache otherwise.
-func newAffinityStore(client *cluster.Client) gateway.AffinityStore {
-	if shared := cluster.NewAffinity(client); shared != nil {
-		return shared
-	}
-	return affinity.NewCache()
-}
-
-// newAccessQuotaGate selects the shared Redis gate in cluster mode and the
-// snapshot-pinned in-process gate otherwise, never boxing a nil pointer.
-func newAccessQuotaGate(
-	shared *cluster.AccessQuota,
-	manager *state.Manager,
-	runtime *accessquota.Runtime,
-) gateway.AccessQuotaGate {
-	if shared != nil {
-		return shared
-	}
-	return gateway.NewLocalAccessQuotaGate(manager, runtime)
-}
-
-// newCredentialRegistry mirrors cluster-shared credential health when
-// cluster mode is enabled, before any credential is loaded.
-func newCredentialRegistry(client *cluster.Client) *state.CredentialRegistry {
-	registry := state.NewCredentialRegistry()
-	if client != nil {
-		registry.EnableSharedHealth()
-	}
-	return registry
-}
-
-// newSharedCredentialHealthStore exposes the Redis health store in cluster
-// mode and nil otherwise, never boxing a nil pointer.
-func newSharedCredentialHealthStore(shared *cluster.CredentialHealth) state.SharedCredentialHealthStore {
-	if shared == nil {
-		return nil
-	}
-	return shared
-}
-
-// newCredentialHealthHydrator restores health from Redis instead of the
-// checkpoint file in cluster mode.
-func newCredentialHealthHydrator(shared *cluster.CredentialHealth) app.CredentialHealthHydrator {
-	if shared == nil {
-		return nil
-	}
-	return shared
 }
 
 // coordinateSubscriptionRefresh makes subscription refreshes cluster-wide
-// single flight; it leaves the manager untouched in single-instance mode.
+// single flight.
 func coordinateSubscriptionRefresh(
 	credentials *subscription.CredentialManager,
 	lease *cluster.RefreshLease,
 	shared *cluster.CredentialHealth,
 	service *control.Service,
 ) {
-	if lease == nil || shared == nil {
-		return
-	}
 	credentials.SetClusterCoordination(lease, shared, service)
 }
 
-// newAccessKeyRPMLimiter selects the shared Redis window in cluster mode and
-// the in-process window otherwise.
-func newAccessKeyRPMLimiter(client *cluster.Client, local *ratelimit.AccessKeyRPM) gateway.AccessKeyRPMLimiter {
-	if shared := cluster.NewAccessKeyRPM(client); shared != nil {
-		return shared
-	}
-	return local
-}
-
 type runtimeSnapshotReconciler struct {
-	adapters    *provideradapter.Registry
-	accessQuota *accessquota.Runtime
+	adapters *provideradapter.Registry
 }
 
 func newSubscriptionRuntime(registry *channel.Registry) (*subscriptionruntime.Runtime, error) {
@@ -440,15 +343,9 @@ func (reconciler runtimeSnapshotReconciler) ReconcileConfigSnapshot(snapshot *st
 			})
 		}
 	}
-	if err := reconciler.adapters.ReconcileTargets(targets); err != nil {
-		return err
-	}
-	if reconciler.accessQuota == nil {
-		// Cluster mode keeps quota state in Redis; state.Compile has already
-		// validated the rule definitions.
-		return nil
-	}
-	return reconciler.accessQuota.Reconcile(snapshot.AccessQuotaDefinitions())
+	// Quota state lives in Redis; state.Compile has already validated the
+	// rule definitions.
+	return reconciler.adapters.ReconcileTargets(targets)
 }
 
 func newHTTPRegistry(

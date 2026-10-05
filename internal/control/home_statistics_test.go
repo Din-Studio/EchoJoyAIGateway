@@ -22,7 +22,7 @@ func TestHomeBaseHTTPUsesAuthenticationEnvelopeAndServerClock(t *testing.T) {
 	t.Parallel()
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
-	server := NewServer(
+	server := newTestServer(t,
 		&config.Config{AuthKey: "test-auth-key"},
 		fixture.service,
 	)
@@ -105,7 +105,7 @@ func TestHomeBaseHTTPScopesAccessKeyAndIncludesCurrentProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAccessKey(other) error = %v", err)
 	}
-	server := NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service)
+	server := newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
 
@@ -140,7 +140,7 @@ func TestHomeBaseHTTPRejectsEveryQueryBeforeReading(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	fixture.service.db = nil
-	server := NewServer(
+	server := newTestServer(t,
 		&config.Config{AuthKey: "test-auth-key"},
 		fixture.service,
 	)
@@ -461,7 +461,7 @@ func TestHomeStatisticsHTTPBindsAccessKeyAndRemovesOtherRankingDimensions(t *tes
 	fixture.service.now = func() time.Time { return now }
 	fixture.service.homeStatistics = reader
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	recorder := performHomeRequest(engine, "/api/home/statistics?range=30d", created.Key)
 	if recorder.Code != http.StatusOK {
@@ -704,7 +704,7 @@ func newHomeStatisticsTestEngine(
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	fixture.service.homeStatistics = reader
-	server := NewServer(
+	server := newTestServer(t,
 		&config.Config{AuthKey: "test-auth-key"},
 		fixture.service,
 	)

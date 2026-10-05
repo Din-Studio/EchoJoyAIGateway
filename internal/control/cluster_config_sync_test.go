@@ -11,7 +11,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 
 	"gpt-load/internal/cluster"
-	"gpt-load/internal/platform/config"
+	"gpt-load/internal/testutil/clustertest"
 )
 
 type fakeClusterReloader struct {
@@ -58,14 +58,7 @@ func (reloader *fakeClusterReloader) setRevision(revision uint64) {
 func newSyncTestBus(t *testing.T, instanceID string) (*miniredis.Miniredis, *cluster.ConfigEventBus) {
 	t.Helper()
 	server := miniredis.RunT(t)
-	client, err := cluster.NewClient(&config.Config{Cluster: config.ClusterConfig{
-		RedisAddrs: []string{server.Addr()}, RedisKeyPrefix: "gl", InstanceID: instanceID,
-	}})
-	if err != nil {
-		t.Fatalf("cluster.NewClient() error = %v", err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-	return server, cluster.NewConfigEventBus(client)
+	return server, cluster.NewConfigEventBus(clustertest.Connect(t, server, instanceID))
 }
 
 func newTestClusterConfigSync(
@@ -256,7 +249,8 @@ func TestClusterConfigSyncPollsWhenRevisionAdvancesWithoutEvent(t *testing.T) {
 	reloader := &fakeClusterReloader{revision: 1}
 	var revision atomic.Uint64
 	revision.Store(1)
-	coordinator := newTestClusterConfigSync(reloader, nil, &revision, 20*time.Millisecond)
+	_, bus := newSyncTestBus(t, "node-b")
+	coordinator := newTestClusterConfigSync(reloader, bus, &revision, 20*time.Millisecond)
 	runClusterConfigSync(t, coordinator)
 	waitForReloadCount(t, reloader, 1)
 	assertReloadCountStays(t, reloader, 1)
@@ -271,7 +265,8 @@ func TestClusterConfigSyncRetriesFailedReload(t *testing.T) {
 	reloader := &fakeClusterReloader{revision: 2, err: errors.New("db down")}
 	var revision atomic.Uint64
 	revision.Store(2)
-	coordinator := newTestClusterConfigSync(reloader, nil, &revision, 20*time.Millisecond)
+	_, bus := newSyncTestBus(t, "node-b")
+	coordinator := newTestClusterConfigSync(reloader, bus, &revision, 20*time.Millisecond)
 	runClusterConfigSync(t, coordinator)
 	waitForReloadCount(t, reloader, 2)
 	if got := coordinator.lastApplied.Load(); got != 0 {
@@ -305,11 +300,8 @@ func TestClusterConfigSyncStopsWhenContextCanceled(t *testing.T) {
 	}
 }
 
-func TestNewClusterConfigSyncRequiresBus(t *testing.T) {
+func TestNewClusterConfigSyncUsesDefaultPollInterval(t *testing.T) {
 	fixture := newServiceFixture(t)
-	if NewClusterConfigSync(fixture.service, nil) != nil {
-		t.Fatal("NewClusterConfigSync(service, nil) must return nil")
-	}
 	_, bus := newSyncTestBus(t, "node-b")
 	coordinator := NewClusterConfigSync(fixture.service, bus)
 	if coordinator == nil || coordinator.pollInterval != defaultClusterPollInterval {

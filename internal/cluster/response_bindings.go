@@ -17,8 +17,7 @@ import (
 
 // ResponseBindings stores Responses ownership in Redis so any instance can
 // continue a response created on another one. Each response is one key that
-// expires after the configured TTL; the first recorded owner wins. It is nil
-// in single-instance mode.
+// expires after the configured TTL; the first recorded owner wins.
 type ResponseBindings struct {
 	client *Client
 	ttl    time.Duration
@@ -35,11 +34,8 @@ type storedResponseBinding struct {
 	AutoSelection      *automodel.Selection `json:"a,omitempty"`
 }
 
-// NewResponseBindings returns nil when cluster mode is disabled.
+// NewResponseBindings builds the shared Responses ownership index.
 func NewResponseBindings(client *Client, ttl time.Duration) *ResponseBindings {
-	if client == nil {
-		return nil
-	}
 	return &ResponseBindings{client: client, ttl: ttl, now: time.Now}
 }
 

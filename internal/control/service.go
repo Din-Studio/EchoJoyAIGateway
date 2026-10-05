@@ -11,7 +11,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"gpt-load/internal/accessquota"
 	"gpt-load/internal/automodel"
 	"gpt-load/internal/catalog"
 	"gpt-load/internal/channel"
@@ -64,7 +63,6 @@ type Service struct {
 	stats                             *health.StatsStore
 	mutations                         credentialMutationCoordinator
 	requestLogStats                   RequestLogStatsReader
-	accessQuota                       *accessquota.Runtime
 	clusterQuota                      *cluster.AccessQuota
 	clusterEvents                     configEventPublisher
 	sharedHealth                      state.SharedCredentialHealthStore
@@ -170,7 +168,6 @@ func NewService(
 	stats *health.StatsStore,
 	mutations *health.MutationCoordinator,
 	requestLogStats RequestLogStatsReader,
-	accessQuota *accessquota.Runtime,
 	clusterQuota *cluster.AccessQuota,
 	sharedHealth state.SharedCredentialHealthStore,
 	refreshLeases *cluster.RefreshLease,
@@ -194,7 +191,8 @@ func NewService(
 		catalogRuntime:  catalogRuntime,
 		encryption:      encryptionService, executor: executor, subscriptions: subscriptions, requestLogs: requestLogs,
 		usageStats: usageStats, homeStatistics: homeStatistics,
-		stats: stats, mutations: mutations, requestLogStats: requestLogStats, accessQuota: accessQuota,
+		stats: stats, mutations: mutations, requestLogStats: requestLogStats,
+		clusterEvents: clusterEvents, clusterQuota: clusterQuota, sharedHealth: sharedHealth, refreshLeases: refreshLeases,
 		modelDiscoveryTimeout: defaultModelDiscoveryTimeout,
 		random:                rand.Reader,
 		operationRandom:       rand.Reader,
@@ -267,16 +265,6 @@ func NewService(
 	}
 	if cfg != nil {
 		service.environmentProxy = outboundproxy.Environment()
-	}
-	if clusterEvents != nil {
-		service.clusterEvents = clusterEvents
-	}
-	if clusterQuota != nil {
-		service.clusterQuota = clusterQuota
-	}
-	service.sharedHealth = sharedHealth
-	if refreshLeases != nil {
-		service.refreshLeases = refreshLeases
 	}
 	if subscriptionCredentials != nil {
 		service.prepareSubscriptionCredential = subscriptionCredentials.PrepareForControl
@@ -571,8 +559,8 @@ func joinCommittedRuntimeRecovery(operationErr, recoveryErr error) error {
 }
 
 // withControlTransaction is the single write-transaction entry point for
-// persisted configuration. In cluster mode the configuration revision is
-// bumped inside the same transaction and, once committed, announced to peers.
+// persisted configuration. The configuration revision is bumped inside the
+// same transaction and, once committed, announced to peers.
 func (s *Service) withControlTransaction(
 	ctx context.Context,
 	mutate func(*gorm.DB) error,
@@ -596,7 +584,6 @@ func (s *Service) runControlTransaction(
 	mutate func(*gorm.DB) error,
 	announce bool,
 ) error {
-	announce = announce && s.clusterEvents != nil
 	var revision uint64
 	callback := mutate
 	if announce {
@@ -624,7 +611,7 @@ func (s *Service) runControlTransaction(
 }
 
 // CommitCredentialState commits a subscription credential change through the
-// control transaction, so in cluster mode peers reload the new secret.
+// control transaction, so peers reload the new secret.
 func (s *Service) CommitCredentialState(ctx context.Context, mutate func(*gorm.DB) error) error {
 	return s.withControlTransaction(ctx, mutate)
 }

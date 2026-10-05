@@ -49,7 +49,7 @@ func TestAccessKeyDistributionCollectionMatchesUsageAndSortsBeforePagination(t *
 		}
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 	for _, tc := range []struct {
 		query  string
 		want   uint

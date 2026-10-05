@@ -48,7 +48,7 @@ type CredentialEntry struct {
 	quotaRemaining          *float64
 	quotaResetAt            time.Time
 	// sharedEpoch and sharedVersion order the cluster health state this
-	// entry mirrors; both stay empty in single-instance mode.
+	// entry mirrors; both stay empty until the first state is mirrored.
 	sharedEpoch   string
 	sharedVersion uint64
 }
@@ -80,7 +80,6 @@ type CredentialRegistry struct {
 	mu               sync.RWMutex
 	buckets          map[uint]map[uint]*CredentialEntry
 	credentialGroups map[uint]uint
-	sharedHealth     bool
 }
 
 func NewCredentialRegistry() *CredentialRegistry {
@@ -151,7 +150,7 @@ func (r *CredentialRegistry) ReplaceCredentials(entries []CredentialEntry) error
 	r.mu.Lock()
 	for groupID, bucket := range buckets {
 		for id, entry := range bucket {
-			r.preserveHealthLocked(entry, r.buckets[groupID][id])
+			preserveSharedHealth(entry, r.buckets[groupID][id])
 		}
 	}
 	r.buckets = buckets
@@ -190,7 +189,7 @@ func (r *CredentialRegistry) ApplyCredentialImport(groupID uint, entries []Crede
 			r.buckets[groupID] = make(map[uint]*CredentialEntry)
 		}
 		cloned := cloneCredentialEntry(entry)
-		r.preserveHealthLocked(&cloned, r.buckets[groupID][entry.ID])
+		preserveSharedHealth(&cloned, r.buckets[groupID][entry.ID])
 		r.buckets[groupID][entry.ID] = &cloned
 		r.credentialGroups[entry.ID] = groupID
 		r.scheduling.SyncCredential(runtimeView(r.buckets[groupID][entry.ID]))
@@ -315,7 +314,7 @@ func (r *CredentialRegistry) ReconcileGroup(groupID uint, entries []CredentialEn
 			continue
 		}
 		cloned := cloneCredentialEntry(desired)
-		r.preserveHealthLocked(&cloned, previous[desired.ID])
+		preserveSharedHealth(&cloned, previous[desired.ID])
 		next[desired.ID] = &cloned
 	}
 	for credentialID := range previous {

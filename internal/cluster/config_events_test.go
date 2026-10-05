@@ -78,18 +78,6 @@ func TestConfigEventBusSubscribeDoesNotLeakGoroutines(t *testing.T) {
 	t.Fatalf("goroutines = %d, want at most %d", runtime.NumGoroutine(), before+1)
 }
 
-func TestNilConfigEventBusIsInert(t *testing.T) {
-	var bus *ConfigEventBus
-	if err := bus.Publish(t.Context(), ConfigChange{Revision: 1}); err != nil {
-		t.Fatalf("nil bus Publish() error = %v", err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	if err := bus.Subscribe(ctx, nil, func(ConfigChange) {}); err != nil {
-		t.Fatalf("nil bus Subscribe() error = %v", err)
-	}
-}
-
 func awaitClosed(t *testing.T, signal <-chan struct{}) {
 	t.Helper()
 	select {

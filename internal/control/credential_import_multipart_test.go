@@ -151,7 +151,7 @@ func serveCredentialImportMultipart(t *testing.T, body *bytes.Buffer, contentTyp
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "multipart-test-auth"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "multipart-test-auth"}, fixture.service).RegisterRoutes(engine)
 	request := httptest.NewRequest(http.MethodPost, "/api/credential-stages/import-batch", body)
 	request.ContentLength = -1
 	request.Header.Set("Content-Type", contentType)

@@ -185,7 +185,4 @@ func TestAffinityRejectsInvalidInputsAndReportsRedisErrors(t *testing.T) {
 	if _, err := store.RecordSuccess(context.Background(), policy, "key", affinity.Observation{}, valid); err == nil {
 		t.Fatal("RecordSuccess() error = nil with Redis down")
 	}
-	if NewAffinity(nil) != nil {
-		t.Fatal("NewAffinity(nil) != nil")
-	}
 }

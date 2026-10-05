@@ -7,15 +7,19 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
 	"gpt-load/internal/accessquota"
 	"gpt-load/internal/catalog"
 	"gpt-load/internal/channel"
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/gateway"
 	"gpt-load/internal/health"
+	"gpt-load/internal/platform/config"
 	"gpt-load/internal/platform/encryption"
 	"gpt-load/internal/platform/httproute"
 	"gpt-load/internal/platform/i18n"
@@ -27,6 +31,7 @@ import (
 	"gpt-load/internal/subscription"
 	subscriptionproviders "gpt-load/internal/subscription/providers"
 	subscriptionruntime "gpt-load/internal/subscription/runtime"
+	"gpt-load/internal/testutil/clustertest"
 	"gpt-load/internal/testutil/encryptiontest"
 	"gpt-load/internal/testutil/pgtest"
 )
@@ -121,7 +126,10 @@ type serviceFixture struct {
 	stats           *health.StatsStore
 	mutations       *health.MutationCoordinator
 	requestLogStats *staticRequestLogStatsReader
-	accessQuota     *accessquota.Runtime
+	redis           *miniredis.Miniredis
+	cluster         *cluster.Client
+	accessQuota     *cluster.AccessQuota
+	sharedHealth    *cluster.CredentialHealth
 	service         *Service
 }
 
@@ -196,9 +204,11 @@ func newServiceFixtureWithDSN(t *testing.T, dsn string) serviceFixture {
 func newServiceFixtureWithDatabase(t *testing.T, db *gorm.DB) serviceFixture {
 	t.Helper()
 	manager := state.NewManager()
-	accessQuota := accessquota.NewRuntime()
-	manager.SetSnapshotReconciler(controlAccessQuotaReconciler{runtime: accessQuota})
 	registry := state.NewCredentialRegistry()
+	redisServer, clusterClient := clustertest.NewClient(t)
+	accessQuota := cluster.NewAccessQuota(clusterClient, requestlog.AccessQuotaStateReader{DB: db})
+	sharedHealth := cluster.NewCredentialHealth(clusterClient, registry)
+	refreshLease := cluster.NewRefreshLease(clusterClient)
 	channelRegistry := channel.NewRegistry()
 	keyService := encryptiontest.Service(t, "control-test-master-key-material-2026")
 	if _, err := manager.Publish(state.CompileInput{}); err != nil {
@@ -221,7 +231,7 @@ func newServiceFixtureWithDatabase(t *testing.T, db *gorm.DB) serviceFixture {
 		priceRuntime,
 		catalogRuntime,
 		nil,
-		nil,
+		cluster.NewConfigEventBus(clusterClient),
 		keyService,
 		controlHTTPExecutor{},
 		subscriptionCredentials,
@@ -232,11 +242,11 @@ func newServiceFixtureWithDatabase(t *testing.T, db *gorm.DB) serviceFixture {
 		mutations,
 		requestLogStats,
 		accessQuota,
-		nil,
-		nil,
-		nil,
+		sharedHealth,
+		refreshLease,
 		channelRegistry,
 	)
+	subscriptionCredentials.SetClusterCoordination(refreshLease, sharedHealth, service)
 	installCodexControlTestHooks(service)
 	// Tests opt into reset-credit upstream calls explicitly; no fixture may
 	// reach a real provider by accident.
@@ -244,17 +254,29 @@ func newServiceFixtureWithDatabase(t *testing.T, db *gorm.DB) serviceFixture {
 	return serviceFixture{
 		db: db, manager: manager, registry: registry, channelRegistry: channelRegistry, encryption: keyService,
 		priceRuntime: priceRuntime, catalogRuntime: catalogRuntime,
-		stats: stats, mutations: mutations, requestLogStats: requestLogStats, accessQuota: accessQuota,
+		stats: stats, mutations: mutations, requestLogStats: requestLogStats,
+		redis: redisServer, cluster: clusterClient, accessQuota: accessQuota, sharedHealth: sharedHealth,
 		service: service,
 	}
 }
 
-type controlAccessQuotaReconciler struct {
-	runtime *accessquota.Runtime
+// newTestServer builds a control server with the admin lockout on its own
+// in-process Redis.
+func newTestServer(t testing.TB, cfg *config.Config, service *Service) *Server {
+	t.Helper()
+	_, client := clustertest.NewClient(t)
+	return NewServer(cfg, service, cluster.NewAuthFailures(client))
 }
 
-func (reconciler controlAccessQuotaReconciler) ReconcileConfigSnapshot(snapshot *state.ConfigSnapshot) error {
-	return reconciler.runtime.Reconcile(snapshot.AccessQuotaDefinitions())
+// newTestGatewaySharedState builds the gateway's Redis-backed request state on
+// the fixture's Redis.
+func newTestGatewaySharedState(fixture serviceFixture) gateway.SharedState {
+	return gateway.SharedState{
+		AccessQuota:      fixture.accessQuota,
+		Health:           fixture.sharedHealth,
+		ResponseBindings: cluster.NewResponseBindings(fixture.cluster, time.Hour),
+		Affinity:         cluster.NewAffinity(fixture.cluster),
+	}
 }
 
 func openControlTestDBWithDSN(t *testing.T, dsn string) *gorm.DB {
@@ -292,5 +314,65 @@ func assertGroupCount(t *testing.T, db *gorm.DB, want int64) {
 	}
 	if got != want {
 		t.Fatalf("group count = %d, want %d", got, want)
+	}
+}
+
+// admitAccessQuota admits one request for accessKeyID against the fixture's
+// shared quota, fails the test when it is denied, and settles costNanoUSD.
+func admitAccessQuota(t *testing.T, fixture serviceFixture, accessKeyID uint, now time.Time, costNanoUSD int64) {
+	t.Helper()
+	ticket, decision, err := fixture.accessQuota.Admit(t.Context(), fixture.manager.Current(), accessKeyID, now)
+	if err != nil || !decision.Allowed {
+		t.Fatalf("Admit() = %#v, %v", decision, err)
+	}
+	if _, err := fixture.accessQuota.Complete(t.Context(), ticket, costNanoUSD); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+}
+
+// accessQuotaView reads accessKeyID's shared cost-limit state.
+func accessQuotaView(t *testing.T, fixture serviceFixture, accessKeyID uint, now time.Time) accessquota.View {
+	t.Helper()
+	view, err := fixture.accessQuota.View(t.Context(), fixture.manager.Current(), accessKeyID, now)
+	if err != nil {
+		t.Fatalf("View() error = %v", err)
+	}
+	return view
+}
+
+// newTestCatalogSyncCoordinator wires a coordinator to its own in-process
+// Redis catalog store and job lease, the way the container does.
+func newTestCatalogSyncCoordinator(
+	t testing.TB,
+	service *Service,
+	client catalogSyncClient,
+	cachePath string,
+	metadata catalog.Metadata,
+	hasLKG bool,
+) *CatalogSyncCoordinator {
+	t.Helper()
+	_, redis := clustertest.NewClient(t)
+	coordinator := newCatalogSyncCoordinator(service, client, cachePath, metadata, hasLKG)
+	coordinator.shared = cluster.NewCatalogStore(redis)
+	coordinator.jobLease = cluster.NewJobLease(redis)
+	return coordinator
+}
+
+// blacklistSharedCredential records one blacklisting failure and, when
+// cooldownUntil is set, a cooldown through the fixture's shared health store.
+func blacklistSharedCredential(t *testing.T, fixture serviceFixture, credentialID uint, cooldownUntil time.Time) {
+	t.Helper()
+	ref, ok := fixture.registry.CredentialRef(credentialID)
+	if !ok {
+		t.Fatalf("credential %d missing", credentialID)
+	}
+	if _, err := fixture.sharedHealth.RecordFailure(t.Context(), ref, 1); err != nil {
+		t.Fatalf("RecordFailure(%d) error = %v", credentialID, err)
+	}
+	if cooldownUntil.IsZero() {
+		return
+	}
+	if _, err := fixture.sharedHealth.CooldownCredential(t.Context(), ref, cooldownUntil, 0); err != nil {
+		t.Fatalf("CooldownCredential(%d) error = %v", credentialID, err)
 	}
 }

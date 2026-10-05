@@ -155,7 +155,7 @@ func TestAuthenticateExpiredAccessKeyLogsSafePolicyReason(t *testing.T) {
 	publishControlAuthAccessKey(t, fixture, accessKey, &expiresAtMS, nil)
 
 	var logs bytes.Buffer
-	server := NewServer(&config.Config{AuthKey: authTestKey}, fixture.service)
+	server := newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service)
 	server.logger = newControlJSONLogger(&logs)
 	server.authFailureEvents = utils.NewRateLimitedEventCounter(
 		time.Minute,
@@ -251,7 +251,7 @@ func TestAuthenticateLockRequestCanEmitBothEventsWhenGateOpens(t *testing.T) {
 func TestAuthenticateValidCredentialAddsNormalizedPeerToContext(t *testing.T) {
 	t.Parallel()
 	initControlI18n(t)
-	server := NewServer(&config.Config{AuthKey: authTestKey}, nil)
+	server := newTestServer(t, &config.Config{AuthKey: authTestKey}, nil)
 	engine := gin.New()
 	api := engine.Group("/api")
 	api.Use(i18n.Middleware(), server.authenticate())

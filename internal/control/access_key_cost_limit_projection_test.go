@@ -4,12 +4,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
-
 	"gpt-load/internal/accessquota"
 	"gpt-load/internal/cluster"
-	"gpt-load/internal/platform/config"
 	"gpt-load/internal/requestlog"
+	"gpt-load/internal/testutil/clustertest"
 )
 
 func TestAccessKeyCostLimitRuntimeProjectionIsSharedByCollectionHomeAndHealth(t *testing.T) {
@@ -27,11 +25,7 @@ func TestAccessKeyCostLimitRuntimeProjectionIsSharedByCollectionHomeAndHealth(t 
 	}
 	now := time.Unix(1_787_184_000, 0).UTC()
 	fixture.service.now = func() time.Time { return now }
-	ticket, decision := fixture.accessQuota.Admit(created.ID, now)
-	if !decision.Allowed {
-		t.Fatalf("Admit() = %#v", decision)
-	}
-	fixture.accessQuota.Complete(ticket, 100_000_000_000)
+	admitAccessQuota(t, fixture, created.ID, now, 100_000_000_000)
 
 	collection, err := fixture.service.ListAccessKeyCollection(
 		t.Context(),
@@ -72,16 +66,8 @@ func TestAccessKeyCostLimitRuntimeProjectionIsSharedByCollectionHomeAndHealth(t 
 func TestAccessKeyCostLimitProjectionReadsSharedClusterState(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
-	server := miniredis.RunT(t)
-	client, err := cluster.NewClient(&config.Config{Cluster: config.ClusterConfig{
-		RedisAddrs: []string{server.Addr()}, RedisKeyPrefix: "gl", InstanceID: "control-test",
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-	shared := cluster.NewAccessQuota(client, requestlog.AccessQuotaStateReader{DB: fixture.db})
-	fixture.service.clusterQuota = shared
+	peer := clustertest.Connect(t, fixture.redis, "node-peer")
+	shared := cluster.NewAccessQuota(peer, requestlog.AccessQuotaStateReader{DB: fixture.db})
 
 	created, err := fixture.service.CreateAccessKey(t.Context(), AccessKeyCreateRequest{
 		Name: "limited",
@@ -94,7 +80,7 @@ func TestAccessKeyCostLimitProjectionReadsSharedClusterState(t *testing.T) {
 	}
 	now := time.Unix(1_787_184_000, 0).UTC()
 	fixture.service.now = func() time.Time { return now }
-	// Another instance spent the whole limit; this instance's runtime never saw it.
+	// Another instance spent the whole limit through its own quota store.
 	ticket, decision, err := shared.Admit(t.Context(), fixture.manager.Current(), created.ID, now)
 	if err != nil || !decision.Allowed {
 		t.Fatalf("Admit() = %#v, %v", decision, err)
@@ -127,7 +113,7 @@ func TestAccessKeyCostLimitProjectionReadsSharedClusterState(t *testing.T) {
 		t.Fatalf("blocked access keys = %#v", health.BlockedAccessKeys)
 	}
 
-	server.Close()
+	fixture.redis.Close()
 	if _, err := fixture.service.ListAccessKeyCollection(t.Context(), AccessKeyCollectionQuery{Page: 1, PageSize: 20}); err == nil {
 		t.Fatal("ListAccessKeyCollection() with Redis down error = nil")
 	}

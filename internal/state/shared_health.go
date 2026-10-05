@@ -33,7 +33,7 @@ type SharedHealthResult struct {
 	BecameBlacklisted bool
 }
 
-// SharedCredentialHealthStore owns credential health in cluster mode. Every
+// SharedCredentialHealthStore owns credential health in Redis. Every
 // method performs one store round trip and applies the resulting state to the
 // local registry mirror. Callers must not hold a mutation stripe, publishMu,
 // or a registry/stats lock while calling it.
@@ -64,15 +64,6 @@ type SharedCredentialHealthStore interface {
 	// the observed one (same Epoch and Version), so a republish computed from
 	// an earlier read never overwrites a newer write.
 	ReplaceAuthState(ctx context.Context, ref CredentialRef, authState CredentialAuthState, secretVersion uint64, observed SharedCredentialHealth) (SharedHealthResult, error)
-}
-
-// EnableSharedHealth switches the registry to mirror a cluster store: peer
-// reloads keep mirrored health, and local health mutations become fallbacks
-// that the next store state overrides. It must be called before loading.
-func (r *CredentialRegistry) EnableSharedHealth() {
-	r.mu.Lock()
-	r.sharedHealth = true
-	r.mu.Unlock()
 }
 
 // CredentialIDs lists every registered credential in stable order.
@@ -151,16 +142,6 @@ func sameCredentialIdentity(entry *CredentialEntry, ref CredentialRef) bool {
 		entry.IdentityGeneration == ref.IdentityGeneration &&
 		entry.Fingerprint == ref.Fingerprint && entry.EncryptedValue == ref.EncryptedValue &&
 		entry.EncryptedProxy == ref.EncryptedProxy && entry.ProxyFingerprint == ref.ProxyFingerprint
-}
-
-// preserveHealthLocked carries runtime health from previous into an entry
-// rebuilt from persisted configuration.
-func (r *CredentialRegistry) preserveHealthLocked(next *CredentialEntry, previous *CredentialEntry) {
-	if r.sharedHealth {
-		preserveSharedHealth(next, previous)
-		return
-	}
-	preserveModelCooldowns(next, previous)
 }
 
 // preserveSharedHealth carries mirrored health across a configuration

@@ -29,7 +29,7 @@ import (
 func TestCredentialImportBatchKeepsPartialResultsAndDeduplicatesIdentity(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
-	server := NewServer(&config.Config{AuthKey: "batch-test-auth"}, fixture.service)
+	server := newTestServer(t, &config.Config{AuthKey: "batch-test-auth"}, fixture.service)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
 	raw := `[
@@ -103,7 +103,7 @@ func TestCredentialImportBatchRejectsInvalidContainerBeforeStaging(t *testing.T)
 	} {
 		t.Run(fmt.Sprintf("bytes-%d", len(raw)), func(t *testing.T) {
 			fixture := newServiceFixture(t)
-			server := NewServer(&config.Config{AuthKey: "batch-test-auth"}, fixture.service)
+			server := newTestServer(t, &config.Config{AuthKey: "batch-test-auth"}, fixture.service)
 			engine := gin.New()
 			server.RegisterRoutes(engine)
 			response := serveCredentialImportBatch(t, engine, "/api/credential-stages/import-batch", "codex", raw, "")
@@ -121,7 +121,7 @@ func TestCredentialImportBatchRejectsInvalidContainerBeforeStaging(t *testing.T)
 func TestOriginalCredentialImportAcceptsNativeCodexAndKeepsSingularResponse(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
-	server := NewServer(&config.Config{AuthKey: "batch-test-auth"}, fixture.service)
+	server := newTestServer(t, &config.Config{AuthKey: "batch-test-auth"}, fixture.service)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
 	raw := `{"auth_mode":"chatgpt","tokens":{"access_token":"native-access","refresh_token":"native-refresh","account_id":"native-account"}}`
@@ -240,7 +240,7 @@ func TestCredentialImportBatchUsesGroupNetworkAndRequiresManagementAuth(t *testi
 	}
 	initControlI18n(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "batch-test-auth"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "batch-test-auth"}, fixture.service).RegisterRoutes(engine)
 	request := httptest.NewRequest(http.MethodPost, "/api/credential-stages/import-batch", strings.NewReader("not multipart"))
 	response := httptest.NewRecorder()
 	engine.ServeHTTP(response, request)
@@ -428,7 +428,7 @@ func TestCredentialImportFilesDeduplicateBeforeRefreshAndReusePreparedResults(t 
 	}
 	initControlI18n(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "batch-test-auth"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "batch-test-auth"}, fixture.service).RegisterRoutes(engine)
 	files := []string{
 		`{"tokens":{"refresh_token":"original-shared-refresh"}}`,
 		`{"platform":"openai","type":"oauth","credentials":{"refresh_token":"original-shared-refresh","email":"same@example.com"}}`,

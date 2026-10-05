@@ -107,19 +107,6 @@ func TestControlTransactionPublishFailureDoesNotFailWrite(t *testing.T) {
 	}
 }
 
-func TestControlTransactionWithoutClusterLeavesNoRevisionRow(t *testing.T) {
-	fixture := newServiceFixture(t)
-
-	createGroupWithCredentials(t, fixture, "sk-first")
-	if _, ok := readStoredClusterRevision(t, fixture.db); ok {
-		t.Fatal("single-instance mode must not write the cluster revision row")
-	}
-	revision, err := readClusterConfigRevision(t.Context(), fixture.db)
-	if err != nil || revision != 0 {
-		t.Fatalf("readClusterConfigRevision() = %d, %v; want 0", revision, err)
-	}
-}
-
 func TestBookkeepingTransactionsDoNotBumpOrPublish(t *testing.T) {
 	fixture := newServiceFixture(t)
 	publisher := &recordingConfigEventPublisher{}

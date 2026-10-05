@@ -14,21 +14,18 @@ import (
 )
 
 // refreshLeaseProbe reports which subscription credentials have a live
-// refresh lease. It is nil in single-instance mode.
+// refresh lease.
 type refreshLeaseProbe interface {
 	Held(ctx context.Context, credentialIDs []uint) (map[uint]bool, error)
 }
 
 // sweepInterruptedRefreshes marks refreshes whose holder is gone as
-// outcome_unknown. In cluster mode a refresh is interrupted exactly when its
-// row is refreshing and no instance holds the credential's refresh lease;
-// the row's age is never consulted, so a slow refresh is never cut short.
+// outcome_unknown. A refresh is interrupted exactly when its row is
+// refreshing and no instance holds the credential's refresh lease; the row's
+// age is never consulted, so a slow refresh is never cut short.
 // A holder judged interrupted by mistake still commits its token, because the
 // secret commit is conditioned on the secret version alone.
 func (s *Service) sweepInterruptedRefreshes(ctx context.Context) error {
-	if s.refreshLeases == nil {
-		return nil
-	}
 	var refreshing []models.Credential
 	if err := s.db.WithContext(ctx).Model(&models.Credential{}).
 		Select("id", "group_id", "secret_version", "identity_fingerprint").
@@ -96,9 +93,6 @@ func (s *Service) sweepInterruptedRefreshes(ctx context.Context) error {
 // auth state. A failed write is repaired by republishSubscriptionAuth on the
 // next poll; meanwhile every instance still excludes the credential.
 func (s *Service) publishSweptAuthStates(ctx context.Context, swept []models.Credential) {
-	if s.sharedHealth == nil {
-		return
-	}
 	groups := make(map[uint]models.Group)
 	for _, row := range swept {
 		ref, err := s.subscriptionAuthRef(ctx, row, groups)
@@ -126,9 +120,6 @@ func (s *Service) syncSubscriptionAuth(ctx context.Context) error {
 // the record still being the one read: any auth write after that read moves
 // the record version, so a correction never overwrites a newer state.
 func (s *Service) republishSubscriptionAuth(ctx context.Context) error {
-	if s.sharedHealth == nil {
-		return nil
-	}
 	var groupIDs []uint
 	if err := s.db.WithContext(ctx).Model(&models.Group{}).
 		Where("connection_type = ?", models.ConnectionTypeSubscription).

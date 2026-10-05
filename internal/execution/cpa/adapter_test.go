@@ -711,6 +711,7 @@ func TestCodexClientImageGenerationReachesSubscriptionExecutor(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Publish() error = %v", err)
 	}
+	shared, _ := newGatewaySharedState(t, manager, credentialRegistry)
 	handler := gateway.NewHandler(
 		manager,
 		credentialRegistry,
@@ -722,6 +723,7 @@ func TestCodexClientImageGenerationReachesSubscriptionExecutor(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		shared,
 	)
 	engine := gin.New()
 	routes, err := httproute.NewRegistry(handler.HTTPModule())

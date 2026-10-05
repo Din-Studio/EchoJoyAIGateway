@@ -15,9 +15,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
-	"gpt-load/internal/accessquota"
 	"gpt-load/internal/app"
 	"gpt-load/internal/channel"
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/control"
 	"gpt-load/internal/dialect"
 	"gpt-load/internal/gateway"
@@ -30,14 +30,12 @@ import (
 	"gpt-load/internal/platform/i18n"
 	"gpt-load/internal/platform/redact"
 	"gpt-load/internal/protocol"
-	"gpt-load/internal/ratelimit"
 	"gpt-load/internal/requestlog"
 	"gpt-load/internal/state"
 	stateloader "gpt-load/internal/state/loader"
 	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/telemetry"
-	"gpt-load/internal/testutil/pgtest"
 	"gpt-load/internal/webui"
 )
 
@@ -82,10 +80,7 @@ func TestSystemOutboundProxyProviderUsesEnvironmentAndLatestGlobalSnapshot(t *te
 }
 
 func TestBuildContainerInstallsDataPlaneCORSBeforeRouteAuthentication(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 	if err := i18n.Init(); err != nil {
 		t.Fatalf("i18n.Init() error = %v", err)
 	}
@@ -154,10 +149,7 @@ func TestBuildContainerInstallsDataPlaneCORSBeforeRouteAuthentication(t *testing
 }
 
 func TestBuildContainerDoesNotInitializeUnusedRuntimeStore(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 	t.Setenv("REDIS_DSN", "://invalid-redis-dsn")
 
 	dependencyContainer, err := BuildContainer()
@@ -175,11 +167,8 @@ func TestBuildContainerDoesNotInitializeUnusedRuntimeStore(t *testing.T) {
 	}
 }
 
-func TestBuildContainerRestoresAndReconcilesAccessKeyCostLimits(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+func TestBuildContainerHydratesAndEnforcesAccessKeyCostLimits(t *testing.T) {
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -187,7 +176,7 @@ func TestBuildContainerRestoresAndReconcilesAccessKeyCostLimits(t *testing.T) {
 	}
 	err = dependencyContainer.Invoke(func(
 		runtimeState app.RuntimeStateLoader,
-		quotaRuntime *accessquota.Runtime,
+		quota *cluster.AccessQuota,
 		requestLogRuntime *requestlog.Service,
 		manager *state.Manager,
 		db *gorm.DB,
@@ -224,19 +213,22 @@ func TestBuildContainerRestoresAndReconcilesAccessKeyCostLimits(t *testing.T) {
 		if loadErr := runtimeState.Load(t.Context()); loadErr != nil {
 			t.Fatalf("Load() error = %v", loadErr)
 		}
-		view := quotaRuntime.Snapshot(accessKey.ID, time.Now())
-		if len(view.Rules) != 1 || view.Rules[0].UsedNanoUSD != 75 || view.Rules[0].LimitNanoUSD != 100 {
-			t.Fatalf("restored view = %#v", view)
+		view, viewErr := quota.View(t.Context(), manager.Current(), accessKey.ID, time.Now())
+		if viewErr != nil || len(view.Rules) != 1 || view.Rules[0].UsedNanoUSD != 75 ||
+			view.Rules[0].LimitNanoUSD != 100 {
+			t.Fatalf("hydrated view = %#v, %v", view, viewErr)
 		}
 		if startErr := requestLogRuntime.Start(); startErr != nil {
 			t.Fatalf("start request log runtime: %v", startErr)
 		}
 		t.Cleanup(func() { _ = requestLogRuntime.Stop(context.Background()) })
-		ticket, quotaDecision := quotaRuntime.Admit(accessKey.ID, time.Now())
-		if !quotaDecision.Allowed {
-			t.Fatalf("Admit() = %#v", quotaDecision)
+		ticket, quotaDecision, admitErr := quota.Admit(t.Context(), manager.Current(), accessKey.ID, time.Now())
+		if admitErr != nil || !quotaDecision.Allowed {
+			t.Fatalf("Admit() = %#v, %v", quotaDecision, admitErr)
 		}
-		quotaRuntime.Complete(ticket, 5)
+		if _, completeErr := quota.Complete(t.Context(), ticket, 5); completeErr != nil {
+			t.Fatalf("Complete() error = %v", completeErr)
+		}
 		deadline := time.Now().Add(3 * time.Second)
 		for {
 			var persisted models.AccessKeyCostLimitState
@@ -260,24 +252,18 @@ func TestBuildContainerRestoresAndReconcilesAccessKeyCostLimits(t *testing.T) {
 		if _, publishErr := manager.Publish(input); publishErr != nil {
 			t.Fatalf("Publish() error = %v", publishErr)
 		}
-		if decision := quotaRuntime.Check(accessKey.ID, time.Now()); decision.Allowed {
-			t.Fatalf("Check() = %#v, want lowered limit to block", decision)
+		if decision, checkErr := quota.Check(t.Context(), manager.Current(), accessKey.ID, time.Now()); checkErr != nil ||
+			decision.Allowed {
+			t.Fatalf("Check() = %#v, %v; want lowered limit to block", decision, checkErr)
 		}
 	})
-	if err == nil {
-		return
+	if err != nil {
+		t.Fatalf("resolve cost limit graph: %v", err)
 	}
-	if strings.Contains(err.Error(), "missing type: *accessquota.Runtime") {
-		t.Fatalf("access quota runtime is not wired: %v", err)
-	}
-	t.Fatalf("resolve cost limit graph: %v", err)
 }
 
 func TestBuildContainerPublishesCodexSubscriptionGroup(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -314,10 +300,7 @@ func TestBuildContainerPublishesCodexSubscriptionGroup(t *testing.T) {
 }
 
 func TestBuildContainerPublishesClaudeSubscriptionGroup(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -354,10 +337,7 @@ func TestBuildContainerPublishesClaudeSubscriptionGroup(t *testing.T) {
 }
 
 func TestBuildContainerWiresRequestLogRetentionSnapshotProvider(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -393,10 +373,7 @@ func TestBuildContainerWiresRequestLogRetentionSnapshotProvider(t *testing.T) {
 }
 
 func TestBuildContainerWiresUsageReaderToSingletonRequestLogService(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -423,10 +400,7 @@ func TestBuildContainerWiresUsageReaderToSingletonRequestLogService(t *testing.T
 func TestBuildContainerWiresHomeStatisticsReaderToSingletonRequestLogService(
 	t *testing.T,
 ) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -457,10 +431,7 @@ func TestBuildContainerWiresHomeStatisticsReaderToSingletonRequestLogService(
 }
 
 func TestBuildContainerWiresSingletonPriceRuntime(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -506,10 +477,7 @@ func TestBuildContainerWiresSingletonPriceRuntime(t *testing.T) {
 }
 
 func TestBuildContainerResolvesAllDialects(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -549,10 +517,8 @@ func TestBuildContainerResolvesAllDialects(t *testing.T) {
 
 func TestBuildContainerResolvesRuntimeDependencies(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AUTH_KEY", "test-auth-key")
+	setStartupEnv(t)
 	t.Setenv("DATA_DIR", dataDir)
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "")
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -576,7 +542,6 @@ func TestBuildContainerResolvesRuntimeDependencies(t *testing.T) {
 		_ *control.Service,
 		_ *control.Server,
 		statsStore *health.StatsStore,
-		rpmLimiter *ratelimit.AccessKeyRPM,
 		gatewayLimiter gateway.AccessKeyRPMLimiter,
 		requestLogService *requestlog.Service,
 		requestLogSink telemetry.RequestLogSink,
@@ -623,11 +588,11 @@ func TestBuildContainerResolvesRuntimeDependencies(t *testing.T) {
 		if attemptForwarder == nil {
 			t.Fatal("stream-capable attempt forwarder was not resolved")
 		}
-		if gatewayHandler == nil || runtime == nil || statsStore == nil ||
-			rpmLimiter == nil || gatewayLimiter != rpmLimiter {
+		if _, shared := gatewayLimiter.(*cluster.AccessKeyRPM); gatewayHandler == nil || runtime == nil ||
+			statsStore == nil || !shared {
 			t.Fatalf(
-				"runtime dependencies were not resolved: gateway=%p runtime=%p stats=%p rpm=%p adapter=%T",
-				gatewayHandler, runtime, statsStore, rpmLimiter, gatewayLimiter,
+				"runtime dependencies were not resolved: gateway=%p runtime=%p stats=%p rpm=%T",
+				gatewayHandler, runtime, statsStore, gatewayLimiter,
 			)
 		}
 		if requestLogSink != requestLogService {
@@ -637,11 +602,10 @@ func TestBuildContainerResolvesRuntimeDependencies(t *testing.T) {
 				requestLogService,
 			)
 		}
-		if _, err := os.Stat(filepath.Join(dataDir, encryption.KeyFileName)); err != nil {
-			t.Fatalf("%s was not created in DATA_DIR: %v", encryption.KeyFileName, err)
-		}
-		if _, err := os.Stat(filepath.Join(dataDir, authkey.FileName)); !os.IsNotExist(err) {
-			t.Fatalf("explicit AUTH_KEY created %s: %v", authkey.FileName, err)
+		for _, fileName := range []string{encryption.KeyFileName, authkey.FileName} {
+			if _, err := os.Stat(filepath.Join(dataDir, fileName)); !os.IsNotExist(err) {
+				t.Fatalf("explicit keys created %s: %v", fileName, err)
+			}
 		}
 		resolved = true
 	})
@@ -654,25 +618,21 @@ func TestBuildContainerResolvesRuntimeDependencies(t *testing.T) {
 }
 
 func TestBuildContainerUsesSingletonAccessKeyRPMLimiter(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
 		t.Fatalf("BuildContainer() error = %v", err)
 	}
 
-	var first *ratelimit.AccessKeyRPM
+	var first gateway.AccessKeyRPMLimiter
 	err = dependencyContainer.Invoke(func(
-		limiter *ratelimit.AccessKeyRPM,
-		adapter gateway.AccessKeyRPMLimiter,
+		limiter gateway.AccessKeyRPMLimiter,
 		db *gorm.DB,
 	) {
 		first = limiter
-		if adapter != limiter {
-			t.Fatalf("gateway limiter adapter = %T, want singleton %p", adapter, limiter)
+		if _, shared := limiter.(*cluster.AccessKeyRPM); !shared {
+			t.Fatalf("gateway limiter = %T, want the shared Redis window", limiter)
 		}
 		t.Cleanup(func() {
 			sqlDB, dbErr := db.DB()
@@ -685,8 +645,8 @@ func TestBuildContainerUsesSingletonAccessKeyRPMLimiter(t *testing.T) {
 		t.Fatalf("resolve first AccessKeyRPM: %v", err)
 	}
 
-	var second *ratelimit.AccessKeyRPM
-	if err := dependencyContainer.Invoke(func(limiter *ratelimit.AccessKeyRPM) {
+	var second gateway.AccessKeyRPMLimiter
+	if err := dependencyContainer.Invoke(func(limiter gateway.AccessKeyRPMLimiter) {
 		second = limiter
 	}); err != nil {
 		t.Fatalf("resolve second AccessKeyRPM: %v", err)
@@ -697,10 +657,7 @@ func TestBuildContainerUsesSingletonAccessKeyRPMLimiter(t *testing.T) {
 }
 
 func TestBuildContainerWiresSingletonMutationCoordinator(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -709,7 +666,7 @@ func TestBuildContainerWiresSingletonMutationCoordinator(t *testing.T) {
 	err = dependencyContainer.Invoke(func(
 		coordinator *health.MutationCoordinator,
 		handler *gateway.Handler,
-		runtime *control.Runtime,
+		service *control.Service,
 		db *gorm.DB,
 	) {
 		t.Cleanup(func() {
@@ -721,17 +678,12 @@ func TestBuildContainerWiresSingletonMutationCoordinator(t *testing.T) {
 		want := reflect.ValueOf(coordinator).Pointer()
 		handlerMutation := mutationCoordinatorFieldPointer(t, reflect.ValueOf(handler), "mutations")
 
-		runtimeValue := reflect.ValueOf(runtime).Elem()
-		validator := runtimeValue.FieldByName("validator")
-		if !validator.IsValid() || validator.IsNil() {
-			t.Fatal("Runtime validator is not wired")
-		}
-		validationMutation := mutationCoordinatorFieldPointer(t, validator.Elem(), "mutations")
-		if handlerMutation != want || validationMutation != want {
+		serviceMutation := mutationCoordinatorFieldPointer(t, reflect.ValueOf(service), "mutations")
+		if handlerMutation != want || serviceMutation != want {
 			t.Fatalf(
-				"mutation coordinators = handler:%#x validation:%#x want:%#x",
+				"mutation coordinators = handler:%#x control:%#x want:%#x",
 				handlerMutation,
-				validationMutation,
+				serviceMutation,
 				want,
 			)
 		}
@@ -763,10 +715,7 @@ func mutationCoordinatorFieldPointer(t *testing.T, value reflect.Value, fieldNam
 }
 
 func TestBuildContainerUsesSingletonDataPlaneRuntimeServices(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -774,10 +723,10 @@ func TestBuildContainerUsesSingletonDataPlaneRuntimeServices(t *testing.T) {
 	}
 
 	var firstService *requestlog.Service
-	var firstLimiter *ratelimit.AccessKeyRPM
+	var firstLimiter gateway.AccessKeyRPMLimiter
 	err = dependencyContainer.Invoke(func(
 		service *requestlog.Service,
-		limiter *ratelimit.AccessKeyRPM,
+		limiter gateway.AccessKeyRPMLimiter,
 		db *gorm.DB,
 	) {
 		firstService = service
@@ -794,10 +743,10 @@ func TestBuildContainerUsesSingletonDataPlaneRuntimeServices(t *testing.T) {
 	}
 
 	var secondService *requestlog.Service
-	var secondLimiter *ratelimit.AccessKeyRPM
+	var secondLimiter gateway.AccessKeyRPMLimiter
 	err = dependencyContainer.Invoke(func(
 		service *requestlog.Service,
-		limiter *ratelimit.AccessKeyRPM,
+		limiter gateway.AccessKeyRPMLimiter,
 	) {
 		secondService = service
 		secondLimiter = limiter
@@ -814,10 +763,7 @@ func TestBuildContainerUsesSingletonDataPlaneRuntimeServices(t *testing.T) {
 }
 
 func TestBuildContainerWiresRequestLogIntoEveryConsumer(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -831,8 +777,6 @@ func TestBuildContainerWiresRequestLogIntoEveryConsumer(t *testing.T) {
 		statsReader control.RequestLogStatsReader,
 		cleaner control.RequestLogCleaner,
 		lifecycle app.RequestLogRuntime,
-		limiter *ratelimit.AccessKeyRPM,
-		gatewayLimiter gateway.AccessKeyRPMLimiter,
 		_ *gateway.Handler,
 		_ *control.Service,
 		_ *control.Runtime,
@@ -856,9 +800,6 @@ func TestBuildContainerWiresRequestLogIntoEveryConsumer(t *testing.T) {
 				t.Errorf("%s adapter = %T, want singleton %p", name, adapter, service)
 			}
 		}
-		if gatewayLimiter != limiter {
-			t.Errorf("gateway limiter = %T, want singleton %p", gatewayLimiter, limiter)
-		}
 	})
 	if err != nil {
 		t.Fatalf("resolve production data-plane consumers: %v", err)
@@ -866,10 +807,7 @@ func TestBuildContainerWiresRequestLogIntoEveryConsumer(t *testing.T) {
 }
 
 func TestBuildContainerUsesSingletonRequestLogReader(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -919,10 +857,7 @@ func TestBuildContainerUsesSingletonRequestLogReader(t *testing.T) {
 }
 
 func TestBuildContainerUsesSingletonRequestLogCleaner(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -971,42 +906,8 @@ func TestBuildContainerUsesSingletonRequestLogCleaner(t *testing.T) {
 	}
 }
 
-func TestBuildContainerGeneratesAuthKeyWhenEnvironmentIsEmpty(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AUTH_KEY", "")
-	t.Setenv("DATA_DIR", dataDir)
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
-
-	dependencyContainer, err := BuildContainer()
-	if err != nil {
-		t.Fatalf("BuildContainer() error = %v", err)
-	}
-	err = dependencyContainer.Invoke(func(cfg *config.Config, db *gorm.DB) {
-		t.Cleanup(func() {
-			sqlDB, dbErr := db.DB()
-			if dbErr == nil {
-				_ = sqlDB.Close()
-			}
-		})
-		stored, err := os.ReadFile(filepath.Join(dataDir, authkey.FileName))
-		if err != nil {
-			t.Fatalf("read %s: %v", authkey.FileName, err)
-		}
-		if cfg.AuthKey != strings.TrimSpace(string(stored)) {
-			t.Fatal("Config.AuthKey does not match generated auth.key")
-		}
-	})
-	if err != nil {
-		t.Fatalf("resolve generated AUTH_KEY config: %v", err)
-	}
-}
-
 func TestBuildContainerUsesSingletonStatsStore(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -1037,10 +938,7 @@ func TestBuildContainerUsesSingletonStatsStore(t *testing.T) {
 }
 
 func TestBuildContainerWiresRuntimeReadConsumersToSingletons(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -1082,10 +980,7 @@ func TestBuildContainerWiresRuntimeReadConsumersToSingletons(t *testing.T) {
 }
 
 func TestContainerHealthEndpointReadsSharedStatsStore(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 	if err := i18n.Init(); err != nil {
 		t.Fatalf("i18n.Init() error = %v", err)
 	}
@@ -1159,10 +1054,7 @@ func TestContainerHealthEndpointReadsSharedStatsStore(t *testing.T) {
 }
 
 func TestBuildContainerRegistersWebUIControlAndGatewayRoutes(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 	if err := i18n.Init(); err != nil {
 		t.Fatalf("i18n.Init() error = %v", err)
 	}
@@ -1218,7 +1110,9 @@ func TestBuildContainerRegistersWebUIControlAndGatewayRoutes(t *testing.T) {
 
 		healthRecorder := httptest.NewRecorder()
 		engine.ServeHTTP(healthRecorder, httptest.NewRequest(http.MethodGet, "/health", nil))
-		if healthRecorder.Code != http.StatusOK || !strings.Contains(healthRecorder.Body.String(), `"status":"ok"`) {
+		if body := healthRecorder.Body.String(); healthRecorder.Code != http.StatusOK ||
+			!strings.Contains(body, `"status":"ok"`) || !strings.Contains(body, `"database":"ok"`) ||
+			!strings.Contains(body, `"redis":"ok"`) {
 			t.Fatalf("health response = %d %s", healthRecorder.Code, healthRecorder.Body.String())
 		}
 
@@ -1317,11 +1211,7 @@ func TestBuildContainerRegistersWebUIControlAndGatewayRoutes(t *testing.T) {
 }
 
 func TestBuildContainerRegistersGatewayRoute(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", dataDir)
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key")
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -1347,10 +1237,7 @@ func TestBuildContainerRegistersGatewayRoute(t *testing.T) {
 }
 
 func TestBuildContainerDoesNotRedirectTrailingSlashGatewayRoute(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", pgtest.NewEmptyDatabase(t))
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	setStartupEnv(t)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -1401,15 +1288,24 @@ func TestBuildContainerDoesNotRedirectTrailingSlashGatewayRoute(t *testing.T) {
 	}
 }
 
-func TestBuildContainerRejectsRedisAddrsWithoutPostgres(t *testing.T) {
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
-	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
-	t.Setenv("REDIS_ADDRS", "127.0.0.1:1")
+func TestBuildContainerRequiresRedisAndPostgreSQL(t *testing.T) {
+	for _, test := range []struct {
+		name, key, value, wantErr string
+	}{
+		{name: "missing redis", key: "REDIS_ADDRS", wantErr: "REDIS_ADDRS is required"},
+		{
+			name: "sqlite database", key: "DATABASE_DSN", value: ":memory:",
+			wantErr: "DATABASE_DSN is required and must be a PostgreSQL DSN",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			setStartupEnv(t)
+			t.Setenv(test.key, test.value)
 
-	_, err := BuildContainer()
-	if err == nil || !strings.Contains(err.Error(), "REDIS_ADDRS requires a PostgreSQL DATABASE_DSN") {
-		t.Fatalf("BuildContainer() error = %v, want PostgreSQL requirement", err)
+			_, err := BuildContainer()
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("BuildContainer() error = %v, want %q", err, test.wantErr)
+			}
+		})
 	}
 }

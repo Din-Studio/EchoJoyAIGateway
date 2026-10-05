@@ -21,18 +21,14 @@ const (
 
 // RefreshLease grants one instance at a time the right to refresh a
 // subscription credential. Liveness is judged by the Redis server clock
-// alone, so no two instance clocks are compared. It is nil in
-// single-instance mode.
+// alone, so no two instance clocks are compared.
 type RefreshLease struct {
 	client        *Client
 	renewInterval time.Duration
 }
 
-// NewRefreshLease returns nil when cluster mode is disabled.
+// NewRefreshLease builds the subscription refresh lease.
 func NewRefreshLease(client *Client) *RefreshLease {
-	if client == nil {
-		return nil
-	}
 	return &RefreshLease{client: client, renewInterval: refreshLeaseRenewInterval}
 }
 

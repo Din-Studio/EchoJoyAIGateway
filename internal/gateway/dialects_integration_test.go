@@ -165,6 +165,7 @@ func newDialectGatewayEngineWithSystemSettings(
 		nil,
 		nil,
 		nil,
+		newTestSharedState(t, registry),
 	)
 
 	engine := gin.New()

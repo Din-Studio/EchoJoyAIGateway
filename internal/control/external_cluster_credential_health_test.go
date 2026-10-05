@@ -70,7 +70,6 @@ type healthContractInstance struct {
 func newHealthContractInstance(t *testing.T, dsn, redisAddr, keyPrefix, instanceID string) healthContractInstance {
 	t.Helper()
 	base := newClusterContractInstance(t, dsn, redisAddr, keyPrefix, instanceID)
-	base.fixture.registry.EnableSharedHealth()
 	client, err := cluster.NewClient(&config.Config{Cluster: config.ClusterConfig{
 		RedisAddrs: redisTestAddrs(redisAddr), RedisKeyPrefix: keyPrefix, InstanceID: instanceID,
 	}})

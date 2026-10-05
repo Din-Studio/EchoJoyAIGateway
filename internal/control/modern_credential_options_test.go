@@ -25,7 +25,7 @@ func TestModernCredentialOptionsPreserveExactAccountMemberships(t *testing.T) {
 	otherGroup, _ := createHomeSubscriptionCredential(t, fixture, "other", "different", "same@example.com")
 	apiGroup := createGroupWithCredentials(t, fixture, "sk-credential-options-secret")
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 	recorder := performGroupCollectionRequest(engine, "/api/modern/credentials/options", "Bearer "+authTestKey)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("options status = %d, want 200", recorder.Code)
@@ -134,7 +134,7 @@ func TestCredentialFiltersAndHomeMergeCurrentIdentityDespiteStoredFingerprintDif
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 	options := performGroupCollectionRequest(engine, "/api/modern/credentials/options", "Bearer "+authTestKey)
 	var optionEnvelope struct {
 		Data struct {

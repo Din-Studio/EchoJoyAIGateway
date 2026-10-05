@@ -39,7 +39,6 @@ type Loader struct {
 	subscriptions    subscriptionCredentialCanonicalizer
 	encryption       encryption.Service
 	environmentProxy *outboundproxy.Config
-	accessQuota      *accessquota.Runtime
 }
 
 type subscriptionCredentialCanonicalizer interface {
@@ -55,18 +54,11 @@ func NewWithCredentialValidation(
 	channelRegistry *channel.Registry,
 	subscriptions subscriptionCredentialCanonicalizer,
 	encryptionService encryption.Service,
-	accessQuotas ...*accessquota.Runtime,
 ) *Loader {
 	loader := New(db, manager, registry, channelRegistry)
 	loader.encryption = encryptionService
 	loader.environmentProxy = outboundproxy.Environment()
 	loader.subscriptions = subscriptions
-	for _, runtime := range accessQuotas {
-		if runtime != nil {
-			loader.accessQuota = runtime
-			break
-		}
-	}
 	return loader
 }
 
@@ -125,22 +117,8 @@ func New(
 	}
 }
 
-// NewWithAccessQuota creates a loader that restores AccessKey cost-limit state
-// before publishing the first configuration snapshot.
-func NewWithAccessQuota(
-	db *gorm.DB,
-	manager *state.Manager,
-	registry *state.CredentialRegistry,
-	accessQuota *accessquota.Runtime,
-	registries ...*channel.Registry,
-) *Loader {
-	loader := New(db, manager, registry, registries...)
-	loader.accessQuota = accessQuota
-	return loader
-}
-
 func (l *Loader) Load(ctx context.Context) error {
-	input, entries, costLimitStates, err := l.read(ctx)
+	input, entries, err := l.read(ctx)
 	if err != nil {
 		return fmt.Errorf("read runtime state: %w", err)
 	}
@@ -149,11 +127,6 @@ func (l *Loader) Load(ctx context.Context) error {
 	}
 	if err := l.validatePersistedCredentials(input, entries); err != nil {
 		return err
-	}
-	if l.accessQuota != nil {
-		if err := l.accessQuota.Restore(costLimitStates); err != nil {
-			return fmt.Errorf("restore access key cost limits: %w", err)
-		}
 	}
 	snapshot, err := l.manager.Publish(input)
 	if err != nil {
@@ -444,34 +417,35 @@ func BuildCredentialEntriesWithProxy(
 
 func (l *Loader) read(
 	ctx context.Context,
-) (state.CompileInput, []state.CredentialEntry, []accessquota.RestoredState, error) {
+) (state.CompileInput, []state.CredentialEntry, error) {
 	rows, err := queryCompileRows(ctx, l.db)
 	if err != nil {
-		return state.CompileInput{}, nil, nil, err
+		return state.CompileInput{}, nil, err
 	}
 	input, err := mapSystemAndGroups(rows, l.encryption, l.environmentProxy)
 	if err != nil {
-		return state.CompileInput{}, nil, nil, err
+		return state.CompileInput{}, nil, err
 	}
 	input.ChannelRegistry = l.channelRegistry
 	input.Credentials = mapCredentialConfigs(rows.credentials, rows.groups)
 	input.AccessKeys, err = mapAccessKeys(rows.accessKeys, rows.costLimitRules)
 	if err != nil {
-		return state.CompileInput{}, nil, nil, err
+		return state.CompileInput{}, nil, err
 	}
 	credentials, err := queryCredentials(ctx, l.db)
 	if err != nil {
-		return state.CompileInput{}, nil, nil, err
+		return state.CompileInput{}, nil, err
 	}
-	states, err := queryCostLimitStates(ctx, l.db, rows.costLimitRules)
-	if err != nil {
-		return state.CompileInput{}, nil, nil, err
+	// Redis seeds quota state from these rows, so an orphan state still fails
+	// the load.
+	if _, err := queryCostLimitStates(ctx, l.db, rows.costLimitRules); err != nil {
+		return state.CompileInput{}, nil, err
 	}
 	entries, err := mapCredentialsWithProxy(credentials, rows.groups, l.encryption)
 	if err != nil {
-		return state.CompileInput{}, nil, nil, err
+		return state.CompileInput{}, nil, err
 	}
-	return input, entries, states, nil
+	return input, entries, nil
 }
 
 func selectChannelRegistry(registries []*channel.Registry) *channel.Registry {

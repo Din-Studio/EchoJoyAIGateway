@@ -13,11 +13,11 @@ import (
 
 	"gpt-load/internal/cluster"
 	"gpt-load/internal/health"
-	"gpt-load/internal/platform/config"
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/state"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/clustertest"
 )
 
 // lockCheckingHealthStore wraps the real Redis store and fails the test when
@@ -91,21 +91,12 @@ type sharedHealthFixture struct {
 func newSharedHealthFixture(t *testing.T) sharedHealthFixture {
 	t.Helper()
 	fixture := newServiceFixture(t)
-	fixture.registry.EnableSharedHealth()
-	server := miniredis.RunT(t)
-	client, err := cluster.NewClient(&config.Config{Cluster: config.ClusterConfig{
-		RedisAddrs: []string{server.Addr()}, RedisKeyPrefix: "gl", InstanceID: "node-a",
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-	store := cluster.NewCredentialHealth(client, fixture.registry)
+	store := fixture.sharedHealth
 	checking := &lockCheckingHealthStore{
 		SharedCredentialHealthStore: store, t: t, mutations: fixture.mutations, manager: fixture.manager,
 	}
 	fixture.service.sharedHealth = checking
-	return sharedHealthFixture{serviceFixture: fixture, server: server, health: store, store: checking}
+	return sharedHealthFixture{serviceFixture: fixture, server: fixture.redis, health: store, store: checking}
 }
 
 func (fixture sharedHealthFixture) ref(t *testing.T, id uint) state.CredentialRef {
@@ -215,7 +206,6 @@ func TestSharedHealthTestedRestoreRejectsChangedSharedState(t *testing.T) {
 	// A peer records another failure after the probe; its event has not
 	// reached this instance, whose mirror still matches the proof.
 	peerRegistry := state.NewCredentialRegistry()
-	peerRegistry.EnableSharedHealth()
 	entries, err := fixture.registry.SnapshotGroupCredentialEntriesExact(groupID, []uint{id})
 	if err != nil {
 		t.Fatal(err)
@@ -223,13 +213,7 @@ func TestSharedHealthTestedRestoreRejectsChangedSharedState(t *testing.T) {
 	if err := peerRegistry.ReplaceCredentials(entries); err != nil {
 		t.Fatal(err)
 	}
-	peerClient, err := cluster.NewClient(&config.Config{Cluster: config.ClusterConfig{
-		RedisAddrs: []string{fixture.server.Addr()}, RedisKeyPrefix: "gl", InstanceID: "node-b",
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = peerClient.Close() })
+	peerClient := clustertest.Connect(t, fixture.server, "node-b")
 	peerRef, _ := peerRegistry.CredentialRef(id)
 	if _, err := cluster.NewCredentialHealth(peerClient, peerRegistry).RecordFailure(t.Context(), peerRef, 1); err != nil {
 		t.Fatal(err)
@@ -266,9 +250,8 @@ func TestSharedHealthValidationRecoversAfterPublicationBoundary(t *testing.T) {
 	if _, err := fixture.health.RecordFailure(t.Context(), ref, 1); err != nil {
 		t.Fatal(err)
 	}
-	worker := newRealRegistryValidationWorker(registry, &validationProbeRecorder{})
+	worker := newRealRegistryValidationWorker(t, registry, &validationProbeRecorder{})
 	worker.sharedHealth = fixture.store
-	fixture.store.mutations = worker.mutations.(*health.MutationCoordinator)
 	fixture.store.manager = worker.snapshots
 	stats := worker.stats.(*health.StatsStore)
 	stats.RecordFailure(1, health.FailureCategoryInvalidKey, http.StatusUnauthorized, time.Now())

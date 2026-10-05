@@ -59,7 +59,7 @@ func TestUsageAPIRollingHourReadsLogsAndScopesAccessKey(t *testing.T) {
 	fixture.service.now = func() time.Time { return now }
 	fixture.service.usageStats = requestlog.NewService(fixture.db, nil, nil)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	for _, test := range []struct {
 		name      string
 		auth      string

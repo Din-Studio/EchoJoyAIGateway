@@ -152,11 +152,7 @@ func TestAccessKeyCostLimitRulesResetOnlySelectedRules(t *testing.T) {
 	}
 
 	now := time.Unix(1_787_184_000, 0).UTC()
-	ticket, decision := fixture.accessQuota.Admit(envelope.Data.ID, now)
-	if !decision.Allowed {
-		t.Fatalf("Admit() = %#v", decision)
-	}
-	fixture.accessQuota.Complete(ticket, 15_000_000_000)
+	admitAccessQuota(t, fixture, envelope.Data.ID, now, 15_000_000_000)
 
 	response := serveAccessKeyCostLimitRequest(
 		t,
@@ -170,7 +166,7 @@ func TestAccessKeyCostLimitRulesResetOnlySelectedRules(t *testing.T) {
 		t.Fatalf("POST reset = %d %s, want 200", response.Code, response.Body.String())
 	}
 
-	view := fixture.accessQuota.Snapshot(envelope.Data.ID, now.Add(time.Minute))
+	view := accessQuotaView(t, fixture, envelope.Data.ID, now.Add(time.Minute))
 	if len(view.Rules) != 3 {
 		t.Fatalf("runtime rules = %#v", view.Rules)
 	}
@@ -445,7 +441,7 @@ func newAccessKeyCostLimitHTTPFixture(t *testing.T) (serviceFixture, *gin.Engine
 	fixture := newServiceFixture(t)
 	fixture.service.random = bytes.NewReader(bytes.Repeat([]byte{0x11}, 64))
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	return fixture, engine
 }
 

@@ -155,9 +155,3 @@ func TestResponseBindingsReturnErrorsWhenRedisIsUnavailable(t *testing.T) {
 		t.Fatal("Record() error = nil with Redis down")
 	}
 }
-
-func TestNewResponseBindingsIsNilWithoutCluster(t *testing.T) {
-	if NewResponseBindings(nil, time.Hour) != nil {
-		t.Fatal("NewResponseBindings(nil) != nil")
-	}
-}

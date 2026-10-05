@@ -63,11 +63,8 @@ func (rule dirtyRule) coveredBy(revision, version uint64) bool {
 	return revision > rule.revision || (revision == rule.revision && version >= rule.version)
 }
 
-// NewAccessQuota returns nil when cluster mode is disabled.
+// NewAccessQuota builds the shared cost-limit gate.
 func NewAccessQuota(client *Client, states AccessQuotaStateReader) *AccessQuota {
-	if client == nil {
-		return nil
-	}
 	return &AccessQuota{client: client, states: states, dirty: make(map[uint]dirtyRule)}
 }
 
@@ -194,9 +191,6 @@ func (quota *AccessQuota) View(
 
 // Stats reports saturated-accounting faults observed by this instance.
 func (quota *AccessQuota) Stats() accessquota.Stats {
-	if quota == nil {
-		return accessquota.Stats{}
-	}
 	return accessquota.Stats{OverflowFaultTotal: quota.overflowFaultTotal.Load()}
 }
 

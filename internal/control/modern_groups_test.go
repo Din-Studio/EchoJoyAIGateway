@@ -63,7 +63,7 @@ func TestModernGroupsWorkspaceIncludesEveryGroupAndActionableContext(t *testing.
 	const hour = int64(1_700_000_000_000)
 	createGroupCollectionUsageStat(t, fixture, ready.ID, hour, 9, "modern")
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 	result := performGroupCollectionRequest(engine, "/api/modern/groups", "Bearer "+authTestKey)
 	if result.Code != http.StatusOK {
 		t.Fatalf("workspace status = %d, want 200: %s", result.Code, result.Body.String())

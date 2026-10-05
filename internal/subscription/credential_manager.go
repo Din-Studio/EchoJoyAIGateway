@@ -61,7 +61,7 @@ type CredentialManager struct {
 	now            func() time.Time
 	logger         *logrus.Logger
 	passiveQuota   *passiveQuotaPending
-	// Cluster coordination; all nil in single-instance mode.
+	// Cluster coordination, set by SetClusterCoordination.
 	lease     refreshLease
 	health    state.SharedCredentialHealthStore
 	committer configCommitter
@@ -73,7 +73,8 @@ type CredentialManager struct {
 // SetClusterCoordination makes refreshes cluster-wide single flight: a
 // refresh holds the credential's lease, auth states are shared through the
 // health store, and a rotated secret is committed as a configuration change.
-// It must be called before the manager serves requests.
+// It is a setter only because the committer (the control service) depends on
+// this manager; it must be called before the manager serves requests.
 func (manager *CredentialManager) SetClusterCoordination(
 	lease refreshLease,
 	health state.SharedCredentialHealthStore,
@@ -172,13 +173,11 @@ func (manager *CredentialManager) prepare(
 			return credential, nil
 		}
 	}
-	if manager.lease != nil {
-		release, evidence := manager.acquireRefreshLease(ctx, snapshot.ID)
-		if evidence != nil {
-			return subscriptionruntime.Credential{}, evidence
-		}
-		defer release()
+	release, evidence := manager.acquireRefreshLease(ctx, snapshot.ID)
+	if evidence != nil {
+		return subscriptionruntime.Credential{}, evidence
 	}
+	defer release()
 	var prepared subscriptionruntime.Credential
 	var prepareErr *execution.ErrorEvidence
 	manager.mutations.Do(snapshot.ID, func() {
@@ -263,7 +262,7 @@ func (manager *CredentialManager) refreshCredentialLocked(
 	if currentIdentityGeneration != expectedIdentityGeneration {
 		return subscriptionruntime.Credential{}, localEvidence("credential_target_mismatch", "subscription credential target does not match")
 	}
-	if manager.lease != nil && row.AuthState == models.CredentialAuthStateRefreshing && !allowRecovery {
+	if row.AuthState == models.CredentialAuthStateRefreshing && !allowRecovery {
 		// This instance holds the lease, so the refresh that wrote this state
 		// lost its lease: its holder crashed or stalled. Mark it interrupted;
 		// a stalled holder can still commit because the commit only checks
@@ -441,12 +440,7 @@ func (manager *CredentialManager) refreshCredentialLocked(
 		}
 		return nil
 	}
-	var commitErr error
-	if manager.committer != nil {
-		commitErr = manager.committer.CommitCredentialState(finalizeContext, commit)
-	} else {
-		commitErr = commit(manager.db.WithContext(finalizeContext))
-	}
+	commitErr := manager.committer.CommitCredentialState(finalizeContext, commit)
 	cancelFinalize()
 	if commitErr != nil {
 		if markErr := manager.markRefreshOutcomeUnknown(ctx, row, row.SecretVersion, "refresh_commit_failed"); markErr != nil {
@@ -479,9 +473,7 @@ func (manager *CredentialManager) refreshCredentialLocked(
 			return subscriptionruntime.Credential{}, authEvidence("refresh_registry_mismatch")
 		}
 	}
-	if manager.health != nil {
-		manager.shareAuthState(ctx, row.ID, state.CredentialAuthStateReady, nextVersion)
-	}
+	manager.shareAuthState(ctx, row.ID, state.CredentialAuthStateReady, nextVersion)
 	if !bypassedCooldown.IsZero() {
 		manager.clearRefreshCooldown(ctx, row.ID, bypassedCooldown)
 	}
@@ -609,9 +601,9 @@ func (manager *CredentialManager) transitionAuthState(
 	return manager.publishAuthState(finalizeContext, row, version, authState)
 }
 
-// publishAuthState publishes the auth state committed for secretVersion. In
-// cluster mode it goes through the shared store so peers stop or resume
-// scheduling the credential; a store failure falls back to the local mirror.
+// publishAuthState publishes the auth state committed for secretVersion
+// through the shared store so peers stop or resume scheduling the
+// credential; a store failure falls back to the local mirror.
 func (manager *CredentialManager) publishAuthState(
 	ctx context.Context,
 	row models.Credential,
@@ -619,7 +611,7 @@ func (manager *CredentialManager) publishAuthState(
 	authState models.CredentialAuthState,
 ) error {
 	runtimeState := state.CredentialAuthState(authState)
-	if manager.health != nil && manager.shareAuthState(ctx, row.ID, runtimeState, secretVersion) {
+	if manager.shareAuthState(ctx, row.ID, runtimeState, secretVersion) {
 		if current, known := manager.registry.CredentialAuthStateOf(row.ID); known && current == runtimeState {
 			return nil
 		}
@@ -662,27 +654,23 @@ func (manager *CredentialManager) shareAuthState(
 // setRefreshCooldown holds the credential back after a retryable refresh
 // failure and reports whether the credential is still registered.
 func (manager *CredentialManager) setRefreshCooldown(ctx context.Context, credentialID uint, until time.Time) bool {
-	if manager.health != nil {
-		if ref, ok := manager.registry.CredentialRef(credentialID); ok {
-			_, err := manager.health.CooldownCredential(ctx, ref, until, 0)
-			if err == nil {
-				return true
-			}
-			manager.logSharedHealthUnavailable(credentialID, "cooldown", err)
+	if ref, ok := manager.registry.CredentialRef(credentialID); ok {
+		_, err := manager.health.CooldownCredential(ctx, ref, until, 0)
+		if err == nil {
+			return true
 		}
+		manager.logSharedHealthUnavailable(credentialID, "cooldown", err)
 	}
 	return manager.registry.SetCooldown(credentialID, until)
 }
 
 func (manager *CredentialManager) clearRefreshCooldown(ctx context.Context, credentialID uint, observed time.Time) {
-	if manager.health != nil {
-		if ref, ok := manager.registry.CredentialRef(credentialID); ok {
-			_, err := manager.health.ClearCooldownIfMatch(ctx, ref, observed)
-			if err == nil {
-				return
-			}
-			manager.logSharedHealthUnavailable(credentialID, "clear_cooldown_if_match", err)
+	if ref, ok := manager.registry.CredentialRef(credentialID); ok {
+		_, err := manager.health.ClearCooldownIfMatch(ctx, ref, observed)
+		if err == nil {
+			return
 		}
+		manager.logSharedHealthUnavailable(credentialID, "clear_cooldown_if_match", err)
 	}
 	manager.registry.ClearCooldownIfMatch(credentialID, observed)
 }

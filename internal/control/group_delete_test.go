@@ -334,7 +334,7 @@ func TestDeleteGroupEndpointAuthenticationValidationNotFoundConflictAndSuccess(t
 	fixture := newServiceFixture(t)
 	groupID := createGroupWithCredentials(t, fixture, "sk-delete-http")
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	path := "/api/groups/" + strconv.FormatUint(uint64(groupID), 10)
 
 	unauthorized := httptest.NewRecorder()

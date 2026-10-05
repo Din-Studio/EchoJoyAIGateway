@@ -172,9 +172,8 @@ func TestEditAccessKeyReplacesCredentialAtomicallyAndReplays(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := loadAccessKeyRow(t, fixture.db, created.ID)
-	ticket, _ := fixture.service.accessQuota.Admit(created.ID, fixture.service.now())
-	fixture.service.accessQuota.Complete(ticket, 1234)
-	quotaBefore := fixture.service.accessQuota.Snapshot(created.ID, fixture.service.now())
+	admitAccessQuota(t, fixture, created.ID, fixture.service.now(), 1234)
+	quotaBefore := accessQuotaView(t, fixture, created.ID, fixture.service.now())
 	engine := newAccessKeyLifecycleEngine(t, fixture)
 	path := fmt.Sprintf("/api/access-keys/%d", created.ID)
 	const firstOperation = "00000000-0000-4000-8000-000000008401"
@@ -197,7 +196,7 @@ func TestEditAccessKeyReplacesCredentialAtomicallyAndReplays(t *testing.T) {
 	if _, exists := fixture.manager.Current().AccessKeysByHash[before.KeyHash]; exists {
 		t.Fatal("old credential remains active")
 	}
-	quotaAfter := fixture.service.accessQuota.Snapshot(created.ID, fixture.service.now())
+	quotaAfter := accessQuotaView(t, fixture, created.ID, fixture.service.now())
 	if len(quotaAfter.Rules) != 1 || quotaAfter.Rules[0].UsedNanoUSD != quotaBefore.Rules[0].UsedNanoUSD || quotaAfter.Rules[0].ID != quotaBefore.Rules[0].ID {
 		t.Fatal("editing the key reset usage or quota identity")
 	}

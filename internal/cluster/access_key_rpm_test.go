@@ -107,7 +107,4 @@ func TestAccessKeyRPMFailsWhenRedisIsDown(t *testing.T) {
 	if decision, err := limiter.Allow(t.Context(), 12, 0); err != nil || !decision.Allowed {
 		t.Fatalf("Allow(unlimited, Redis down) = %#v, %v", decision, err)
 	}
-	if NewAccessKeyRPM(nil) != nil || NewAccessQuota(nil, nil) != nil {
-		t.Fatal("constructors must return nil when cluster mode is disabled")
-	}
 }

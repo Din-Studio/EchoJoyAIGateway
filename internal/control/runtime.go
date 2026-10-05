@@ -90,7 +90,6 @@ type Runtime struct {
 func NewRuntime(
 	registry *state.CredentialRegistry,
 	stats *health.StatsStore,
-	mutations *health.MutationCoordinator,
 	manager *state.Manager,
 	encryptionService encryption.Service,
 	channelRegistry *channel.Registry,
@@ -108,6 +107,8 @@ func NewRuntime(
 		controlCleaner:     operationRecovery,
 		operationRecovery:  operationRecovery,
 		catalogSync:        catalogSync,
+		configSync:         configSync,
+		credentialHealth:   credentialHealth,
 		manager:            manager,
 		jobLease:           jobLease,
 		validationInterval: defaultValidationInterval,
@@ -122,23 +123,15 @@ func NewRuntime(
 	if operationRecovery != nil {
 		runtime.oauthCallback = operationRecovery.oauthCallback
 	}
-	if configSync != nil {
-		runtime.configSync = configSync
-	}
-	worker := newValidationWorker(
+	runtime.validator = newValidationWorker(
 		manager,
 		registry,
 		stats,
-		mutations,
 		encryptionService,
 		channelRegistry,
 		executor,
+		credentialHealth,
 	)
-	if credentialHealth != nil {
-		runtime.credentialHealth = credentialHealth
-		worker.sharedHealth = credentialHealth
-	}
-	runtime.validator = worker
 	return runtime
 }
 
@@ -177,20 +170,15 @@ func (runtime *Runtime) Run(ctx context.Context) {
 			runtime.catalogSync.Run(ctx)
 		}()
 	}
-	if runtime.configSync != nil {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			runtime.configSync.Run(ctx)
-		}()
-	}
-	if runtime.credentialHealth != nil {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			runtime.credentialHealth.Run(ctx)
-		}()
-	}
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		runtime.configSync.Run(ctx)
+	}()
+	go func() {
+		defer wait.Done()
+		runtime.credentialHealth.Run(ctx)
+	}()
 	if runtime.oauthCallback != nil {
 		wait.Add(1)
 		go func() {

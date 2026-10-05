@@ -18,8 +18,10 @@ import (
 
 	"gpt-load/internal/catalog"
 	"gpt-load/internal/channel"
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/pricing"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/clustertest"
 	"gpt-load/internal/testutil/pgtest"
 )
 
@@ -49,7 +51,7 @@ func TestCatalogSyncEmitsLifecycleLogsWithoutLeakingFailureDetails(t *testing.T)
 		logrus.SetLevel(previousLevel)
 	})
 
-	success := newCatalogSyncCoordinator(
+	success := newTestCatalogSyncCoordinator(t,
 		fixture.service,
 		catalogSyncClientFunc(func(context.Context, catalog.Metadata) (catalog.SyncResult, error) {
 			return catalogResultFixture(3000, "success", nil), nil
@@ -58,7 +60,6 @@ func TestCatalogSyncEmitsLifecycleLogsWithoutLeakingFailureDetails(t *testing.T)
 		catalog.Metadata{},
 		false,
 	)
-	success.storeCache = func(string, catalog.SyncResult) error { return nil }
 	success.applySnapshot = func(context.Context, *catalog.Snapshot) error { return nil }
 	if _, err := success.Sync(t.Context(), CatalogSyncManual); err != nil {
 		t.Fatal(err)
@@ -71,7 +72,7 @@ func TestCatalogSyncEmitsLifecycleLogsWithoutLeakingFailureDetails(t *testing.T)
 	}
 
 	const rawFailure = "secret upstream response body"
-	failure := newCatalogSyncCoordinator(
+	failure := newTestCatalogSyncCoordinator(t,
 		fixture.service,
 		catalogSyncClientFunc(func(context.Context, catalog.Metadata) (catalog.SyncResult, error) {
 			return catalog.SyncResult{}, errors.New(rawFailure)
@@ -375,14 +376,13 @@ func TestCatalogSyncSingleFlightJoinsManualStartupAndGroupTriggers(t *testing.T)
 			return catalog.SyncResult{}, ctx.Err()
 		}
 	})
-	coordinator := newCatalogSyncCoordinator(
+	coordinator := newTestCatalogSyncCoordinator(t,
 		fixture.service,
 		client,
 		filepath.Join(t.TempDir(), "catalog.json"),
 		catalog.Metadata{},
 		false,
 	)
-	coordinator.storeCache = func(string, catalog.SyncResult) error { return nil }
 
 	type syncResult struct{ err error }
 	results := make(chan syncResult, 4)
@@ -434,8 +434,7 @@ func TestCatalogSyncCallerCancellationStopsWaitingWithoutCancelingSharedOperatio
 			return catalog.SyncResult{}, ctx.Err()
 		}
 	})
-	coordinator := newCatalogSyncCoordinator(fixture.service, client, "unused", catalog.Metadata{}, false)
-	coordinator.storeCache = func(string, catalog.SyncResult) error { return nil }
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{}, false)
 	coordinator.applySnapshot = func(context.Context, *catalog.Snapshot) error { return nil }
 
 	callerCtx, cancelCaller := context.WithCancel(t.Context())
@@ -494,12 +493,7 @@ func TestCatalogSync304PreservesPublishedGenerationsAndDoesNotStoreCache(t *test
 		updated.CheckedAtMillis = 20
 		return catalog.SyncResult{Metadata: updated, NotModified: true}, nil
 	})
-	coordinator := newCatalogSyncCoordinator(fixture.service, client, "unused", previous, true)
-	var stores atomic.Int32
-	coordinator.storeCache = func(string, catalog.SyncResult) error {
-		stores.Add(1)
-		return nil
-	}
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", previous, true)
 
 	status, err := coordinator.Sync(t.Context(), CatalogSyncManual)
 	if err != nil {
@@ -508,8 +502,8 @@ func TestCatalogSync304PreservesPublishedGenerationsAndDoesNotStoreCache(t *test
 	if !status.NotModified || status.CheckedAtMS != 20 || status.SuccessfulFetchAtMS != 10 {
 		t.Fatalf("status = %#v", status)
 	}
-	if stores.Load() != 0 {
-		t.Fatalf("304 cache stores = %d, want 0", stores.Load())
+	if _, err := coordinator.shared.FetchedAt(t.Context()); !errors.Is(err, cluster.ErrCatalogMissing) {
+		t.Fatalf("304 stored the shared catalog: %v", err)
 	}
 	if !reflect.DeepEqual(fixture.catalogRuntime.Load(), oldSnapshot) {
 		t.Fatal("304 replaced CatalogRuntime")
@@ -529,7 +523,7 @@ func TestCatalogSyncRejects304WithoutLastKnownGoodGeneration(t *testing.T) {
 			NotModified: true,
 		}, nil
 	})
-	coordinator := newCatalogSyncCoordinator(fixture.service, client, "unused", previous, false)
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", previous, false)
 	coordinator.now = func() time.Time { return time.UnixMilli(250) }
 
 	status, err := coordinator.Sync(t.Context(), CatalogSyncManual)
@@ -559,7 +553,7 @@ func TestCatalogSyncFailuresRefreshLastCheckAndPreserveLastSuccessfulFetch(t *te
 	client := catalogSyncClientFunc(func(context.Context, catalog.Metadata) (catalog.SyncResult, error) {
 		return catalog.SyncResult{}, errors.New("upstream response was invalid")
 	})
-	coordinator := newCatalogSyncCoordinator(fixture.service, client, "unused", previous, true)
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", previous, true)
 	coordinator.now = func() time.Time { return time.UnixMilli(250) }
 
 	status, err := coordinator.Sync(t.Context(), CatalogSyncManual)
@@ -585,9 +579,11 @@ func TestCatalogSyncCacheFailureUsesCurrentCheckWithoutAdvancingSuccessfulFetch(
 	client := catalogSyncClientFunc(func(context.Context, catalog.Metadata) (catalog.SyncResult, error) {
 		return catalogResultFixture(200, "new", nil), nil
 	})
-	coordinator := newCatalogSyncCoordinator(fixture.service, client, "unused", previous, true)
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", previous, true)
 	coordinator.now = func() time.Time { return time.UnixMilli(250) }
-	coordinator.storeCache = func(string, catalog.SyncResult) error { return errors.New("disk full") }
+	server, redis := clustertest.NewClient(t)
+	coordinator.shared = cluster.NewCatalogStore(redis)
+	server.SetError("store unavailable")
 
 	status, err := coordinator.Sync(t.Context(), CatalogSyncManual)
 	if err == nil {
@@ -609,14 +605,13 @@ func TestCatalogSyncDisabledAutomaticTriggersDoNotCallNetworkButManualStillWorks
 		calls.Add(1)
 		return catalogResultFixture(100, "manual", nil), nil
 	})
-	coordinator := newCatalogSyncCoordinator(
+	coordinator := newTestCatalogSyncCoordinator(t,
 		fixture.service,
 		client,
 		filepath.Join(t.TempDir(), "catalog.json"),
 		catalog.Metadata{},
 		false,
 	)
-	coordinator.storeCache = func(string, catalog.SyncResult) error { return nil }
 
 	for _, trigger := range []CatalogSyncTrigger{CatalogSyncStartup, CatalogSyncPeriodic, CatalogSyncGroup} {
 		status, err := coordinator.Sync(t.Context(), trigger)
@@ -657,7 +652,7 @@ func TestCatalogSyncSchedulerRetriesNoLKGAfterOneHourAndKeepsLKGOnDailyCadence(t
 				calls <- struct{}{}
 				return catalog.SyncResult{}, errors.New("offline")
 			})
-			coordinator := newCatalogSyncCoordinator(fixture.service, client, "unused", catalog.Metadata{}, test.hasLKG)
+			coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{}, test.hasLKG)
 			periodic := newFakeRuntimeTicker()
 			coordinator.newTicker = func(interval time.Duration) runtimeTicker {
 				if interval != 24*time.Hour {
@@ -722,7 +717,7 @@ func TestCatalogSyncSchedulerDebouncesGroupChangeBursts(t *testing.T) {
 			NotModified: true,
 		}, nil
 	})
-	coordinator := newCatalogSyncCoordinator(fixture.service, client, "unused", catalog.Metadata{
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{
 		CheckedAtMillis: 1, SuccessfulFetchAtMillis: 1,
 	}, true)
 	fixture.catalogRuntime.Publish(&catalog.Snapshot{Providers: map[string]catalog.Provider{}})
@@ -779,7 +774,7 @@ func TestCatalogSyncSchedulerRunsImmediateSettingsTrigger(t *testing.T) {
 			NotModified: true,
 		}, nil
 	})
-	coordinator := newCatalogSyncCoordinator(fixture.service, client, "unused", catalog.Metadata{
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{
 		CheckedAtMillis: 1, SuccessfulFetchAtMillis: 1,
 	}, true)
 	fixture.catalogRuntime.Publish(&catalog.Snapshot{Providers: map[string]catalog.Provider{}})
@@ -818,7 +813,7 @@ func TestCatalogSyncSchedulerRetries304WithoutLKGAfterOneHour(t *testing.T) {
 		calls <- struct{}{}
 		return catalog.SyncResult{Metadata: catalog.Metadata{CheckedAtMillis: 20}, NotModified: true}, nil
 	})
-	coordinator := newCatalogSyncCoordinator(fixture.service, client, "unused", catalog.Metadata{}, false)
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{}, false)
 	periodic := newFakeRuntimeTicker()
 	coordinator.newTicker = func(time.Duration) runtimeTicker { return periodic }
 	timers := make(chan *fakeCatalogTimer, 2)
@@ -848,66 +843,6 @@ func TestCatalogSyncSchedulerRetries304WithoutLKGAfterOneHour(t *testing.T) {
 	}
 }
 
-func TestCatalogSyncShutdownWaitsForBlockedCacheAndPreventsLateReconcile(t *testing.T) {
-	t.Parallel()
-	fixture := newServiceFixture(t)
-	result := catalogResultFixture(100, "shutdown", nil)
-	var calls atomic.Int32
-	client := catalogSyncClientFunc(func(context.Context, catalog.Metadata) (catalog.SyncResult, error) {
-		calls.Add(1)
-		return result, nil
-	})
-	coordinator := newCatalogSyncCoordinator(fixture.service, client, "unused", catalog.Metadata{}, false)
-	periodic := newFakeRuntimeTicker()
-	coordinator.newTicker = func(time.Duration) runtimeTicker { return periodic }
-	cacheStarted := make(chan struct{})
-	releaseCache := make(chan struct{})
-	coordinator.storeCache = func(string, catalog.SyncResult) error {
-		close(cacheStarted)
-		<-releaseCache
-		return nil
-	}
-	var reconcileCalls atomic.Int32
-	coordinator.applySnapshot = func(context.Context, *catalog.Snapshot) error {
-		reconcileCalls.Add(1)
-		return nil
-	}
-
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan struct{})
-	go func() {
-		coordinator.Run(ctx)
-		close(done)
-	}()
-	select {
-	case <-cacheStarted:
-	case <-time.After(time.Second):
-		t.Fatal("catalog cache write did not start")
-	}
-	cancel()
-	waitForCatalogShutdown(t, coordinator)
-	select {
-	case <-done:
-		t.Fatal("Run returned while durable cache write was still blocked")
-	default:
-	}
-	if _, err := coordinator.Sync(context.Background(), CatalogSyncManual); err == nil {
-		t.Fatal("manual sync started after coordinator shutdown")
-	}
-	if calls.Load() != 1 {
-		t.Fatalf("network calls after shutdown = %d, want 1", calls.Load())
-	}
-	close(releaseCache)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("Run did not join cache-blocked execute")
-	}
-	if reconcileCalls.Load() != 0 {
-		t.Fatalf("reconcile calls after canceled cache = %d, want 0", reconcileCalls.Load())
-	}
-}
-
 func TestCatalogSyncShutdownWaitsForBlockedReconcile(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
@@ -915,9 +850,8 @@ func TestCatalogSyncShutdownWaitsForBlockedReconcile(t *testing.T) {
 	client := catalogSyncClientFunc(func(context.Context, catalog.Metadata) (catalog.SyncResult, error) {
 		return result, nil
 	})
-	coordinator := newCatalogSyncCoordinator(fixture.service, client, "unused", catalog.Metadata{}, false)
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{}, false)
 	coordinator.newTicker = func(time.Duration) runtimeTicker { return newFakeRuntimeTicker() }
-	coordinator.storeCache = func(string, catalog.SyncResult) error { return nil }
 	reconcileStarted := make(chan struct{})
 	releaseReconcile := make(chan struct{})
 	coordinator.applySnapshot = func(context.Context, *catalog.Snapshot) error {
@@ -973,7 +907,7 @@ func TestCatalogSyncRunShutdownCancelsPreRuntimeManualOperation(t *testing.T) {
 			return catalog.SyncResult{}, errors.New("test released uncanceled operation")
 		}
 	})
-	coordinator := newCatalogSyncCoordinator(fixture.service, client, "unused", catalog.Metadata{}, false)
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{}, false)
 	coordinator.newTicker = func(time.Duration) runtimeTicker { return newFakeRuntimeTicker() }
 	var reconcileCalls atomic.Int32
 	coordinator.applySnapshot = func(context.Context, *catalog.Snapshot) error {
@@ -1327,18 +1261,13 @@ func TestCatalogSyncReconcileFailurePublishesNeitherRuntimeAndKeepsPendingLKG(t 
 	client := catalogSyncClientFunc(func(context.Context, catalog.Metadata) (catalog.SyncResult, error) {
 		return result, nil
 	})
-	coordinator := newCatalogSyncCoordinator(fixture.service, client, "unused", catalog.Metadata{}, false)
-	var stored atomic.Bool
-	coordinator.storeCache = func(string, catalog.SyncResult) error {
-		stored.Store(true)
-		return nil
-	}
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{}, false)
 
 	if _, err := coordinator.Sync(t.Context(), CatalogSyncManual); err == nil {
 		t.Fatal("Sync() error = nil, want reconciliation failure")
 	}
-	if !stored.Load() {
-		t.Fatal("validated catalog was not durably stored before reconciliation")
+	if fetchedAt, err := coordinator.shared.FetchedAt(t.Context()); err != nil || fetchedAt != result.Metadata.SuccessfulFetchAtMillis {
+		t.Fatalf("validated catalog was not durably stored before reconciliation: %d, %v", fetchedAt, err)
 	}
 	if fixture.priceRuntime.Load() != oldTable {
 		t.Fatal("failed reconciliation replaced PriceRuntime")

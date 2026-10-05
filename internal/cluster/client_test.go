@@ -26,25 +26,8 @@ func newTestClient(t *testing.T) (*miniredis.Miniredis, *Client) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	if client == nil {
-		t.Fatal("NewClient() = nil for enabled cluster config")
-	}
 	t.Cleanup(func() { _ = client.Close() })
 	return server, client
-}
-
-func TestNewClientReturnsNilWhenClusterDisabled(t *testing.T) {
-	client, err := NewClient(&config.Config{})
-	if err != nil || client != nil {
-		t.Fatalf("NewClient(disabled) = %v, %v; want nil, nil", client, err)
-	}
-	client, err = NewClient(nil)
-	if err != nil || client != nil {
-		t.Fatalf("NewClient(nil) = %v, %v; want nil, nil", client, err)
-	}
-	if NewConfigEventBus(nil) != nil {
-		t.Fatal("NewConfigEventBus(nil) must return nil")
-	}
 }
 
 func TestNewClientFailsWhenRedisUnreachable(t *testing.T) {

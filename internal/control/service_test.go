@@ -277,6 +277,7 @@ func TestWriteConfigMakesCreatedGroupAndFirstKeyAtomicallyVisibleToDataPlane(t *
 		nil,
 		nil,
 		nil,
+		newTestGatewaySharedState(fixture),
 	)
 	engine := gin.New()
 	registerGatewayRoutes(t, engine, handler)

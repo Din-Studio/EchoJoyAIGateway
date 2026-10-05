@@ -32,7 +32,7 @@ import (
 func TestServerHomeAndSystemUpdateRoutesUseExactManagementContracts(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
-	module := NewServer(
+	module := newTestServer(t,
 		&config.Config{AuthKey: "test-auth-key"},
 		fixture.service,
 	).HTTPModule()
@@ -81,7 +81,7 @@ func TestServerHomeAndSystemUpdateRoutesUseExactManagementContracts(t *testing.T
 func TestGroupCollectionHTTPRoutesDeclareStaticOptionsBeforeDynamicDetail(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
-	module := NewServer(
+	module := newTestServer(t,
 		&config.Config{AuthKey: authTestKey},
 		fixture.service,
 	).HTTPModule()
@@ -131,7 +131,7 @@ func TestSystemInfoHTTPContract(t *testing.T) {
 		},
 	}
 	engine := gin.New()
-	NewServer(cfg, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, cfg, fixture.service).RegisterRoutes(engine)
 
 	cfg.DataDir = "./mutated-data"
 	cfg.DatabaseDSN = "file:mutated-secret-dsn"
@@ -305,7 +305,7 @@ func TestControlMutationRejectsDuplicateJSONWithoutSideEffects(t *testing.T) {
 		t.Run(endpoint.name, func(t *testing.T) {
 			fixture := newServiceFixture(t)
 			engine := gin.New()
-			NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).
+			newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).
 				RegisterRoutes(engine)
 			before := captureDuplicateJSONControlState(t, fixture)
 
@@ -577,7 +577,7 @@ func TestControlJSONBodyLimitAppliesToEveryJSONEndpoint(t *testing.T) {
 				},
 			})
 			engine := gin.New()
-			NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+			newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 			before := captureControlJSONBodyLimitState(t, fixture, groupID, accessKey.ID)
 
 			path := endpoint.path(groupID, before.credential.ID, accessKey.ID)
@@ -621,7 +621,7 @@ func TestControlJSONBodyLimitContentLengthFastPathPreservesAuthenticationPriorit
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	for _, auth := range []struct {
 		name       string
@@ -665,7 +665,7 @@ func TestControlJSONBodyLimitLocalizes413(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	for _, test := range []struct {
 		language string
@@ -709,7 +709,7 @@ func TestManagementAuthRequiresConstantShapeBearerToken(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	tests := []struct {
 		name       string
@@ -752,7 +752,7 @@ func TestManagementAuthLocalizesUnauthorized(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	for _, test := range []struct {
 		language string
@@ -777,7 +777,7 @@ func TestManagementAuthDoesNotLogSecretOrDigest(t *testing.T) {
 	const authKey = "distinctive-control-auth-key"
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
 
 	var logs bytes.Buffer
 	previousOutput := logrus.StandardLogger().Out
@@ -802,7 +802,7 @@ func TestGroupCreateHTTPReturnsNarrowSuccessAndConflictEnvelopes(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/groups", strings.NewReader(
 		`{"name":"primary","channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com/v1/"},"models":[{"id":"gpt-4o","alias":"public-gpt","alias_enabled":true}],"credentials":"sk-first"}`,
@@ -915,7 +915,7 @@ func TestGroupCreateHTTPRejectsLegacyMissingAndMalformedContractsWithoutMutation
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newServiceFixture(t)
 			engine := gin.New()
-			NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+			newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 			before := countCreateImportRows(t, fixture)
 			request := httptest.NewRequest(http.MethodPost, "/api/groups", strings.NewReader(test.body))
 			request.Header.Set("Authorization", "Bearer test-auth-key")
@@ -944,7 +944,7 @@ func TestImportGroupCredentialsEndpointReturnsSuccessEnvelope(t *testing.T) {
 	groupID := createGroupForCredentialImport(t, fixture, "sk-existing")
 	beforeSnapshot := fixture.manager.Current()
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/groups/"+strconv.FormatUint(uint64(groupID), 10)+"/credentials/import", strings.NewReader(
@@ -995,7 +995,7 @@ func TestImportGroupCredentialsEndpointRejectsUnknownFieldsAndInvalidGroupID(t *
 	fixture := newServiceFixture(t)
 	groupID := createGroupForCredentialImport(t, fixture, "sk-existing")
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	tests := []struct {
 		name    string
@@ -1034,7 +1034,7 @@ func TestImportGroupCredentialsEndpointReturnsGroupNotFound(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/groups/999/credentials/import", strings.NewReader(`{"credentials":"sk-new"}`))
@@ -1092,7 +1092,7 @@ func TestLegacyImportRouteIsNotRegistered(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	for _, route := range engine.Routes() {
 		if route.Method == http.MethodPost && route.Path == "/api/import" {
@@ -1108,7 +1108,7 @@ func TestManagementWritesRejectUnknownFieldsAndMultipleJSONValues(t *testing.T) 
 	t.Run("group create rejects unknown top-level field", func(t *testing.T) {
 		fixture := newServiceFixture(t)
 		engine := gin.New()
-		NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+		newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 		beforeRevision := fixture.manager.Current().Revision
 
 		recorder := httptest.NewRecorder()
@@ -1132,7 +1132,7 @@ func TestManagementWritesRejectUnknownFieldsAndMultipleJSONValues(t *testing.T) 
 	t.Run("access key rejects unknown nested filter field", func(t *testing.T) {
 		fixture := newServiceFixture(t)
 		engine := gin.New()
-		NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+		newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 		beforeRevision := fixture.manager.Current().Revision
 
 		recorder := httptest.NewRecorder()
@@ -1167,7 +1167,7 @@ func TestManagementWritesRejectUnknownFieldsAndMultipleJSONValues(t *testing.T) 
 			t.Fatalf("CreateAccessKey() error = %v", err)
 		}
 		engine := gin.New()
-		NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+		newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 		beforeRevision := fixture.manager.Current().Revision
 
 		recorder := httptest.NewRecorder()
@@ -1199,7 +1199,7 @@ func TestUpdateGroupSettingsEndpointRejectsStrictInvalidBodies(t *testing.T) {
 	fixture := newServiceFixture(t)
 	groupID := createGroupForCredentialImport(t, fixture, "sk-update-http")
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	for _, test := range []struct {
 		name string
@@ -1258,7 +1258,7 @@ func TestUpdateGroupSettingsEndpointRejectsTopLevelNullWithoutMutation(t *testin
 	fixture := newServiceFixture(t)
 	groupID := createGroupForCredentialImport(t, fixture, "sk-update-null")
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	var beforeGroup models.Group
 	if err := fixture.db.First(&beforeGroup, groupID).Error; err != nil {
@@ -1326,7 +1326,7 @@ func TestUpdateGroupSettingsEndpointAllowsURLReuseAndPreservesI18nAndAuth(t *tes
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	path := "/api/groups/" + strconv.FormatUint(uint64(firstID), 10) + "/settings"
 
 	request := httptest.NewRequest(http.MethodPut, path, strings.NewReader(
@@ -1412,7 +1412,7 @@ func TestUpdateGroupSettingsEndpointRejectsOversizedJSON(t *testing.T) {
 	fixture := newServiceFixture(t)
 	groupID := createGroupForCredentialImport(t, fixture, "sk-update-limit")
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	before := fixture.manager.Current().Revision
 
 	recorder := httptest.NewRecorder()
@@ -1448,7 +1448,7 @@ func TestUpdateGroupModelsEndpointRejectsStrictInvalidBodiesWithoutMutation(t *t
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	for _, test := range []struct {
 		name string
@@ -1500,7 +1500,7 @@ func TestGroupModelsHTTPReturnsStructuredConflictWithoutMutation(t *testing.T) {
 	fixture := newServiceFixture(t)
 	groupID := createGroupForCredentialImport(t, fixture, "sk-model-conflict-http")
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	beforeRevision := fixture.manager.Current().Revision
 	beforeModels := loadCreatedGroupModels(t, fixture, groupID)
 
@@ -1539,7 +1539,7 @@ func TestGroupModelsHTTPRejectsMissingAliasEnabledWithoutMutation(t *testing.T) 
 	mustEnsureInitialPrices(t, fixture)
 	groupID := createGroupForCredentialImport(t, fixture, "sk-model-alias-default")
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	beforeRevision := fixture.manager.Current().Revision
 	beforeModels := loadCreatedGroupModels(t, fixture, groupID)
 
@@ -1581,7 +1581,7 @@ func TestUpdateGroupModelsEndpointIDsAuthNotFoundAndSuccessDTO(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	body := `{"models":[{"id":"provider-new","alias":"new-public","alias_enabled":true}]}`
 
 	for _, rawID := range []string{"0", "-1", "not-a-number", "18446744073709551616"} {
@@ -1719,7 +1719,7 @@ func TestUpdateAccessKeyRoutesParseIDsAndPreservePointerSemantics(t *testing.T) 
 		t.Fatalf("CreateAccessKey() error = %v", err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	request := httptest.NewRequest(http.MethodPut, "/api/access-keys/"+strconv.FormatUint(uint64(created.ID), 10), strings.NewReader(`{"status":"disabled"}`))
 	request.Header.Set("Authorization", "Bearer test-auth-key")
@@ -1792,7 +1792,7 @@ func TestModelDiscoveryHTTPContract(t *testing.T) {
 			fixture.service.executor = newRecordingDiscoveryExecutor(value)
 		}
 		engine := gin.New()
-		NewServer(&config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
+		newTestServer(t, &config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
 		return fixture.service, engine
 	}
 
@@ -1982,7 +1982,7 @@ func TestModelDiscoveryHTTPContract(t *testing.T) {
 			}
 		}}
 		engine := gin.New()
-		NewServer(&config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
+		newTestServer(t, &config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
 		recorder := serveDiscoveryRequest(t, engine, authKey,
 			`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},`+
 				`"credentials":"sk-upstream"}`,
@@ -2012,7 +2012,7 @@ func TestServerDraftModelDiscoveryLogsOnlyMetadata(t *testing.T) {
 		},
 	})
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authSecret}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authSecret}, fixture.service).RegisterRoutes(engine)
 
 	var logs bytes.Buffer
 	previousOutput := logrus.StandardLogger().Out
@@ -2073,7 +2073,7 @@ func TestServerGroupModelDiscoveryBodyContract(t *testing.T) {
 			},
 		})
 		engine := gin.New()
-		NewServer(&config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
+		newTestServer(t, &config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
 		return fixture, engine, created.GroupID
 	}
 
@@ -2238,7 +2238,7 @@ func TestSettingsHTTPContract(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	tests := []struct {
 		name       string
@@ -2312,7 +2312,7 @@ func TestSettingsHTTPSuccessEnvelopeUpdateAndReset(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	assertResponse := func(recorder *httptest.ResponseRecorder, timeout int64, overrides []string) {
 		t.Helper()
@@ -2353,7 +2353,7 @@ func TestSettingsHTTPBodyLimitRejectsBeforeMutation(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	before := fixture.manager.Current()
 
 	recorder := httptest.NewRecorder()
@@ -2393,7 +2393,7 @@ func TestSettingsHTTPFiltersPrivateRowsAndDoesNotLogValues(t *testing.T) {
 	)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
 
 	update := serveSettingsRequest(
 		t,
@@ -2463,7 +2463,7 @@ func TestSettingsHTTPFiltersPrivateRowsAndDoesNotLogValues(t *testing.T) {
 		nil,
 	)
 	brokenEngine := gin.New()
-	NewServer(&config.Config{AuthKey: authKey}, brokenService).RegisterRoutes(brokenEngine)
+	newTestServer(t, &config.Config{AuthKey: authKey}, brokenService).RegisterRoutes(brokenEngine)
 	failure := serveSettingsRequest(t, brokenEngine, http.MethodGet, authKey, "")
 	if failure.Code != http.StatusInternalServerError {
 		t.Fatalf("failure response = %d %s", failure.Code, failure.Body.String())

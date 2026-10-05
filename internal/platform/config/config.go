@@ -4,6 +4,7 @@ package config
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -112,9 +113,8 @@ type DatabaseMetadata struct {
 	Driver DatabaseDriver
 }
 
-// ClusterConfig contains the optional multi-instance (cluster) mode settings.
-// Cluster mode is enabled by REDIS_ADDRS; every other field is only meaningful
-// when Enabled reports true.
+// ClusterConfig contains the Redis settings every gateway instance shares.
+// REDIS_ADDRS is required; a single instance is a one-replica cluster.
 type ClusterConfig struct {
 	RedisAddrs     []string
 	RedisPassword  string
@@ -123,11 +123,6 @@ type ClusterConfig struct {
 	InstanceID     string
 	// ResponseBindingTTL bounds how long Responses ownership stays in Redis.
 	ResponseBindingTTL time.Duration
-}
-
-// Enabled reports whether the operator selected cluster mode.
-func (c ClusterConfig) Enabled() bool {
-	return len(c.RedisAddrs) > 0
 }
 
 // Config contains static environment configuration for the application process.
@@ -197,6 +192,24 @@ func Load() (*Config, error) {
 		)
 	}
 
+	// Validate the required variables before DATA_DIR or key files are touched,
+	// so a misconfigured process fails without side effects.
+	cluster, err := parseClusterConfig()
+	if err != nil {
+		return nil, err
+	}
+	if err := requirePostgreSQLDSN(os.Getenv("DATABASE_DSN")); err != nil {
+		return nil, err
+	}
+	explicitAuthKey := os.Getenv("AUTH_KEY")
+	if explicitAuthKey == "" {
+		return nil, fmt.Errorf("AUTH_KEY is required")
+	}
+	explicitEncryptionKey := os.Getenv("ENCRYPTION_KEY")
+	if explicitEncryptionKey == "" {
+		return nil, fmt.Errorf("ENCRYPTION_KEY is required")
+	}
+
 	dataDir := valueOrDefault("DATA_DIR", defaultDataDir)
 	if err := securefile.PrepareManagedDataDir(dataDir); err != nil {
 		return nil, fmt.Errorf("prepare DATA_DIR: %w", err)
@@ -234,8 +247,6 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("DATABASE_DSN resolved to an empty DSN")
 	}
 
-	explicitAuthKey := os.Getenv("AUTH_KEY")
-	explicitEncryptionKey := os.Getenv("ENCRYPTION_KEY")
 	authKey, err := authkey.Resolve(explicitAuthKey, dataDir)
 	if err != nil {
 		return nil, err
@@ -255,22 +266,6 @@ func Load() (*Config, error) {
 		encryptionKeyMetadata = SecretMetadata{
 			Source: SecretSourceKeyFile,
 			Path:   filepath.Join(dataDir, "encryption.key"),
-		}
-	}
-
-	cluster, err := parseClusterConfig()
-	if err != nil {
-		return nil, err
-	}
-	if cluster.Enabled() {
-		if databaseSource != DatabaseSourceExternal || database.Driver != DatabaseDriverPostgreSQL {
-			return nil, fmt.Errorf("REDIS_ADDRS requires a PostgreSQL DATABASE_DSN")
-		}
-		if explicitAuthKey == "" {
-			return nil, fmt.Errorf("REDIS_ADDRS requires AUTH_KEY to be set explicitly")
-		}
-		if explicitEncryptionKey == "" {
-			return nil, fmt.Errorf("REDIS_ADDRS requires ENCRYPTION_KEY to be set explicitly")
 		}
 	}
 
@@ -311,8 +306,24 @@ func Load() (*Config, error) {
 	}, nil
 }
 
-// parseClusterConfig reads the cluster-mode variables. REDIS_DSN is a 1.x
-// variable and is intentionally never read.
+// requirePostgreSQLDSN rejects an empty or non-PostgreSQL DATABASE_DSN.
+func requirePostgreSQLDSN(rawDSN string) error {
+	const message = "DATABASE_DSN is required and must be a PostgreSQL DSN"
+	if strings.TrimSpace(rawDSN) == "" {
+		return errors.New(message)
+	}
+	database, err := ParseDatabaseDSN(rawDSN)
+	if err != nil {
+		return fmt.Errorf("%s: %w", message, err)
+	}
+	if database.Driver != DatabaseDriverPostgreSQL {
+		return errors.New(message)
+	}
+	return nil
+}
+
+// parseClusterConfig reads the Redis variables. REDIS_DSN is a 1.x variable
+// and is intentionally never read.
 func parseClusterConfig() (ClusterConfig, error) {
 	var addrs []string
 	for _, raw := range strings.Split(os.Getenv("REDIS_ADDRS"), ",") {
@@ -322,7 +333,7 @@ func parseClusterConfig() (ClusterConfig, error) {
 		}
 	}
 	if len(addrs) == 0 {
-		return ClusterConfig{}, nil
+		return ClusterConfig{}, fmt.Errorf("REDIS_ADDRS is required")
 	}
 
 	redisTLS, err := parseOptionalBool("REDIS_TLS")

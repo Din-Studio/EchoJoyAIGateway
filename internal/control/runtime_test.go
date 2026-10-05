@@ -8,8 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
+
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/platform/config"
 	"gpt-load/internal/state"
+	"gpt-load/internal/testutil/clustertest"
 )
 
 type fakeRuntimeTicker struct {
@@ -144,7 +148,7 @@ func TestRuntimeRunsOperationRecoveryUntilCancellation(t *testing.T) {
 		started:  make(chan struct{}),
 		returned: make(chan struct{}),
 	}
-	runtime, _, created := newRuntimeHarness(
+	runtime, _, created := newRuntimeHarness(t,
 		newFakeValidationSweep(false),
 		time.Now,
 	)
@@ -166,7 +170,7 @@ func TestRuntimeSweepsRequestLogsImmediatelyAndHourlyWithoutOverlap(t *testing.T
 	validationTicker := newFakeRuntimeTicker()
 	retentionTicker := newFakeRuntimeTicker()
 	created := make(chan time.Duration, 3)
-	runtime := newTestRuntime(
+	runtime, redis := newTestRuntimeWithRedis(t,
 		newFakeValidationSweep(false),
 		validationTicker,
 		created,
@@ -204,6 +208,8 @@ func TestRuntimeSweepsRequestLogsImmediatelyAndHourlyWithoutOverlap(t *testing.T
 		t.Fatalf("overlapping Sweep started at %v before first returned", got)
 	case <-time.After(25 * time.Millisecond):
 	}
+	// The next hour starts a new claim period.
+	redis.FastForward(retentionInterval)
 	cleaner.release <- struct{}{}
 	awaitSignal(t, cleaner.returned)
 	if got := awaitValue(t, cleaner.calls); !got.Equal(base.Add(time.Hour)) {
@@ -226,7 +232,7 @@ func TestRuntimeSweepsCredentialStagesAndCompactsOperationsWithoutRequestLogClea
 	validationTicker := newFakeRuntimeTicker()
 	retentionTicker := newFakeRuntimeTicker()
 	created := make(chan time.Duration, 3)
-	runtime := newTestRuntime(newFakeValidationSweep(false), validationTicker, created, func() time.Time { return base })
+	runtime, redis := newTestRuntimeWithRedis(t, newFakeValidationSweep(false), validationTicker, created, func() time.Time { return base })
 	cleaner := &controlledStageCleaner{calls: make(chan time.Time, 2), compactions: make(chan time.Time, 2)}
 	runtime.controlCleaner = cleaner
 	runtime.newTicker = func(interval time.Duration) runtimeTicker {
@@ -252,6 +258,7 @@ func TestRuntimeSweepsCredentialStagesAndCompactsOperationsWithoutRequestLogClea
 	if got := awaitValue(t, cleaner.compactions); !got.Equal(base) {
 		t.Fatalf("compaction time = %v", got)
 	}
+	redis.FastForward(retentionInterval)
 	retentionTicker.ticks <- base.Add(time.Hour)
 	_ = awaitValue(t, cleaner.calls)
 	_ = awaitValue(t, cleaner.compactions)
@@ -265,7 +272,7 @@ func TestRuntimeCancellationWaitsForRetentionSweep(t *testing.T) {
 	validationTicker := newFakeRuntimeTicker()
 	retentionTicker := newFakeRuntimeTicker()
 	created := make(chan time.Duration, 3)
-	runtime := newTestRuntime(
+	runtime := newTestRuntime(t,
 		newFakeValidationSweep(false),
 		validationTicker,
 		created,
@@ -307,7 +314,7 @@ func TestRuntimeCreatesOnlyJitteredValidationTicker(t *testing.T) {
 	t.Parallel()
 	validationTicker := newFakeRuntimeTicker()
 	created := make(chan time.Duration, 2)
-	runtime := newTestRuntime(newFakeValidationSweep(false), validationTicker, created, time.Now)
+	runtime := newTestRuntime(t, newFakeValidationSweep(false), validationTicker, created, time.Now)
 	runtime.validationJitter = func() time.Duration { return 2 * time.Minute }
 
 	cancel, done := startRuntime(t, runtime)
@@ -322,7 +329,7 @@ func TestRuntimeValidationJitterDoesNotOverflow(t *testing.T) {
 	t.Parallel()
 	validationTicker := newFakeRuntimeTicker()
 	created := make(chan time.Duration, 2)
-	runtime := newTestRuntime(
+	runtime := newTestRuntime(t,
 		newFakeValidationSweep(false),
 		validationTicker,
 		created,
@@ -352,7 +359,7 @@ func TestRuntimeReschedulesValidationWhenPublishedIntervalChanges(t *testing.T) 
 	defaultTicker := newFakeRuntimeTicker()
 	overriddenTicker := newFakeRuntimeTicker()
 	created := make(chan time.Duration, 3)
-	runtime := newTestRuntime(
+	runtime := newTestRuntime(t,
 		newFakeValidationSweep(false),
 		defaultTicker,
 		created,
@@ -393,7 +400,7 @@ func TestRuntimeReschedulesValidationWhenPublishedIntervalChanges(t *testing.T) 
 func TestRuntimeWaitsForValidationTick(t *testing.T) {
 	t.Parallel()
 	validator := newFakeValidationSweep(false)
-	runtime, validationTicker, created := newRuntimeHarness(validator, time.Now)
+	runtime, validationTicker, created := newRuntimeHarness(t, validator, time.Now)
 
 	cancel, done := startRuntime(t, runtime)
 	awaitTickers(t, created)
@@ -411,7 +418,7 @@ func TestRuntimeWaitsForValidationTick(t *testing.T) {
 func TestRuntimeCancellationStopsTickerAndWaitsForValidation(t *testing.T) {
 	t.Parallel()
 	validator := newFakeValidationSweep(true)
-	runtime, validationTicker, created := newRuntimeHarness(validator, time.Now)
+	runtime, validationTicker, created := newRuntimeHarness(t, validator, time.Now)
 
 	cancel, done := startRuntime(t, runtime)
 	awaitTickers(t, created)
@@ -425,7 +432,7 @@ func TestRuntimeCancellationStopsTickerAndWaitsForValidation(t *testing.T) {
 
 func TestRuntimeStopsOnContextCancellation(t *testing.T) {
 	t.Parallel()
-	runtime, validationTicker, created := newRuntimeHarness(newFakeValidationSweep(false), time.Now)
+	runtime, validationTicker, created := newRuntimeHarness(t, newFakeValidationSweep(false), time.Now)
 
 	cancel, done := startRuntime(t, runtime)
 	awaitTickers(t, created)
@@ -491,13 +498,28 @@ func awaitSignal(t *testing.T, channel <-chan struct{}) {
 	}
 }
 
-func newRuntimeHarness(validator validationSweep, now func() time.Time) (*Runtime, *fakeRuntimeTicker, <-chan time.Duration) {
+func newRuntimeHarness(t *testing.T, validator validationSweep, now func() time.Time) (*Runtime, *fakeRuntimeTicker, <-chan time.Duration) {
 	validationTicker := newFakeRuntimeTicker()
 	created := make(chan time.Duration, 2)
-	return newTestRuntime(validator, validationTicker, created, now), validationTicker, created
+	return newTestRuntime(t, validator, validationTicker, created, now), validationTicker, created
 }
 
-func newTestRuntime(validator validationSweep, validationTicker *fakeRuntimeTicker, created chan<- time.Duration, now func() time.Time) *Runtime {
+func newTestRuntime(t *testing.T, validator validationSweep, validationTicker *fakeRuntimeTicker, created chan<- time.Duration, now func() time.Time) *Runtime {
+	runtime, _ := newTestRuntimeWithRedis(t, validator, validationTicker, created, now)
+	return runtime
+}
+
+// newTestRuntimeWithRedis also returns the Redis holding the runtime's job
+// claims, so a test can expire them.
+func newTestRuntimeWithRedis(
+	t *testing.T,
+	validator validationSweep,
+	validationTicker *fakeRuntimeTicker,
+	created chan<- time.Duration,
+	now func() time.Time,
+) (*Runtime, *miniredis.Miniredis) {
+	t.Helper()
+	server, client := clustertest.NewClient(t)
 	return &Runtime{
 		validator: validator, validationInterval: 30 * time.Minute,
 		validationJitter: func() time.Duration { return 2 * time.Minute }, now: now,
@@ -508,8 +530,16 @@ func newTestRuntime(validator validationSweep, validationTicker *fakeRuntimeTick
 			}
 			return validationTicker
 		},
-	}
+		configSync:       idleRuntime{},
+		credentialHealth: idleRuntime{},
+		jobLease:         cluster.NewJobLease(client),
+	}, server
 }
+
+// idleRuntime stands in for a background loop a test does not exercise.
+type idleRuntime struct{}
+
+func (idleRuntime) Run(ctx context.Context) { <-ctx.Done() }
 
 type fakeConfigSyncRuntime struct {
 	started chan struct{}
@@ -524,7 +554,7 @@ func (fake *fakeConfigSyncRuntime) Run(ctx context.Context) {
 
 func TestRuntimeRunsConfigSyncUntilCancel(t *testing.T) {
 	fake := &fakeConfigSyncRuntime{started: make(chan struct{}), stopped: make(chan struct{})}
-	runtime, _, _ := newRuntimeHarness(nil, time.Now)
+	runtime, _, _ := newRuntimeHarness(t, nil, time.Now)
 	runtime.configSync = fake
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})

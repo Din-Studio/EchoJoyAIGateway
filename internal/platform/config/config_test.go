@@ -7,12 +7,10 @@ import (
 	"testing"
 
 	"gpt-load/internal/platform/authkey"
-	"gpt-load/internal/platform/encryption"
 )
 
 func TestLoadUsesDefaultConfiguration(t *testing.T) {
-	clearEnvironment(t)
-	t.Setenv("AUTH_KEY", "test-auth-key")
+	setRequiredEnv(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -37,11 +35,14 @@ func TestLoadUsesDefaultConfiguration(t *testing.T) {
 	if cfg.DataDir != "./data" {
 		t.Fatalf("DataDir = %q, want ./data", cfg.DataDir)
 	}
-	if cfg.DatabaseDSN != filepath.Join("./data", "gpt-load.db") {
+	if cfg.DatabaseDSN != testPostgresDSN {
 		t.Fatalf("DatabaseDSN = %q", cfg.DatabaseDSN)
 	}
-	if cfg.DatabaseMetadata.Driver != DatabaseDriverSQLite {
-		t.Fatalf("DatabaseMetadata.Driver = %q, want %q", cfg.DatabaseMetadata.Driver, DatabaseDriverSQLite)
+	if cfg.DatabaseMetadata.Source != DatabaseSourceExternal || cfg.DatabaseMetadata.Driver != DatabaseDriverPostgreSQL {
+		t.Fatalf("DatabaseMetadata = %#v, want external PostgreSQL", cfg.DatabaseMetadata)
+	}
+	if len(cfg.Cluster.RedisAddrs) == 0 {
+		t.Fatal("Cluster.RedisAddrs is empty")
 	}
 	if cfg.DatabasePool.MaxOpenConnections != 10 || cfg.DatabasePool.MaxIdleConnections != 5 {
 		t.Fatalf("DatabasePool = %#v, want max open/idle 10/5", cfg.DatabasePool)
@@ -52,8 +53,7 @@ func TestLoadUsesDefaultConfiguration(t *testing.T) {
 }
 
 func TestLoadPreservesExplicitAllInterfacesHost(t *testing.T) {
-	clearEnvironment(t)
-	t.Setenv("AUTH_KEY", "test-auth-key")
+	setRequiredEnv(t)
 	t.Setenv("HOST", "0.0.0.0")
 
 	cfg, err := Load()
@@ -67,12 +67,10 @@ func TestLoadPreservesExplicitAllInterfacesHost(t *testing.T) {
 }
 
 func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
-	clearEnvironment(t)
-	t.Setenv("AUTH_KEY", "test-auth-key")
+	setRequiredEnv(t)
 	t.Setenv("HOST", "127.0.0.1")
 	t.Setenv("PORT", "4010")
 	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("DATABASE_DSN", ":memory:")
 	t.Setenv("ENCRYPTION_KEY", "explicit-encryption-key")
 	t.Setenv("LOG_LEVEL", "debug")
 	t.Setenv("LOG_FORMAT", "json")
@@ -96,11 +94,8 @@ func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
 	if cfg.Server.ReadTimeout != 45 || cfg.Server.IdleTimeout != 90 {
 		t.Fatalf("read/idle timeouts not loaded: %#v", cfg.Server)
 	}
-	if cfg.DatabaseDSN != ":memory:" || cfg.EncryptionKey != "explicit-encryption-key" {
-		t.Fatalf("database/encryption overrides not loaded: %#v", cfg)
-	}
-	if cfg.DatabaseMetadata.Driver != DatabaseDriverSQLite {
-		t.Fatalf("DatabaseMetadata.Driver = %q, want %q", cfg.DatabaseMetadata.Driver, DatabaseDriverSQLite)
+	if cfg.EncryptionKey != "explicit-encryption-key" {
+		t.Fatalf("encryption override not loaded: %#v", cfg)
 	}
 	if cfg.DatabasePool.MaxOpenConnections != 24 || cfg.DatabasePool.MaxIdleConnections != 12 {
 		t.Fatalf("DatabasePool = %#v, want max open/idle 24/12", cfg.DatabasePool)
@@ -124,8 +119,7 @@ func TestLoadModelsDevAutoSyncOverrideIsOptionalAndStrict(t *testing.T) {
 		{name: "invalid", value: "enabled", wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			clearEnvironment(t)
-			t.Setenv("AUTH_KEY", "test-auth-key")
+			setRequiredEnv(t)
 			t.Setenv("MODELS_DEV_AUTO_SYNC_ENABLED", test.value)
 
 			cfg, err := Load()
@@ -153,7 +147,7 @@ func boolPointer(value bool) *bool {
 }
 
 func TestLoadReportsEnvironmentSecretSources(t *testing.T) {
-	clearEnvironment(t)
+	setRequiredEnv(t)
 	t.Setenv("AUTH_KEY", "explicit-auth")
 	t.Setenv("ENCRYPTION_KEY", "explicit-encryption")
 
@@ -169,74 +163,10 @@ func TestLoadReportsEnvironmentSecretSources(t *testing.T) {
 	}
 }
 
-func TestLoadReportsKeyFileSecretSources(t *testing.T) {
-	clearEnvironment(t)
-	dataDir := t.TempDir()
-	t.Setenv("DATA_DIR", dataDir)
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.AuthKeyMetadata.Source != SecretSourceKeyFile ||
-		cfg.AuthKeyMetadata.Path != filepath.Join(dataDir, authkey.FileName) ||
-		cfg.EncryptionKeyMetadata.Source != SecretSourceKeyFile ||
-		cfg.EncryptionKeyMetadata.Path != filepath.Join(dataDir, encryption.KeyFileName) {
-		t.Fatalf("metadata = %#v/%#v", cfg.AuthKeyMetadata, cfg.EncryptionKeyMetadata)
-	}
-}
-
-func TestLoadDerivesDatabaseDSNFromDataDir(t *testing.T) {
-	clearEnvironment(t)
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	dataDir := t.TempDir()
-	t.Setenv("DATA_DIR", dataDir)
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if want := filepath.Join(dataDir, "gpt-load.db"); cfg.DatabaseDSN != want {
-		t.Fatalf("DatabaseDSN = %q, want %q", cfg.DatabaseDSN, want)
-	}
-}
-
-func TestLoadDefaultsDatabaseSourceToManaged(t *testing.T) {
-	clearEnvironment(t)
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	dataDir := t.TempDir()
-	t.Setenv("DATA_DIR", dataDir)
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.DatabaseMetadata.Source != DatabaseSourceManaged {
-		t.Fatalf("DatabaseMetadata.Source = %q, want %q", cfg.DatabaseMetadata.Source, DatabaseSourceManaged)
-	}
-}
-
-func TestLoadClassifiesNonEmptyDatabaseDSNAsExternal(t *testing.T) {
-	clearEnvironment(t)
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	t.Setenv("DATABASE_DSN", ":memory:")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.DatabaseMetadata.Source != DatabaseSourceExternal {
-		t.Fatalf("DatabaseMetadata.Source = %q, want %q", cfg.DatabaseMetadata.Source, DatabaseSourceExternal)
-	}
-}
-
 func TestLoadPreparesDataDirForExternalDatabaseWithExplicitSecrets(t *testing.T) {
-	clearEnvironment(t)
+	setRequiredEnv(t)
 	dataDir := filepath.Join(t.TempDir(), "data")
 	t.Setenv("DATA_DIR", dataDir)
-	t.Setenv("DATABASE_DSN", ":memory:")
-	t.Setenv("AUTH_KEY", "explicit-auth-key")
-	t.Setenv("ENCRYPTION_KEY", "explicit-encryption-key")
 
 	if _, err := Load(); err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -251,37 +181,18 @@ func TestLoadPreparesDataDirForExternalDatabaseWithExplicitSecrets(t *testing.T)
 }
 
 func TestLoadRejectsUnsafeDataDirForExternalDatabaseWithExplicitSecrets(t *testing.T) {
-	clearEnvironment(t)
+	setRequiredEnv(t)
 	targetDir := t.TempDir()
 	dataDirLink := filepath.Join(t.TempDir(), "unsafe-data-dir")
 	if err := os.Symlink(targetDir, dataDirLink); err != nil {
 		t.Skipf("create DATA_DIR symlink: %v", err)
 	}
 	t.Setenv("DATA_DIR", dataDirLink)
-	t.Setenv("DATABASE_DSN", ":memory:")
-	t.Setenv("AUTH_KEY", "explicit-auth-key")
-	t.Setenv("ENCRYPTION_KEY", "explicit-encryption-key")
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want unsafe DATA_DIR rejection")
 	} else if !strings.Contains(err.Error(), "prepare DATA_DIR") {
 		t.Fatalf("Load() error = %q, want DATA_DIR preparation context", err)
-	}
-}
-
-func TestLoadExplicitDefaultDatabaseDSNRemainsExternal(t *testing.T) {
-	clearEnvironment(t)
-	t.Setenv("AUTH_KEY", "test-auth-key")
-	dataDir := t.TempDir()
-	t.Setenv("DATA_DIR", dataDir)
-	t.Setenv("DATABASE_DSN", filepath.Join(dataDir, "gpt-load.db"))
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.DatabaseMetadata.Source != DatabaseSourceExternal {
-		t.Fatalf("DatabaseMetadata.Source = %q, want %q", cfg.DatabaseMetadata.Source, DatabaseSourceExternal)
 	}
 }
 
@@ -291,14 +202,11 @@ func TestLoadClassifiesNetworkDatabaseURLs(t *testing.T) {
 		dsn    string
 		driver DatabaseDriver
 	}{
-		{name: "mysql", dsn: "mysql://user:password@db.example:3306/gpt_load", driver: DatabaseDriverMySQL},
 		{name: "postgres", dsn: "postgres://user:password@db.example:5432/gpt_load", driver: DatabaseDriverPostgreSQL},
 		{name: "postgresql alias", dsn: "postgresql://user:password@db.example:5432/gpt_load", driver: DatabaseDriverPostgreSQL},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			clearEnvironment(t)
-			t.Setenv("AUTH_KEY", "test-auth-key")
-			t.Setenv("ENCRYPTION_KEY", "test-encryption-key")
+			setRequiredEnv(t)
 			t.Setenv("DATABASE_DSN", test.dsn)
 
 			cfg, err := Load()
@@ -359,66 +267,8 @@ func TestParseDatabaseDSNRejectsUnsupportedOrIncompleteURLs(t *testing.T) {
 	}
 }
 
-func TestLoadManagedDatabaseRejectsUnsafeDataDirBeforeCreatingSecrets(t *testing.T) {
-	tests := []struct {
-		name   string
-		suffix string
-	}{
-		{name: "symlink"},
-		{name: "symlink with trailing separator", suffix: string(os.PathSeparator)},
-		{name: "symlink with dot suffix", suffix: string(os.PathSeparator) + "."},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			clearEnvironment(t)
-			targetDir := t.TempDir()
-			dataDirLink := filepath.Join(t.TempDir(), "sensitive-managed-data-dir")
-			if err := os.Symlink(targetDir, dataDirLink); err != nil {
-				t.Skipf("create DATA_DIR symlink: %v", err)
-			}
-			dataDir := dataDirLink + tt.suffix
-			t.Setenv("DATA_DIR", dataDir)
-
-			_, err := Load()
-			if err == nil {
-				t.Fatal("Load() error = nil, want unsafe managed DATA_DIR rejection")
-			}
-			if strings.Contains(err.Error(), dataDir) {
-				t.Fatalf("Load() error exposes DATA_DIR: %v", err)
-			}
-			for _, fileName := range []string{authkey.FileName, encryption.KeyFileName} {
-				if _, statErr := os.Stat(filepath.Join(targetDir, fileName)); !os.IsNotExist(statErr) {
-					t.Fatalf("%s created before DATA_DIR validation: %v", fileName, statErr)
-				}
-			}
-		})
-	}
-}
-
-func TestLoadGeneratesAuthKeyInsideConfiguredDataDir(t *testing.T) {
-	clearEnvironment(t)
-	dataDir := t.TempDir()
-	t.Setenv("DATA_DIR", dataDir)
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if len(cfg.AuthKey) != 64 {
-		t.Fatalf("AuthKey length = %d, want 64", len(cfg.AuthKey))
-	}
-	contents, err := os.ReadFile(filepath.Join(dataDir, authkey.FileName))
-	if err != nil {
-		t.Fatalf("read auth.key: %v", err)
-	}
-	if strings.TrimSpace(string(contents)) != cfg.AuthKey {
-		t.Fatal("Config.AuthKey does not match generated auth.key")
-	}
-}
-
 func TestLoadExplicitAuthKeyDoesNotCreateFile(t *testing.T) {
-	clearEnvironment(t)
+	setRequiredEnv(t)
 	dataDir := t.TempDir()
 	t.Setenv("DATA_DIR", dataDir)
 	t.Setenv("AUTH_KEY", "explicit-auth-key")
@@ -458,7 +308,7 @@ func TestLoadRejectsInvalidRequiredAndNumericValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			clearEnvironment(t)
+			setRequiredEnv(t)
 			for key, value := range tt.env {
 				t.Setenv(key, value)
 			}

@@ -18,16 +18,13 @@ type ConfigChange struct {
 }
 
 // ConfigEventBus publishes and receives ConfigChange events over Redis
-// Pub/Sub. It is nil in single-instance mode.
+// Pub/Sub.
 type ConfigEventBus struct {
 	client *Client
 }
 
 // NewConfigEventBus wires the event bus onto the shared client.
 func NewConfigEventBus(client *Client) *ConfigEventBus {
-	if client == nil {
-		return nil
-	}
 	return &ConfigEventBus{client: client}
 }
 
@@ -38,9 +35,6 @@ func (bus *ConfigEventBus) channel() string {
 // Publish broadcasts change to every subscriber. Delivery is best effort: the
 // PostgreSQL revision remains the source of truth and pollers catch up.
 func (bus *ConfigEventBus) Publish(ctx context.Context, change ConfigChange) error {
-	if bus == nil {
-		return nil
-	}
 	payload, err := json.Marshal(change)
 	if err != nil {
 		return fmt.Errorf("encode config change: %w", err)
@@ -61,10 +55,6 @@ func (bus *ConfigEventBus) Subscribe(
 	subscribed func(),
 	handle func(ConfigChange),
 ) error {
-	if bus == nil {
-		<-ctx.Done()
-		return nil
-	}
 	pubsub := bus.client.Subscribe(ctx, bus.channel())
 	defer func() { _ = pubsub.Close() }()
 	if _, err := pubsub.Receive(ctx); err != nil {

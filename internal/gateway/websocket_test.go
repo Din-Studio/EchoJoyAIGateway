@@ -46,7 +46,7 @@ func websocketTestHandler(t *testing.T, endpoint string, id channel.ID) (*Handle
 	if err := registry.ReplaceCredentials([]state.CredentialEntry{testCredentialEntry(t, service, 1, 1, "upstream-key")}); err != nil {
 		t.Fatal(err)
 	}
-	h := NewHandler(manager, registry, service, newTestExecutionForwarder(t), dialect.NewSet(dialect.NewOpenAIResponses()), health.NewStatsStore(), health.NewMutationCoordinator(), nil, nil, nil)
+	h := NewHandler(manager, registry, service, newTestExecutionForwarder(t), dialect.NewSet(dialect.NewOpenAIResponses()), health.NewStatsStore(), health.NewMutationCoordinator(), nil, nil, nil, newTestSharedState(t, registry))
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
 	bindGatewayRoutesForTest(t, engine, h)
@@ -141,16 +141,16 @@ func TestWebsocketQuotaCountsConcurrentTurnsOnceWithoutReservation(t *testing.T)
 		_, _, _ = conn.ReadMessage()
 	}))
 	defer upstream.Close()
-	h, engine, _ := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
+	h, engine, input := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
 	sink := &recordingRequestLogSink{}
 	h.requestLogSink = sink
 	limiter := &recordingAccessKeyRPMLimiter{}
 	h.limiter = limiter
-	runtime := accessquota.NewRuntime()
-	h.accessQuota = NewLocalAccessQuotaGate(h.manager, runtime)
-	if err := runtime.Reconcile(map[uint][]accessquota.Rule{1: {{ID: 1, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 4}}}); err != nil {
+	input.AccessKeys[0].CostLimitRules = []accessquota.Rule{{ID: 1, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 4}}
+	if _, err := h.manager.Publish(input); err != nil {
 		t.Fatal(err)
 	}
+	quota := useSharedAccessQuota(t, h)
 	table, err := pricing.NewTable([]pricing.Rule{{Identity: pricing.Identity{ChannelID: "openai", ModelID: "upstream"}, Prices: pricing.Prices{Input: pricing.Price{NanoUSDPerMillion: 1_000_000, Set: true}, Output: pricing.Price{NanoUSDPerMillion: 1_000_000, Set: true}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -173,7 +173,11 @@ func TestWebsocketQuotaCountsConcurrentTurnsOnceWithoutReservation(t *testing.T)
 			t.Fatalf("wrong per-turn record: %+v", event)
 		}
 	}
-	if got := runtime.Snapshot(1, time.Now()).Rules[0].UsedNanoUSD; got != 6 {
+	view, err := quota.View(t.Context(), h.manager.Current(), 1, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := view.Rules[0].UsedNanoUSD; got != 6 {
 		t.Fatalf("used=%d want 6 (existing in-flight overspend)", got)
 	}
 	if len(limiter.snapshot()) != 2 {

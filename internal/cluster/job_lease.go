@@ -12,16 +12,13 @@ const minJobClaim = time.Second
 // JobLease lets one instance claim a periodic background job for most of a
 // period, so every instance can keep its own ticker while the cluster runs
 // the job about once per period. Every job it gates is safe to run twice;
-// the claim only avoids duplicate work. It is nil in single-instance mode.
+// the claim only avoids duplicate work.
 type JobLease struct {
 	client *Client
 }
 
-// NewJobLease returns nil when cluster mode is disabled.
+// NewJobLease builds the periodic job claim.
 func NewJobLease(client *Client) *JobLease {
-	if client == nil {
-		return nil
-	}
 	return &JobLease{client: client}
 }
 
@@ -29,17 +26,13 @@ func NewJobLease(client *Client) *JobLease {
 // period, leaving the next tick of the same instance room to claim it again.
 // A failed run releases the claim so any instance's next tick retries; a
 // successful run keeps it until it expires. A Redis error skips this round.
-// A nil lease always runs fn. It reports whether fn ran.
+// It reports whether fn ran.
 func (lease *JobLease) RunOncePerPeriod(
 	ctx context.Context,
 	job string,
 	period time.Duration,
 	fn func(context.Context) error,
 ) bool {
-	if lease == nil {
-		_ = fn(ctx)
-		return true
-	}
 	claim := max(period*9/10, minJobClaim)
 	key := lease.client.Key("lease", job)
 	token := lease.client.InstanceID() + ":" + randomToken()
