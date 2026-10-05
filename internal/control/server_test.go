@@ -121,24 +121,13 @@ func TestSystemInfoHTTPContract(t *testing.T) {
 		AuthKey:       "distinctive-system-info-auth-secret",
 		EncryptionKey: "distinctive-system-info-encryption-secret",
 		DatabaseDSN:   "file:distinctive-system-info-secret-dsn",
-		DataDir:       "./safe-data",
-		AuthKeyMetadata: config.SecretMetadata{
-			Source: config.SecretSourceKeyFile,
-			Path:   "safe-data/auth.key",
-		},
-		EncryptionKeyMetadata: config.SecretMetadata{
-			Source: config.SecretSourceEnvironment,
-		},
 	}
 	engine := gin.New()
 	newTestServer(t, cfg, fixture.service).RegisterRoutes(engine)
 
-	cfg.DataDir = "./mutated-data"
 	cfg.DatabaseDSN = "file:mutated-secret-dsn"
 	cfg.AuthKey = "mutated-auth-secret"
 	cfg.EncryptionKey = "mutated-encryption-secret"
-	cfg.AuthKeyMetadata.Path = "mutated-data/auth.key"
-	cfg.EncryptionKeyMetadata.Path = "mutated-data/encryption.key"
 
 	var logs bytes.Buffer
 	previousOutput := logrus.StandardLogger().Out
@@ -186,12 +175,9 @@ func TestSystemInfoHTTPContract(t *testing.T) {
 			if err := json.Unmarshal(envelope["data"], &data); err != nil {
 				t.Fatalf("decode data: %v", err)
 			}
-			if data["data_dir"] != "./safe-data" {
-				t.Fatalf("data_dir = %#v, want constructor-time value", data["data_dir"])
-			}
 			authKey, ok := data["auth_key"].(map[string]any)
-			if !ok || authKey["path"] != "safe-data/auth.key" {
-				t.Fatalf("auth_key = %#v, want constructor-time path", data["auth_key"])
+			if !ok || authKey["source"] != "environment" || authKey["path"] != nil {
+				t.Fatalf("auth_key = %#v, want environment source without path", data["auth_key"])
 			}
 		})
 	}
@@ -203,7 +189,6 @@ func TestSystemInfoHTTPContract(t *testing.T) {
 		"mutated-auth-secret",
 		"mutated-encryption-secret",
 		"mutated-secret-dsn",
-		"mutated-data",
 	} {
 		if strings.Contains(responses.String(), forbidden) {
 			t.Fatalf("HTTP response exposed %q: %s", forbidden, responses.String())

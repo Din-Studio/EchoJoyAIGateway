@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -23,7 +21,6 @@ import (
 	"gpt-load/internal/gateway"
 	"gpt-load/internal/health"
 	"gpt-load/internal/outboundproxy"
-	"gpt-load/internal/platform/authkey"
 	"gpt-load/internal/platform/config"
 	"gpt-load/internal/platform/encryption"
 	"gpt-load/internal/platform/httpclient"
@@ -516,9 +513,7 @@ func TestBuildContainerResolvesAllDialects(t *testing.T) {
 }
 
 func TestBuildContainerResolvesRuntimeDependencies(t *testing.T) {
-	dataDir := t.TempDir()
 	setStartupEnv(t)
-	t.Setenv("DATA_DIR", dataDir)
 
 	dependencyContainer, err := BuildContainer()
 	if err != nil {
@@ -601,11 +596,6 @@ func TestBuildContainerResolvesRuntimeDependencies(t *testing.T) {
 				requestLogSink,
 				requestLogService,
 			)
-		}
-		for _, fileName := range []string{encryption.KeyFileName, authkey.FileName} {
-			if _, err := os.Stat(filepath.Join(dataDir, fileName)); !os.IsNotExist(err) {
-				t.Fatalf("explicit keys created %s: %v", fileName, err)
-			}
 		}
 		resolved = true
 	})

@@ -47,29 +47,6 @@ type accessQuotaCheckpointSource interface {
 	SetDirtyNotifier(notifier func())
 }
 
-type localAccessQuotaCheckpoints struct {
-	runtime *accessquota.Runtime
-}
-
-func (source localAccessQuotaCheckpoints) HasDirty() bool {
-	return len(source.runtime.DirtySnapshots(1)) > 0
-}
-
-func (source localAccessQuotaCheckpoints) DirtySnapshots(
-	_ context.Context,
-	limit int,
-) ([]accessquota.RestoredState, error) {
-	return source.runtime.DirtySnapshots(limit), nil
-}
-
-func (source localAccessQuotaCheckpoints) Ack(accessKeyID, ruleID uint, revision, snapshotVersion uint64) {
-	source.runtime.Ack(accessKeyID, ruleID, revision, snapshotVersion)
-}
-
-func (source localAccessQuotaCheckpoints) SetDirtyNotifier(notifier func()) {
-	source.runtime.SetDirtyNotifier(notifier)
-}
-
 type workerTimer interface {
 	C() <-chan time.Time
 	Stop() bool

@@ -83,10 +83,6 @@ const updateMessage = computed(() => {
           }}</AppBadge>
         </dd>
       </div>
-      <div class="modern-settings-system-wide">
-        <dt>{{ t('settingsForm.system.dataDir') }}</dt>
-        <dd><AppCopyValue :value="data.dataDir" /></dd>
-      </div>
       <div
         v-for="key in ['authKey', 'encryption'] as const"
         :key="key"

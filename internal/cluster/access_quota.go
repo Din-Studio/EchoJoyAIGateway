@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -46,8 +45,6 @@ type AccessQuota struct {
 	mu       sync.Mutex
 	dirty    map[uint]dirtyRule
 	notifier func()
-
-	overflowFaultTotal atomic.Uint64
 }
 
 // dirtyRule is a rule this instance changed in Redis and has not yet
@@ -162,9 +159,6 @@ func (quota *AccessQuota) Complete(
 		}
 		quota.markDirty(ticket.AccessKeyID, ticket.Rules[index-1].RuleID, revision, version)
 	}
-	if completion.Fault != "" {
-		quota.overflowFaultTotal.Add(1)
-	}
 	if len(reply) > 1 {
 		quota.notifyDirty()
 	}
@@ -187,11 +181,6 @@ func (quota *AccessQuota) View(
 		return accessquota.View{}, err
 	}
 	return accessquota.ViewFor(rules, evaluation.states, now), nil
-}
-
-// Stats reports saturated-accounting faults observed by this instance.
-func (quota *AccessQuota) Stats() accessquota.Stats {
-	return accessquota.Stats{OverflowFaultTotal: quota.overflowFaultTotal.Load()}
 }
 
 // SetDirtyNotifier installs the non-blocking checkpoint wake-up.

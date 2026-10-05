@@ -15,10 +15,9 @@ import (
 	"gpt-load/internal/ratelimit"
 )
 
-// rpmScript is the Redis form of ratelimit.AccessKeyRPM's 60 s sliding
-// window: entries at or before now-60000 expire, a full window rejects with
-// the admission time of the entry that must expire first, and an admitted
-// request is recorded.
+// rpmScript is the 60 s sliding window: entries at or before now-60000
+// expire, a full window rejects with the admission time of the entry that
+// must expire first, and an admitted request is recorded.
 //
 // KEYS: the AccessKey window ZSET. ARGV: nowMS, limit, unique member.
 // Returns {"1"} when admitted or {"0", targetMS} when rejected.
@@ -56,8 +55,8 @@ func NewAccessKeyRPM(client *Client) *AccessKeyRPM {
 }
 
 // Allow admits one request when fewer than limit requests were admitted in
-// the last minute. A non-positive limit is unlimited and skips Redis; unlike
-// the in-memory limiter it leaves the old window to expire on its own.
+// the last minute. A non-positive limit is unlimited and skips Redis, leaving
+// the old window to expire on its own.
 func (limiter *AccessKeyRPM) Allow(ctx context.Context, accessKeyID uint, limit int64) (ratelimit.LimitDecision, error) {
 	if limit <= 0 {
 		return ratelimit.LimitDecision{Allowed: true}, nil

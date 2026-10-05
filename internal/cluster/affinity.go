@@ -15,10 +15,9 @@ import (
 	"gpt-load/internal/affinity"
 )
 
-// affinityRecordScript is the Redis form of affinity.Cache's conditional
-// success update: a different mapping that is still live under the current
-// TTL wins, anything else (absent, observed, or older than the TTL) is
-// replaced by the new mapping.
+// affinityRecordScript is the conditional success update: a different
+// mapping that is still live under the current TTL wins, anything else
+// (absent, observed, or older than the TTL) is replaced by the new mapping.
 //
 // KEYS: the affinity key. ARGV: expected token ("" when none was observed),
 // new value, nowMS, ttlMS. Returns 1 when written and 0 when rejected.
@@ -34,10 +33,10 @@ redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[4])
 return 1
 `)
 
-// Affinity shares soft credential preferences across instances. Unlike the
-// in-process cache it ignores Policy.Capacity (memory is bounded by the TTL)
-// and never clears on a configuration revision; a TTL change applies to
-// existing entries at lookup time.
+// Affinity shares soft credential preferences across instances. It ignores
+// Policy.Capacity (memory is bounded by the TTL) and never clears on a
+// configuration revision; a TTL change applies to existing entries at lookup
+// time.
 type Affinity struct {
 	client *Client
 	now    func() time.Time
@@ -58,16 +57,16 @@ func (store *Affinity) Lookup(ctx context.Context, policy affinity.Policy, key a
 	defer cancel()
 	token, err := store.client.Get(callCtx, store.key(key)).Result()
 	if errors.Is(err, redis.Nil) {
-		return affinity.SharedObservation(key, affinity.Target{}, ""), nil
+		return affinity.SharedObservation(affinity.Target{}, ""), nil
 	}
 	if err != nil {
 		return affinity.Observation{}, fmt.Errorf("look up soft affinity: %w", err)
 	}
 	target, learnedAt, ok := decodeAffinityValue(token)
 	if !ok || !learnedAt.Add(policy.TTL).After(store.now()) {
-		return affinity.SharedObservation(key, affinity.Target{}, ""), nil
+		return affinity.SharedObservation(affinity.Target{}, ""), nil
 	}
-	return affinity.SharedObservation(key, target, token), nil
+	return affinity.SharedObservation(target, token), nil
 }
 
 // RecordSuccess conditionally learns target, keeping the first live success.

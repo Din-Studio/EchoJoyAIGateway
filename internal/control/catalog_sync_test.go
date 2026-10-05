@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -14,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/sirupsen/logrus"
 
 	"gpt-load/internal/catalog"
@@ -56,7 +55,6 @@ func TestCatalogSyncEmitsLifecycleLogsWithoutLeakingFailureDetails(t *testing.T)
 		catalogSyncClientFunc(func(context.Context, catalog.Metadata) (catalog.SyncResult, error) {
 			return catalogResultFixture(3000, "success", nil), nil
 		}),
-		"unused",
 		catalog.Metadata{},
 		false,
 	)
@@ -77,7 +75,6 @@ func TestCatalogSyncEmitsLifecycleLogsWithoutLeakingFailureDetails(t *testing.T)
 		catalogSyncClientFunc(func(context.Context, catalog.Metadata) (catalog.SyncResult, error) {
 			return catalog.SyncResult{}, errors.New(rawFailure)
 		}),
-		"unused",
 		catalog.Metadata{},
 		false,
 	)
@@ -285,7 +282,9 @@ func TestApplyCatalogSnapshotFailureDoesNotLogPriorityWarningOrPublishRuntime(t 
 
 func TestCatalogBootstrapLoadsLKGAndFallsBackToOfficialCatalog(t *testing.T) {
 	t.Parallel()
-	missing := loadCatalogBootstrap(filepath.Join(t.TempDir(), "missing.json"))
+	server := miniredis.RunT(t)
+	shared := cluster.NewCatalogStore(clustertest.Connect(t, server, "bootstrap"))
+	missing := loadSharedCatalogBootstrap(t.Context(), shared)
 	if missing.HasLKG || missing.Runtime == nil || missing.Runtime.Load() == nil {
 		t.Fatalf("missing bootstrap = %#v, want official-only runtime", missing)
 	}
@@ -293,29 +292,24 @@ func TestCatalogBootstrapLoadsLKGAndFallsBackToOfficialCatalog(t *testing.T) {
 		t.Fatal("missing bootstrap did not publish official Volcengine catalog")
 	}
 
-	corruptPath := filepath.Join(t.TempDir(), "catalog.json")
-	if err := os.WriteFile(corruptPath, []byte("not-json"), 0o600); err != nil {
+	if err := shared.Store(t.Context(), []byte("not-json"), 1); err != nil {
 		t.Fatal(err)
 	}
-	corrupt := loadCatalogBootstrap(corruptPath)
+	corrupt := loadSharedCatalogBootstrap(t.Context(), shared)
 	if corrupt.HasLKG || corrupt.Runtime == nil || corrupt.Runtime.Load() == nil {
 		t.Fatalf("corrupt bootstrap = %#v, want official-only runtime", corrupt)
 	}
 	if _, ok := corrupt.Runtime.Load().Providers["volcengine"]; !ok {
 		t.Fatal("corrupt bootstrap did not publish official Volcengine catalog")
 	}
-	if got, err := os.ReadFile(corruptPath); err != nil || string(got) != "not-json" {
-		t.Fatalf("corrupt cache was changed during bootstrap: %q, %v", got, err)
+	if got, err := shared.Load(t.Context()); err != nil || string(got) != "not-json" {
+		t.Fatalf("corrupt shared catalog was changed during bootstrap: %q, %v", got, err)
 	}
 
-	validPath := filepath.Join(t.TempDir(), "catalog.json")
-	result := catalogResultFixture(2000, "v2", map[string]catalog.Provider{
+	storeSharedCatalog(t, server, catalogResultFixture(2000, "v2", map[string]catalog.Provider{
 		"openai": catalogProviderFixture("openai", "OpenAI", "gpt-4o", 2_000_000_000),
-	})
-	if err := catalog.StoreCache(validPath, result); err != nil {
-		t.Fatal(err)
-	}
-	valid := loadCatalogBootstrap(validPath)
+	}))
+	valid := loadSharedCatalogBootstrap(t.Context(), shared)
 	if !valid.HasLKG || valid.Metadata.ETag != "v2" || valid.Runtime.Load() == nil {
 		t.Fatalf("valid bootstrap = %#v, want cached generation", valid)
 	}
@@ -335,14 +329,11 @@ func TestCatalogStartupReconcilesDurableLKGBeforeAnyNetworkSync(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cachePath := filepath.Join(t.TempDir(), modelsDevCatalogCacheName)
-	result := catalogResultFixture(100, "startup", map[string]catalog.Provider{
+	server := miniredis.RunT(t)
+	storeSharedCatalog(t, server, catalogResultFixture(100, "startup", map[string]catalog.Provider{
 		"openai": catalogProviderFixture("openai", "OpenAI", "gpt", 9),
-	})
-	if err := catalog.StoreCache(cachePath, result); err != nil {
-		t.Fatal(err)
-	}
-	bootstrap := loadCatalogBootstrap(cachePath)
+	}))
+	bootstrap := loadSharedCatalogBootstrap(t.Context(), cluster.NewCatalogStore(clustertest.Connect(t, server, "startup")))
 	fixture.service.catalogRuntime = bootstrap.Runtime
 
 	if err := fixture.service.EnsureInitialState(t.Context()); err != nil {
@@ -379,7 +370,6 @@ func TestCatalogSyncSingleFlightJoinsManualStartupAndGroupTriggers(t *testing.T)
 	coordinator := newTestCatalogSyncCoordinator(t,
 		fixture.service,
 		client,
-		filepath.Join(t.TempDir(), "catalog.json"),
 		catalog.Metadata{},
 		false,
 	)
@@ -434,7 +424,7 @@ func TestCatalogSyncCallerCancellationStopsWaitingWithoutCancelingSharedOperatio
 			return catalog.SyncResult{}, ctx.Err()
 		}
 	})
-	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{}, false)
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, catalog.Metadata{}, false)
 	coordinator.applySnapshot = func(context.Context, *catalog.Snapshot) error { return nil }
 
 	callerCtx, cancelCaller := context.WithCancel(t.Context())
@@ -493,7 +483,7 @@ func TestCatalogSync304PreservesPublishedGenerationsAndDoesNotStoreCache(t *test
 		updated.CheckedAtMillis = 20
 		return catalog.SyncResult{Metadata: updated, NotModified: true}, nil
 	})
-	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", previous, true)
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, previous, true)
 
 	status, err := coordinator.Sync(t.Context(), CatalogSyncManual)
 	if err != nil {
@@ -523,7 +513,7 @@ func TestCatalogSyncRejects304WithoutLastKnownGoodGeneration(t *testing.T) {
 			NotModified: true,
 		}, nil
 	})
-	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", previous, false)
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, previous, false)
 	coordinator.now = func() time.Time { return time.UnixMilli(250) }
 
 	status, err := coordinator.Sync(t.Context(), CatalogSyncManual)
@@ -553,7 +543,7 @@ func TestCatalogSyncFailuresRefreshLastCheckAndPreserveLastSuccessfulFetch(t *te
 	client := catalogSyncClientFunc(func(context.Context, catalog.Metadata) (catalog.SyncResult, error) {
 		return catalog.SyncResult{}, errors.New("upstream response was invalid")
 	})
-	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", previous, true)
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, previous, true)
 	coordinator.now = func() time.Time { return time.UnixMilli(250) }
 
 	status, err := coordinator.Sync(t.Context(), CatalogSyncManual)
@@ -579,7 +569,7 @@ func TestCatalogSyncCacheFailureUsesCurrentCheckWithoutAdvancingSuccessfulFetch(
 	client := catalogSyncClientFunc(func(context.Context, catalog.Metadata) (catalog.SyncResult, error) {
 		return catalogResultFixture(200, "new", nil), nil
 	})
-	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", previous, true)
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, previous, true)
 	coordinator.now = func() time.Time { return time.UnixMilli(250) }
 	server, redis := clustertest.NewClient(t)
 	coordinator.shared = cluster.NewCatalogStore(redis)
@@ -608,7 +598,6 @@ func TestCatalogSyncDisabledAutomaticTriggersDoNotCallNetworkButManualStillWorks
 	coordinator := newTestCatalogSyncCoordinator(t,
 		fixture.service,
 		client,
-		filepath.Join(t.TempDir(), "catalog.json"),
 		catalog.Metadata{},
 		false,
 	)
@@ -652,7 +641,7 @@ func TestCatalogSyncSchedulerRetriesNoLKGAfterOneHourAndKeepsLKGOnDailyCadence(t
 				calls <- struct{}{}
 				return catalog.SyncResult{}, errors.New("offline")
 			})
-			coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{}, test.hasLKG)
+			coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, catalog.Metadata{}, test.hasLKG)
 			periodic := newFakeRuntimeTicker()
 			coordinator.newTicker = func(interval time.Duration) runtimeTicker {
 				if interval != 24*time.Hour {
@@ -717,7 +706,7 @@ func TestCatalogSyncSchedulerDebouncesGroupChangeBursts(t *testing.T) {
 			NotModified: true,
 		}, nil
 	})
-	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, catalog.Metadata{
 		CheckedAtMillis: 1, SuccessfulFetchAtMillis: 1,
 	}, true)
 	fixture.catalogRuntime.Publish(&catalog.Snapshot{Providers: map[string]catalog.Provider{}})
@@ -774,7 +763,7 @@ func TestCatalogSyncSchedulerRunsImmediateSettingsTrigger(t *testing.T) {
 			NotModified: true,
 		}, nil
 	})
-	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, catalog.Metadata{
 		CheckedAtMillis: 1, SuccessfulFetchAtMillis: 1,
 	}, true)
 	fixture.catalogRuntime.Publish(&catalog.Snapshot{Providers: map[string]catalog.Provider{}})
@@ -813,7 +802,7 @@ func TestCatalogSyncSchedulerRetries304WithoutLKGAfterOneHour(t *testing.T) {
 		calls <- struct{}{}
 		return catalog.SyncResult{Metadata: catalog.Metadata{CheckedAtMillis: 20}, NotModified: true}, nil
 	})
-	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{}, false)
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, catalog.Metadata{}, false)
 	periodic := newFakeRuntimeTicker()
 	coordinator.newTicker = func(time.Duration) runtimeTicker { return periodic }
 	timers := make(chan *fakeCatalogTimer, 2)
@@ -850,7 +839,7 @@ func TestCatalogSyncShutdownWaitsForBlockedReconcile(t *testing.T) {
 	client := catalogSyncClientFunc(func(context.Context, catalog.Metadata) (catalog.SyncResult, error) {
 		return result, nil
 	})
-	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{}, false)
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, catalog.Metadata{}, false)
 	coordinator.newTicker = func(time.Duration) runtimeTicker { return newFakeRuntimeTicker() }
 	reconcileStarted := make(chan struct{})
 	releaseReconcile := make(chan struct{})
@@ -907,7 +896,7 @@ func TestCatalogSyncRunShutdownCancelsPreRuntimeManualOperation(t *testing.T) {
 			return catalog.SyncResult{}, errors.New("test released uncanceled operation")
 		}
 	})
-	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{}, false)
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, catalog.Metadata{}, false)
 	coordinator.newTicker = func(time.Duration) runtimeTicker { return newFakeRuntimeTicker() }
 	var reconcileCalls atomic.Int32
 	coordinator.applySnapshot = func(context.Context, *catalog.Snapshot) error {
@@ -1261,7 +1250,7 @@ func TestCatalogSyncReconcileFailurePublishesNeitherRuntimeAndKeepsPendingLKG(t 
 	client := catalogSyncClientFunc(func(context.Context, catalog.Metadata) (catalog.SyncResult, error) {
 		return result, nil
 	})
-	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{}, false)
+	coordinator := newTestCatalogSyncCoordinator(t, fixture.service, client, catalog.Metadata{}, false)
 
 	if _, err := coordinator.Sync(t.Context(), CatalogSyncManual); err == nil {
 		t.Fatal("Sync() error = nil, want reconciliation failure")

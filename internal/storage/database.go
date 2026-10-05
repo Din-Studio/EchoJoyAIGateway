@@ -69,7 +69,6 @@ func (filter databaseLogFilter) ParamsFilter(
 }
 
 // Open opens a database using a fully resolved DSN.
-// Resolving an empty DSN to DATA_DIR belongs to platform/config.
 func Open(dsn string) (*gorm.DB, error) {
 	return OpenWithSource(dsn, config.DatabaseSourceExternal)
 }

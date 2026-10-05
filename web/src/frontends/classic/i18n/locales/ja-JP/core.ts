@@ -185,12 +185,6 @@ export default {
       environmentTitle: '環境変数を優先',
       environmentDescription:
         'インスタンス起動時に {key} を設定した場合は、デプロイ環境で保護された値を使用してください',
-      fileTitle: '管理キーのファイル',
-      fileDescription:
-        '環境変数がない場合、インスタンスは {path} を読み込むか生成します。コンテナの既定値は {containerPath} です',
-      dockerTitle: 'Docker インスタンス',
-      dockerDescription:
-        '管理された端末で {command} を実行してからキーのファイルを確認してください。出力をログ、チケット、チャットに貼り付けないでください',
     },
     recoveryPrefix: 'サービスが無効な応答を返す場合は、インスタンスのアドレスと状態を確認してから',
     recoveryAction: 'セッションを再確認',

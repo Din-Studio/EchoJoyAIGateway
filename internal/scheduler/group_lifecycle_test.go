@@ -9,8 +9,7 @@ import (
 
 func TestFairnessGroupModelLifecycle(t *testing.T) {
 	for _, scenario := range []string{
-		"initially empty", "models cleared", "credentials reloaded", "old request",
-		"checkpoint while empty", "checkpoint before models removed", "other model",
+		"initially empty", "models cleared", "credentials reloaded", "old request", "other model",
 	} {
 		t.Run(scenario, func(t *testing.T) {
 			registry := state.NewCredentialRegistry()
@@ -48,7 +47,6 @@ func TestFairnessGroupModelLifecycle(t *testing.T) {
 				fairnessPick(t, snapshot, registry, 11)
 			}
 			beforeChange := snapshot
-			checkpointBeforeChange := registry.SchedulingState().CaptureCheckpoint()
 			if scenario == "other model" {
 				snapshot = publish([]state.ModelConfig{{ID: "gpt-4o-mini"}})
 			} else if scenario != "initially empty" {
@@ -70,21 +68,6 @@ func TestFairnessGroupModelLifecycle(t *testing.T) {
 				}
 				if got := fairnessPick(t, snapshot, registry, 12); got != 11 {
 					t.Fatalf("new request selected unavailable group credential %d", got)
-				}
-			case "checkpoint while empty", "checkpoint before models removed":
-				saved := registry.SchedulingState().CaptureCheckpoint()
-				if scenario == "checkpoint before models removed" {
-					saved = checkpointBeforeChange
-				}
-				registry = state.NewCredentialRegistry()
-				manager = state.NewManager()
-				manager.SetSchedulingState(registry.SchedulingState())
-				snapshot = publish(nil)
-				if err := registry.ReplaceCredentials(entries); err != nil {
-					t.Fatal(err)
-				}
-				if got := registry.SchedulingState().RestoreCheckpoint(saved); got != 2 {
-					t.Fatalf("restored %d credentials, want 2", got)
 				}
 			}
 			// 不可用期间继续产生流量，验证恢复校准没有被同步或旧请求提前清除。

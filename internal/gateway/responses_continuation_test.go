@@ -44,8 +44,12 @@ func TestResponsesContinuationPinsCredentialWithoutSoftAffinity(t *testing.T) {
 			if sink.snapshot()[1].AffinityKind != telemetry.AffinityResponseContinuity {
 				t.Fatal("missing continuation kind")
 			}
-			if got := handler.registry.SchedulingState().CaptureCheckpoint().Sequence; got != 3 {
-				t.Fatalf("scheduling allocations = %d, want 3", got)
+			var allocations uint64
+			handler.registry.SchedulingState().WithLock(func(ledger *state.SchedulingLedger) {
+				allocations = ledger.Sequence
+			})
+			if allocations != 3 {
+				t.Fatalf("scheduling allocations = %d, want 3", allocations)
 			}
 		})
 	}

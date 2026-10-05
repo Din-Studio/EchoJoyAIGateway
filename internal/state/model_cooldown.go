@@ -81,16 +81,3 @@ func cloneModelCooldowns(limits map[string]time.Time) map[string]time.Time {
 	}
 	return cloned
 }
-
-func preserveModelCooldowns(next *CredentialEntry, previous *CredentialEntry) {
-	if previous == nil {
-		return
-	}
-	next.ModelCooldownGeneration = previous.ModelCooldownGeneration
-	if next.ID == previous.ID && next.GroupID == previous.GroupID && next.IdentityGeneration == previous.IdentityGeneration {
-		next.ModelCooldowns = cloneModelCooldowns(previous.ModelCooldowns)
-	} else {
-		next.ModelCooldowns = nil
-		next.ModelCooldownGeneration++
-	}
-}

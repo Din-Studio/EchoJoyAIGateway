@@ -165,14 +165,9 @@ const visibleSections = computed(() =>
       id === 'interface'
         ? [t('settingsForm.frontend'), t('frontend.modern.title'), t('frontend.classic.title')]
         : id === 'system'
-          ? [
-              'version',
-              'database',
-              'dataDir',
-              'authKeySource',
-              'encryptionSource',
-              'encryption',
-            ].map((key) => t('settingsForm.system.' + key))
+          ? ['version', 'database', 'authKeySource', 'encryptionSource', 'encryption'].map((key) =>
+              t('settingsForm.system.' + key),
+            )
           : []
     const text = (sectionText(id) + ' ' + extra.join(' ')).toLocaleLowerCase()
     return sectionFields[id].some(matches) || words.value.every((word) => text.includes(word))

@@ -52,7 +52,7 @@ func TestModelPriceSyncMutationAudit(t *testing.T) {
 				NotModified: true,
 			}, nil
 		})
-		newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{
+		newTestCatalogSyncCoordinator(t, fixture.service, client, catalog.Metadata{
 			CheckedAtMillis: 10, SuccessfulFetchAtMillis: 10,
 		}, true)
 
@@ -86,7 +86,7 @@ func TestModelPriceSyncMutationAudit(t *testing.T) {
 		client := catalogSyncClientFunc(func(context.Context, catalog.Metadata) (catalog.SyncResult, error) {
 			return catalog.SyncResult{}, errors.New(rawFailure)
 		})
-		newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{}, false)
+		newTestCatalogSyncCoordinator(t, fixture.service, client, catalog.Metadata{}, false)
 
 		var logs bytes.Buffer
 		_, engine := newMutationAuditRouteServer(t, fixture, &logs)

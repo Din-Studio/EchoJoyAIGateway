@@ -215,15 +215,6 @@ async function submit(): Promise<void> {
             <strong>{{ t('auth.help.adminTitle') }}</strong
             >{{ t('auth.help.admin') }}
           </p>
-          <p>
-            {{
-              t('auth.help.file', {
-                path: '${DATA_DIR}/auth.key',
-                containerPath: '/app/data/auth.key',
-              })
-            }}
-          </p>
-          <p>{{ t('auth.help.docker') }}<code>docker exec -it gpt-load sh</code></p>
           <AppExternalLink href="https://www.gpt-load.com/docs">{{
             t('shell.documentation')
           }}</AppExternalLink>

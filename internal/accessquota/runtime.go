@@ -1,13 +1,11 @@
-// Package accessquota owns AccessKey estimated-cost limit runtime state.
+// Package accessquota defines AccessKey estimated-cost limit rules and the
+// decisions and views derived from their shared state.
 package accessquota
 
 import (
 	"errors"
 	"fmt"
-	"math"
 	"sort"
-	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -91,10 +89,6 @@ type View struct {
 	Rules             []RuleView
 }
 
-type Stats struct {
-	OverflowFaultTotal uint64
-}
-
 type CompletionFault string
 
 const (
@@ -106,20 +100,8 @@ type CompletionResult struct {
 	Fault CompletionFault
 }
 
-type Runtime struct {
-	mu             sync.RWMutex
-	entries        map[uint]*accessKeyEntry
-	restored       map[uint]RestoredState
-	restorePending bool
-	dirtyNotifier  func()
-
-	overflowFaultTotal atomic.Uint64
-}
-
 type accessKeyEntry struct {
-	mu    sync.Mutex
 	rules []*runtimeRule
-	byID  map[uint]*runtimeRule
 }
 
 type runtimeRule struct {
@@ -128,22 +110,6 @@ type runtimeRule struct {
 	windowStartedAtMS *int64
 	windowEndsAtMS    *int64
 	windowGeneration  uint64
-	snapshotVersion   uint64
-	dirty             bool
-}
-
-func NewRuntime() *Runtime {
-	return &Runtime{entries: make(map[uint]*accessKeyEntry)}
-}
-
-// SetDirtyNotifier installs the process-owned non-blocking checkpoint wake-up.
-func (runtime *Runtime) SetDirtyNotifier(notifier func()) {
-	if runtime == nil {
-		return
-	}
-	runtime.mu.Lock()
-	runtime.dirtyNotifier = notifier
-	runtime.mu.Unlock()
 }
 
 // ValidateDefinitions verifies all per-key rule identities and limits.
@@ -152,209 +118,16 @@ func ValidateDefinitions(definitions map[uint][]Rule) error {
 	return err
 }
 
-func (runtime *Runtime) Restore(states []RestoredState) error {
-	if runtime == nil {
-		return fmt.Errorf("restore access quota runtime: runtime is nil")
-	}
-	restored := make(map[uint]RestoredState, len(states))
-	for _, state := range states {
-		if err := validateRestoredState(state); err != nil {
-			return err
-		}
-		if _, exists := restored[state.RuleID]; exists {
-			return fmt.Errorf("restore access quota rule %d: duplicate state", state.RuleID)
-		}
-		restored[state.RuleID] = cloneRestoredState(state)
-	}
-
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	if runtime.restorePending || len(runtime.entries) != 0 {
-		return fmt.Errorf("restore access quota runtime: runtime is already initialized")
-	}
-	runtime.restored = restored
-	runtime.restorePending = true
-	return nil
-}
-
-func (runtime *Runtime) Reconcile(definitions map[uint][]Rule) error {
-	if runtime == nil {
-		return fmt.Errorf("reconcile access quota runtime: runtime is nil")
-	}
-	normalized, err := normalizeDefinitions(definitions)
-	if err != nil {
-		return err
-	}
-
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	if runtime.entries == nil {
-		runtime.entries = make(map[uint]*accessKeyEntry)
-	}
-	if runtime.restorePending {
-		entries, err := entriesFromRestore(normalized, runtime.restored)
-		if err != nil {
-			return err
-		}
-		runtime.entries = entries
-		runtime.restored = nil
-		runtime.restorePending = false
-		return nil
-	}
-
-	next := make(map[uint]*accessKeyEntry, len(normalized))
-	for accessKeyID, rules := range normalized {
-		if len(rules) == 0 {
-			continue
-		}
-		entry := newAccessKeyEntry(rules)
-		if current := runtime.entries[accessKeyID]; current != nil {
-			current.mu.Lock()
-			for _, rule := range entry.rules {
-				previous := current.byID[rule.definition.ID]
-				if previous == nil || previous.definition.Revision != rule.definition.Revision {
-					continue
-				}
-				if previous.definition.Kind != rule.definition.Kind ||
-					previous.definition.PeriodSeconds != rule.definition.PeriodSeconds {
-					current.mu.Unlock()
-					return fmt.Errorf(
-						"reconcile access quota rule %d: kind or period changed without revision",
-						rule.definition.ID,
-					)
-				}
-				cloneRuntimeState(rule, previous)
-			}
-			current.mu.Unlock()
-		}
-		next[accessKeyID] = entry
-	}
-	runtime.entries = next
-	return nil
-}
-
-func (runtime *Runtime) Check(accessKeyID uint, now time.Time) Decision {
-	entry := runtime.lockEntry(accessKeyID)
-	if entry == nil {
-		return allowedDecision()
-	}
-	defer entry.mu.Unlock()
-	return decisionLocked(entry, now.UnixMilli())
-}
-
-func (runtime *Runtime) Admit(accessKeyID uint, now time.Time) (Ticket, Decision) {
-	entry := runtime.lockEntry(accessKeyID)
-	if entry == nil {
-		return Ticket{AccessKeyID: accessKeyID}, allowedDecision()
-	}
-	nowMS := now.UnixMilli()
-	decision := decisionLocked(entry, nowMS)
-	if !decision.Allowed {
-		entry.mu.Unlock()
-		return Ticket{AccessKeyID: accessKeyID}, decision
-	}
-
-	dirty := false
-	for _, rule := range entry.rules {
-		if rule.definition.Kind != KindPeriodic || !periodicInactive(rule, nowMS) {
-			continue
-		}
-		startedAt := nowMS
-		endsAt := now.Add(time.Duration(rule.definition.PeriodSeconds) * time.Second).UnixMilli()
-		rule.windowStartedAtMS = &startedAt
-		rule.windowEndsAtMS = &endsAt
-		rule.usedNanoUSD = 0
-		if rule.windowGeneration < math.MaxUint64 {
-			rule.windowGeneration++
-		}
-		advanceVersion(rule)
-		dirty = true
-	}
-
-	ticket := Ticket{AccessKeyID: accessKeyID, Rules: make([]TicketRule, 0, len(entry.rules))}
-	for _, rule := range entry.rules {
-		ticket.Rules = append(ticket.Rules, TicketRule{
-			RuleID: rule.definition.ID, RuleRevision: rule.definition.Revision,
-			WindowGeneration: rule.windowGeneration,
-		})
-	}
-	entry.mu.Unlock()
-	if dirty {
-		runtime.notifyDirty()
-	}
-	return ticket, allowedDecision()
-}
-
-func (runtime *Runtime) Complete(ticket Ticket, costNanoUSD int64) CompletionResult {
-	if runtime == nil || ticket.AccessKeyID == 0 || len(ticket.Rules) == 0 {
-		return CompletionResult{}
-	}
-	entry := runtime.lockEntry(ticket.AccessKeyID)
-	if entry == nil {
-		return CompletionResult{}
-	}
-
-	completion := CompletionResult{}
-	dirty := false
-	for _, ticketRule := range ticket.Rules {
-		rule := entry.byID[ticketRule.RuleID]
-		if rule == nil || rule.definition.Revision != ticketRule.RuleRevision {
-			continue
-		}
-		if rule.definition.Kind == KindPeriodic && rule.windowGeneration != ticketRule.WindowGeneration {
-			continue
-		}
-		used := rule.usedNanoUSD
-		switch {
-		case costNanoUSD < 0:
-			used = math.MaxInt64
-			completion.Fault = CompletionFaultNegativeEstimate
-		case costNanoUSD == 0:
-			continue
-		case used > math.MaxInt64-costNanoUSD:
-			used = math.MaxInt64
-			if completion.Fault == "" {
-				completion.Fault = CompletionFaultOverflow
-			}
-		default:
-			used += costNanoUSD
-		}
-		if used == rule.usedNanoUSD {
-			continue
-		}
-		rule.usedNanoUSD = used
-		advanceVersion(rule)
-		dirty = true
-	}
-	entry.mu.Unlock()
-	if completion.Fault != "" {
-		runtime.overflowFaultTotal.Add(1)
-	}
-	if dirty {
-		runtime.notifyDirty()
-	}
-	return completion
-}
-
-func (runtime *Runtime) Snapshot(accessKeyID uint, now time.Time) View {
-	entry := runtime.lockEntry(accessKeyID)
-	if entry == nil {
-		return viewLocked(nil, now.UnixMilli())
-	}
-	defer entry.mu.Unlock()
-	return viewLocked(entry, now.UnixMilli())
-}
-
-// DecisionFor evaluates externally owned rule state with the same rules as
-// Runtime.Check. A rule without a state entry is treated as never used.
+// DecisionFor evaluates externally owned rule state. A rule without a state
+// entry is treated as never used.
 func DecisionFor(rules []Rule, states map[uint]RestoredState, nowMS int64) Decision {
-	return decisionLocked(entryFromStates(rules, states), nowMS)
+	return decisionOf(entryFromStates(rules, states), nowMS)
 }
 
-// ViewFor projects externally owned rule state with the same rules as
-// Runtime.Snapshot. A rule without a state entry is treated as never used.
+// ViewFor projects externally owned rule state. A rule without a state entry
+// is treated as never used.
 func ViewFor(rules []Rule, states map[uint]RestoredState, now time.Time) View {
-	return viewLocked(entryFromStates(rules, states), now.UnixMilli())
+	return viewOf(entryFromStates(rules, states), now.UnixMilli())
 }
 
 // ValidateRestoredState verifies that persisted state is a legal state of rule.
@@ -366,84 +139,6 @@ func ValidateRestoredState(rule Rule, state RestoredState) error {
 		return fmt.Errorf("restore access quota rule %d: state identity or revision mismatch", rule.ID)
 	}
 	return applyRestoredState(&runtimeRule{definition: rule}, state)
-}
-
-func (runtime *Runtime) DirtySnapshots(limit int) []RestoredState {
-	if runtime == nil || limit == 0 {
-		return nil
-	}
-	runtime.mu.RLock()
-	ids := make([]uint, 0, len(runtime.entries))
-	for id := range runtime.entries {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	runtime.mu.RUnlock()
-
-	result := make([]RestoredState, 0)
-	for _, id := range ids {
-		entry := runtime.lockEntry(id)
-		if entry == nil {
-			continue
-		}
-		for _, rule := range entry.rules {
-			if !rule.dirty {
-				continue
-			}
-			result = append(result, restoredState(id, rule))
-			if limit > 0 && len(result) >= limit {
-				entry.mu.Unlock()
-				return result
-			}
-		}
-		entry.mu.Unlock()
-	}
-	return result
-}
-
-func (runtime *Runtime) Ack(accessKeyID, ruleID uint, revision, snapshotVersion uint64) {
-	entry := runtime.lockEntry(accessKeyID)
-	if entry == nil {
-		return
-	}
-	defer entry.mu.Unlock()
-	rule := entry.byID[ruleID]
-	if rule == nil || rule.definition.Revision != revision || rule.snapshotVersion != snapshotVersion {
-		return
-	}
-	rule.dirty = false
-}
-
-func (runtime *Runtime) Stats() Stats {
-	if runtime == nil {
-		return Stats{}
-	}
-	return Stats{OverflowFaultTotal: runtime.overflowFaultTotal.Load()}
-}
-
-func (runtime *Runtime) notifyDirty() {
-	if runtime == nil {
-		return
-	}
-	runtime.mu.RLock()
-	notifier := runtime.dirtyNotifier
-	runtime.mu.RUnlock()
-	if notifier != nil {
-		notifier()
-	}
-}
-
-func (runtime *Runtime) lockEntry(accessKeyID uint) *accessKeyEntry {
-	if runtime == nil || accessKeyID == 0 {
-		return nil
-	}
-	runtime.mu.RLock()
-	entry := runtime.entries[accessKeyID]
-	if entry != nil {
-		entry.mu.Lock()
-	}
-	runtime.mu.RUnlock()
-	return entry
 }
 
 func normalizeDefinitions(definitions map[uint][]Rule) (map[uint][]Rule, error) {
@@ -516,49 +211,10 @@ func sortRules(rules []Rule) {
 	})
 }
 
-func entriesFromRestore(
-	definitions map[uint][]Rule,
-	restored map[uint]RestoredState,
-) (map[uint]*accessKeyEntry, error) {
-	remaining := make(map[uint]RestoredState, len(restored))
-	for id, state := range restored {
-		remaining[id] = state
-	}
-	entries := make(map[uint]*accessKeyEntry, len(definitions))
-	for accessKeyID, rules := range definitions {
-		entry := newAccessKeyEntry(rules)
-		for _, rule := range entry.rules {
-			state, exists := remaining[rule.definition.ID]
-			if !exists {
-				return nil, fmt.Errorf("restore access quota rule %d for key %d: state is missing", rule.definition.ID, accessKeyID)
-			}
-			if state.AccessKeyID != accessKeyID || state.RuleRevision != rule.definition.Revision {
-				return nil, fmt.Errorf("restore access quota rule %d: state identity or revision mismatch", rule.definition.ID)
-			}
-			if err := applyRestoredState(rule, state); err != nil {
-				return nil, err
-			}
-			delete(remaining, rule.definition.ID)
-		}
-		entries[accessKeyID] = entry
-	}
-	if len(remaining) != 0 {
-		ids := make([]uint, 0, len(remaining))
-		for id := range remaining {
-			ids = append(ids, id)
-		}
-		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-		return nil, fmt.Errorf("restore access quota runtime: orphan state for rule %d", ids[0])
-	}
-	return entries, nil
-}
-
 func newAccessKeyEntry(rules []Rule) *accessKeyEntry {
-	entry := &accessKeyEntry{rules: make([]*runtimeRule, 0, len(rules)), byID: make(map[uint]*runtimeRule, len(rules))}
+	entry := &accessKeyEntry{rules: make([]*runtimeRule, 0, len(rules))}
 	for _, definition := range rules {
-		rule := &runtimeRule{definition: definition, snapshotVersion: 1}
-		entry.rules = append(entry.rules, rule)
-		entry.byID[definition.ID] = rule
+		entry.rules = append(entry.rules, &runtimeRule{definition: definition})
 	}
 	return entry
 }
@@ -600,17 +256,7 @@ func applyRestoredState(rule *runtimeRule, state RestoredState) error {
 	rule.windowStartedAtMS = cloneInt64(state.WindowStartedAtMS)
 	rule.windowEndsAtMS = cloneInt64(state.WindowEndsAtMS)
 	rule.windowGeneration = state.WindowGeneration
-	rule.snapshotVersion = state.SnapshotVersion
 	return nil
-}
-
-func cloneRuntimeState(target, source *runtimeRule) {
-	target.usedNanoUSD = source.usedNanoUSD
-	target.windowStartedAtMS = cloneInt64(source.windowStartedAtMS)
-	target.windowEndsAtMS = cloneInt64(source.windowEndsAtMS)
-	target.windowGeneration = source.windowGeneration
-	target.snapshotVersion = source.snapshotVersion
-	target.dirty = source.dirty
 }
 
 func entryFromStates(rules []Rule, states map[uint]RestoredState) *accessKeyEntry {
@@ -626,32 +272,31 @@ func entryFromStates(rules []Rule, states map[uint]RestoredState) *accessKeyEntr
 		rule.windowStartedAtMS = cloneInt64(state.WindowStartedAtMS)
 		rule.windowEndsAtMS = cloneInt64(state.WindowEndsAtMS)
 		rule.windowGeneration = state.WindowGeneration
-		rule.snapshotVersion = state.SnapshotVersion
 	}
 	return entry
 }
 
-func viewLocked(entry *accessKeyEntry, nowMS int64) View {
+func viewOf(entry *accessKeyEntry, nowMS int64) View {
 	view := View{ObservedAtMS: nowMS, Allowed: true, Recoverable: true, Rules: []RuleView{}}
 	if entry == nil || len(entry.rules) == 0 {
 		return view
 	}
 	view.Rules = make([]RuleView, 0, len(entry.rules))
 	for _, rule := range entry.rules {
-		view.Rules = append(view.Rules, ruleViewLocked(rule, nowMS))
+		view.Rules = append(view.Rules, ruleViewOf(rule, nowMS))
 	}
-	decision := decisionLocked(entry, nowMS)
+	decision := decisionOf(entry, nowMS)
 	view.Allowed = decision.Allowed
 	view.Recoverable = decision.Recoverable
 	view.NextAvailableAtMS = cloneInt64(decision.NextAvailableAtMS)
 	return view
 }
 
-func decisionLocked(entry *accessKeyEntry, nowMS int64) Decision {
+func decisionOf(entry *accessKeyEntry, nowMS int64) Decision {
 	decision := allowedDecision()
 	var next int64
 	for _, rule := range entry.rules {
-		view := ruleViewLocked(rule, nowMS)
+		view := ruleViewOf(rule, nowMS)
 		if view.Status != RuleStatusExhausted {
 			continue
 		}
@@ -676,7 +321,7 @@ func allowedDecision() Decision {
 	return Decision{Allowed: true, Recoverable: true, BlockingRules: []RuleView{}}
 }
 
-func ruleViewLocked(rule *runtimeRule, nowMS int64) RuleView {
+func ruleViewOf(rule *runtimeRule, nowMS int64) RuleView {
 	view := RuleView{
 		Rule: rule.definition, RemainingNanoUSD: rule.definition.LimitNanoUSD,
 		Status: RuleStatusAvailable, WindowGeneration: rule.windowGeneration,
@@ -704,28 +349,6 @@ func remaining(limit, used int64) int64 {
 		return 0
 	}
 	return limit - used
-}
-
-func advanceVersion(rule *runtimeRule) {
-	if rule.snapshotVersion < math.MaxUint64 {
-		rule.snapshotVersion++
-	}
-	rule.dirty = true
-}
-
-func restoredState(accessKeyID uint, rule *runtimeRule) RestoredState {
-	return RestoredState{
-		AccessKeyID: accessKeyID, RuleID: rule.definition.ID, RuleRevision: rule.definition.Revision,
-		UsedNanoUSD: rule.usedNanoUSD, WindowStartedAtMS: cloneInt64(rule.windowStartedAtMS),
-		WindowEndsAtMS: cloneInt64(rule.windowEndsAtMS), WindowGeneration: rule.windowGeneration,
-		SnapshotVersion: rule.snapshotVersion,
-	}
-}
-
-func cloneRestoredState(state RestoredState) RestoredState {
-	state.WindowStartedAtMS = cloneInt64(state.WindowStartedAtMS)
-	state.WindowEndsAtMS = cloneInt64(state.WindowEndsAtMS)
-	return state
 }
 
 func cloneInt64(value *int64) *int64 {

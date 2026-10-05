@@ -93,9 +93,6 @@ export default {
         'Use a distributed access key to view its own data. It cannot change configuration.',
       adminTitle: 'Admin key',
       admin: 'If AUTH_KEY is configured, use its value from your deployment system.',
-      file: 'Without AUTH_KEY, read the key from {path}; the default container path is {containerPath}.',
-      docker:
-        'For Docker, enter the container from your own terminal and read the file. Keep the key out of logs and chats.',
     },
   },
   pages: {

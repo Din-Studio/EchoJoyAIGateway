@@ -99,11 +99,10 @@ func TestModelCooldownSurvivesIdentityPreservingRebuilds(t *testing.T) {
 	}
 }
 
-func TestModelCooldownCheckpointAndBatchSnapshotsAreDetached(t *testing.T) {
+func TestModelCooldownBatchSnapshotsAreDetached(t *testing.T) {
 	r, api, now := modelCooldownFixture(t)
 	ref, _ := r.CredentialRef(1)
 	api.SetModelCooldown(ref, "model-a", now.Add(time.Hour), now)
-	checkpoint := r.CaptureRuntimeCheckpoint()
 	entries, err := r.SnapshotGroupCredentialEntriesExact(10, []uint{1})
 	if err != nil {
 		t.Fatal(err)
@@ -114,18 +113,5 @@ func TestModelCooldownCheckpointAndBatchSnapshotsAreDetached(t *testing.T) {
 	}
 	if len(api.ModelCooldowns(1, now)) != 1 {
 		t.Fatal("batch snapshot shared mutable model map")
-	}
-	api.ClearModelCooldowns(1)
-	r.RestoreRuntimeCheckpoint(checkpoint)
-	if len(api.ModelCooldowns(1, now)) != 1 {
-		t.Fatal("checkpoint lost cooldown")
-	}
-	entries[0].IdentityGeneration = 2
-	if _, err := r.ReconcileGroup(10, entries); err != nil {
-		t.Fatal(err)
-	}
-	r.RestoreRuntimeCheckpoint(checkpoint)
-	if len(api.ModelCooldowns(1, now)) != 0 {
-		t.Fatal("checkpoint restored wrong target cooldown")
 	}
 }

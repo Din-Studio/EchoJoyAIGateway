@@ -26,19 +26,19 @@ import (
 
 // App owns the process lifecycle, infrastructure resources, and runtime state.
 type App struct {
-	engine            *gin.Engine
-	config            *config.Config
-	db                *gorm.DB
-	runtimeState      RuntimeStateLoader
-	runtimeCheckpoint RuntimeStateCheckpoint
-	lifecycle         *httplifecycle.Coordinator
-	controlRuntime    ControlRuntime
-	startupBootstrap  StartupBootstrap
-	startupRecovery   StartupRecovery
-	requestLogs       RequestLogRuntime
-	executionRuntime  ExecutionRuntime
-	clusterClient     *cluster.Client
-	listen            func(network, address string) (net.Listener, error)
+	engine           *gin.Engine
+	config           *config.Config
+	db               *gorm.DB
+	runtimeState     RuntimeStateLoader
+	credentialHealth CredentialHealthHydrator
+	lifecycle        *httplifecycle.Coordinator
+	controlRuntime   ControlRuntime
+	startupBootstrap StartupBootstrap
+	startupRecovery  StartupRecovery
+	requestLogs      RequestLogRuntime
+	executionRuntime ExecutionRuntime
+	clusterClient    *cluster.Client
+	listen           func(network, address string) (net.Listener, error)
 
 	mu            sync.Mutex
 	httpServer    *http.Server
@@ -51,6 +51,11 @@ type App struct {
 // RuntimeStateLoader initializes the in-memory runtime state from persistence.
 type RuntimeStateLoader interface {
 	Load(context.Context) error
+}
+
+// CredentialHealthHydrator restores credential health from the cluster store.
+type CredentialHealthHydrator interface {
+	Hydrate(context.Context) error
 }
 
 // StartupBootstrap ensures required persisted state exists before runtime loading.
@@ -85,18 +90,18 @@ type ExecutionRuntime interface {
 type AppParams struct {
 	dig.In
 
-	Engine            *gin.Engine
-	Config            *config.Config
-	DB                *gorm.DB
-	StartupBootstrap  StartupBootstrap
-	StartupRecovery   StartupRecovery `optional:"true"`
-	RuntimeState      RuntimeStateLoader
-	RuntimeCheckpoint RuntimeStateCheckpoint     `optional:"true"`
-	Lifecycle         *httplifecycle.Coordinator `optional:"true"`
-	ControlRuntime    ControlRuntime
-	RequestLogs       RequestLogRuntime
-	ExecutionRuntime  ExecutionRuntime `optional:"true"`
-	ClusterClient     *cluster.Client
+	Engine           *gin.Engine
+	Config           *config.Config
+	DB               *gorm.DB
+	StartupBootstrap StartupBootstrap
+	StartupRecovery  StartupRecovery `optional:"true"`
+	RuntimeState     RuntimeStateLoader
+	CredentialHealth CredentialHealthHydrator
+	Lifecycle        *httplifecycle.Coordinator `optional:"true"`
+	ControlRuntime   ControlRuntime
+	RequestLogs      RequestLogRuntime
+	ExecutionRuntime ExecutionRuntime `optional:"true"`
+	ClusterClient    *cluster.Client
 }
 
 // NewEngine creates the process HTTP engine and global middleware.
@@ -127,20 +132,20 @@ func newEngine(lifecycle *httplifecycle.Coordinator) (*gin.Engine, error) {
 // NewApp creates the application lifecycle manager.
 func NewApp(params AppParams) *App {
 	return &App{
-		engine:            params.Engine,
-		config:            params.Config,
-		db:                params.DB,
-		runtimeState:      params.RuntimeState,
-		runtimeCheckpoint: params.RuntimeCheckpoint,
-		lifecycle:         params.Lifecycle,
-		controlRuntime:    params.ControlRuntime,
-		startupBootstrap:  params.StartupBootstrap,
-		startupRecovery:   params.StartupRecovery,
-		requestLogs:       params.RequestLogs,
-		executionRuntime:  params.ExecutionRuntime,
-		clusterClient:     params.ClusterClient,
-		listen:            net.Listen,
-		serveErrors:       make(chan error, 1),
+		engine:           params.Engine,
+		config:           params.Config,
+		db:               params.DB,
+		runtimeState:     params.RuntimeState,
+		credentialHealth: params.CredentialHealth,
+		lifecycle:        params.Lifecycle,
+		controlRuntime:   params.ControlRuntime,
+		startupBootstrap: params.StartupBootstrap,
+		startupRecovery:  params.StartupRecovery,
+		requestLogs:      params.RequestLogs,
+		executionRuntime: params.ExecutionRuntime,
+		clusterClient:    params.ClusterClient,
+		listen:           net.Listen,
+		serveErrors:      make(chan error, 1),
 	}
 }
 
@@ -174,14 +179,12 @@ func (a *App) Start() error {
 		}
 		logrus.WithField("event", "startup.operation_recovery").Info("committed control operations recovered")
 	}
-	if a.runtimeCheckpoint != nil {
-		if err := a.runtimeCheckpoint.Restore(context.Background()); err != nil {
-			logrus.WithError(err).WithField("event", "startup.checkpoint_restore").Warn(
-				"runtime state checkpoint restore failed; continuing with database-backed state",
-			)
-		} else {
-			logrus.WithField("event", "startup.checkpoint_restore").Info("runtime state checkpoint checked")
-		}
+	if err := a.credentialHealth.Hydrate(context.Background()); err != nil {
+		logrus.WithError(err).WithField("event", "startup.credential_health_hydrate").Warn(
+			"shared credential health hydration failed; continuing with database-backed state",
+		)
+	} else {
+		logrus.WithField("event", "startup.credential_health_hydrate").Info("shared credential health hydrated")
 	}
 	if a.executionRuntime != nil {
 		if err := a.executionRuntime.Start(context.Background()); err != nil {
@@ -277,7 +280,6 @@ func (a *App) Stop(ctx context.Context) error {
 	runtimeDone := a.runtimeDone
 	requestLogs := a.requestLogs
 	executionRuntime := a.executionRuntime
-	runtimeCheckpoint := a.runtimeCheckpoint
 	lifecycle := a.lifecycle
 	a.mu.Unlock()
 
@@ -338,15 +340,6 @@ func (a *App) Stop(ctx context.Context) error {
 		}
 		if waitErr == nil {
 			logrus.WithField("event", "shutdown.http_handlers_drained").Info("HTTP handlers drained")
-		}
-	}
-	if runtimeCheckpoint != nil {
-		if err := runtimeCheckpoint.Save(context.Background()); err != nil {
-			logrus.WithError(err).WithField("event", "shutdown.checkpoint_save").Warn(
-				"runtime state checkpoint could not be saved; continuing shutdown",
-			)
-		} else {
-			logrus.WithField("event", "shutdown.checkpoint_save").Info("runtime state checkpoint saved")
 		}
 	}
 	if requestLogs != nil {

@@ -14,10 +14,11 @@ import (
 	"github.com/gorilla/websocket"
 
 	"gpt-load/internal/channel"
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/platform/config"
-	"gpt-load/internal/ratelimit"
 	"gpt-load/internal/state"
+	"gpt-load/internal/testutil/clustertest"
 )
 
 func TestWebsocketErrorPreservesLaneAndRedactsSecrets(t *testing.T) {
@@ -107,7 +108,8 @@ func TestWebsocketInvalidTurnsConsumeRPM(t *testing.T) {
 	if _, err := h.manager.Publish(input); err != nil {
 		t.Fatal(err)
 	}
-	h.limiter = ratelimit.NewAccessKeyRPM()
+	_, client := clustertest.NewClient(t)
+	h.limiter = cluster.NewAccessKeyRPM(client)
 	server := httptest.NewServer(engine)
 	defer server.Close()
 	conn := dialGatewayWebsocket(t, server.URL)

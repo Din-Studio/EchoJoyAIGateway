@@ -43,8 +43,8 @@ func TestBuildContainerAssemblesRedisSharedState(t *testing.T) {
 		if _, ok := shared.Affinity.(*cluster.Affinity); !ok {
 			t.Errorf("affinity = %T, want *cluster.Affinity", shared.Affinity)
 		}
-		if bootstrap.CachePath != "" || bootstrap.HasLKG {
-			t.Errorf("catalog bootstrap = path %q, LKG %t; want the empty shared catalog", bootstrap.CachePath, bootstrap.HasLKG)
+		if bootstrap.HasLKG {
+			t.Error("catalog bootstrap has an LKG; want the empty shared catalog")
 		}
 	})
 	if err != nil {

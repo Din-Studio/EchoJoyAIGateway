@@ -2,8 +2,9 @@ package cluster
 
 import "github.com/redis/go-redis/v9"
 
-// Every AccessQuota script mirrors one accessquota.Runtime state transition
-// and must stay behaviorally identical to it. Each rule is one Hash with
+// Every AccessQuota script implements one quota state transition; decisions
+// and views over the stored state come from accessquota.DecisionFor and
+// accessquota.ViewFor. Each rule is one Hash with
 // fields rev/used/ws/we/gen/ver; an inactive window stores ws and we as "".
 // Amounts are nano-USD int64 values that exceed Lua's exact double range, so
 // they are compared as canonical decimal strings and only added through

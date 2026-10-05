@@ -185,12 +185,6 @@ export default {
       environmentTitle: 'Environment variable first',
       environmentDescription:
         'If the instance was started with {key}, use the protected value from your deployment system',
-      fileTitle: 'Managed key file',
-      fileDescription:
-        'Without the environment variable, the instance reads or creates {path}; containers use {containerPath} by default',
-      dockerTitle: 'Docker instance',
-      dockerDescription:
-        'Run {command} in a controlled terminal before reading the managed file. Never paste its output into logs, tickets, or chats',
     },
     recoveryPrefix:
       'If the service returns an invalid response, confirm the instance address and health, then',

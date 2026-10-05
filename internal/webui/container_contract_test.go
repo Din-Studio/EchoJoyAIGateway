@@ -242,11 +242,7 @@ func TestDockerfileFinalStageDeclaresNonRootPersistentRuntime(t *testing.T) {
 	orderedBeforeUser := []string{
 		"addgroup -S -g 10001 gpt-load",
 		"adduser -S -D -H -u 10001 -G gpt-load gpt-load",
-		"mkdir -p /app/data",
-		"chown 10001:10001 /app/data",
-		"chmod 0700 /app/data",
 		"ENV HOST=0.0.0.0",
-		"ENV DATA_DIR=/app/data",
 		"USER 10001:10001",
 	}
 	previousIndex := -1
@@ -282,22 +278,13 @@ func TestDockerfileFinalStageDeclaresNonRootPersistentRuntime(t *testing.T) {
 			}
 		}
 	}
-	for _, expectation := range []struct {
-		label string
-		line  string
-	}{
-		{label: "USER", line: "USER 10001:10001"},
-		{label: "chown", line: "chown 10001:10001 /app/data"},
-		{label: "chmod", line: "chmod 0700 /app/data"},
-	} {
-		lines := linesByMutation[expectation.label]
-		if len(lines) != 1 || lines[0] != expectation.line {
-			t.Fatalf(
-				"Dockerfile final stage %s mutations = %q, want exactly [%q]",
-				expectation.label,
-				lines,
-				expectation.line,
-			)
+	if lines := linesByMutation["USER"]; len(lines) != 1 || lines[0] != "USER 10001:10001" {
+		t.Fatalf("Dockerfile final stage USER lines = %q, want exactly [%q]", lines, "USER 10001:10001")
+	}
+	// The gateway writes no local files, so the runtime image prepares no writable directory.
+	for _, mutation := range []string{"chown", "chmod"} {
+		if lines := linesByMutation[mutation]; len(lines) != 0 {
+			t.Fatalf("Dockerfile final stage %s mutations = %q, want none", mutation, lines)
 		}
 	}
 
@@ -518,7 +505,6 @@ func TestComposeProjectsHaveIndependentNamesApplicationPortsAndDatabaseVolumes(t
 }
 
 func TestComposeRunsStatelessGatewayOnPostgresAndRedisWithMajorChannelImage(t *testing.T) {
-	t.Setenv("DATA_DIR", "/host/path/must-not-reach-container")
 	t.Setenv("DATABASE_DSN", "/host/database/must-not-reach-container.db")
 
 	projectDir := t.TempDir()
@@ -571,9 +557,6 @@ func TestComposeRunsStatelessGatewayOnPostgresAndRedisWithMajorChannelImage(t *t
 	}
 	if service.Image != "ghcr.io/tbphp/gpt-load:2" {
 		t.Fatalf("resolved image = %q, want ghcr.io/tbphp/gpt-load:2", service.Image)
-	}
-	if dataDir, ok := service.Environment["DATA_DIR"]; ok {
-		t.Fatalf("resolved DATA_DIR = %q, want the stateless gateway to leave it unset", dataDir)
 	}
 	wantDSN := "postgres://gpt_load:compose-test-postgres@postgres:5432/gpt_load?sslmode=disable"
 	if got := service.Environment["DATABASE_DSN"]; got != wantDSN {

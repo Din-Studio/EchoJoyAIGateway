@@ -12,15 +12,10 @@ import (
 	"fmt"
 	"io"
 
-	"gpt-load/internal/platform/securefile"
 	"gpt-load/internal/platform/utils"
-
-	"github.com/sirupsen/logrus"
 )
 
-// KeyFileName is the persistent master-key filename within DATA_DIR.
 const (
-	KeyFileName          = "encryption.key"
 	encryptionKeyDomain  = "gpt-load/encryption/aes-256-gcm/v1"
 	fingerprintKeyDomain = "gpt-load/encryption/fingerprint-hmac/v1"
 )
@@ -53,36 +48,6 @@ func NewService(keyMaterial string) (Service, error) {
 	}
 
 	return &aesService{hashKey: hashKey, gcm: gcm}, nil
-}
-
-// NewServiceWithKeyFile resolves explicit key material or a persistent keyfile
-// before constructing the encryption service.
-func NewServiceWithKeyFile(explicitKey, dataDir string) (Service, error) {
-	keyMaterial, err := LoadOrCreateKeyMaterial(explicitKey, dataDir)
-	if err != nil {
-		return nil, err
-	}
-	return NewService(keyMaterial)
-}
-
-// LoadOrCreateKeyMaterial prefers explicit key material. When it is absent, a
-// 32-byte random key is loaded from or created at DATA_DIR/encryption.key.
-func LoadOrCreateKeyMaterial(explicitKey, dataDir string) (string, error) {
-	if explicitKey != "" {
-		return explicitKey, nil
-	}
-	if dataDir == "" {
-		return "", fmt.Errorf("DATA_DIR is required when ENCRYPTION_KEY is empty")
-	}
-	result, err := securefile.LoadOrCreateHex(dataDir, KeyFileName)
-	if err != nil {
-		return "", err
-	}
-	if result.Created {
-		logrus.WithField("path", result.Path).
-			Warn("Generated encryption keyfile; back it up before relying on encrypted credentials")
-	}
-	return result.Value, nil
 }
 
 type aesService struct {

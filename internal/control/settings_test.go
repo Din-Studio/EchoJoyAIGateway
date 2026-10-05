@@ -422,7 +422,6 @@ func TestUpdateSettingsEnablingModelsDevRequestsImmediateSyncOnce(t *testing.T) 
 	coordinator := newTestCatalogSyncCoordinator(t,
 		fixture.service,
 		nil,
-		"unused",
 		catalog.Metadata{},
 		false,
 	)
