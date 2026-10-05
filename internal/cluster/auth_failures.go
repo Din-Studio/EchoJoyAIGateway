@@ -50,8 +50,7 @@ type AuthFailureDecision struct {
 }
 
 // AuthFailures counts admin authentication failures per peer across every
-// instance, so a lockout reached through any instance applies to all. It is
-// nil in single-instance mode.
+// instance, so a lockout reached through any instance applies to all.
 type AuthFailures struct {
 	client *Client
 	// memberPrefix and sequence keep every recorded failure distinct.
@@ -59,11 +58,8 @@ type AuthFailures struct {
 	sequence     atomic.Uint64
 }
 
-// NewAuthFailures returns nil when cluster mode is disabled.
+// NewAuthFailures builds the shared admin lockout.
 func NewAuthFailures(client *Client) *AuthFailures {
-	if client == nil {
-		return nil
-	}
 	nonce := make([]byte, 8)
 	_, _ = rand.Read(nonce)
 	return &AuthFailures{client: client, memberPrefix: hex.EncodeToString(nonce) + ":"}

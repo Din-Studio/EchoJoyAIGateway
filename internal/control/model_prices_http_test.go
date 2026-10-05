@@ -562,7 +562,7 @@ func newModelPriceHTTPFixture(
 		}
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 	return fixture, engine, row
 }
 

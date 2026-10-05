@@ -627,7 +627,7 @@ func TestRuntimeHealthEndpointRequiresManagementAuthentication(t *testing.T) {
 	fixture := newServiceFixture(t)
 	fixture.service.now = healthNow
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	recorder := httptest.NewRecorder()

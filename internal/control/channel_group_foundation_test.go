@@ -91,7 +91,7 @@ func TestChannelsHTTPIsAuthenticatedAndStrict(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "channel-auth"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "channel-auth"}, fixture.service).RegisterRoutes(engine)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/channels?q=deep%20seek", nil)
 	request.Header.Set("Authorization", "Bearer channel-auth")

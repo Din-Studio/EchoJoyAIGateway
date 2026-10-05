@@ -62,8 +62,10 @@ func TestHandlerUsesPublishedRouteStrategyAndPreservesSelectedRoute(t *testing.T
 		if _, err := manager.Publish(input); err != nil {
 			t.Fatalf("publish %s: %v", strategy, err)
 		}
+		// Each strategy sends its own prompt: shared soft affinity survives a
+		// configuration revision and would otherwise pin the earlier route.
 		request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
-			bytes.NewBufferString(`{"model":"public","messages":[{"role":"user","content":"hello"}]}`))
+			bytes.NewBufferString(`{"model":"public","messages":[{"role":"user","content":"hello `+string(strategy)+`"}]}`))
 		request.Header.Set("Authorization", "Bearer gl-client")
 		recorder := httptest.NewRecorder()
 		engine.ServeHTTP(recorder, request)

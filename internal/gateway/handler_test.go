@@ -239,7 +239,7 @@ func TestHandlerCoordinatesCooldownMutation(t *testing.T) {
 			stats:         stats.Snapshot(1, now),
 		}
 	})
-	handler := &Handler{registry: registry, stats: stats, mutations: coordinator}
+	handler := &Handler{registry: registry, stats: stats, mutations: coordinator, sharedHealth: unavailableSharedHealth()}
 	done := make(chan struct{})
 	go func() {
 		handler.applyDecisionEffect(state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}, health.Decision{
@@ -287,6 +287,7 @@ func TestHandlerSkipsCooldownFromStaleCredentialVersion(t *testing.T) {
 	stats := health.NewStatsStore()
 	handler := &Handler{
 		registry: registry, stats: stats, mutations: health.NewMutationCoordinator(),
+		sharedHealth: unavailableSharedHealth(),
 	}
 	handler.applyGroupDecisionEffect(
 		state.GroupView{},
@@ -470,7 +471,7 @@ func TestHandlerCoordinatesSuccessMutation(t *testing.T) {
 			stats:      stats.Snapshot(1, now),
 		}
 	})
-	handler := &Handler{registry: registry, stats: stats, mutations: coordinator}
+	handler := &Handler{registry: registry, stats: stats, mutations: coordinator, sharedHealth: unavailableSharedHealth()}
 
 	done := make(chan struct{})
 	go func() {
@@ -483,7 +484,7 @@ func TestHandlerCoordinatesSuccessMutation(t *testing.T) {
 	}
 	close(coordinator.releaseEntry)
 	observed := receiveTestSignal(t, coordinator.observed, "success mutation observation")
-	if observed.clearCalls != 1 || observed.stats != (health.CredentialStats{Success: 1}) {
+	if observed.clearCalls != 1 || observed.stats != (health.CredentialStats{}) {
 		t.Fatalf("coordinator callback observation = %#v", observed)
 	}
 	select {
@@ -493,6 +494,9 @@ func TestHandlerCoordinatesSuccessMutation(t *testing.T) {
 	}
 	close(coordinator.releaseExit)
 	receiveTestSignal(t, done, "success mutation completion")
+	if got := stats.Snapshot(1, now); got != (health.CredentialStats{Success: 1}) {
+		t.Fatalf("success stats = %#v", got)
+	}
 }
 
 func TestHandlerLogsCredentialStateChanges(t *testing.T) {
@@ -507,10 +511,11 @@ func TestHandlerLogsCredentialStateChanges(t *testing.T) {
 	}
 	var logs bytes.Buffer
 	handler := &Handler{
-		registry:  registry,
-		stats:     health.NewStatsStore(),
-		mutations: health.NewMutationCoordinator(),
-		logger:    newGatewayJSONLogger(&logs),
+		registry:     registry,
+		stats:        health.NewStatsStore(),
+		mutations:    health.NewMutationCoordinator(),
+		logger:       newGatewayJSONLogger(&logs),
+		sharedHealth: newTestSharedState(t, registry).Health,
 	}
 	cooldown := health.Decision{
 		Category:      health.FailureCategoryRateLimited,
@@ -562,7 +567,7 @@ func TestHandlerRecordsCooldownFailureContext(t *testing.T) {
 		t.Fatalf("Replace() error = %v", err)
 	}
 	stats := health.NewStatsStore()
-	handler := &Handler{registry: registry, stats: stats}
+	handler := &Handler{registry: registry, stats: stats, sharedHealth: unavailableSharedHealth()}
 	until := now.Add(30 * time.Second)
 
 	handler.applyDecisionEffect(state.CredentialRef{ID: 1, GroupID: 1, IdentityGeneration: 1}, health.Decision{
@@ -624,9 +629,10 @@ func TestHandlerSkipsStatsWhenRegistryKeyWasDeletedBeforeCompletion(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			stats := health.NewStatsStore()
 			handler := &Handler{
-				registry:  state.NewCredentialRegistry(),
-				stats:     stats,
-				mutations: health.NewMutationCoordinator(),
+				registry:     state.NewCredentialRegistry(),
+				stats:        stats,
+				mutations:    health.NewMutationCoordinator(),
+				sharedHealth: unavailableSharedHealth(),
 			}
 			test.mutate(handler)
 			if got := stats.Snapshot(1, now); got != (health.CredentialStats{}) {
@@ -653,7 +659,7 @@ func TestHandlerCoordinatesAttributableFailureMutation(t *testing.T) {
 			stats:            stats.Snapshot(1, now),
 		}
 	})
-	handler := &Handler{registry: registry, stats: stats, mutations: coordinator}
+	handler := &Handler{registry: registry, stats: stats, mutations: coordinator, sharedHealth: unavailableSharedHealth()}
 
 	done := make(chan struct{})
 	go func() {
@@ -709,7 +715,7 @@ func TestGatewayFailureAndValidationRecoveryFailureFirstKeepsRegistryAndStatsFai
 	stats := health.NewStatsStore()
 	stats.RecordFailure(1, health.FailureCategoryAmbiguous, 0, now)
 	mutations := health.NewMutationCoordinator()
-	handler := &Handler{registry: registry, stats: stats, mutations: mutations}
+	handler := &Handler{registry: registry, stats: stats, mutations: mutations, sharedHealth: unavailableSharedHealth()}
 
 	failureDone := make(chan struct{})
 	go func() {
@@ -764,7 +770,7 @@ func TestGatewayFailureAndValidationRecoveryRecoveryFirstLeavesNewFailure(t *tes
 	stats := health.NewStatsStore()
 	stats.RecordFailure(1, health.FailureCategoryAmbiguous, 0, now)
 	mutations := health.NewMutationCoordinator()
-	handler := &Handler{registry: registry, stats: stats, mutations: mutations}
+	handler := &Handler{registry: registry, stats: stats, mutations: mutations, sharedHealth: unavailableSharedHealth()}
 
 	recoveryEntered := make(chan struct{})
 	releaseRecovery := make(chan struct{})
@@ -1125,9 +1131,6 @@ func TestHandlerDoesNotRotateOrPenalizeRequestRejected429(t *testing.T) {
 		{StatusCode: http.StatusOK, Header: make(http.Header), Body: []byte(`{"ok":true}`), RequestWritten: true},
 	}}
 	engine, handler, registry, stats := newStatsHandlerTestRuntime(t, forwarder, "sk-first", "sk-second")
-	recording := &recordingRuntimeRegistry{CredentialRegistry: registry}
-	handler.registry = recording
-
 	handler.now = func() time.Time { return now }
 
 	request := httptest.NewRequest(
@@ -1142,10 +1145,7 @@ func TestHandlerDoesNotRotateOrPenalizeRequestRejected429(t *testing.T) {
 	if recorder.Code != http.StatusTooManyRequests || len(forwarder.inputs) != 1 {
 		t.Fatalf("response/attempts = %d/%d, want 429/1; body=%s", recorder.Code, len(forwarder.inputs), recorder.Body.String())
 	}
-	if recording.cooldownCalls != 0 || recording.incrFailureCalls != 0 || recording.blacklistCalls != 0 {
-		t.Fatalf("credential mutations = cooldown:%d failure:%d blacklist:%d, want none",
-			recording.cooldownCalls, recording.incrFailureCalls, recording.blacklistCalls)
-	}
+	assertNoCredentialHealthEffects(t, registry)
 	if got := stats.Snapshot(1, now); got != (health.CredentialStats{}) {
 		t.Fatalf("request-rejected credential stats = %#v, want empty", got)
 	}
@@ -1170,9 +1170,6 @@ func TestHandlerRetriesCandidateUnavailableWithoutCredentialPenalty(t *testing.T
 		{StatusCode: http.StatusOK, Header: make(http.Header), Body: []byte(`{"ok":true}`), RequestWritten: true},
 	}}
 	engine, handler, registry, stats := newStatsHandlerTestRuntime(t, forwarder, "sk-first", "sk-second")
-	recording := &recordingRuntimeRegistry{CredentialRegistry: registry}
-	handler.registry = recording
-
 	handler.now = func() time.Time { return now }
 
 	request := httptest.NewRequest(
@@ -1187,10 +1184,7 @@ func TestHandlerRetriesCandidateUnavailableWithoutCredentialPenalty(t *testing.T
 	if recorder.Code != http.StatusOK || recorder.Body.String() != `{"ok":true}` || len(forwarder.inputs) != 2 {
 		t.Fatalf("response/attempts = %d %s / %d", recorder.Code, recorder.Body.String(), len(forwarder.inputs))
 	}
-	if recording.cooldownCalls != 0 || recording.incrFailureCalls != 0 || recording.blacklistCalls != 0 {
-		t.Fatalf("credential mutations = cooldown:%d failure:%d blacklist:%d, want none",
-			recording.cooldownCalls, recording.incrFailureCalls, recording.blacklistCalls)
-	}
+	assertNoCredentialHealthEffects(t, registry)
 	if got := stats.Snapshot(1, now); got != (health.CredentialStats{}) {
 		t.Fatalf("first credential stats = %#v, want empty", got)
 	}
@@ -1227,9 +1221,7 @@ func TestHandlerRetriesSafeBootstrapCapacityErrorWithoutCredentialPenalty(t *tes
 					Stream: StreamObservation{EndReason: StreamEndCleanEOF},
 				},
 			}}
-			engine, handler, registry, _ := newStatsHandlerTestRuntime(t, forwarder, "sk-first", "sk-second")
-			recording := &recordingRuntimeRegistry{CredentialRegistry: registry}
-			handler.registry = recording
+			engine, _, registry, _ := newStatsHandlerTestRuntime(t, forwarder, "sk-first", "sk-second")
 
 			request := httptest.NewRequest(
 				http.MethodPost,
@@ -1244,10 +1236,7 @@ func TestHandlerRetriesSafeBootstrapCapacityErrorWithoutCredentialPenalty(t *tes
 				forwarder.streamInputs[0].APIKey == forwarder.streamInputs[1].APIKey {
 				t.Fatalf("response/attempts = %d/%d inputs=%#v", recorder.Code, len(forwarder.streamInputs), forwarder.streamInputs)
 			}
-			if recording.cooldownCalls != 0 || recording.incrFailureCalls != 0 || recording.blacklistCalls != 0 {
-				t.Fatalf("credential mutations = cooldown:%d failure:%d blacklist:%d, want none",
-					recording.cooldownCalls, recording.incrFailureCalls, recording.blacklistCalls)
-			}
+			assertNoCredentialHealthEffects(t, registry)
 		})
 	}
 }
@@ -1398,8 +1387,6 @@ func TestHandlerFinalizesCommittedStreamThroughJudge(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			forwarder := &scriptedForwarder{streamResults: []UpstreamResult{test.result}}
 			engine, handler, registry, stats := newStatsHandlerTestRuntime(t, forwarder, "sk-one", "sk-two")
-			recording := &recordingRuntimeRegistry{CredentialRegistry: registry}
-			handler.registry = recording
 			handler.now = func() time.Time { return now }
 
 			request := httptest.NewRequest(
@@ -1413,13 +1400,14 @@ func TestHandlerFinalizesCommittedStreamThroughJudge(t *testing.T) {
 			if len(forwarder.streamInputs) != 1 {
 				t.Fatalf("stream attempts = %d, want 1", len(forwarder.streamInputs))
 			}
-			if recording.cooldownCalls != test.wantCooldown {
-				t.Fatalf("cooldown calls = %d, want %d", recording.cooldownCalls, test.wantCooldown)
-			}
 			credentialID := forwarder.streamInputs[0].Credential.ID
+			cooldownUntil, _ := registry.CredentialCooldownUntil(credentialID)
+			if (test.wantCooldown == 1) == cooldownUntil.IsZero() {
+				t.Fatalf("cooldown until = %s, want cooldown %t", cooldownUntil, test.wantCooldown == 1)
+			}
 			if test.wantCooldown == 1 {
-				if !recording.cooldownUntil.Equal(now.Add(time.Minute)) {
-					t.Fatalf("cooldown until = %s, want %s", recording.cooldownUntil, now.Add(time.Minute))
+				if !cooldownUntil.Equal(now.Add(time.Minute)) {
+					t.Fatalf("cooldown until = %s, want %s", cooldownUntil, now.Add(time.Minute))
 				}
 				if got := stats.Snapshot(credentialID, now); got.Problem != 1 {
 					t.Fatalf("credential stats = %#v, want one problem", got)
@@ -1857,10 +1845,11 @@ func TestHandlerModelEndpointHasNoDataPlaneSideEffects(t *testing.T) {
 		t.Fatalf("Publish() error = %v", err)
 	}
 	spyEncryption := &decryptPanicEncryption{Service: keyService}
+	registry := state.NewCredentialRegistry()
 	handler := NewHandler(
-		manager, state.NewCredentialRegistry(), spyEncryption, panicForwarder{}, dialect.NewSet(), health.NewStatsStore(),
+		manager, registry, spyEncryption, panicForwarder{}, dialect.NewSet(), health.NewStatsStore(),
 		health.NewMutationCoordinator(),
-		nil, nil, nil,
+		nil, nil, nil, newTestSharedState(t, registry),
 	)
 	handler.registry = panicRuntimeRegistry{}
 	engine := gin.New()
@@ -1925,10 +1914,11 @@ func newModelListHandlerEngineWithLimit(
 	}); err != nil {
 		t.Fatalf("Publish() error = %v", err)
 	}
+	registry := state.NewCredentialRegistry()
 	handler := NewHandler(
-		manager, state.NewCredentialRegistry(), keyService, &scriptedForwarder{}, dialect.NewSet(), health.NewStatsStore(),
+		manager, registry, keyService, &scriptedForwarder{}, dialect.NewSet(), health.NewStatsStore(),
 		health.NewMutationCoordinator(),
-		nil, nil, nil,
+		nil, nil, nil, newTestSharedState(t, registry),
 	)
 	handler.modelListLimit = limit
 	engine := gin.New()
@@ -4762,7 +4752,7 @@ func TestHandlerSkipsCandidateChangedAfterCollection(t *testing.T) {
 			handler := NewHandler(
 				manager, registry, keyService, forwarder, dialect.NewSet(openAI), health.NewStatsStore(),
 				health.NewMutationCoordinator(),
-				nil, nil, nil,
+				nil, nil, nil, newTestSharedState(t, registry),
 			)
 			handler.registry = runtimeRegistry
 
@@ -4952,13 +4942,12 @@ func TestHandlerAllowsCapturedUnavailableIdentityAfterRecovery(t *testing.T) {
 					t.Fatal("SetCooldown(3) = false")
 				}
 			},
-			recover: func(t *testing.T, registry *state.CredentialRegistry, encrypted string) {
+			recover: func(t *testing.T, registry *state.CredentialRegistry, _ string) {
 				t.Helper()
-				if err := registry.ApplyCredentialImport(1, []state.CredentialEntry{{
-					ID: 3, GroupID: 1, Version: 1, IdentityGeneration: 3, Fingerprint: "test-3", Status: state.CredentialStatusActive,
-					EncryptedValue: encrypted,
-				}}); err != nil {
-					t.Fatalf("ApplyImport(recovered cooldown key) error = %v", err)
+				// A peer recovery reaches this instance as a shared state
+				// without the cooldown.
+				if !registry.ApplySharedHealth(3, state.SharedCredentialHealth{Epoch: "peer", Version: 1, IdentityGeneration: 3}) {
+					t.Fatal("ApplySharedHealth(recovered cooldown key) = false")
 				}
 			},
 		},
@@ -5101,6 +5090,7 @@ func newRealGatewayEngine(t *testing.T, upstreamURL string, upstreamKeys ...stri
 		nil,
 		nil,
 		nil,
+		newTestSharedState(t, registry),
 	)
 
 	engine := gin.New()
@@ -5344,7 +5334,7 @@ func newHandlerForTestWithStats(
 	handler := NewHandler(
 		manager, registry, keyService, forwarder, dialect.NewSet(openAI), stats,
 		health.NewMutationCoordinator(),
-		nil, nil, nil,
+		nil, nil, nil, newTestSharedState(t, registry),
 	)
 
 	return handler, manager, registry
@@ -5410,7 +5400,7 @@ func newConvertedFallbackHandlerTestRuntime(
 	handler := NewHandler(
 		manager, registry, keyService, forwarder, dialect.NewSet(dialect.NewAnthropic()),
 		health.NewStatsStore(), health.NewMutationCoordinator(),
-		nil, nil, nil,
+		nil, nil, nil, newTestSharedState(t, registry),
 	)
 	handler.channels = channelRegistry
 

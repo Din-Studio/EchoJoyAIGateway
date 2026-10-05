@@ -341,30 +341,7 @@ func (s *Service) restoreGroupCredential(
 			credential := credentialProbeCredentialFromEntry(entries[0])
 			testedCredential = &credential
 		}
-		if s.sharedHealth != nil {
-			sharedRestore = s.sharedRestoreFor(groupView, current, testedCredential, observedAt)
-			return
-		}
-		if targetSignature == nil {
-			if !s.registry.ClearModelCooldowns(credentialID) {
-				restoreErr = dbRegistryMismatch(mismatchMissingRegistry, groupID, credentialID)
-				return
-			}
-			bucket := classifyHealthKey(groupView, current, observedAt)
-			if (bucket == healthBucketCooldown || bucket == healthBucketBlacklisted) && !s.registry.RestoreRuntimeState(credentialID) {
-				restoreErr = dbRegistryMismatch(mismatchMissingRegistry, groupID, credentialID)
-				return
-			}
-		} else {
-			if testedCredential == nil || !s.registry.RestoreRuntimeStateIfMatch(
-				testedCredential.ref,
-				testedCredential.cooldownUntil,
-			) {
-				restoreErr = app_errors.ErrCredentialVersionConflict
-				return
-			}
-		}
-		s.stats.ClearProblemState(credentialID)
+		sharedRestore = s.sharedRestoreFor(groupView, current, testedCredential, observedAt)
 	}
 	coordinateRestore := func(targetSignature *groupValidationSignature) {
 		if s.mutations == nil {
@@ -403,12 +380,10 @@ func (s *Service) restoreGroupCredential(
 	if restoreErr != nil {
 		return CredentialItemResponse{}, restoreErr
 	}
-	if sharedRestore != nil {
-		if err := sharedRestore(); err != nil {
-			return CredentialItemResponse{}, err
-		}
-		s.stats.ClearProblemState(credentialID)
+	if err := sharedRestore(); err != nil {
+		return CredentialItemResponse{}, err
 	}
+	s.stats.ClearProblemState(credentialID)
 	view, exists = findRuntimeCredential(s.registry.Snapshot(), credentialID)
 	if !exists {
 		return CredentialItemResponse{}, dbRegistryMismatch(mismatchMissingRegistry, groupID, credentialID)
@@ -645,11 +620,7 @@ func (s *Service) BatchGroupCredentials(
 			return
 		}
 		if request.Action == CredentialBatchRestore {
-			if s.sharedHealth != nil {
-				sharedRestores, ids = s.sharedBatchRestores(group, before)
-				return
-			}
-			ids, mutationErr = s.restoreCredentialBatchRuntime(group, before)
+			sharedRestores, ids = s.sharedBatchRestores(group, before)
 			return
 		}
 		desired := make([]state.CredentialEntry, len(before))
@@ -762,35 +733,9 @@ func (s *Service) BatchGroupCredentials(
 	}, nil
 }
 
-func (s *Service) restoreCredentialBatchRuntime(group models.Group, entries []state.CredentialEntry) ([]uint, error) {
-	groupView := state.GroupCatalogView{ID: group.ID, Enabled: group.Enabled, WeightManual: group.WeightManual}
-	now := s.now().UTC()
-	restored := make([]uint, 0, len(entries))
-	for _, entry := range entries {
-		view := state.CredentialRuntimeView{
-			Status: entry.Status, AuthState: entry.AuthState, WeightManual: entry.WeightManual,
-			CooldownUntil: entry.CooldownUntil, Blacklisted: entry.Blacklisted,
-		}
-		bucket := classifyHealthKey(groupView, view, now)
-		if bucket != healthBucketCooldown && bucket != healthBucketBlacklisted && !hasModelCooldown(entry.ModelCooldowns, now) {
-			continue
-		}
-		if !s.registry.ClearModelCooldowns(entry.ID) {
-			return nil, dbRegistryMismatch(mismatchMissingRegistry, group.ID, entry.ID)
-		}
-		// 只修改健康字段，保留并发发布的订阅额度与授权状态。
-		if (bucket == healthBucketCooldown || bucket == healthBucketBlacklisted) && !s.registry.RestoreRuntimeState(entry.ID) {
-			return nil, dbRegistryMismatch(mismatchMissingRegistry, group.ID, entry.ID)
-		}
-		s.stats.ClearProblemState(entry.ID)
-		restored = append(restored, entry.ID)
-	}
-	return restored, nil
-}
-
-// sharedBatchRestores selects the same credentials as
-// restoreCredentialBatchRuntime and returns their shared store writes, to be
-// run after the mutation stripes are released.
+// sharedBatchRestores selects the credentials in cooldown, blacklisted, or
+// with a model cooldown and returns their shared store writes, to be run
+// after the mutation stripes are released.
 func (s *Service) sharedBatchRestores(group models.Group, entries []state.CredentialEntry) ([]func() error, []uint) {
 	groupView := state.GroupCatalogView{ID: group.ID, Enabled: group.Enabled, WeightManual: group.WeightManual}
 	now := s.now().UTC()

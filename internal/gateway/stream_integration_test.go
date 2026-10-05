@@ -918,6 +918,7 @@ func newStreamingGatewayEngine(t *testing.T, groups ...streamGatewayGroup) (*gin
 		nil,
 		nil,
 		nil,
+		newTestSharedState(t, registry),
 	)
 
 	engine := gin.New()

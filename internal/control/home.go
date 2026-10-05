@@ -107,11 +107,11 @@ func (s *Service) readHomeBase(
 	if err != nil || result.CurrentAccessKey == nil {
 		return result, err
 	}
-	view, ok, err := s.accessQuotaView(ctx, s.manager.Current(), *accessKeyID, time.UnixMilli(nowMS))
+	view, err := s.accessQuotaView(ctx, s.manager.Current(), *accessKeyID, time.UnixMilli(nowMS))
 	if err != nil {
 		return HomeBase{}, err
 	}
-	if status := mapAccessKeyCostLimitStatus(view); ok && len(status.Rules) > 0 {
+	if status := mapAccessKeyCostLimitStatus(view); len(status.Rules) > 0 {
 		result.CurrentAccessKey.CostLimitStatus = &status
 		result.CurrentAccessKey.CostLimitRules = costLimitDefinitionsFromStatus(status)
 	}

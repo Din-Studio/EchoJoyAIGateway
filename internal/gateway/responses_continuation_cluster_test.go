@@ -5,27 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
-
 	"gpt-load/internal/cluster"
-	"gpt-load/internal/platform/config"
+	"gpt-load/internal/testutil/clustertest"
 )
 
-func newGatewayClusterClient(t *testing.T) (*miniredis.Miniredis, *cluster.Client) {
-	t.Helper()
-	server := miniredis.RunT(t)
-	client, err := cluster.NewClient(&config.Config{Cluster: config.ClusterConfig{
-		RedisAddrs: []string{server.Addr()}, RedisKeyPrefix: "gl", InstanceID: "gateway-test",
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-	return server, client
-}
-
 func TestResponsesContinuationCrossesInstancesThroughSharedStore(t *testing.T) {
-	_, client := newGatewayClusterClient(t)
+	_, client := clustertest.NewClient(t)
 	instanceA := &scriptedForwarder{results: []UpstreamResult{storedResponse("warm-up"), storedResponse("created-on-a")}}
 	instanceB := &scriptedForwarder{results: []UpstreamResult{storedResponse("continued-on-b")}}
 	handlerA, engineA, _ := newContinuationFixture(t, instanceA)

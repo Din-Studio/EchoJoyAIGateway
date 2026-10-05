@@ -297,7 +297,7 @@ func TestGroupCollectionHTTPReturnsExactCollectionAndOptionsContracts(t *testing
 	fixture.service.now = func() time.Time { return observedAt }
 
 	engine := gin.New()
-	NewServer(
+	newTestServer(t,
 		&config.Config{AuthKey: authTestKey},
 		fixture.service,
 	).RegisterRoutes(engine)
@@ -379,7 +379,7 @@ func TestGroupCollectionHTTPAllowsAvailableKeysInAnUnavailableStatus(t *testing.
 	})
 
 	engine := gin.New()
-	NewServer(
+	newTestServer(t,
 		&config.Config{AuthKey: authTestKey},
 		fixture.service,
 	).RegisterRoutes(engine)
@@ -405,7 +405,7 @@ func TestGroupOptionsHTTPRejectsAnyQueryIncludingBareQuestionMark(t *testing.T) 
 	t.Parallel()
 	initControlI18n(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, nil).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, nil).RegisterRoutes(engine)
 
 	for _, target := range []string{
 		"/api/groups/options?q=alpha",
@@ -433,7 +433,7 @@ func TestGroupCollectionHTTPRejectsInvalidQueryBeforeServiceAccess(t *testing.T)
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(
+	newTestServer(t,
 		&config.Config{AuthKey: authTestKey},
 		fixture.service,
 	).RegisterRoutes(engine)
@@ -473,7 +473,7 @@ func TestGroupCollectionHTTPMapsServiceErrorsThroughStandardEnvelope(t *testing.
 				t.Fatalf("close fixture database: %v", err)
 			}
 			engine := gin.New()
-			NewServer(
+			newTestServer(t,
 				&config.Config{AuthKey: authTestKey},
 				fixture.service,
 			).RegisterRoutes(engine)

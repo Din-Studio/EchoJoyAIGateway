@@ -16,7 +16,6 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"gpt-load/internal/accessquota"
-	"gpt-load/internal/affinity"
 	"gpt-load/internal/automodel"
 	"gpt-load/internal/channel"
 	"gpt-load/internal/connection"
@@ -69,8 +68,7 @@ type AccessKeyRPMLimiter interface {
 	Allow(ctx context.Context, accessKeyID uint, limit int64) (ratelimit.LimitDecision, error)
 }
 
-// ResponseBindingStore owns Responses ownership: the in-process index in
-// single-instance mode and the shared Redis index in cluster mode.
+// ResponseBindingStore owns Responses ownership, shared through Redis.
 type ResponseBindingStore interface {
 	Lookup(ctx context.Context, accessKeyID uint, responseID string) (state.ResponseBinding, bool, error)
 	Record(
@@ -167,6 +165,15 @@ func (handler *Handler) freezeAttemptPricing(
 	return frozen
 }
 
+// SharedState groups the Redis-backed request state every gateway instance
+// shares. Every field is required.
+type SharedState struct {
+	AccessQuota      AccessQuotaGate
+	Health           state.SharedCredentialHealthStore
+	ResponseBindings ResponseBindingStore
+	Affinity         AffinityStore
+}
+
 func NewHandler(
 	manager *state.Manager,
 	registry *state.CredentialRegistry,
@@ -178,7 +185,7 @@ func NewHandler(
 	limiter AccessKeyRPMLimiter,
 	requestLogSink telemetry.RequestLogSink,
 	priceTables PriceTableProvider,
-	accessQuotas ...*accessquota.Runtime,
+	shared SharedState,
 ) *Handler {
 	if limiter == nil {
 		limiter = unlimitedAccessKeyRPMLimiter{}
@@ -189,13 +196,15 @@ func NewHandler(
 	manager.SetSchedulingState(registry.SchedulingState())
 	channels := channel.NewRegistry()
 	subscriptions, _ := subscriptionruntime.NewRuntime(channels, subscriptionproviders.Implementations()...)
-	handler := &Handler{
+	return &Handler{
 		decisionClients: platformhttp.NewHTTPClientManager(),
 		manager:         manager, channels: channels, subscriptions: subscriptions, registry: registry, encryption: encryptionService,
 		forwarder: forwarder, dialects: dialects, stats: stats, mutations: mutations,
 		limiter: limiter, requestLogSink: requestLogSink, priceTables: priceTables,
-		affinity:         affinity.NewCache(),
-		responseBindings: state.NewResponseBindings(),
+		accessQuota:      shared.AccessQuota,
+		sharedHealth:     shared.Health,
+		affinity:         shared.Affinity,
+		responseBindings: shared.ResponseBindings,
 		websocketLimits:  defaultWebsocketLimits(),
 		newRequestID:     newRequestID,
 		requestNow:       time.Now,
@@ -212,13 +221,6 @@ func NewHandler(
 			time.Now,
 		),
 	}
-	for _, runtime := range accessQuotas {
-		if runtime != nil {
-			handler.accessQuota = NewLocalAccessQuotaGate(manager, runtime)
-			break
-		}
-	}
-	return handler
 }
 
 // NewHandlerWithLifecycle wires the process HTTP lifecycle coordinator into
@@ -237,11 +239,8 @@ func NewHandlerWithLifecycle(
 	limiter AccessKeyRPMLimiter,
 	requestLogSink telemetry.RequestLogSink,
 	priceTables PriceTableProvider,
-	accessQuota AccessQuotaGate,
-	sharedHealth state.SharedCredentialHealthStore,
+	shared SharedState,
 	lifecycle *httplifecycle.Coordinator,
-	responseBindings ResponseBindingStore,
-	affinityStore AffinityStore,
 ) *Handler {
 	handler := NewHandler(
 		manager,
@@ -254,11 +253,8 @@ func NewHandlerWithLifecycle(
 		limiter,
 		requestLogSink,
 		priceTables,
+		shared,
 	)
-	if accessQuota != nil {
-		handler.accessQuota = accessQuota
-	}
-	handler.sharedHealth = sharedHealth
 	if channelRegistry != nil {
 		handler.channels = channelRegistry
 	}
@@ -266,12 +262,6 @@ func NewHandlerWithLifecycle(
 		handler.subscriptions = subscriptions
 	}
 	handler.lifecycle = lifecycle
-	if responseBindings != nil {
-		handler.responseBindings = responseBindings
-	}
-	if affinityStore != nil {
-		handler.affinity = affinityStore
-	}
 	return handler
 }
 
@@ -343,7 +333,7 @@ func (handler *Handler) applyDecisionEffectWithBlacklistPolicy(
 	blacklistThreshold int,
 	model string,
 ) {
-	if handler.sharedHealth != nil && handler.applySharedDecisionEffect(
+	if handler.applySharedDecisionEffect(
 		ref, credentialVersion, decision, statusCode, attemptNow, blacklistThreshold, model,
 	) {
 		return
@@ -478,26 +468,18 @@ func (handler *Handler) logSharedHealthUnavailable(credentialID uint, op string,
 }
 
 func (handler *Handler) recordCredentialSuccess(ref state.CredentialRef, at time.Time) {
-	if handler.sharedHealth != nil {
-		if !handler.credentialTargetCurrent(ref) {
-			return
-		}
-		// Healthy traffic stays off Redis: only a mirrored failure streak
-		// needs clearing.
-		if failures, _ := handler.registry.CredentialFailureCount(ref.ID); failures > 0 {
-			if _, err := handler.sharedHealth.ClearFailure(context.Background(), ref); err != nil {
-				handler.logSharedHealthUnavailable(ref.ID, "clear_failure", err)
-				handler.mutateCredentialForTarget(ref, func() { handler.registry.ClearFailure(ref.ID) })
-			}
-		}
-		handler.stats.RecordSuccess(ref.ID, at)
+	if !handler.credentialTargetCurrent(ref) {
 		return
 	}
-	handler.mutateCredentialForTarget(ref, func() {
-		if handler.registry.ClearFailure(ref.ID) {
-			handler.stats.RecordSuccess(ref.ID, at)
+	// Healthy traffic stays off Redis: only a mirrored failure streak needs
+	// clearing.
+	if failures, _ := handler.registry.CredentialFailureCount(ref.ID); failures > 0 {
+		if _, err := handler.sharedHealth.ClearFailure(context.Background(), ref); err != nil {
+			handler.logSharedHealthUnavailable(ref.ID, "clear_failure", err)
+			handler.mutateCredentialForTarget(ref, func() { handler.registry.ClearFailure(ref.ID) })
 		}
-	})
+	}
+	handler.stats.RecordSuccess(ref.ID, at)
 }
 
 func (handler *Handler) mutateCredentialForTarget(ref state.CredentialRef, mutate func()) {
@@ -590,7 +572,7 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 				ginContext.Writer.Written(),
 				ginContext.Writer.Status(),
 			)
-			if quotaAdmission != nil && quotaAdmission.admitted && handler.accessQuota != nil {
+			if quotaAdmission != nil && quotaAdmission.admitted {
 				handler.completeAccessQuota(
 					ginContext.Request.Context(),
 					accessKey.ID,
@@ -602,7 +584,7 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 		}()
 	}
 
-	if quotaAdmission != nil && handler.accessQuota != nil {
+	if quotaAdmission != nil {
 		quotaDecision, err := handler.accessQuota.Check(
 			ginContext.Request.Context(),
 			quotaAdmission.snapshot,
@@ -1255,7 +1237,7 @@ func (handler *Handler) executeAttempts(
 			}
 			continue
 		}
-		if quotaAdmission != nil && !quotaAdmission.admitted && handler.accessQuota != nil {
+		if quotaAdmission != nil && !quotaAdmission.admitted {
 			ticket, decision, err := handler.accessQuota.Admit(
 				ginContext.Request.Context(),
 				quotaAdmission.snapshot,

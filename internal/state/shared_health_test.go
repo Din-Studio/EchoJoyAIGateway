@@ -8,7 +8,6 @@ import (
 func newSharedHealthRegistry(t *testing.T, entries ...CredentialEntry) *CredentialRegistry {
 	t.Helper()
 	registry := NewCredentialRegistry()
-	registry.EnableSharedHealth()
 	mustReplaceKeyEntries(t, registry, entries)
 	return registry
 }
@@ -181,21 +180,6 @@ func TestSharedReconcileKeepsHealthAcrossConfigChanges(t *testing.T) {
 	}
 	if !registry.ApplySharedHealth(1, SharedCredentialHealth{Epoch: "e", Version: 1, IdentityGeneration: 8, FailureCount: 1}) {
 		t.Fatal("first state of the new identity was not applied")
-	}
-}
-
-func TestLocalReconcileStillResetsHealthOnConfigChange(t *testing.T) {
-	registry := NewCredentialRegistry()
-	entry := sharedHealthEntry(1)
-	mustReplaceKeyEntries(t, registry, []CredentialEntry{entry})
-	registry.SetBlacklisted(1)
-	reweighted := entry
-	reweighted.WeightManual = intPointer(5)
-	if _, err := registry.ReconcileGroup(10, []CredentialEntry{reweighted}); err != nil {
-		t.Fatal(err)
-	}
-	if onlyView(t, registry).Blacklisted {
-		t.Fatal("single-instance reconcile kept health across a config change")
 	}
 }
 

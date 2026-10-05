@@ -11,6 +11,7 @@ import (
 
 	"gpt-load/internal/catalog"
 	"gpt-load/internal/cluster"
+	"gpt-load/internal/testutil/clustertest"
 )
 
 type clusterCatalogInstance struct {
@@ -29,14 +30,15 @@ func newClusterCatalogInstance(
 	client catalogSyncClient,
 ) clusterCatalogInstance {
 	t.Helper()
-	redis := newJobTestClient(t, server, instanceID)
+	redis := clustertest.Connect(t, server, instanceID)
 	shared := cluster.NewCatalogStore(redis)
 	fixture := newServiceFixture(t)
 	bootstrap := loadSharedCatalogBootstrap(t.Context(), shared)
 	fixture.service.catalogRuntime.Publish(bootstrap.Runtime.Load())
-	coordinator := newCatalogSyncCoordinator(fixture.service, client, "", bootstrap.Metadata, bootstrap.HasLKG)
-	coordinator.shared = shared
-	coordinator.jobLease = cluster.NewJobLease(redis)
+	coordinator := newCatalogSyncCoordinator(
+		fixture.service, client, "", bootstrap.Metadata, bootstrap.HasLKG,
+		shared, cluster.NewJobLease(redis),
+	)
 	applied := &atomic.Int32{}
 	coordinator.applySnapshot = func(_ context.Context, snapshot *catalog.Snapshot) error {
 		applied.Add(1)
@@ -52,7 +54,7 @@ func storeSharedCatalog(t *testing.T, server *miniredis.Miniredis, result catalo
 	if err != nil {
 		t.Fatalf("EncodeCache() error = %v", err)
 	}
-	shared := cluster.NewCatalogStore(newJobTestClient(t, server, "seed"))
+	shared := cluster.NewCatalogStore(clustertest.Connect(t, server, "seed"))
 	if err := shared.Store(t.Context(), document, result.Metadata.SuccessfulFetchAtMillis); err != nil {
 		t.Fatalf("Store() error = %v", err)
 	}
@@ -139,7 +141,7 @@ func TestClusterCatalogWithoutSharedDocumentSyncsUnclaimed(t *testing.T) {
 	if got := fetches.Load(); got != 2 {
 		t.Fatalf("fetches without a shared catalog = %d, want each instance to sync", got)
 	}
-	fetchedAt, err := cluster.NewCatalogStore(newJobTestClient(t, server, "reader")).FetchedAt(t.Context())
+	fetchedAt, err := cluster.NewCatalogStore(clustertest.Connect(t, server, "reader")).FetchedAt(t.Context())
 	if err != nil || fetchedAt != 3000 {
 		t.Fatalf("shared catalog fetched_at = %d, %v; want 3000", fetchedAt, err)
 	}

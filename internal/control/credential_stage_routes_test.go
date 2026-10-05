@@ -33,7 +33,7 @@ func TestCredentialStageRoutesRequireAuthAndNeverReturnSecrets(t *testing.T) {
 	useEphemeralOAuthCallbackListeners(fixture.service.oauthCallback)
 	t.Cleanup(func() { _ = fixture.service.oauthCallback.Stop(t.Context()) })
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	unauthorized := httptest.NewRequest(http.MethodPost, "/api/credential-stages/authorizations", strings.NewReader(`{"channel_id":"codex"}`))
 	unauthorized.Header.Set("Content-Type", "application/json")
@@ -109,7 +109,7 @@ func TestCredentialStageRoutesUseExistingGroupProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	assertStageNetwork := func(t *testing.T, response *httptest.ResponseRecorder) {
 		t.Helper()
@@ -197,7 +197,7 @@ func TestDeviceAuthorizationRouteReturnsSafeChallengeAndPollsByPOST(t *testing.T
 		return nil, fmt.Errorf("device OAuth must not start a listener")
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/credential-stages/authorizations", strings.NewReader(`{"channel_id":"grok"}`))
 	request.Header.Set("Authorization", "Bearer test-auth-key")
@@ -235,7 +235,7 @@ func TestBeginCredentialAuthorizationAllowsManualCallbackWhenListenerIsUnavailab
 		return nil, fmt.Errorf("port is already in use")
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/credential-stages/authorizations", strings.NewReader(`{"channel_id":"codex"}`))
 	request.Header.Set("Authorization", "Bearer test-auth-key")
@@ -263,7 +263,7 @@ func TestBeginCredentialAuthorizationStartsOnlyTheCallbackRequestedByTheDriver(t
 		return nil, fmt.Errorf("listener must not start")
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/credential-stages/authorizations", strings.NewReader(`{"channel_id":"codex"}`))
 	request.Header.Set("Authorization", "Bearer test-auth-key")
@@ -303,7 +303,7 @@ func TestManualOAuthCallbackCompletesOnlyItsBoundStageOnce(t *testing.T) {
 		return codex.Credential{Type: "codex", AccessToken: "access", RefreshToken: "refresh", AccountID: "account-one", Email: "one@example.com"}, nil
 	})
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	callbackURL := "http://localhost:1455/auth/callback?code=authorization-code&state=" + url.QueryEscape(state)
 
 	mismatched := postManualOAuthCallback(engine, second.StageID, callbackURL)
@@ -423,7 +423,7 @@ func TestOAuthFileImportRouteStreamsOneFileIntoReadyStage(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -462,7 +462,7 @@ func TestOAuthFileImportRouteRequiresChannelID(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -676,7 +676,7 @@ func useEphemeralOAuthCallbackListeners(manager *OAuthCallbackManager) {
 func TestNewServerConfiguresOAuthCallbackForWildcardContainerHost(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
-	NewServer(&config.Config{AuthKey: "test-auth-key", Server: config.ServerConfig{Host: "0.0.0.0"}}, fixture.service)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key", Server: config.ServerConfig{Host: "0.0.0.0"}}, fixture.service)
 	if got := fixture.service.oauthCallback.host; got != "0.0.0.0" {
 		t.Fatalf("callback host = %q, want 0.0.0.0", got)
 	}
@@ -690,7 +690,7 @@ func TestCredentialObservationRoutesReadCacheAndRefreshExplicitly(t *testing.T) 
 		return codex.AccountObservation{Payload: []byte(`{"plan_type":"pro","rate_limit":{"primary_window":{"limit_window_seconds":604800,"used_percent":35}}}`)}, nil
 	})
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	detailRequest := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/groups/%d/credentials/%d", groupID, credentialID), nil)
 	detailRequest.Header.Set("Authorization", "Bearer test-auth-key")
@@ -734,7 +734,7 @@ func TestCredentialResetCreditRouteRequiresIdempotencyAndReplays(t *testing.T) {
 		return codex.AccountObservation{Payload: []byte(`{}`)}, nil
 	})
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	path := fmt.Sprintf("/api/groups/%d/credentials/%d/reset-credits/consume", groupID, credentialID)
 
 	missingKey := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))

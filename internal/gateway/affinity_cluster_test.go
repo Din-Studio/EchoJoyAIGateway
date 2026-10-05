@@ -4,10 +4,11 @@ import (
 	"testing"
 
 	"gpt-load/internal/cluster"
+	"gpt-load/internal/testutil/clustertest"
 )
 
 func TestSoftAffinityLearnedOnOneInstanceIsHitOnAnother(t *testing.T) {
-	server, client := newGatewayClusterClient(t)
+	server, client := clustertest.NewClient(t)
 	forwarderA := &scriptedForwarder{results: successfulAffinityResults(2)}
 	forwarderB := &scriptedForwarder{results: successfulAffinityResults(2)}
 	handlerA, _, _ := newHandlerForTest(t, forwarderA, "sk-one", "sk-two")

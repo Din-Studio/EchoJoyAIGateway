@@ -82,6 +82,7 @@ func TestControlWriteLockDoesNotBlockDataPlane(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		newTestGatewaySharedState(fixture),
 	)
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()

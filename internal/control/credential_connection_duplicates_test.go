@@ -190,7 +190,7 @@ func TestInspectSubscriptionConnectionIdentifiesExactDuplicateStages(t *testing.
 
 	engine := gin.New()
 	const auth = "credential-duplicate-inspection-auth"
-	NewServer(&config.Config{AuthKey: auth}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: auth}, fixture.service).RegisterRoutes(engine)
 	encoded, err := json.Marshal(CredentialConnectRequest{StagedCredentialIDs: stageIDs})
 	if err != nil {
 		t.Fatal(err)

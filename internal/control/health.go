@@ -421,37 +421,35 @@ func (service *Service) RuntimeHealth() (runtimeHealthResponse, error) {
 		}
 		credit.Identity = identity
 	}
-	if observation.accessQuotaViews != nil {
-		accessKeyIDs := make([]uint, 0, len(observation.snapshot.AccessKeysByID))
-		for accessKeyID := range observation.snapshot.AccessKeysByID {
-			accessKeyIDs = append(accessKeyIDs, accessKeyID)
+	accessKeyIDs := make([]uint, 0, len(observation.snapshot.AccessKeysByID))
+	for accessKeyID := range observation.snapshot.AccessKeysByID {
+		accessKeyIDs = append(accessKeyIDs, accessKeyID)
+	}
+	sort.Slice(accessKeyIDs, func(i, j int) bool { return accessKeyIDs[i] < accessKeyIDs[j] })
+	for _, accessKeyID := range accessKeyIDs {
+		accessKey := observation.snapshot.AccessKeysByID[accessKeyID]
+		if accessKey.Status != state.AccessKeyStatusActive {
+			continue
 		}
-		sort.Slice(accessKeyIDs, func(i, j int) bool { return accessKeyIDs[i] < accessKeyIDs[j] })
-		for _, accessKeyID := range accessKeyIDs {
-			accessKey := observation.snapshot.AccessKeysByID[accessKeyID]
-			if accessKey.Status != state.AccessKeyStatusActive {
-				continue
-			}
-			view := observation.accessQuotaViews[accessKeyID]
-			if view.Allowed {
-				continue
-			}
-			if !validAccessKeyPrefix(accessKey.KeyPrefix) || !validAccessKeySuffix(accessKey.KeySuffix) {
-				return runtimeHealthResponse{}, fmt.Errorf(
-					"map blocked access key %d suffix: %w",
-					accessKeyID,
-					app_errors.ErrInternalServer,
-				)
-			}
-			status := mapAccessKeyCostLimitStatus(view)
-			result.BlockedAccessKeys = append(result.BlockedAccessKeys, healthAccessKeyCostLimitResponse{
-				AccessKeyID: accessKeyID, Name: accessKey.Name,
-				MaskedKey:         maskedAccessKey(accessKey.KeyPrefix, accessKey.KeySuffix),
-				Recoverable:       status.Recoverable,
-				NextAvailableAtMS: cloneCostLimitMilliseconds(status.NextAvailableAtMS),
-				BlockingRules:     blockingCostLimitRuleStatuses(status),
-			})
+		view := observation.accessQuotaViews[accessKeyID]
+		if view.Allowed {
+			continue
 		}
+		if !validAccessKeyPrefix(accessKey.KeyPrefix) || !validAccessKeySuffix(accessKey.KeySuffix) {
+			return runtimeHealthResponse{}, fmt.Errorf(
+				"map blocked access key %d suffix: %w",
+				accessKeyID,
+				app_errors.ErrInternalServer,
+			)
+		}
+		status := mapAccessKeyCostLimitStatus(view)
+		result.BlockedAccessKeys = append(result.BlockedAccessKeys, healthAccessKeyCostLimitResponse{
+			AccessKeyID: accessKeyID, Name: accessKey.Name,
+			MaskedKey:         maskedAccessKey(accessKey.KeyPrefix, accessKey.KeySuffix),
+			Recoverable:       status.Recoverable,
+			NextAvailableAtMS: cloneCostLimitMilliseconds(status.NextAvailableAtMS),
+			BlockingRules:     blockingCostLimitRuleStatuses(status),
+		})
 	}
 	requestLog, err := mapRequestLogHealth(service.requestLogStats.Stats())
 	if err != nil {

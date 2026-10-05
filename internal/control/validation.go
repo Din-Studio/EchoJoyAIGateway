@@ -35,7 +35,6 @@ type validationSweep interface {
 
 type validationRegistry interface {
 	BlacklistedCredentials() []state.CredentialRef
-	RecoverIfMatch(ref state.CredentialRef) bool
 }
 
 type statsResetter interface {
@@ -55,12 +54,11 @@ type validationWorker struct {
 	snapshots snapshotSource
 	registry  validationRegistry
 	stats     statsResetter
-	mutations credentialMutationCoordinator
 	decryptor credentialDecryptor
 	channels  *channel.Registry
 	executor  execution.Executor
-	// sharedHealth, when set, recovers through the cluster store after the
-	// publication boundary is released.
+	// sharedHealth recovers through the cluster store after the publication
+	// boundary is released.
 	sharedHealth state.SharedCredentialHealthStore
 }
 
@@ -79,19 +77,19 @@ func newValidationWorker(
 	manager *state.Manager,
 	registry *state.CredentialRegistry,
 	stats *health.StatsStore,
-	mutations *health.MutationCoordinator,
 	decryptor encryption.Service,
 	channels *channel.Registry,
 	executor execution.Executor,
+	sharedHealth state.SharedCredentialHealthStore,
 ) *validationWorker {
 	return &validationWorker{
-		snapshots: manager,
-		registry:  registry,
-		stats:     stats,
-		mutations: mutations,
-		decryptor: decryptor,
-		channels:  channels,
-		executor:  executor,
+		snapshots:    manager,
+		registry:     registry,
+		stats:        stats,
+		decryptor:    decryptor,
+		channels:     channels,
+		executor:     executor,
+		sharedHealth: sharedHealth,
 	}
 }
 
@@ -201,18 +199,10 @@ func (worker *validationWorker) validateRef(ctx context.Context, snapshot *state
 		return
 	}
 
-	if worker.mutations == nil {
-		if ctx.Err() == nil {
-			logValidationFailure(ref, string(executed.protocol), "conditional_recover")
-		}
-		return
-	}
-
-	// This callback follows Manager publishMu -> coordinator stripe ->
-	// Registry/Stats locks. With a shared store it only compares the target
-	// signature; the store write follows once publishMu is released. Keep it to current reads, pure signature work, and
-	// coordinated recover/reset; decrypt, probe, DB/network, and logging stay
-	// outside the publication boundary.
+	// This callback runs under Manager publishMu and only compares the target
+	// signature; the shared store write follows once publishMu is released.
+	// Decrypt, probe, DB/network, and logging stay outside the publication
+	// boundary.
 	recovered := worker.snapshots.WithCurrentSnapshot(func(current *state.ConfigSnapshot) bool {
 		if current == nil {
 			return false
@@ -222,23 +212,9 @@ func (worker *validationWorker) validateRef(ctx context.Context, snapshot *state
 			return false
 		}
 		currentTarget, valid := buildGroupValidationTarget(currentGroup)
-		if !valid || currentTarget.signature != target.signature {
-			return false
-		}
-
-		if worker.sharedHealth != nil {
-			return true
-		}
-		var matched bool
-		worker.mutations.Do(ref.ID, func() {
-			matched = worker.registry.RecoverIfMatch(ref)
-			if matched {
-				worker.stats.Reset(ref.ID)
-			}
-		})
-		return matched
+		return valid && currentTarget.signature == target.signature
 	})
-	if recovered && worker.sharedHealth != nil {
+	if recovered {
 		result, err := worker.sharedHealth.RecoverIfMatch(ctx, ref, nil)
 		recovered = err == nil && result.Accepted
 		if recovered {

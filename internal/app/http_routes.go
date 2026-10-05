@@ -15,8 +15,7 @@ const readinessCheckTimeout = 2 * time.Second
 
 // ReadinessProbe reports the health of every infrastructure dependency the
 // process cannot serve without. Each key is a dependency name; a nil value
-// means healthy. It is nil in single-instance mode, where /health stays a
-// static liveness response.
+// means healthy.
 type ReadinessProbe interface {
 	Check(context.Context) map[string]error
 }
@@ -41,13 +40,6 @@ func HTTPModule(probe ReadinessProbe) httproute.Module {
 
 func healthHandler(probe ReadinessProbe) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if probe == nil {
-			c.JSON(http.StatusOK, gin.H{
-				"status":  "ok",
-				"version": version.Version,
-			})
-			return
-		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), readinessCheckTimeout)
 		defer cancel()
 		results := probe.Check(ctx)

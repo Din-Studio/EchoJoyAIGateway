@@ -13,9 +13,8 @@ import (
 	"gpt-load/internal/telemetry"
 )
 
-// AffinityStore remembers soft credential preferences: the in-process cache
-// in single-instance mode and the shared Redis store in cluster mode. Both
-// are advisory, so a failing store only removes the preference.
+// AffinityStore remembers soft credential preferences shared through Redis.
+// They are advisory, so a failing store only removes the preference.
 type AffinityStore interface {
 	Lookup(ctx context.Context, policy affinity.Policy, key affinity.Key) (affinity.Observation, error)
 	RecordSuccess(
@@ -65,7 +64,7 @@ func (handler *Handler) resolveRequestAffinity(
 		Capacity: snapshot.Settings.AffinityCapacity,
 		TTL:      snapshot.Settings.AffinityTTL,
 	}
-	if handler.affinity == nil || !key.Valid() || !policy.Valid() {
+	if !key.Valid() || !policy.Valid() {
 		return result
 	}
 	observation, err := handler.affinity.Lookup(ctx, policy, key)
@@ -101,8 +100,7 @@ func (handler *Handler) recordAffinitySuccess(
 	selection scheduler.Selection,
 	ref state.CredentialRef,
 ) {
-	if handler == nil || handler.affinity == nil || !request.key.Valid() ||
-		!selection.Group.AffinityEnabled {
+	if handler == nil || !request.key.Valid() || !selection.Group.AffinityEnabled {
 		return
 	}
 	// 响应已完成；客户端断开不应阻止学习，调用由共享存储自身的超时约束。

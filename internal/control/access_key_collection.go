@@ -95,11 +95,11 @@ func (s *Service) ListAccessKeyCollection(
 	}
 	snapshot := s.manager.Current()
 	for index := range records {
-		view, ok, err := s.accessQuotaView(ctx, snapshot, records[index].ID, observedAt)
+		view, err := s.accessQuotaView(ctx, snapshot, records[index].ID, observedAt)
 		if err != nil {
 			return AccessKeyCollectionResponse{}, err
 		}
-		if status := mapAccessKeyCostLimitStatus(view); ok && len(status.Rules) > 0 {
+		if status := mapAccessKeyCostLimitStatus(view); len(status.Rules) > 0 {
 			records[index].CostLimitStatus = &status
 		}
 	}

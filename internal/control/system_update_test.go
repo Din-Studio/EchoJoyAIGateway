@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/platform/config"
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/releasecheck"
@@ -46,7 +47,7 @@ func TestSystemUpdateHTTPChecksOnDemandWithoutAffectingHome(t *testing.T) {
 		&config.Config{AuthKey: "test-auth-key"},
 		fixture.service,
 		checker,
-		nil,
+		cluster.NewAuthFailures(fixture.cluster),
 	)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
@@ -104,7 +105,7 @@ func TestSystemUpdateHTTPReturnsNullForSuccessfulNoUpdate(t *testing.T) {
 		&config.Config{AuthKey: "test-auth-key"},
 		fixture.service,
 		checker,
-		nil,
+		cluster.NewAuthFailures(fixture.cluster),
 	)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
@@ -133,7 +134,7 @@ func TestSystemUpdateHTTPHidesUpstreamFailureBehindBadGateway(t *testing.T) {
 		&config.Config{AuthKey: "test-auth-key"},
 		fixture.service,
 		checker,
-		nil,
+		cluster.NewAuthFailures(fixture.cluster),
 	)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
@@ -159,7 +160,7 @@ func TestSystemUpdateHTTPRejectsAccessKeyAndInvalidQueryBeforeCheck(t *testing.T
 		&config.Config{AuthKey: "test-auth-key"},
 		fixture.service,
 		checker,
-		nil,
+		cluster.NewAuthFailures(fixture.cluster),
 	)
 	engine := gin.New()
 	server.RegisterRoutes(engine)

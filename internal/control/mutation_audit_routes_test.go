@@ -52,7 +52,7 @@ func TestModelPriceSyncMutationAudit(t *testing.T) {
 				NotModified: true,
 			}, nil
 		})
-		newCatalogSyncCoordinator(fixture.service, client, "unused", catalog.Metadata{
+		newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{
 			CheckedAtMillis: 10, SuccessfulFetchAtMillis: 10,
 		}, true)
 
@@ -86,7 +86,7 @@ func TestModelPriceSyncMutationAudit(t *testing.T) {
 		client := catalogSyncClientFunc(func(context.Context, catalog.Metadata) (catalog.SyncResult, error) {
 			return catalog.SyncResult{}, errors.New(rawFailure)
 		})
-		newCatalogSyncCoordinator(fixture.service, client, "unused", catalog.Metadata{}, false)
+		newTestCatalogSyncCoordinator(t, fixture.service, client, "unused", catalog.Metadata{}, false)
 
 		var logs bytes.Buffer
 		_, engine := newMutationAuditRouteServer(t, fixture, &logs)
@@ -261,7 +261,7 @@ func TestGroupMutationAuditExcludesInternalCalls(t *testing.T) {
 		"sk-direct-service",
 	)
 	var logs bytes.Buffer
-	server := NewServer(
+	server := newTestServer(t,
 		&config.Config{AuthKey: authTestKey},
 		fixture.service,
 	)
@@ -811,7 +811,7 @@ func TestControlSecurityEventFormatterSecretMatrix(t *testing.T) {
 				if withHook {
 					logger.AddHook(redact.NewHook(redact.New()))
 				}
-				server := NewServer(
+				server := newTestServer(t,
 					&config.Config{AuthKey: authKey},
 					fixture.service,
 				)
@@ -1360,7 +1360,7 @@ func newMutationAuditRouteServer(
 ) (*Server, *gin.Engine) {
 	t.Helper()
 	initControlI18n(t)
-	server := NewServer(
+	server := newTestServer(t,
 		&config.Config{AuthKey: authTestKey},
 		fixture.service,
 	)

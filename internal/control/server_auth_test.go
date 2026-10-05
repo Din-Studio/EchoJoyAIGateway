@@ -380,7 +380,7 @@ func TestAuthSessionEndpointReturnsAuthenticatedWithoutDatabaseAccess(t *testing
 	t.Parallel()
 	initControlI18n(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, nil).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, nil).RegisterRoutes(engine)
 
 	recorder := serveAuthRequest(
 		engine,
@@ -425,13 +425,9 @@ func TestAuthSessionEndpointAcceptsActiveAccessKeyAndRejectsAdminRoutes(t *testi
 	if err != nil {
 		t.Fatalf("CreateAccessKey() error = %v", err)
 	}
-	ticket, decision := fixture.accessQuota.Admit(created.ID, time.Now())
-	if !decision.Allowed {
-		t.Fatalf("Admit() = %#v", decision)
-	}
-	fixture.accessQuota.Complete(ticket, 1_000_000_000)
+	admitAccessQuota(t, fixture, created.ID, time.Now(), 1_000_000_000)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 
 	session := serveAuthRequest(
 		engine,
@@ -532,7 +528,7 @@ func TestAccessKeyAuthenticationDoesNotClearPeerFailuresOrLock(t *testing.T) {
 		t.Fatalf("CreateAccessKey() error = %v", err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 	const peer = "192.0.2.58:1234"
 
 	assertSessionStatus := func(authorization string, wantStatus int) {
@@ -580,7 +576,7 @@ func TestAuthSessionEndpointRejectsDisabledAccessKey(t *testing.T) {
 		t.Fatalf("CreateAccessKey() error = %v", err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 
 	recorder := serveAuthRequest(
 		engine,
@@ -605,7 +601,7 @@ func TestAuthSessionEndpointRejectsCredentialMatchingAdminAndAccessKey(t *testin
 		t.Fatalf("CreateAccessKey() error = %v", err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: created.Key}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: created.Key}, fixture.service).RegisterRoutes(engine)
 
 	recorder := serveAuthRequest(
 		engine,
@@ -629,7 +625,7 @@ func TestAuthSessionRejectsExpiredAccessKeyWithoutChangingAdminFailureCount(t *t
 	expiresAtMS := now.Add(-time.Millisecond).UnixMilli()
 	publishControlAuthAccessKey(t, fixture, accessKey, &expiresAtMS, nil)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 	const peer = "192.0.2.90:1234"
 
 	for range authFailureLimit - 1 {
@@ -657,7 +653,7 @@ func TestAuthSessionExpiredAccessKeyCollisionCannotBecomeAdmin(t *testing.T) {
 	expiresAtMS := now.Add(-time.Millisecond).UnixMilli()
 	publishControlAuthAccessKey(t, fixture, authTestKey, &expiresAtMS, nil)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 
 	recorder := serveAuthRequest(
 		engine,
@@ -684,7 +680,7 @@ func TestAuthSessionEnforcesAccessKeyDirectPeerCIDRs(t *testing.T) {
 		[]netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
 	)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 
 	allowed := serveAuthRequest(
 		engine,
@@ -733,7 +729,7 @@ func TestAuthSessionEndpointRequiresAuthentication(t *testing.T) {
 	t.Parallel()
 	initControlI18n(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, nil).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, nil).RegisterRoutes(engine)
 
 	recorder := serveAuthRequest(engine, "/api/auth/session", "192.0.2.51:1234", "", nil)
 
@@ -746,7 +742,7 @@ func TestCollectionEndpointsRequireBearerAuthentication(t *testing.T) {
 	t.Parallel()
 	initControlI18n(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, nil).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, nil).RegisterRoutes(engine)
 
 	peerIndex := 60
 	for _, target := range []string{
@@ -789,7 +785,7 @@ func TestAuthSessionEndpointUsesLimiter(t *testing.T) {
 	t.Parallel()
 	initControlI18n(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, nil).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, nil).RegisterRoutes(engine)
 	const peer = "192.0.2.52:1234"
 
 	for attempt, wantStatus := range []int{
@@ -808,7 +804,7 @@ func TestAuthSessionEndpointUsesLimiter(t *testing.T) {
 
 func newAuthProbeServer(t *testing.T) (*Server, *gin.Engine) {
 	t.Helper()
-	server := NewServer(&config.Config{AuthKey: authTestKey}, nil)
+	server := newTestServer(t, &config.Config{AuthKey: authTestKey}, nil)
 	engine := gin.New()
 	api := engine.Group("/api")
 	api.Use(i18n.Middleware(), server.authenticate())

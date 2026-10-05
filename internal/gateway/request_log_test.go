@@ -2293,9 +2293,10 @@ func TestHandlerUsesFrozenRPMLimitAcrossSnapshotPublish(t *testing.T) {
 			publish(9)
 		}
 	}
+	registry := state.NewCredentialRegistry()
 	handler := NewHandler(
 		manager,
-		state.NewCredentialRegistry(),
+		registry,
 		keyService,
 		&scriptedForwarder{},
 		dialect.NewSet(),
@@ -2304,6 +2305,7 @@ func TestHandlerUsesFrozenRPMLimitAcrossSnapshotPublish(t *testing.T) {
 		limiter,
 		telemetry.NoopRequestLogSink{},
 		nil,
+		newTestSharedState(t, registry),
 	)
 	handler.newRequestID = func() (string, error) { return fixedRequestID, nil }
 	engine := gin.New()
@@ -2581,10 +2583,6 @@ func TestHandlerPrioritizesClientCancellationOverLocalInferenceErrors(t *testing
 				extractDialect.cancel = cancel
 			}
 			handler.dialects[protocol.OpenAICompletions] = extractDialect
-			handler.now = func() time.Time {
-				t.Fatal("canceled local failure entered health timing")
-				return time.Time{}
-			}
 
 			request := httptest.NewRequest(
 				http.MethodPost,
@@ -2634,6 +2632,7 @@ func TestHandlerPrioritizesClientCancellationOverLocalInferenceErrors(t *testing
 				runtimeRegistry.clearCalls != 0 {
 				t.Fatalf("Registry side effects = %#v", runtimeRegistry)
 			}
+			assertNoCredentialHealthEffects(t, registry)
 			if got := stats.Snapshot(1, time.Now()); got != (health.CredentialStats{}) {
 				t.Fatalf("StatsStore side effects = %#v, want zero", got)
 			}
@@ -2948,16 +2947,15 @@ func TestHandlerRecordsCommittedStreamTerminalMatrix(t *testing.T) {
 					downstreamBody,
 				)
 			}
-			wantClearCalls := 0
 			wantStats := health.CredentialStats{}
 			if test.observation.EndReason == StreamEndCleanEOF {
-				wantClearCalls = 1
 				wantStats.Success = 1
 			}
+			// A success without a mirrored failure streak leaves health alone.
 			if runtimeRegistry.cooldownCalls != 0 ||
 				runtimeRegistry.incrFailureCalls != 0 ||
 				runtimeRegistry.blacklistCalls != 0 ||
-				runtimeRegistry.clearCalls != wantClearCalls {
+				runtimeRegistry.clearCalls != 0 {
 				t.Fatalf("Registry side effects = %#v", runtimeRegistry)
 			}
 			if got := handler.stats.Snapshot(1, now); got != wantStats {

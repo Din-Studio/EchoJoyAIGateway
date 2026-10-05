@@ -244,7 +244,7 @@ func TestUpdateSettingsPublishesCORSAndResponseHeaderRules(t *testing.T) {
 	}
 
 	var rows []models.SystemSetting
-	if err := fixture.db.Order("key").Find(&rows).Error; err != nil {
+	if err := fixture.db.Where("key <> ?", clusterConfigRevisionKey).Order("key").Find(&rows).Error; err != nil {
 		t.Fatal(err)
 	}
 	if len(rows) != 2 || rows[0].Key != state.SettingCORS || rows[1].Key != state.SettingResponseHeaderRules {
@@ -419,7 +419,7 @@ func TestUpdateSettingsEnablingModelsDevRequestsImmediateSyncOnce(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	coordinator := newCatalogSyncCoordinator(
+	coordinator := newTestCatalogSyncCoordinator(t,
 		fixture.service,
 		nil,
 		"unused",
@@ -642,7 +642,7 @@ func TestUpdateSettingsRejectsSDKOwnedCredentialHeaders(t *testing.T) {
 	)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
 
 	beforeSnapshot := fixture.manager.Current()
 	for _, value := range []string{"Bearer ${API_KEY}", "Bearer " + providerToken} {

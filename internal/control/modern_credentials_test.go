@@ -37,7 +37,7 @@ func TestModernCredentialDetailPreservesWindowUsage(t *testing.T) {
 	}
 	fixture.service.credentialWindowUsage = reader
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 	result := performGroupCollectionRequest(engine, fmt.Sprintf("/api/modern/groups/%d/credentials/%d", group, id), "Bearer "+authTestKey)
 	if result.Code != http.StatusOK {
 		t.Fatalf("detail status=%d body=%s", result.Code, result.Body.String())
@@ -81,7 +81,7 @@ func TestModernCredentialFiltersRunBeforePagination(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	credentialKey := fixture.encryption.Hash("credential-filter/v1|openai|api_key|" + last.Fingerprint)
 	updated := serveGroupDetailLedgerRoute(t, engine, http.MethodPut,
 		fmt.Sprintf("/api/groups/%d/credentials/%d", created.GroupID, last.ID),
@@ -182,7 +182,7 @@ func TestModernCredentialRoutesLoadActivity(t *testing.T) {
 			}}
 			fixture.service.credentialActivity = reader
 			engine := gin.New()
-			NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+			newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 			for _, detail := range []bool{false, true} {
 				path := fmt.Sprintf("/api/modern/groups/%d/credentials", groupID)
 				if detail {
@@ -239,7 +239,7 @@ func TestModernCredentialRoutesExposeManualWeightWithoutChangingClassic(t *testi
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	classicList := fmt.Sprintf("/api/groups/%d/credentials", created.GroupID)
 	modernList := fmt.Sprintf("/api/modern/groups/%d/credentials", created.GroupID)
 	classicDetail := fmt.Sprintf("%s/%d", classicList, credential.ID)

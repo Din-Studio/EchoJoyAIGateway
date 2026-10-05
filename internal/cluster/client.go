@@ -1,6 +1,6 @@
-// Package cluster owns the optional Redis-backed multi-instance primitives.
-// Every constructor returns nil when cluster mode is disabled so callers can
-// gate on a nil check instead of an empty implementation.
+// Package cluster owns the Redis-backed primitives every gateway instance
+// shares. Redis is a hard dependency: a single instance is a one-replica
+// cluster.
 package cluster
 
 import (
@@ -27,20 +27,16 @@ const (
 	stateTimeout = 200 * time.Millisecond
 )
 
-// Client wraps the Redis connection shared by every cluster primitive. It is
-// nil in single-instance mode.
+// Client wraps the Redis connection shared by every cluster primitive.
 type Client struct {
 	redis.UniversalClient
 	keyPrefix  string
 	instanceID string
 }
 
-// NewClient connects to Redis when cluster mode is enabled. Redis is a hard
-// dependency in cluster mode, so an unreachable server fails startup.
+// NewClient connects to Redis. Redis is a hard dependency, so an unreachable
+// server fails startup.
 func NewClient(cfg *config.Config) (*Client, error) {
-	if cfg == nil || !cfg.Cluster.Enabled() {
-		return nil, nil
-	}
 	options := &redis.UniversalOptions{
 		Addrs:        cfg.Cluster.RedisAddrs,
 		Password:     cfg.Cluster.RedisPassword,
@@ -77,17 +73,11 @@ func NewClient(cfg *config.Config) (*Client, error) {
 
 // Ping verifies the Redis connection.
 func (c *Client) Ping(ctx context.Context) error {
-	if c == nil {
-		return fmt.Errorf("redis client is nil")
-	}
 	return c.UniversalClient.Ping(ctx).Err()
 }
 
 // Close releases the Redis connection pool.
 func (c *Client) Close() error {
-	if c == nil {
-		return nil
-	}
 	return c.UniversalClient.Close()
 }
 
@@ -98,8 +88,5 @@ func (c *Client) Key(parts ...string) string {
 
 // InstanceID returns the identity this process uses in cluster events.
 func (c *Client) InstanceID() string {
-	if c == nil {
-		return ""
-	}
 	return c.instanceID
 }

@@ -8,13 +8,16 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/gin-gonic/gin"
-
 	"gpt-load/internal/platform/httproute"
 	"gpt-load/internal/platform/version"
 )
 
 type readinessProbeFunc func(context.Context) map[string]error
+
+// healthyProbe reports every dependency ready.
+var healthyProbe = readinessProbeFunc(func(context.Context) map[string]error {
+	return map[string]error{"database": nil, "redis": nil}
+})
 
 func (probe readinessProbeFunc) Check(ctx context.Context) map[string]error {
 	return probe(ctx)
@@ -38,26 +41,8 @@ func serveHealth(t *testing.T, probe ReadinessProbe) *httptest.ResponseRecorder 
 	return recorder
 }
 
-func TestHealthWithoutProbeKeepsStaticBody(t *testing.T) {
-	recorder := serveHealth(t, nil)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", recorder.Code)
-	}
-	gin.SetMode(gin.ReleaseMode)
-	expected, err := json.Marshal(gin.H{"status": "ok", "version": version.Version})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := recorder.Body.String(); got != string(expected) {
-		t.Fatalf("body = %s, want %s", got, expected)
-	}
-}
-
 func TestHealthWithProbeReportsChecks(t *testing.T) {
-	healthy := readinessProbeFunc(func(context.Context) map[string]error {
-		return map[string]error{"database": nil, "redis": nil}
-	})
-	recorder := serveHealth(t, healthy)
+	recorder := serveHealth(t, healthyProbe)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("healthy status = %d, want 200", recorder.Code)
 	}

@@ -33,7 +33,7 @@ func TestCredentialProbeProtocolOverrideDoesNotChangeGroupDefault(t *testing.T) 
 	executor := &credentialProbeTestExecutor{result: successfulCredentialProbeResult()}
 	fixture.service.executor = executor
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "protocol-auth"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "protocol-auth"}, fixture.service).RegisterRoutes(engine)
 	path := fmt.Sprintf("/api/groups/%d/credentials/%d/test", groupID, credential.ID)
 	response := serveCredentialRequest(t, engine, http.MethodPost, path, `{"protocol":"openai-embeddings","model":" temporary-model "}`, "protocol-auth", "")
 	if response.Code != http.StatusOK {
@@ -277,7 +277,7 @@ func TestGatewayMalformedProbeDoesNotRecoverCredential(t *testing.T) {
 			}
 			healthy.Store(true)
 			worker.Validate(t.Context())
-			if calls.Load() != 2 || !slices.Equal(worker.recorder.events(), []string{"registry.recover:7", "stats.reset:7"}) {
+			if calls.Load() != 2 || !slices.Equal(worker.recorder.events(), []string{"health.recover:7", "stats.reset:7"}) {
 				t.Errorf("valid response: calls = %d; recovery events = %v", calls.Load(), worker.recorder.events())
 			}
 		})

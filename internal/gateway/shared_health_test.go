@@ -78,7 +78,6 @@ func (store *recordingHealthStore) SetAuthState(_ context.Context, ref state.Cre
 func newSharedHealthHandler(t *testing.T, store *recordingHealthStore) (*Handler, *state.CredentialRegistry) {
 	t.Helper()
 	registry := state.NewCredentialRegistry()
-	registry.EnableSharedHealth()
 	if err := registry.ReplaceCredentials([]state.CredentialEntry{{
 		ID: 1, GroupID: 1, Version: 1, IdentityGeneration: 1,
 		Fingerprint: "test-1", Status: state.CredentialStatusActive, EncryptedValue: "cipher",

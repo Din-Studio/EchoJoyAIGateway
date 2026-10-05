@@ -88,7 +88,7 @@ func TestRouteInspectReportsSnapshotRouteStrategy(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	for _, strategy := range []string{"native_first", "weighted_mix"} {
 		t.Run(strategy, func(t *testing.T) {
@@ -136,7 +136,7 @@ func TestRouteInspectEndpointRejectsMalformedAndInvalidRequests(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	tests := []struct {
 		name     string
 		body     string
@@ -277,7 +277,7 @@ func TestRouteInspectDerivesStandardRequestMetadataFromProtocol(t *testing.T) {
 		t.Fatalf("ReplaceCredentials() error = %v", err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	tests := []struct {
 		protocol         protocol.Protocol
@@ -315,7 +315,7 @@ func TestRouteInspectRejectsLegacyDerivedFields(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	recorder := performRouteInspectRequest(
 		engine,
 		"test-auth-key",
@@ -425,7 +425,7 @@ func TestRouteInspectEndpointReturnsCurrentSafeExplanation(t *testing.T) {
 		t.Fatalf("Replace() error = %v", err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	recorder := performRouteInspectRequest(
 		engine,
 		"test-auth-key",
@@ -564,7 +564,7 @@ func TestRouteInspectEndpointReturnsFilterExplanations(t *testing.T) {
 				t.Fatalf("Replace() error = %v", err)
 			}
 			engine := gin.New()
-			NewServer(
+			newTestServer(t,
 				&config.Config{AuthKey: "test-auth-key"},
 				fixture.service,
 			).RegisterRoutes(engine)
@@ -628,7 +628,7 @@ func TestRouteInspectEndpointReturnsNoRouteTargetExplanation(t *testing.T) {
 		t.Fatalf("Publish() error = %v", err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	recorder := performRouteInspectRequest(
 		engine,
 		"test-auth-key",
@@ -694,7 +694,7 @@ func TestRouteInspectEndpointReturnsNoAvailableKeyExplanation(t *testing.T) {
 		t.Fatalf("Replace() error = %v", err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	recorder := performRouteInspectRequest(
 		engine,
 		"test-auth-key",
@@ -779,7 +779,7 @@ func TestRouteInspectReturnsDisabledAccessKeyAsExplanation(t *testing.T) {
 		t.Fatalf("disabled result = %#v", result)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	recorder := performRouteInspectRequest(
 		engine,
 		"test-auth-key",
@@ -831,7 +831,7 @@ func TestRouteInspectMissingAccessKeyReturnsNotFound(t *testing.T) {
 		t.Fatalf("InspectRoute() error = %v, want NOT_FOUND", err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	recorder := performRouteInspectRequest(
 		engine,
 		"test-auth-key",
@@ -944,7 +944,7 @@ func TestRouteInspectEndpointRequiresManagementAuthentication(t *testing.T) {
 	beforeSnapshot := fixture.manager.Current()
 	beforeKeys := fixture.registry.Snapshot()
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	recorder := performRouteInspectRequest(
 		engine,
 		"",
@@ -978,7 +978,7 @@ func TestRouteInspectCatalogMismatchReturnsInternalServerError(t *testing.T) {
 		GroupID: 999, UpstreamModelID: "model",
 	}}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	recorder := performRouteInspectRequest(
 		engine,
 		"test-auth-key",

@@ -20,12 +20,9 @@ func healthTestEntry(id uint, identityGeneration uint64) state.CredentialEntry {
 	}
 }
 
-func newHealthRegistry(t *testing.T, shared bool, entries ...state.CredentialEntry) *state.CredentialRegistry {
+func newHealthRegistry(t *testing.T, entries ...state.CredentialEntry) *state.CredentialRegistry {
 	t.Helper()
 	registry := state.NewCredentialRegistry()
-	if shared {
-		registry.EnableSharedHealth()
-	}
 	if err := registry.ReplaceCredentials(entries); err != nil {
 		t.Fatalf("ReplaceCredentials() error = %v", err)
 	}
@@ -102,8 +99,8 @@ func sameView(left, right healthView) bool {
 // registry mirroring the Redis store.
 func TestCredentialHealthMatchesLocalRegistry(t *testing.T) {
 	_, client := newTestClient(t)
-	local := newHealthRegistry(t, false, healthTestEntry(1, 7))
-	shared := newHealthRegistry(t, true, healthTestEntry(1, 7))
+	local := newHealthRegistry(t, healthTestEntry(1, 7))
+	shared := newHealthRegistry(t, healthTestEntry(1, 7))
 	store := NewCredentialHealth(client, shared)
 	ctx := t.Context()
 	now := time.Now().Truncate(time.Millisecond)
@@ -279,7 +276,7 @@ func TestCredentialHealthMatchesLocalRegistry(t *testing.T) {
 
 func TestCredentialHealthAuthStateFollowsSecretVersion(t *testing.T) {
 	_, client := newTestClient(t)
-	registry := newHealthRegistry(t, true, healthTestEntry(1, 7))
+	registry := newHealthRegistry(t, healthTestEntry(1, 7))
 	store := NewCredentialHealth(client, registry)
 	ref := mustRef(t, registry, 1)
 
@@ -313,7 +310,7 @@ type healthInstance struct {
 
 func startHealthInstance(t *testing.T, server *miniredis.Miniredis, instanceID string, run bool) healthInstance {
 	t.Helper()
-	registry := newHealthRegistry(t, true, healthTestEntry(1, 7), healthTestEntry(2, 7))
+	registry := newHealthRegistry(t, healthTestEntry(1, 7), healthTestEntry(2, 7))
 	store := NewCredentialHealth(newClientForServer(t, server, instanceID), registry)
 	if run {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -455,7 +452,7 @@ func TestCredentialHealthReconcileTickerRepairsWithoutEvents(t *testing.T) {
 
 func TestCredentialHealthFailsWhenRedisIsDown(t *testing.T) {
 	server, client := newTestClient(t)
-	registry := newHealthRegistry(t, true, healthTestEntry(1, 7))
+	registry := newHealthRegistry(t, healthTestEntry(1, 7))
 	store := NewCredentialHealth(client, registry)
 	server.Close()
 	started := time.Now()
@@ -465,14 +462,11 @@ func TestCredentialHealthFailsWhenRedisIsDown(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("failure took %s, want within the state timeout", elapsed)
 	}
-	if NewCredentialHealth(nil, registry) != nil || NewRefreshLease(nil) != nil {
-		t.Fatal("constructors must return nil when cluster mode is disabled")
-	}
 }
 
 func TestReplaceAuthStateRefusesAfterAnyInterveningAuthWrite(t *testing.T) {
 	_, client := newTestClient(t)
-	registry := newHealthRegistry(t, true, healthTestEntry(1, 7))
+	registry := newHealthRegistry(t, healthTestEntry(1, 7))
 	store := NewCredentialHealth(client, registry)
 	ref := mustRef(t, registry, 1)
 	if _, err := store.SetAuthState(t.Context(), ref, state.CredentialAuthStateRefreshing, 3); err != nil {

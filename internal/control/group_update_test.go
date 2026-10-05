@@ -81,7 +81,7 @@ func TestGroupCatalogSyncTriggerOnlyTracksProviderAndModelIDChanges(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	coordinator := newCatalogSyncCoordinator(
+	coordinator := newTestCatalogSyncCoordinator(t,
 		fixture.service,
 		nil,
 		filepath.Join(t.TempDir(), "catalog.json"),

@@ -577,13 +577,14 @@ func TestKeyRegistryFailureGenerationTracksActualFailureStateChanges(t *testing.
 	}}); err != nil {
 		t.Fatalf("ApplyImport() error = %v", err)
 	}
-	assertGeneration(0)
+	// Reloading the same identity keeps the shared health it mirrors.
+	assertGeneration(4)
 
 	mustReplaceKeyEntries(t, registry, []CredentialEntry{{
 		ID: 1, GroupID: 10, Status: CredentialStatusActive,
 		FailureGeneration: 42, Version: 1, IdentityGeneration: 1, Fingerprint: "test-fingerprint", EncryptedValue: "cipher-replaced",
 	}})
-	assertGeneration(0)
+	assertGeneration(4)
 }
 
 func TestKeyRegistryReplaceFailurePreservesRegistry(t *testing.T) {

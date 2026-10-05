@@ -10,19 +10,15 @@ import (
 	"gpt-load/internal/cluster"
 )
 
-// readinessProbe pings the database and Redis in parallel. Cluster mode makes
-// both hard dependencies, so /health only reports ready when both answer.
+// readinessProbe pings the database and Redis in parallel. Both are hard
+// dependencies, so /health only reports ready when both answer.
 type readinessProbe struct {
 	db     *gorm.DB
 	client *cluster.Client
 }
 
-// NewReadinessProbe returns nil outside cluster mode so /health keeps its
-// static single-instance response.
+// NewReadinessProbe checks the database and Redis the process depends on.
 func NewReadinessProbe(db *gorm.DB, client *cluster.Client) ReadinessProbe {
-	if client == nil {
-		return nil
-	}
 	return readinessProbe{db: db, client: client}
 }
 

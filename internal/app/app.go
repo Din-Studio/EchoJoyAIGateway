@@ -96,7 +96,7 @@ type AppParams struct {
 	ControlRuntime    ControlRuntime
 	RequestLogs       RequestLogRuntime
 	ExecutionRuntime  ExecutionRuntime `optional:"true"`
-	ClusterClient     *cluster.Client  `optional:"true"`
+	ClusterClient     *cluster.Client
 }
 
 // NewEngine creates the process HTTP engine and global middleware.
@@ -371,13 +371,11 @@ func (a *App) Stop(ctx context.Context) error {
 			}).Warn("execution runtime is still stopping; process exit will release remaining connections")
 		}
 	}
-	if a.clusterClient != nil {
-		if err := a.clusterClient.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("close Redis client: %w", err))
-			logrus.WithError(err).WithField("event", "shutdown.redis_close").Warn("Redis client close failed")
-		} else {
-			logrus.WithField("event", "shutdown.redis_close").Info("Redis client closed")
-		}
+	if err := a.clusterClient.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("close Redis client: %w", err))
+		logrus.WithError(err).WithField("event", "shutdown.redis_close").Warn("Redis client close failed")
+	} else {
+		logrus.WithField("event", "shutdown.redis_close").Info("Redis client closed")
 	}
 	if a.db != nil {
 		sqlDB, err := a.db.DB()

@@ -33,7 +33,7 @@ func TestGroupDetailLedgerRoutesReplaceLegacyContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	legacy := serveGroupDetailLedgerRoute(
 		t,

@@ -17,7 +17,7 @@ func testCredentialManagerForPassiveQuota(t *testing.T) *CredentialManager {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	return NewCredentialManager(nil, nil, registry, nil, nil)
+	return NewCredentialManager(nil, nil, registry, nil, nil, nil, nil)
 }
 
 func floatPointer(value float64) *float64 { return &value }

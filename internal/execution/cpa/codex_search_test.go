@@ -111,6 +111,7 @@ func TestCodexStandaloneSearchGateway(t *testing.T) {
 		}},
 		AccessKeys: []state.AccessKeyConfig{{
 			ID: 1, Name: "client", KeyHash: encryption.Hash("gl-search-client"), Status: state.AccessKeyStatusActive,
+			CostLimitRules: []accessquota.Rule{{ID: 1, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 100}},
 		}},
 	}
 	if _, err := manager.Publish(input); err != nil {
@@ -119,21 +120,19 @@ func TestCodexStandaloneSearchGateway(t *testing.T) {
 	if candidates := manager.Current().ExecutionCandidates[protocol.OpenAIResponses][execution.Operation("web_search")]["public"]; len(candidates) != 1 || candidates[0].GroupID != credential.GroupID {
 		t.Fatalf("search candidates must contain only Codex: %#v", candidates)
 	}
-	quota := accessquota.NewRuntime()
-	if err := quota.Reconcile(map[uint][]accessquota.Rule{1: {{
-		ID: 1, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 100,
-	}}}); err != nil {
+	shared, quota := newGatewaySharedState(t, manager, registry)
+	// Exhaust the cost limit: standalone search must still pass.
+	ticket, decision, err := quota.Admit(t.Context(), manager.Current(), 1, time.Now())
+	if err != nil || !decision.Allowed {
+		t.Fatalf("quota admission = %#v, %v", decision, err)
+	}
+	if _, err := quota.Complete(t.Context(), ticket, 100); err != nil {
 		t.Fatal(err)
 	}
-	ticket, decision := quota.Admit(1, time.Now())
-	if !decision.Allowed {
-		t.Fatal("quota admission failed")
-	}
-	quota.Complete(ticket, 100)
 	sink := &searchRequestLogSink{}
 	stats := health.NewStatsStore()
 	handler := gateway.NewHandler(manager, registry, encryption, gateway.NewExecutionForwarder(adapter),
-		dialect.NewSet(dialect.NewOpenAIResponses()), stats, health.NewMutationCoordinator(), nil, sink, nil, quota)
+		dialect.NewSet(dialect.NewOpenAIResponses()), stats, health.NewMutationCoordinator(), nil, sink, nil, shared)
 	engine := gin.New()
 	routes, err := httproute.NewRegistry(handler.HTTPModule())
 	if err != nil {

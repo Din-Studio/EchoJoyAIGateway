@@ -39,7 +39,7 @@ services:
       timeout: 5s
       retries: 15
 
-  # 单实例模式基线：不设 REDIS_ADDRS，使用独立的 PostgreSQL，CPU 限额与集群副本相同。
+  # 一副本集群基线：一个网关，使用独立的 PostgreSQL 与单节点 Redis，CPU 限额与集群副本相同。
   gpt-load-single:
     <<: *bench-gateway
     environment:
@@ -50,8 +50,11 @@ services:
       DATABASE_DSN: postgres://gpt_load:${POSTGRES_PASSWORD}@postgres-single:5432/gpt_load?sslmode=disable
       AUTH_KEY: ${AUTH_KEY}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      REDIS_ADDRS: redis-single:6379
     depends_on:
       postgres-single:
+        condition: service_healthy
+      redis-single:
         condition: service_healthy
     healthcheck:
       test: wget -q --spider -T 10 -O /dev/null http://localhost:3001/health
@@ -70,6 +73,15 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     healthcheck:
       test: pg_isready -h 127.0.0.1 -U gpt_load -d gpt_load
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis-single:
+    image: redis:7.4-alpine
+    restart: "no"
+    healthcheck:
+      test: redis-cli ping
       interval: 5s
       timeout: 5s
       retries: 20

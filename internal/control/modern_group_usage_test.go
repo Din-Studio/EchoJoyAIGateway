@@ -51,7 +51,7 @@ func TestModernGroupUsageBatchesExactRollingWindow(t *testing.T) {
 		}
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 	result := performGroupCollectionRequest(engine, "/api/modern/groups/usage?group_ids=1,2,3,4,5,6,7,9", "Bearer "+authTestKey)
 	if result.Code != http.StatusOK {
 		t.Fatalf("batch usage status = %d: %s", result.Code, result.Body.String())
@@ -96,7 +96,7 @@ func TestModernGroupUsageRejectsInvalidBatchesAndReadOnlyKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 	for _, query := range []string{"", "group_ids=", "group_ids=0", "group_ids=1,1", "group_ids=01", "group_ids=-1", "group_ids=1&group_ids=2", "group_ids=1&from_ms=0", "group_ids=" + strings.Repeat("1,", 100) + "2"} {
 		result := performGroupCollectionRequest(engine, "/api/modern/groups/usage?"+query, "Bearer "+authTestKey)
 		if result.Code != http.StatusBadRequest {

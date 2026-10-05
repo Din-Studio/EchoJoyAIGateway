@@ -15,8 +15,10 @@ import (
 
 	"gpt-load/internal/accessquota"
 	"gpt-load/internal/channel"
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/state"
+	"gpt-load/internal/testutil/clustertest"
 	"gpt-load/internal/usage"
 )
 
@@ -24,22 +26,17 @@ func TestHandlerBlocksAllDataPlaneRoutesUntilPeriodicQuotaRecovers(t *testing.T)
 	forwarder := &scriptedForwarder{results: []UpstreamResult{{
 		StatusCode: http.StatusOK, Header: make(http.Header), Body: []byte(`{"ok":true}`), RequestWritten: true,
 	}}}
-	engine, handler, _, _ := newRequestLogHandlerTestRuntime(
+	engine, handler, manager, _ := newRequestLogHandlerTestRuntime(
 		t, forwarder, &recordingAccessKeyRPMLimiter{}, &recordingRequestLogSink{}, "sk-first",
 	)
-	runtime := accessquota.NewRuntime()
-	if err := runtime.Reconcile(map[uint][]accessquota.Rule{1: {
+	if _, err := manager.Publish(gatewayAccessQuotaCompileInput(handler, []accessquota.Rule{
 		{ID: 101, Revision: 1, Kind: accessquota.KindPeriodic, LimitNanoUSD: 100, PeriodSeconds: 300},
-	}}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
+	quota := useSharedAccessQuota(t, handler)
 	windowStart := time.Unix(1_000, 0)
-	ticket, decision := runtime.Admit(1, windowStart)
-	if !decision.Allowed {
-		t.Fatalf("Admit() = %#v", decision)
-	}
-	runtime.Complete(ticket, 100)
-	handler.accessQuota = NewLocalAccessQuotaGate(handler.manager, runtime)
+	consumeGatewayQuota(t, quota, manager, windowStart, 100)
 	handler.now = func() time.Time { return windowStart.Add(time.Minute) }
 
 	for _, test := range []struct {
@@ -76,27 +73,25 @@ func TestHandlerBlocksAllDataPlaneRoutesUntilPeriodicQuotaRecovers(t *testing.T)
 	if response.Code != http.StatusOK {
 		t.Fatalf("recovered model list = %d %s", response.Code, response.Body.String())
 	}
-	view := runtime.Snapshot(1, windowStart.Add(5*time.Minute))
-	if len(view.Rules) != 1 || view.Rules[0].Status != accessquota.RuleStatusInactive {
+	view, err := quota.View(t.Context(), manager.Current(), 1, windowStart.Add(5*time.Minute))
+	if err != nil || len(view.Rules) != 1 || view.Rules[0].Status != accessquota.RuleStatusInactive {
 		t.Fatalf("recovered view = %#v", view)
 	}
 }
 
 func TestHandlerTotalQuotaBlockIsNotRetryableAndReturnsEveryBlocker(t *testing.T) {
-	engine, handler, _, _ := newRequestLogHandlerTestRuntime(
+	engine, handler, manager, _ := newRequestLogHandlerTestRuntime(
 		t, &scriptedForwarder{}, &recordingAccessKeyRPMLimiter{}, &recordingRequestLogSink{},
 	)
-	runtime := accessquota.NewRuntime()
-	if err := runtime.Reconcile(map[uint][]accessquota.Rule{1: {
+	if _, err := manager.Publish(gatewayAccessQuotaCompileInput(handler, []accessquota.Rule{
 		{ID: 201, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 100},
 		{ID: 202, Revision: 1, Kind: accessquota.KindPeriodic, LimitNanoUSD: 20, PeriodSeconds: 300},
-	}}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
+	quota := useSharedAccessQuota(t, handler)
 	now := time.Unix(4_000, 0)
-	ticket, _ := runtime.Admit(1, now)
-	runtime.Complete(ticket, 100)
-	handler.accessQuota = NewLocalAccessQuotaGate(handler.manager, runtime)
+	consumeGatewayQuota(t, quota, manager, now, 100)
 	handler.now = func() time.Time { return now.Add(time.Minute) }
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
@@ -127,38 +122,46 @@ func TestHandlerTotalQuotaBlockIsNotRetryableAndReturnsEveryBlocker(t *testing.T
 }
 
 func TestHandlerStartsPeriodicWindowOnlyAtFirstGatewayExecutionAttempt(t *testing.T) {
-	runtime := accessquota.NewRuntime()
-	if err := runtime.Reconcile(map[uint][]accessquota.Rule{1: {
+	rules := []accessquota.Rule{
 		{ID: 102, Revision: 1, Kind: accessquota.KindPeriodic, LimitNanoUSD: 100, PeriodSeconds: 300},
-	}}); err != nil {
-		t.Fatal(err)
 	}
 	now := time.Unix(2_000, 0)
+	_, client := clustertest.NewClient(t)
 
-	noCandidateEngine, noCandidateHandler, _, _ := newRequestLogHandlerTestRuntime(
+	noCandidateEngine, noCandidateHandler, noCandidateManager, _ := newRequestLogHandlerTestRuntime(
 		t, &scriptedForwarder{}, &recordingAccessKeyRPMLimiter{}, &recordingRequestLogSink{},
 	)
-	noCandidateHandler.accessQuota = NewLocalAccessQuotaGate(noCandidateHandler.manager, runtime)
+	if _, err := noCandidateManager.Publish(gatewayAccessQuotaCompileInput(noCandidateHandler, rules)); err != nil {
+		t.Fatal(err)
+	}
+	quota := useSharedAccessQuotaOn(client, noCandidateHandler)
 	noCandidateHandler.now = func() time.Time { return now }
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o"}`))
 	request.Header.Set("Authorization", "Bearer gl-client")
 	noCandidateEngine.ServeHTTP(httptest.NewRecorder(), request)
-	if view := runtime.Snapshot(1, now); view.Rules[0].Status != accessquota.RuleStatusInactive {
-		t.Fatalf("local no-candidate request started window = %#v", view)
+	if view, err := quota.View(t.Context(), noCandidateManager.Current(), 1, now); err != nil ||
+		view.Rules[0].Status != accessquota.RuleStatusInactive {
+		t.Fatalf("local no-candidate request started window = %#v (%v)", view, err)
 	}
 
 	forwarder := &scriptedForwarder{results: []UpstreamResult{{
 		Err: errors.New("not sent"), DispatchState: execution.DispatchNotSent,
 	}}}
-	engine, handler, _, _ := newRequestLogHandlerTestRuntime(
+	engine, handler, manager, _ := newRequestLogHandlerTestRuntime(
 		t, forwarder, &recordingAccessKeyRPMLimiter{}, &recordingRequestLogSink{}, "sk-first",
 	)
-	handler.accessQuota = NewLocalAccessQuotaGate(handler.manager, runtime)
+	if _, err := manager.Publish(gatewayAccessQuotaCompileInput(handler, rules)); err != nil {
+		t.Fatal(err)
+	}
+	useSharedAccessQuotaOn(client, handler)
 	handler.now = func() time.Time { return now }
 	request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o"}`))
 	request.Header.Set("Authorization", "Bearer gl-client")
 	engine.ServeHTTP(httptest.NewRecorder(), request)
-	view := runtime.Snapshot(1, now)
+	view, err := quota.View(t.Context(), manager.Current(), 1, now)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(forwarder.inputs) != 1 || view.Rules[0].Status != accessquota.RuleStatusAvailable ||
 		view.Rules[0].WindowStartedAtMS == nil || *view.Rules[0].WindowStartedAtMS != now.UnixMilli() {
 		t.Fatalf("execution attempts/view = %d/%#v", len(forwarder.inputs), view)
@@ -174,18 +177,14 @@ func TestHandlerAccountsFinalEstimateWhenRequestIDGenerationFails(t *testing.T) 
 	engine, handler, manager, _ := newRequestLogHandlerTestRuntime(
 		t, forwarder, &recordingAccessKeyRPMLimiter{}, sink, "sk-first",
 	)
-	runtime := accessquota.NewRuntime()
-	if err := runtime.Reconcile(map[uint][]accessquota.Rule{1: {
+	input := gatewayAccessQuotaCompileInput(handler, []accessquota.Rule{
 		{ID: 103, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 10_000_000_000},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	input := gatewayAccessQuotaCompileInput(handler, nil)
+	})
 	setGatewayPriceMultipliers(t, &input, "0.8", "1.5")
 	if _, err := manager.Publish(input); err != nil {
 		t.Fatal(err)
 	}
-	handler.accessQuota = NewLocalAccessQuotaGate(handler.manager, runtime)
+	quota := useSharedAccessQuota(t, handler)
 	handler.priceTables = &mutableGatewayPriceTableProvider{table: mustGatewayPriceTable(t, 2_000_000_000, true)}
 	handler.newRequestID = func() (string, error) { return "", errors.New("entropy unavailable") }
 	handler.requestNow = func() time.Time { return time.Unix(3_000, 0) }
@@ -198,8 +197,8 @@ func TestHandlerAccountsFinalEstimateWhenRequestIDGenerationFails(t *testing.T) 
 	if response.Code != http.StatusOK {
 		t.Fatalf("response = %d %s", response.Code, response.Body.String())
 	}
-	view := runtime.Snapshot(1, time.Unix(3_001, 0))
-	if len(view.Rules) != 1 || view.Rules[0].UsedNanoUSD != 2_400_000_000 {
+	view, err := quota.View(t.Context(), manager.Current(), 1, time.Unix(3_001, 0))
+	if err != nil || len(view.Rules) != 1 || view.Rules[0].UsedNanoUSD != 2_400_000_000 {
 		t.Fatalf("quota view = %#v", view)
 	}
 	if events := sink.snapshot(); len(events) != 0 {
@@ -226,27 +225,22 @@ func TestHandlerRejectsStaleSnapshotBeforeQuotaCheck(t *testing.T) {
 	_, handler, manager, _ := newRequestLogHandlerTestRuntime(
 		t, forwarder, &recordingAccessKeyRPMLimiter{}, &recordingRequestLogSink{}, "sk-first",
 	)
-	runtime := accessquota.NewRuntime()
-	manager.SetSnapshotReconciler(gatewayAccessQuotaSnapshotReconciler{runtime: runtime})
 	oldRules := []accessquota.Rule{{
 		ID: 301, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 100,
 	}}
 	if _, err := manager.Publish(gatewayAccessQuotaCompileInput(handler, oldRules)); err != nil {
 		t.Fatal(err)
 	}
-	ticket, decision := runtime.Admit(1, time.Unix(5_000, 0))
-	if !decision.Allowed {
-		t.Fatalf("Admit() = %#v", decision)
-	}
-	runtime.Complete(ticket, 100)
-	handler.accessQuota = NewLocalAccessQuotaGate(handler.manager, runtime)
+	quota := useSharedAccessQuota(t, handler)
+	consumeGatewayQuota(t, quota, manager, time.Unix(5_000, 0), 100)
 
 	context, response := prepareAuthenticatedGatewayRequest(t, handler, http.MethodGet, "/v1/models", nil)
 	if _, err := manager.Publish(gatewayAccessQuotaCompileInput(handler, []accessquota.Rule{{
-		ID: 301, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 200,
+		ID: 301, Revision: 2, Kind: accessquota.KindTotal, LimitNanoUSD: 200,
 	}})); err != nil {
 		t.Fatal(err)
 	}
+	advanceGatewayQuotaRevision(t, quota, manager)
 
 	handler.Handle(context)
 	if response.Code != http.StatusServiceUnavailable ||
@@ -271,21 +265,14 @@ func TestHandlerRejectsSnapshotChangedBetweenQuotaCheckAndAdmit(t *testing.T) {
 	_, handler, manager, _ := newRequestLogHandlerTestRuntime(
 		t, forwarder, &recordingAccessKeyRPMLimiter{}, &recordingRequestLogSink{}, "sk-first",
 	)
-	runtime := accessquota.NewRuntime()
-	manager.SetSnapshotReconciler(gatewayAccessQuotaSnapshotReconciler{runtime: runtime})
 	oldRules := []accessquota.Rule{{
 		ID: 302, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 100,
 	}}
 	if _, err := manager.Publish(gatewayAccessQuotaCompileInput(handler, oldRules)); err != nil {
 		t.Fatal(err)
 	}
-	first, _ := runtime.Admit(1, time.Unix(6_000, 0))
-	runtime.Complete(first, 90)
-	second, decision := runtime.Admit(1, time.Unix(6_001, 0))
-	if !decision.Allowed {
-		t.Fatalf("second Admit() = %#v", decision)
-	}
-	handler.accessQuota = NewLocalAccessQuotaGate(handler.manager, runtime)
+	quota := useSharedAccessQuota(t, handler)
+	consumeGatewayQuota(t, quota, manager, time.Unix(6_000, 0), 90)
 
 	body := newBlockingRequestBody(`{"model":"gpt-4o"}`, nil)
 	context, response := prepareAuthenticatedGatewayRequest(
@@ -302,12 +289,12 @@ func TestHandlerRejectsSnapshotChangedBetweenQuotaCheckAndAdmit(t *testing.T) {
 	}()
 	receiveTestSignal(t, body.started, "quota request body read")
 
-	runtime.Complete(second, 10)
 	if _, err := manager.Publish(gatewayAccessQuotaCompileInput(handler, []accessquota.Rule{{
-		ID: 302, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 200,
+		ID: 302, Revision: 2, Kind: accessquota.KindTotal, LimitNanoUSD: 200,
 	}})); err != nil {
 		t.Fatal(err)
 	}
+	advanceGatewayQuotaRevision(t, quota, manager)
 	close(body.release)
 	receiveTestSignal(t, done, "stale quota admission completion")
 
@@ -326,14 +313,33 @@ func TestHandlerRejectsSnapshotChangedBetweenQuotaCheckAndAdmit(t *testing.T) {
 	}
 }
 
-type gatewayAccessQuotaSnapshotReconciler struct {
-	runtime *accessquota.Runtime
+// consumeGatewayQuota settles cost against the current rules, as an earlier
+// request on any instance would.
+func consumeGatewayQuota(
+	t *testing.T,
+	quota *cluster.AccessQuota,
+	manager *state.Manager,
+	now time.Time,
+	costNanoUSD int64,
+) {
+	t.Helper()
+	ticket, decision, err := quota.Admit(t.Context(), manager.Current(), 1, now)
+	if err != nil || !decision.Allowed {
+		t.Fatalf("Admit() = %#v, %v", decision, err)
+	}
+	if _, err := quota.Complete(t.Context(), ticket, costNanoUSD); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
 }
 
-func (reconciler gatewayAccessQuotaSnapshotReconciler) ReconcileConfigSnapshot(
-	snapshot *state.ConfigSnapshot,
-) error {
-	return reconciler.runtime.Reconcile(snapshot.AccessQuotaDefinitions())
+// advanceGatewayQuotaRevision evaluates the newly published rules, as a peer
+// serving a request under them would, so the shared state moves past every
+// older snapshot.
+func advanceGatewayQuotaRevision(t *testing.T, quota *cluster.AccessQuota, manager *state.Manager) {
+	t.Helper()
+	if _, err := quota.Check(t.Context(), manager.Current(), 1, time.Now()); err != nil {
+		t.Fatalf("Check(newer rules) error = %v", err)
+	}
 }
 
 func gatewayAccessQuotaCompileInput(

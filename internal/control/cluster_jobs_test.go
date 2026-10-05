@@ -10,20 +10,8 @@ import (
 	"github.com/alicebob/miniredis/v2"
 
 	"gpt-load/internal/cluster"
-	"gpt-load/internal/platform/config"
+	"gpt-load/internal/testutil/clustertest"
 )
-
-func newJobTestClient(t *testing.T, server *miniredis.Miniredis, instanceID string) *cluster.Client {
-	t.Helper()
-	client, err := cluster.NewClient(&config.Config{Cluster: config.ClusterConfig{
-		RedisAddrs: []string{server.Addr()}, RedisKeyPrefix: "gl", InstanceID: instanceID,
-	}})
-	if err != nil {
-		t.Fatalf("cluster.NewClient() error = %v", err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-	return client
-}
 
 type countingRetentionCleaner struct {
 	sweeps      atomic.Int32
@@ -55,7 +43,7 @@ func TestClusterRetentionRunsOncePerPeriodAcrossInstances(t *testing.T) {
 		runtimes[index] = &Runtime{
 			requestLogCleaner: cleaner,
 			controlCleaner:    cleaner,
-			jobLease:          cluster.NewJobLease(newJobTestClient(t, server, "node-"+string(rune('a'+index)))),
+			jobLease:          cluster.NewJobLease(clustertest.Connect(t, server, "node-"+string(rune('a'+index)))),
 		}
 	}
 	now := time.Date(2026, time.September, 28, 12, 0, 0, 0, time.UTC)
@@ -94,8 +82,8 @@ func TestClusterValidationRunsOncePerIntervalAcrossInstances(t *testing.T) {
 	for index := range instances {
 		ticker := newFakeRuntimeTicker()
 		created := make(chan time.Duration, 2)
-		runtime := newTestRuntime(validator, ticker, created, time.Now)
-		runtime.jobLease = cluster.NewJobLease(newJobTestClient(t, server, "node-"+string(rune('a'+index))))
+		runtime := newTestRuntime(t, validator, ticker, created, time.Now)
+		runtime.jobLease = cluster.NewJobLease(clustertest.Connect(t, server, "node-"+string(rune('a'+index))))
 		cancel, done := startRuntime(t, runtime)
 		awaitTickers(t, created)
 		instances[index] = instance{ticker: ticker, created: created, cancel: cancel, done: done}

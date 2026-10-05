@@ -37,7 +37,7 @@ return {'1'}
 `)
 
 // AccessKeyRPM enforces per-AccessKey RPM against one window shared by every
-// instance. It is nil in single-instance mode.
+// instance.
 type AccessKeyRPM struct {
 	client *Client
 	now    func() time.Time
@@ -48,11 +48,8 @@ type AccessKeyRPM struct {
 	sequence     atomic.Uint64
 }
 
-// NewAccessKeyRPM returns nil when cluster mode is disabled.
+// NewAccessKeyRPM builds the shared per-AccessKey RPM window.
 func NewAccessKeyRPM(client *Client) *AccessKeyRPM {
-	if client == nil {
-		return nil
-	}
 	nonce := make([]byte, 8)
 	_, _ = rand.Read(nonce)
 	return &AccessKeyRPM{client: client, now: time.Now, memberPrefix: hex.EncodeToString(nonce) + ":"}

@@ -15,12 +15,12 @@ import (
 	"gpt-load/internal/cluster"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/health"
-	"gpt-load/internal/platform/config"
 	"gpt-load/internal/platform/encryption"
 	"gpt-load/internal/state"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/subscription/providers/codex"
 	subscriptionruntime "gpt-load/internal/subscription/runtime"
+	"gpt-load/internal/testutil/clustertest"
 )
 
 // countingCommitter commits like control.Service.CommitCredentialState and
@@ -86,20 +86,16 @@ func newClusterRefreshFixture(t *testing.T, expires time.Time) clusterRefreshFix
 	}
 	// One connection keeps every goroutine on the same in-memory database.
 	sqlDB.SetMaxOpenConns(1)
-	registryA.EnableSharedHealth()
 
 	registryB := state.NewCredentialRegistry()
-	registryB.EnableSharedHealth()
 	if err := registryB.ReplaceCredentials(registryEntries(registryA)); err != nil {
 		t.Fatal(err)
 	}
-	managerB := NewCredentialManager(db, keyService, registryB, health.NewMutationCoordinator(), managerA.runtime)
-
 	server := miniredis.RunT(t)
 	committer := &countingCommitter{db: db}
 	fixture := clusterRefreshFixture{db: db, keyService: keyService, row: row, server: server, committer: committer}
 	fixture.a = coordinate(t, server, "node-a", managerA, registryA, committer)
-	fixture.b = coordinate(t, server, "node-b", managerB, registryB, committer)
+	fixture.b = coordinate(t, server, "node-b", managerA, registryB, committer)
 	return fixture
 }
 
@@ -112,24 +108,24 @@ func registryEntries(registry *state.CredentialRegistry) []state.CredentialEntry
 	return entries
 }
 
+// coordinate builds one instance's manager on template's database, keys, and
+// runtime, coordinated through its own connection to the shared server.
 func coordinate(
 	t *testing.T,
 	server *miniredis.Miniredis,
 	instanceID string,
-	manager *CredentialManager,
+	template *CredentialManager,
 	registry *state.CredentialRegistry,
 	committer configCommitter,
 ) clusterManager {
 	t.Helper()
-	client, err := cluster.NewClient(&config.Config{Cluster: config.ClusterConfig{
-		RedisAddrs: []string{server.Addr()}, RedisKeyPrefix: "gl", InstanceID: instanceID,
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
+	client := clustertest.Connect(t, server, instanceID)
 	store := cluster.NewCredentialHealth(client, registry)
-	manager.SetClusterCoordination(cluster.NewRefreshLease(client), store, committer)
+	manager := NewCredentialManager(
+		template.db, template.encryption, registry, health.NewMutationCoordinator(), template.runtime,
+		cluster.NewRefreshLease(client), store,
+	)
+	manager.SetConfigCommitter(committer)
 	return clusterManager{manager: manager, registry: registry, health: store, client: client}
 }
 

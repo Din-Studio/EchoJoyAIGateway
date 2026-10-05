@@ -70,7 +70,6 @@ type healthContractInstance struct {
 func newHealthContractInstance(t *testing.T, dsn, redisAddr, keyPrefix, instanceID string) healthContractInstance {
 	t.Helper()
 	base := newClusterContractInstance(t, dsn, redisAddr, keyPrefix, instanceID)
-	base.fixture.registry.EnableSharedHealth()
 	client, err := cluster.NewClient(&config.Config{Cluster: config.ClusterConfig{
 		RedisAddrs: redisTestAddrs(redisAddr), RedisKeyPrefix: keyPrefix, InstanceID: instanceID,
 	}})
@@ -310,8 +309,9 @@ func TestExternalClusterSubscriptionRefreshOnce(t *testing.T) {
 		}
 		driver := &countingCodexDriver{calls: calls, started: started, release: release}
 		manager := subscription.NewCredentialManager(instance.fixture.db, encryption, instance.fixture.registry,
-			instance.fixture.mutations, countingSubscriptionRuntime(t, instance.fixture.channelRegistry, driver))
-		manager.SetClusterCoordination(instance.leases, instance.health, instance.fixture.service)
+			instance.fixture.mutations, countingSubscriptionRuntime(t, instance.fixture.channelRegistry, driver),
+			instance.leases, instance.health)
+		manager.SetConfigCommitter(instance.fixture.service)
 		managers = append(managers, manager)
 	}
 	instanceB.start(t)

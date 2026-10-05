@@ -276,11 +276,7 @@ func TestRuntimeHealthKeepsAccessQuotaViewWithCapturedConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAccessKey() error = %v", err)
 	}
-	ticket, decision := fixture.accessQuota.Admit(created.ID, now)
-	if !decision.Allowed {
-		t.Fatalf("Admit() = %#v", decision)
-	}
-	fixture.accessQuota.Complete(ticket, 1_000_000_000)
+	admitAccessQuota(t, fixture, created.ID, now, 1_000_000_000)
 	expectedRevision := fixture.manager.Current().Revision
 
 	decryptStarted := make(chan struct{})

@@ -113,7 +113,7 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 	var finishOnce sync.Once
 	finish := func() {
 		finishOnce.Do(func() {
-			if admission.admitted && h.accessQuota != nil {
+			if admission.admitted {
 				h.completeAccessQuota(s.ctx, s.keyID, admission.ticket, recorder.estimatedCostNanoUSD())
 			}
 			recorder.emit()
@@ -147,16 +147,14 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		return
 	}
 	recorder.accessKeyMultiplier = key.PriceMultiplier
-	if h.accessQuota != nil {
-		decision, err := h.accessQuota.Check(s.ctx, snapshot, key.ID, h.quotaNow())
-		if err != nil {
-			reject(limitStateFailureReason(err))
-			return
-		}
-		if !decision.Allowed {
-			reject(reasonAccessKeyCostLimitExceeded)
-			return
-		}
+	decision, err := h.accessQuota.Check(s.ctx, snapshot, key.ID, h.quotaNow())
+	if err != nil {
+		reject(limitStateFailureReason(err))
+		return
+	}
+	if !decision.Allowed {
+		reject(reasonAccessKeyCostLimitExceeded)
+		return
 	}
 	if limitDecision, err := h.limiter.Allow(s.ctx, key.ID, key.RPMLimit); err != nil {
 		reject(limitStateFailureReason(err))
@@ -392,7 +390,7 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 			s.cancel()
 			return
 		}
-		if !admission.admitted && h.accessQuota != nil {
+		if !admission.admitted {
 			var decision accessquota.Decision
 			var err error
 			admission.ticket, decision, err = h.accessQuota.Admit(s.ctx, snapshot, key.ID, h.quotaNow())

@@ -4,31 +4,17 @@ import (
 	"context"
 	"testing"
 
-	"github.com/alicebob/miniredis/v2"
-
 	"gpt-load/internal/cluster"
-	"gpt-load/internal/platform/config"
 	"gpt-load/internal/storage"
+	"gpt-load/internal/testutil/clustertest"
 	"gpt-load/internal/testutil/pgtest"
 )
 
-func newTestClusterClient(t *testing.T) (*miniredis.Miniredis, *cluster.Client) {
+// testClusterClient connects an App to a miniredis server.
+func testClusterClient(t *testing.T) *cluster.Client {
 	t.Helper()
-	server := miniredis.RunT(t)
-	client, err := cluster.NewClient(&config.Config{Cluster: config.ClusterConfig{
-		RedisAddrs: []string{server.Addr()}, RedisKeyPrefix: "gl", InstanceID: "node-test",
-	}})
-	if err != nil {
-		t.Fatalf("cluster.NewClient() error = %v", err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-	return server, client
-}
-
-func TestNewReadinessProbeIsNilWithoutClusterClient(t *testing.T) {
-	if NewReadinessProbe(nil, nil) != nil {
-		t.Fatal("NewReadinessProbe(nil client) must return nil")
-	}
+	_, client := clustertest.NewClient(t)
+	return client
 }
 
 func TestReadinessProbeChecksDatabaseAndRedis(t *testing.T) {
@@ -41,7 +27,7 @@ func TestReadinessProbeChecksDatabaseAndRedis(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	server, client := newTestClusterClient(t)
+	server, client := clustertest.NewClient(t)
 	probe := NewReadinessProbe(db, client)
 
 	results := probe.Check(context.Background())
@@ -57,7 +43,7 @@ func TestReadinessProbeChecksDatabaseAndRedis(t *testing.T) {
 }
 
 func TestAppStopClosesClusterClient(t *testing.T) {
-	_, client := newTestClusterClient(t)
+	_, client := clustertest.NewClient(t)
 	application := NewApp(AppParams{ClusterClient: client})
 	if err := application.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop() error = %v", err)

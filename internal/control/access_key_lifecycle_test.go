@@ -385,7 +385,7 @@ func TestAccessKeyHomeCurrentAccessKeyIncludesLifecyclePolicy(t *testing.T) {
 func newAccessKeyLifecycleEngine(t *testing.T, fixture serviceFixture) *gin.Engine {
 	t.Helper()
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 	return engine
 }
 

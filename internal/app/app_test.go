@@ -19,13 +19,13 @@ import (
 	"gpt-load/internal/platform/config"
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/platform/httproute"
-	"gpt-load/internal/platform/version"
 	"gpt-load/internal/state"
 	"gpt-load/internal/state/loader"
 	"gpt-load/internal/storage"
 	"gpt-load/internal/testutil/pgtest"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 )
@@ -95,7 +95,7 @@ func TestAppStopShutsDownExecutionRuntime(t *testing.T) {
 	t.Parallel()
 
 	runtime := &executionRuntimeFake{}
-	application := NewApp(AppParams{ExecutionRuntime: runtime})
+	application := NewApp(AppParams{ExecutionRuntime: runtime, ClusterClient: testClusterClient(t)})
 	if err := application.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
@@ -119,6 +119,7 @@ func TestAppStartsExecutionRuntimeBeforeListen(t *testing.T) {
 	}
 	listenErr := errors.New("stop after lifecycle order check")
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           mustNewEngine(t),
 		Config:           testConfig(t),
 		DB:               db,
@@ -165,6 +166,7 @@ func TestAppExecutionRuntimeStartFailureStopsBeforeListen(t *testing.T) {
 		startFunc: func(context.Context) error { return startErr },
 	}
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           mustNewEngine(t),
 		Config:           testConfig(t),
 		DB:               db,
@@ -196,7 +198,7 @@ func TestAppStopDoesNotWaitForBlockedExecutionRuntime(t *testing.T) {
 	executionRuntime := &executionRuntimeFake{
 		shutdownFunc: func() { <-release },
 	}
-	application := NewApp(AppParams{ExecutionRuntime: executionRuntime})
+	application := NewApp(AppParams{ExecutionRuntime: executionRuntime, ClusterClient: testClusterClient(t)})
 	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
 
 	stopResult := make(chan error, 1)
@@ -230,6 +232,7 @@ func TestAppStopDrainsRequestLogsWithoutWaitingForExecutionRuntime(t *testing.T)
 		return nil
 	})
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		ExecutionRuntime: executionRuntime,
 		RequestLogs:      requestLogs,
 	})
@@ -305,7 +308,7 @@ func mustNewEngine(t *testing.T) *gin.Engine {
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
-	registry, err := httproute.NewRegistry(HTTPModule(nil))
+	registry, err := httproute.NewRegistry(HTTPModule(healthyProbe))
 	if err != nil {
 		t.Fatalf("NewRegistry(system) error = %v", err)
 	}
@@ -434,25 +437,6 @@ func TestNewEngineRecoversWithoutLoggingCredentials(t *testing.T) {
 	}
 }
 
-func TestSystemHTTPModuleServesHealth(t *testing.T) {
-	engine := mustNewEngine(t)
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/health", nil)
-
-	engine.ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("GET /health status = %d, want 200", recorder.Code)
-	}
-	var body map[string]string
-	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode health response: %v", err)
-	}
-	if body["status"] != "ok" || body["version"] != version.Version {
-		t.Fatalf("health response = %#v", body)
-	}
-}
-
 func TestNewEngineDoesNotTrustForwardingHeaders(t *testing.T) {
 	engine := mustNewEngine(t)
 	engine.GET("/client-ip", func(c *gin.Context) {
@@ -479,6 +463,7 @@ func TestAppStartMigratesDatabaseAndServesHTTP(t *testing.T) {
 	manager, runtimeState := newTestRuntimeState(db)
 
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           mustNewEngine(t),
 		Config:           testConfig(t),
 		DB:               db,
@@ -540,6 +525,7 @@ func TestAppStartRejectsFirstInitializationWithExistingGroupsBeforeRuntimeLoad(t
 	}
 	runtimeLoadCalled := false
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           mustNewEngine(t),
 		Config:           testConfig(t),
 		DB:               db,
@@ -571,9 +557,10 @@ func TestAppStartBootstrapsAfterMigrationBeforeRuntimeLoad(t *testing.T) {
 	var order []string
 	loadErr := errors.New("stop before listen")
 	application := NewApp(AppParams{
-		Engine: mustNewEngine(t),
-		Config: testConfig(t),
-		DB:     db,
+		ClusterClient: testClusterClient(t),
+		Engine:        mustNewEngine(t),
+		Config:        testConfig(t),
+		DB:            db,
 		StartupBootstrap: startupBootstrapFunc(func(context.Context) error {
 			for _, table := range []string{"groups", "access_keys", "system_settings"} {
 				if !db.Migrator().HasTable(table) {
@@ -609,6 +596,7 @@ func TestAppStartDrainsCommittedOperationsAfterRuntimeLoadBeforeListen(t *testin
 	var order []string
 	recoveryErr := errors.New("durable recovery failed")
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           mustNewEngine(t),
 		Config:           testConfig(t),
 		DB:               db,
@@ -652,9 +640,10 @@ func TestAppStartRejectsBootstrapFailureBeforeRuntimeLoadAndListen(t *testing.T)
 	bootstrapErr := errors.New("bootstrap failed")
 	loadCalled := false
 	application := NewApp(AppParams{
-		Engine: mustNewEngine(t),
-		Config: testConfig(t),
-		DB:     db,
+		ClusterClient: testClusterClient(t),
+		Engine:        mustNewEngine(t),
+		Config:        testConfig(t),
+		DB:            db,
 		StartupBootstrap: startupBootstrapFunc(func(context.Context) error {
 			return bootstrapErr
 		}),
@@ -691,6 +680,7 @@ func TestAppStartRejectsRuntimeStateLoadFailureBeforeListen(t *testing.T) {
 
 	loadErr := errors.New("corrupt runtime config")
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           mustNewEngine(t),
 		Config:           testConfig(t),
 		DB:               db,
@@ -729,6 +719,7 @@ func TestAppReportsUnexpectedHTTPServeFailure(t *testing.T) {
 	_, runtimeState := newTestRuntimeState(db)
 
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           mustNewEngine(t),
 		Config:           testConfig(t),
 		DB:               db,
@@ -763,6 +754,7 @@ func TestAppStartsControlRuntimeAfterInitialization(t *testing.T) {
 	loaded := make(chan struct{})
 	runtime := newControlRuntimeFake(loaded, false)
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           mustNewEngine(t),
 		Config:           testConfig(t),
 		DB:               db,
@@ -798,6 +790,7 @@ func TestAppDoesNotStartControlRuntimeWhenLoadFails(t *testing.T) {
 	loadErr := errors.New("corrupt runtime config")
 	runtime := newControlRuntimeFake(nil, false)
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           mustNewEngine(t),
 		Config:           testConfig(t),
 		DB:               db,
@@ -833,6 +826,7 @@ func TestAppDoesNotStartControlRuntimeWhenListenFails(t *testing.T) {
 	cfg.Server.Port = occupied.Addr().(*net.TCPAddr).Port
 	runtime := newControlRuntimeFake(nil, false)
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           mustNewEngine(t),
 		Config:           cfg,
 		DB:               db,
@@ -860,6 +854,7 @@ func TestAppStopCancelsAndWaitsForControlRuntime(t *testing.T) {
 	}
 	runtime := newControlRuntimeFake(nil, true)
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           mustNewEngine(t),
 		Config:           testConfig(t),
 		DB:               db,
@@ -898,8 +893,9 @@ func TestAppStopClosesListenerBeforeHTTPServerRegistersIt(t *testing.T) {
 	t.Cleanup(func() { _ = listener.Close() })
 
 	application := &App{
-		httpServer: &http.Server{},
-		listener:   listener,
+		httpServer:    &http.Server{},
+		listener:      listener,
+		clusterClient: testClusterClient(t),
 	}
 	if err := application.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop() error = %v", err)
@@ -919,6 +915,7 @@ func TestAppStopHonorsDeadlineWhileWaitingForControlRuntime(t *testing.T) {
 	}
 	runtime := newControlRuntimeFake(nil, true)
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           mustNewEngine(t),
 		Config:           testConfig(t),
 		DB:               db,
@@ -994,6 +991,7 @@ func TestAppStartsRequestLogAfterListenBeforeHTTPServe(t *testing.T) {
 	}, nil)
 
 	application = NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           mustNewEngine(t),
 		Config:           cfg,
 		DB:               db,
@@ -1051,6 +1049,7 @@ func TestAppRequestLogStartFailureClosesListenerWithoutServing(t *testing.T) {
 	requestLogs := newRequestLogRuntimeFake(func() error { return startErr }, nil)
 	controlRuntime := newControlRuntimeFake(nil, false)
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           mustNewEngine(t),
 		Config:           cfg,
 		DB:               db,
@@ -1152,6 +1151,7 @@ func TestAppStopDrainsRequestLogAfterLastHandlerEmitBeforeDatabaseClose(t *testi
 	})
 	controlRuntime := newControlRuntimeFake(nil, false)
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           engine,
 		Config:           testConfig(t),
 		DB:               db,
@@ -1236,6 +1236,7 @@ func TestAppStopDeadlineJoinsRequestLogErrorAndClosesDatabase(t *testing.T) {
 	})
 	controlRuntime := newControlRuntimeFake(nil, true)
 	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
 		Engine:           mustNewEngine(t),
 		Config:           testConfig(t),
 		DB:               db,
@@ -1289,7 +1290,8 @@ func cleanupApp(t *testing.T, application *App) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		if err := application.Stop(ctx); err != nil {
+		// A test that already stopped the app closes Redis a second time.
+		if err := application.Stop(ctx); err != nil && !errors.Is(err, redis.ErrClosed) {
 			t.Errorf("Stop() error = %v", err)
 		}
 	})

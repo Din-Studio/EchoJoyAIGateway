@@ -94,7 +94,7 @@ func TestListRequestLogsSuppressesOnlyCanceledHTTPRequestErrors(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newServiceFixture(t)
 			fixture.service.requestLogs = &recordingRequestLogReader{err: test.readerErr}
-			server := NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service)
+			server := newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service)
 			recorder := httptest.NewRecorder()
 			ginContext, _ := gin.CreateTestContext(recorder)
 			ginContext.Request = httptest.NewRequest(http.MethodGet, "/api/logs", nil).
@@ -1175,7 +1175,7 @@ func TestRequestLogEndpointsBindAccessKeyScopeAndRedactRoutingInternals(t *testi
 	}}
 	fixture.service.requestLogs = reader
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	list := performRequestLogRequest(engine, current.Key, "client_model=client-model")
 	if list.Code != http.StatusOK {
@@ -1329,7 +1329,7 @@ func newRequestLogTestEngine(t *testing.T, reader RequestLogReader) *gin.Engine 
 	fixture := newServiceFixture(t)
 	fixture.service.requestLogs = reader
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 	return engine
 }
 
@@ -1538,12 +1538,19 @@ func TestHistoricalCredentialLabelsPreserveUnavailableDataWithoutSchedulingIt(t 
 				entry.AuthState = state.CredentialAuthStateReauthorizationRequired
 			case "outcome unknown":
 				entry.AuthState = state.CredentialAuthStateOutcomeUnknown
-			case "model cooldown":
-				entry.ModelCooldowns = map[string]time.Time{"model-a": time.Now().Add(time.Hour)}
 			case "zero credential weight":
 				entry.WeightManual = &zero
 			}
 			publishGroupCollectionRuntime(t, fixture, []state.CredentialEntry{entry})
+			if scenario == "model cooldown" {
+				// Model cooldowns are shared health, recorded through the store.
+				ref, _ := fixture.registry.CredentialRef(entry.ID)
+				if _, err := fixture.sharedHealth.CooldownModel(
+					t.Context(), ref, "model-a", time.Now().Add(time.Hour), time.Now(),
+				); err != nil {
+					t.Fatalf("CooldownModel() error = %v", err)
+				}
+			}
 			labels := fixture.service.CredentialLabels([]uint{entry.ID})
 			if label := labels[entry.ID]; label == "" {
 				t.Fatalf("existing unavailable credential has no historical label: %q", label)

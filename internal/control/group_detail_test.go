@@ -136,7 +136,7 @@ func TestGetGroupHTTPContractAndAuthentication(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	for _, test := range []struct {
 		name       string

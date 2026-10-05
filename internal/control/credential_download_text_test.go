@@ -36,7 +36,7 @@ func TestDownloadAllAPIKeysReturnsOneTextFileAcrossAllStatuses(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(&config.Config{AuthKey: "synthetic-export-auth"}, fixture.service)
+	server := newTestServer(t, &config.Config{AuthKey: "synthetic-export-auth"}, fixture.service)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
 	response := serveCredentialRequest(t, engine, http.MethodPost,

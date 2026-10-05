@@ -39,8 +39,8 @@ type Server struct {
 	service      *Service
 	systemInfo   systemInfoResponse
 	authFailures *authFailureLimiter
-	// sharedAuthFailures makes admin lockout cluster-wide; nil in
-	// single-instance mode.
+	// sharedAuthFailures makes admin lockout cluster-wide; authFailures is
+	// the fallback while Redis is unavailable.
 	sharedAuthFailures *cluster.AuthFailures
 	sharedAuthErrors   *utils.RateLimitedEventCounter
 	compareDigest      func([]byte, []byte) int
@@ -57,20 +57,24 @@ const (
 	maxCredentialStageGroupIDBytes   int64 = 32
 )
 
-func NewServer(cfg *config.Config, service *Service) *Server {
+// NewServer builds the control-plane server. sharedAuthFailures holds the
+// admin lockout every instance shares.
+func NewServer(cfg *config.Config, service *Service, sharedAuthFailures *cluster.AuthFailures) *Server {
 	now := time.Now
 	if service != nil && service.oauthCallback != nil {
 		service.oauthCallback.configureForServerHost(cfg.Server.Host)
 	}
 	return &Server{
-		authDigest:    sha256.Sum256([]byte(cfg.AuthKey)),
-		service:       service,
-		systemInfo:    newSystemInfoResponse(cfg),
-		authFailures:  newAuthFailureLimiter(),
-		compareDigest: subtle.ConstantTimeCompare,
-		logger:        logrus.StandardLogger(),
-		startedAt:     now().UTC(),
-		now:           now,
+		authDigest:         sha256.Sum256([]byte(cfg.AuthKey)),
+		service:            service,
+		systemInfo:         newSystemInfoResponse(cfg),
+		authFailures:       newAuthFailureLimiter(),
+		sharedAuthFailures: sharedAuthFailures,
+		sharedAuthErrors:   utils.NewRateLimitedEventCounter(time.Minute, time.Now),
+		compareDigest:      subtle.ConstantTimeCompare,
+		logger:             logrus.StandardLogger(),
+		startedAt:          now().UTC(),
+		now:                now,
 		authFailureEvents: utils.NewRateLimitedEventCounter(
 			time.Minute,
 			time.Now,
@@ -78,20 +82,15 @@ func NewServer(cfg *config.Config, service *Service) *Server {
 	}
 }
 
-// NewServerWithReleaseUpdateChecker wires the on-demand public update checker
-// and, in cluster mode, the admin lockout shared by every instance.
+// NewServerWithReleaseUpdateChecker wires the on-demand public update checker.
 func NewServerWithReleaseUpdateChecker(
 	cfg *config.Config,
 	service *Service,
 	releaseChecker ReleaseUpdateChecker,
 	sharedAuthFailures *cluster.AuthFailures,
 ) *Server {
-	server := NewServer(cfg, service)
+	server := NewServer(cfg, service, sharedAuthFailures)
 	server.releaseChecker = releaseChecker
-	if sharedAuthFailures != nil {
-		server.sharedAuthFailures = sharedAuthFailures
-		server.sharedAuthErrors = utils.NewRateLimitedEventCounter(time.Minute, time.Now)
-	}
 	return server
 }
 

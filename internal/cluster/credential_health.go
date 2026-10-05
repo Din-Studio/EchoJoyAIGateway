@@ -33,8 +33,7 @@ const (
 // CredentialHealth keeps credential health in Redis, one Hash per credential,
 // and mirrors it into the local registry. Writes apply their result locally
 // and publish it to peers; a periodic reconciliation repairs lost events. No
-// method performs a Redis call while holding a process lock. It is nil in
-// single-instance mode.
+// method performs a Redis call while holding a process lock.
 type CredentialHealth struct {
 	client   *Client
 	registry *state.CredentialRegistry
@@ -46,11 +45,8 @@ type CredentialHealth struct {
 
 var _ state.SharedCredentialHealthStore = (*CredentialHealth)(nil)
 
-// NewCredentialHealth returns nil when cluster mode is disabled.
+// NewCredentialHealth builds the shared credential health store.
 func NewCredentialHealth(client *Client, registry *state.CredentialRegistry) *CredentialHealth {
-	if client == nil {
-		return nil
-	}
 	return &CredentialHealth{
 		client: client, registry: registry,
 		origin:            client.InstanceID() + ":" + randomToken(),
@@ -292,9 +288,6 @@ func (health *CredentialHealth) readBatch(
 // fast path, and a reconciliation after every (re)subscription and on each
 // interval repairs anything an event missed.
 func (health *CredentialHealth) Run(ctx context.Context) {
-	if health == nil {
-		return
-	}
 	var subscriber sync.WaitGroup
 	subscriber.Add(1)
 	go func() {

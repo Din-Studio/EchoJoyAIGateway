@@ -12,8 +12,11 @@ import (
 	"gorm.io/gorm"
 
 	"gpt-load/internal/accessquota"
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/platform/redact"
+	"gpt-load/internal/state"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/testutil/clustertest"
 )
 
 func TestAccessQuotaCheckpointWriterAppliesAndRetriesAbsoluteSnapshot(t *testing.T) {
@@ -107,22 +110,14 @@ func TestAccessQuotaCheckpointWriterClassifiesStaleDeletedAndMissingState(t *tes
 func TestRequestLogServiceFlushesAndAcknowledgesQuotaDirtyStateWithoutLogEvent(t *testing.T) {
 	db := openRequestLogQueryDB(t)
 	accessKey, rule := createCheckpointRule(t, db)
-	runtime := accessquota.NewRuntime()
-	if err := runtime.Reconcile(map[uint][]accessquota.Rule{accessKey.ID: {
-		{
-			ID: rule.ID, Revision: 1, Kind: accessquota.KindPeriodic,
-			LimitNanoUSD: 100, PeriodSeconds: 300,
-		},
-	}}); err != nil {
-		t.Fatal(err)
+	quota := newTestSharedQuota(t, AccessQuotaStateReader{DB: db})
+	snapshot := periodicCheckpointSnapshot(accessKey.ID, rule.ID)
+	service := NewService(db, redact.New(), staticRetentionPolicy{days: 7})
+	service.SetAccessQuotaCheckpointSource(quota)
+	spendSharedQuota(t, quota, snapshot, accessKey.ID, 75)
+	if err := service.writeBatch(t.Context(), nil); err != nil {
+		t.Fatalf("writeBatch() error = %v", err)
 	}
-	service := NewService(db, redact.New(), staticRetentionPolicy{days: 7}, runtime)
-	ticket, decision := runtime.Admit(accessKey.ID, time.Unix(100, 0))
-	if !decision.Allowed {
-		t.Fatalf("Admit() = %#v", decision)
-	}
-	runtime.Complete(ticket, 75)
-	service.writeBatch(t.Context(), nil)
 
 	var persisted models.AccessKeyCostLimitState
 	if err := db.First(&persisted, rule.ID).Error; err != nil {
@@ -131,35 +126,28 @@ func TestRequestLogServiceFlushesAndAcknowledgesQuotaDirtyStateWithoutLogEvent(t
 	if persisted.UsedNanoUSD != 75 || persisted.SnapshotVersion <= 1 {
 		t.Fatalf("persisted checkpoint = %#v", persisted)
 	}
-	if dirty := runtime.DirtySnapshots(10); len(dirty) != 0 {
-		t.Fatalf("dirty after checkpoint = %#v", dirty)
+	if quota.HasDirty() {
+		t.Fatal("shared quota still dirty after checkpoint")
 	}
 }
 
 func TestRequestLogWorkerWakesForQuotaCheckpointAndDrainsOnStop(t *testing.T) {
 	db := openRequestLogQueryDB(t)
 	accessKey, rule := createCheckpointRule(t, db)
-	runtime := accessquota.NewRuntime()
-	if err := runtime.Reconcile(map[uint][]accessquota.Rule{accessKey.ID: {
-		{ID: rule.ID, Revision: 1, Kind: accessquota.KindPeriodic, LimitNanoUSD: 100, PeriodSeconds: 300},
-	}}); err != nil {
-		t.Fatal(err)
-	}
+	quota := newTestSharedQuota(t, AccessQuotaStateReader{DB: db})
+	snapshot := periodicCheckpointSnapshot(accessKey.ID, rule.ID)
 	timers := newManualTimerFactory()
-	service := NewService(db, redact.New(), staticRetentionPolicy{days: 7}, runtime)
+	service := NewService(db, redact.New(), staticRetentionPolicy{days: 7})
+	service.SetAccessQuotaCheckpointSource(quota)
 	service.timerFactory = timers.New
 	if err := service.Start(); err != nil {
 		t.Fatal(err)
 	}
-	ticket, decision := runtime.Admit(accessKey.ID, time.Unix(100, 0))
-	if !decision.Allowed {
-		t.Fatalf("Admit() = %#v", decision)
-	}
-	runtime.Complete(ticket, 75)
+	spendSharedQuota(t, quota, snapshot, accessKey.ID, 75)
 	receiveValue(t, timers.created).Fire()
 	waitForCheckpointCost(t, db, rule.ID, 75)
 
-	runtime.Complete(ticket, 5)
+	spendSharedQuota(t, quota, snapshot, accessKey.ID, 5)
 	if err := service.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
@@ -167,22 +155,14 @@ func TestRequestLogWorkerWakesForQuotaCheckpointAndDrainsOnStop(t *testing.T) {
 }
 
 func TestRequestLogWorkerDrainsEveryQuotaCheckpointBatchOnStop(t *testing.T) {
-	runtime := accessquota.NewRuntime()
-	definitions := make(map[uint][]accessquota.Rule, batchSize+1)
+	owners := make(initialQuotaStates, batchSize+1)
 	for index := 1; index <= batchSize+1; index++ {
-		definitions[uint(index)] = []accessquota.Rule{{
-			ID: uint(index), Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 100,
-		}}
+		owners[uint(index)] = uint(index)
 	}
-	if err := runtime.Reconcile(definitions); err != nil {
-		t.Fatal(err)
-	}
+	quota := newTestSharedQuota(t, owners)
+	snapshot := owners.snapshot()
 	for index := 1; index <= batchSize+1; index++ {
-		ticket, decision := runtime.Admit(uint(index), time.Unix(100, 0))
-		if !decision.Allowed {
-			t.Fatalf("Admit(%d) = %#v", index, decision)
-		}
-		runtime.Complete(ticket, 1)
+		spendSharedQuota(t, quota, snapshot, uint(index), 1)
 	}
 
 	timers := newManualTimerFactory()
@@ -192,8 +172,7 @@ func TestRequestLogWorkerDrainsEveryQuotaCheckpointBatchOnStop(t *testing.T) {
 		redact.New(),
 		timers.New,
 	)
-	service.accessQuota = localAccessQuotaCheckpoints{runtime: runtime}
-	service.quotaWake = make(chan struct{}, 1)
+	service.SetAccessQuotaCheckpointSource(quota)
 	service.quotaWriter = accessQuotaCheckpointWriterFunc(func(
 		_ context.Context,
 		snapshots []accessquota.RestoredState,
@@ -211,28 +190,22 @@ func TestRequestLogWorkerDrainsEveryQuotaCheckpointBatchOnStop(t *testing.T) {
 	if len(batchSizes) != 2 || batchSizes[0] != batchSize || batchSizes[1] != 1 {
 		t.Fatalf("checkpoint batch sizes = %v, want [%d 1]", batchSizes, batchSize)
 	}
-	if dirty := runtime.DirtySnapshots(1); len(dirty) != 0 {
-		t.Fatalf("dirty checkpoints after stop = %#v", dirty)
+	if quota.HasDirty() {
+		t.Fatal("shared quota still dirty after stop")
 	}
 }
 
 func TestRequestLogWorkerReportsFinalQuotaCheckpointFailureOnStop(t *testing.T) {
-	runtime := accessquota.NewRuntime()
-	if err := runtime.Reconcile(map[uint][]accessquota.Rule{1: {{
-		ID: 302, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 100,
-	}}}); err != nil {
-		t.Fatal(err)
-	}
-	ticket, _ := runtime.Admit(1, time.Unix(100, 0))
-	runtime.Complete(ticket, 75)
+	owners := initialQuotaStates{302: 1}
+	quota := newTestSharedQuota(t, owners)
+	spendSharedQuota(t, quota, owners.snapshot(), 1, 75)
 
 	service := newService(
 		batchWriterFunc(func(context.Context, []models.RequestLog) error { return nil }),
 		redact.New(),
 		newManualTimerFactory().New,
 	)
-	service.accessQuota = localAccessQuotaCheckpoints{runtime: runtime}
-	service.quotaWake = make(chan struct{}, 1)
+	service.SetAccessQuotaCheckpointSource(quota)
 	service.quotaWriter = accessQuotaCheckpointWriterFunc(func(
 		context.Context,
 		[]accessquota.RestoredState,
@@ -246,18 +219,14 @@ func TestRequestLogWorkerReportsFinalQuotaCheckpointFailureOnStop(t *testing.T) 
 	if err == nil || !strings.Contains(err.Error(), "final access key cost limit checkpoint") {
 		t.Fatalf("Stop() error = %v, want final checkpoint failure", err)
 	}
-	if dirty := runtime.DirtySnapshots(1); len(dirty) != 1 {
-		t.Fatalf("dirty checkpoints after failed stop = %#v", dirty)
+	if !quota.HasDirty() {
+		t.Fatal("shared quota lost its dirty state after a failed final checkpoint")
 	}
 }
 
 func TestRequestLogWorkerRetriesQuotaCheckpointWithoutClearingDirtyVersion(t *testing.T) {
-	runtime := accessquota.NewRuntime()
-	if err := runtime.Reconcile(map[uint][]accessquota.Rule{1: {{
-		ID: 301, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 100,
-	}}}); err != nil {
-		t.Fatal(err)
-	}
+	owners := initialQuotaStates{301: 1}
+	quota := newTestSharedQuota(t, owners)
 	timers := newManualTimerFactory()
 	writes := make(chan []accessquota.RestoredState, 2)
 	writeCount := 0
@@ -266,8 +235,7 @@ func TestRequestLogWorkerRetriesQuotaCheckpointWithoutClearingDirtyVersion(t *te
 		redact.New(),
 		timers.New,
 	)
-	service.accessQuota = localAccessQuotaCheckpoints{runtime: runtime}
-	service.quotaWake = make(chan struct{}, 1)
+	service.SetAccessQuotaCheckpointSource(quota)
 	service.quotaWriter = accessQuotaCheckpointWriterFunc(func(
 		_ context.Context,
 		snapshots []accessquota.RestoredState,
@@ -279,12 +247,10 @@ func TestRequestLogWorkerRetriesQuotaCheckpointWithoutClearingDirtyVersion(t *te
 		}
 		return nil
 	})
-	runtime.SetDirtyNotifier(service.wakeAccessQuotaCheckpoint)
 	if err := service.Start(); err != nil {
 		t.Fatal(err)
 	}
-	ticket, _ := runtime.Admit(1, time.Unix(100, 0))
-	runtime.Complete(ticket, 75)
+	spendSharedQuota(t, quota, owners.snapshot(), 1, 75)
 	receiveValue(t, timers.created).Fire()
 	first := receiveValue(t, writes)
 	failureDeadline := time.Now().Add(time.Second)
@@ -303,11 +269,11 @@ func TestRequestLogWorkerRetriesQuotaCheckpointWithoutClearingDirtyVersion(t *te
 		t.Fatalf("checkpoint retries = %#v / %#v", first, second)
 	}
 	deadline := time.Now().Add(time.Second)
-	for len(runtime.DirtySnapshots(1)) != 0 && time.Now().Before(deadline) {
+	for quota.HasDirty() && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if dirty := runtime.DirtySnapshots(1); len(dirty) != 0 {
-		t.Fatalf("dirty after successful retry = %#v", dirty)
+	if quota.HasDirty() {
+		t.Fatal("shared quota still dirty after successful retry")
 	}
 	if err := service.Stop(context.Background()); err != nil {
 		t.Fatal(err)
@@ -319,6 +285,67 @@ func TestRequestLogWorkerRetriesQuotaCheckpointWithoutClearingDirtyVersion(t *te
 		stats.DroppedPersistFailedTotal != 0 {
 		t.Fatalf("checkpoint failure stats = %#v", stats)
 	}
+}
+
+// newTestSharedQuota builds the Redis cost-limit state on miniredis.
+func newTestSharedQuota(t *testing.T, states cluster.AccessQuotaStateReader) *cluster.AccessQuota {
+	t.Helper()
+	_, client := clustertest.NewClient(t)
+	return cluster.NewAccessQuota(client, states)
+}
+
+// spendSharedQuota admits one request and settles cost against every rule
+// the snapshot defines for accessKeyID.
+func spendSharedQuota(t *testing.T, quota *cluster.AccessQuota, snapshot *state.ConfigSnapshot, accessKeyID uint, cost int64) {
+	t.Helper()
+	ticket, decision, err := quota.Admit(t.Context(), snapshot, accessKeyID, time.Now())
+	if err != nil || !decision.Allowed {
+		t.Fatalf("Admit(%d) = %#v, %v", accessKeyID, decision, err)
+	}
+	if _, err := quota.Complete(t.Context(), ticket, cost); err != nil {
+		t.Fatalf("Complete(%d) error = %v", accessKeyID, err)
+	}
+}
+
+// periodicCheckpointSnapshot defines the rule createCheckpointRule persists.
+func periodicCheckpointSnapshot(accessKeyID, ruleID uint) *state.ConfigSnapshot {
+	return &state.ConfigSnapshot{AccessKeysByID: map[uint]state.AccessKeyView{accessKeyID: {
+		ID: accessKeyID, CostLimitRules: []accessquota.Rule{{
+			ID: ruleID, Revision: 1, Kind: accessquota.KindPeriodic, LimitNanoUSD: 100, PeriodSeconds: 300,
+		}},
+	}}}
+}
+
+// initialQuotaStates maps rule IDs to their AccessKey and serves an empty
+// revision-1 checkpoint for each, standing in for the database.
+type initialQuotaStates map[uint]uint
+
+func (owners initialQuotaStates) ReadAccessQuotaStates(
+	_ context.Context,
+	ruleIDs []uint,
+) ([]accessquota.RestoredState, error) {
+	states := make([]accessquota.RestoredState, 0, len(ruleIDs))
+	for _, ruleID := range ruleIDs {
+		if accessKeyID, exists := owners[ruleID]; exists {
+			states = append(states, accessquota.RestoredState{
+				AccessKeyID: accessKeyID, RuleID: ruleID, RuleRevision: 1, SnapshotVersion: 1,
+			})
+		}
+	}
+	return states, nil
+}
+
+// snapshot defines one total rule with a large limit per entry.
+func (owners initialQuotaStates) snapshot() *state.ConfigSnapshot {
+	snapshot := &state.ConfigSnapshot{AccessKeysByID: make(map[uint]state.AccessKeyView, len(owners))}
+	for ruleID, accessKeyID := range owners {
+		snapshot.AccessKeysByID[accessKeyID] = state.AccessKeyView{
+			ID: accessKeyID, CostLimitRules: []accessquota.Rule{{
+				ID: ruleID, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 1_000,
+			}},
+		}
+	}
+	return snapshot
 }
 
 type accessQuotaCheckpointWriterFunc func(context.Context, []accessquota.RestoredState) error

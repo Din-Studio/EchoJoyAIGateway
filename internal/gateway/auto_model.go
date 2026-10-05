@@ -23,7 +23,7 @@ var reasonAutoModelForbidden = reason{http.StatusForbidden, "auto_model_target_f
 var reasonAutoModelUnsupported = reason{http.StatusBadRequest, "auto_model_operation_unsupported", "Automatic model selection is unsupported for this operation."}
 
 func (handler *Handler) admitAutoQuota(ctx context.Context, snapshot *state.ConfigSnapshot, admission *requestAccessQuotaAdmission) *reason {
-	if admission == nil || admission.admitted || handler.accessQuota == nil {
+	if admission == nil || admission.admitted {
 		return nil
 	}
 	var decision accessquota.Decision

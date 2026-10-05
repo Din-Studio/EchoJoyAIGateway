@@ -20,16 +20,13 @@ var ErrCatalogMissing = errors.New("shared catalog is missing")
 // CatalogStore keeps the one Models.dev last-known-good document every
 // instance serves, so a single instance fetches it and the rest adopt it. The
 // document is an opaque encoded catalog; its fetch time lets instances detect
-// a newer one without reading it. It is nil in single-instance mode.
+// a newer one without reading it.
 type CatalogStore struct {
 	client *Client
 }
 
-// NewCatalogStore returns nil when cluster mode is disabled.
+// NewCatalogStore builds the shared Models.dev catalog store.
 func NewCatalogStore(client *Client) *CatalogStore {
-	if client == nil {
-		return nil
-	}
 	return &CatalogStore{client: client}
 }
 

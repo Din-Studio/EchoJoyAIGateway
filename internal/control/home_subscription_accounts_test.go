@@ -190,7 +190,7 @@ func TestHomeSubscriptionAccountsRouteIsAdminOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 
 	admin := performHomeRequest(engine, "/api/home/subscription-accounts", authTestKey)
 	if admin.Code != http.StatusOK {

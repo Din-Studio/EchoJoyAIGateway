@@ -45,7 +45,4 @@ func TestCatalogStoreReportsRedisErrors(t *testing.T) {
 	if _, err := store.FetchedAt(t.Context()); err == nil || errors.Is(err, ErrCatalogMissing) {
 		t.Fatalf("FetchedAt() with Redis down error = %v", err)
 	}
-	if NewCatalogStore(nil) != nil {
-		t.Fatal("NewCatalogStore(nil) != nil")
-	}
 }
