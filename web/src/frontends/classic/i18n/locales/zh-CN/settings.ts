@@ -173,22 +173,16 @@ export default {
       viewRelease: '查看 Release',
       checkUpdateFailed: '检查更新失败，请稍后重试。',
       deployment: '部署形态',
-      single: '单实例',
       databases: {
-        sqlite: 'SQLite',
-        mysql: 'MySQL',
         postgres: 'PostgreSQL',
       },
-      singleBinary: '单二进制',
       authKey: 'AUTH_KEY 来源',
       encryption: '静态加密',
       enabled: '已启用',
-      copyPath: '复制路径',
       sources: {
         environment: '环境变量',
-        key_file: '密钥文件',
       },
-      securityNote: '仅可复制非秘密路径；界面绝不显示 AUTH_KEY 或加密密钥内容。',
+      securityNote: '界面绝不显示 AUTH_KEY 或加密密钥内容。',
     },
   },
 } as const

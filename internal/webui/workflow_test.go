@@ -2597,7 +2597,7 @@ func TestReleaseWorkflowSkipsOnlyCIProvenGatesAndStillFailsClosed(t *testing.T) 
 	content := readRepositoryFile(t, ".github/workflows/release.yml")
 
 	// 只有同一 commit 上确定性重跑的 gate 才允许复用 CI 结论。
-	reusable := []string{"race-tests", "race-cpa", "database-contract"}
+	reusable := []string{"race-tests", "race-cpa"}
 	for _, jobName := range reusable {
 		job := workflowJobBlock(t, content, jobName)
 		if !strings.Contains(job, "needs.validate-tag.outputs.ci_verified != 'true'") {
@@ -2628,7 +2628,6 @@ func TestReleaseWorkflowSkipsOnlyCIProvenGatesAndStillFailsClosed(t *testing.T) 
 		"package-checksums",
 		"docker-smoke",
 		"prebuilt-image-smoke",
-		"database-contract",
 	} {
 		if !strings.Contains(needsBlock, "- "+gate) {
 			t.Fatalf("publication preflight does not directly need gate %q:\n%s", gate, needsBlock)
@@ -2680,7 +2679,7 @@ func TestReleaseWorkflowJobsDownstreamOfSkippableGatesOverrideDefaultCondition(t
 	// 它自己列出的直接 needs 全部成功（beta.8 的真实回归：publication-preflight
 	// 成功了，但下游 publish-images/publish-github/... 仍被跳过）。凡是这条链上
 	// 存在会被跳过的祖先的 job，都必须自己写显式 if，绕开默认条件的传播。
-	skippable := map[string]bool{"race-tests": true, "race-cpa": true, "database-contract": true}
+	skippable := map[string]bool{"race-tests": true, "race-cpa": true}
 	var ancestors func(name string, seen map[string]bool)
 	ancestors = func(name string, seen map[string]bool) {
 		for _, dep := range needsOf[name] {
@@ -2725,8 +2724,8 @@ func TestReleaseAssetManifestIsTheSingleSourceOfTruth(t *testing.T) {
 			assets = append(assets, name)
 		}
 	}
-	if len(assets) != 7 {
-		t.Fatalf("release asset manifest lists %d assets, want 7", len(assets))
+	if len(assets) != 6 {
+		t.Fatalf("release asset manifest lists %d assets, want 6", len(assets))
 	}
 	sorted := append([]string(nil), assets...)
 	sort.Strings(sorted)
@@ -2742,7 +2741,6 @@ func TestReleaseAssetManifestIsTheSingleSourceOfTruth(t *testing.T) {
 	for _, name := range []string{
 		"Apache-2.0.txt",
 		"MIT.txt",
-		"MPL-2.0.txt",
 		"THIRD_PARTY_NOTICES.md",
 		"bom.cdx.json",
 	} {

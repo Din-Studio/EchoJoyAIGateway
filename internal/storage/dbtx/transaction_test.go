@@ -2,43 +2,27 @@ package dbtx
 
 import (
 	"context"
-	"reflect"
 	"testing"
 
 	"gpt-load/internal/storage"
 	"gpt-load/internal/testutil/pgtest"
 )
 
-func TestCapabilitiesForDriverPreserveDatabaseTransactionSemantics(t *testing.T) {
-	tests := []struct {
-		name     string
-		driver   string
-		writeSQL []string
-		readSQL  []string
+func TestBeginStatementForSelectsPostgreSQLIsolation(t *testing.T) {
+	for _, test := range []struct {
+		mode Mode
+		want string
 	}{
-		{name: "sqlite", driver: "sqlite", writeSQL: []string{"BEGIN IMMEDIATE"}, readSQL: []string{"BEGIN"}},
-		{name: "mysql", driver: "mysql", writeSQL: []string{"BEGIN"}, readSQL: []string{
-			"SET TRANSACTION ISOLATION LEVEL REPEATABLE READ",
-			"START TRANSACTION WITH CONSISTENT SNAPSHOT",
-		}},
-		{name: "postgres", driver: "postgres", writeSQL: []string{"BEGIN ISOLATION LEVEL READ COMMITTED"}, readSQL: []string{"BEGIN ISOLATION LEVEL REPEATABLE READ"}},
-		{name: "postgresql alias", driver: "postgresql", writeSQL: []string{"BEGIN ISOLATION LEVEL READ COMMITTED"}, readSQL: []string{"BEGIN ISOLATION LEVEL REPEATABLE READ"}},
+		{mode: Write, want: "BEGIN ISOLATION LEVEL READ COMMITTED"},
+		{mode: ReadSnapshot, want: "BEGIN ISOLATION LEVEL REPEATABLE READ"},
+	} {
+		got, err := beginStatementFor(test.mode)
+		if err != nil || got != test.want {
+			t.Fatalf("beginStatementFor(%d) = %q/%v, want %q/nil", test.mode, got, err, test.want)
+		}
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			capabilities, err := CapabilitiesForDriver(test.driver)
-			if err != nil {
-				t.Fatalf("CapabilitiesForDriver(%q) error = %v", test.driver, err)
-			}
-			writeSQL, err := capabilities.beginStatements(Write)
-			if err != nil || !reflect.DeepEqual(writeSQL, test.writeSQL) {
-				t.Fatalf("write begin SQL = %#v/%v, want %#v/nil", writeSQL, err, test.writeSQL)
-			}
-			readSQL, err := capabilities.beginStatements(ReadSnapshot)
-			if err != nil || !reflect.DeepEqual(readSQL, test.readSQL) {
-				t.Fatalf("read begin SQL = %#v/%v, want %#v/nil", readSQL, err, test.readSQL)
-			}
-		})
+	if _, err := beginStatementFor(Mode(99)); err == nil {
+		t.Fatal("beginStatementFor(99) error = nil, want unsupported mode error")
 	}
 }
 

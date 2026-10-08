@@ -36,14 +36,6 @@ func Up0004(db *gorm.DB) error {
 	return nil
 }
 
-// ValidateRecoverable0004 accepts either side of this idempotent index creation.
-func ValidateRecoverable0004(db *gorm.DB) error {
-	if !db.Migrator().HasTable(&usageStat0004{}) {
-		return fmt.Errorf("validate recoverable usage stats group activity index: table %q is missing", usageStat0004{}.TableName())
-	}
-	return nil
-}
-
 // Validate0004 verifies the activity lookup index is present.
 func Validate0004(db *gorm.DB) error {
 	if !db.Migrator().HasTable(&usageStat0004{}) {

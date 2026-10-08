@@ -64,21 +64,6 @@ decompression.
 
 The complete MIT License text is distributed in `LICENSES/MIT.txt`.
 
-## Go MySQL Driver
-
-- Module: `github.com/go-sql-driver/mysql`
-- Version: `v1.8.1`
-- Copyright: 2012 The Go-MySQL-Driver Authors
-- License: Mozilla Public License 2.0
-
-Linked unmodified, through `gorm.io/driver/mysql`, for MySQL support. As required
-by MPL-2.0 Section 3.2, the Source Code Form for this version is available under
-the terms of the MPL at
-<https://github.com/go-sql-driver/mysql/tree/v1.8.1>.
-
-The complete Mozilla Public License 2.0 text is distributed in
-`LICENSES/MPL-2.0.txt`.
-
 ## Lobe Icons
 
 - Source: `@lobehub/icons-static-svg` `1.94.0` (vendored subset, not an npm

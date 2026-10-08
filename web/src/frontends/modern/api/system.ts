@@ -1,37 +1,25 @@
 import type { ApiClient } from '@shared/http/client'
 import { InvalidResponseError, NetworkError, RequestCancelledError } from '@shared/http/errors'
-import { boolean, oneOf, record, text } from './response'
+import { oneOf, record, text } from './response'
 
 export const systemInfoKey = ['modern', 'system-info'] as const
 export interface SecretSourceInfo {
-  source: 'environment' | 'key_file'
-  path: string | null
+  source: 'environment'
 }
 export interface SystemInfo {
   version: string
-  database: 'sqlite' | 'mysql' | 'postgres'
+  database: 'postgres'
   authKey: SecretSourceInfo
   encryption: SecretSourceInfo
 }
 function readSecretSource(value: unknown): SecretSourceInfo {
-  const row = record(value)
-  const source = oneOf(row.source, ['environment', 'key_file'] as const)
-  const path = row.path === null ? null : asNonBlankString(row.path)
-  if ((source === 'environment') !== (path === null)) throw new InvalidResponseError()
-  return { source, path }
+  return { source: oneOf(record(value).source, ['environment'] as const) }
 }
 export async function getSystemInfo(client: ApiClient, signal: AbortSignal): Promise<SystemInfo> {
   const row = record(await client.request('/api/system/info', { signal }))
-  const deployment = record(row.deployment)
-  if (
-    deployment.instance_mode !== 'single' ||
-    deployment.distribution !== 'single_binary' ||
-    !boolean(record(row.encryption).enabled)
-  )
-    throw new InvalidResponseError()
   return {
     version: text(row.version),
-    database: oneOf(deployment.database, ['sqlite', 'mysql', 'postgres']),
+    database: oneOf(record(row.deployment).database, ['postgres'] as const),
     authKey: readSecretSource(row.auth_key),
     encryption: readSecretSource(row.encryption),
   }

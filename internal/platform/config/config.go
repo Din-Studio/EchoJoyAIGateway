@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -45,54 +44,18 @@ type LogConfig struct {
 	Format string
 }
 
-// DatabaseSource identifies whether the operator selected the database
-// location or the application supplied its managed default.
-type DatabaseSource string
-
-const (
-	DatabaseSourceManaged  DatabaseSource = "managed"
-	DatabaseSourceExternal DatabaseSource = "external"
-)
-
-// DatabaseDriver identifies the database driver selected by DATABASE_DSN.
-// The values are stable because they are also consumed by the management API.
-type DatabaseDriver string
-
-const (
-	DatabaseDriverSQLite     DatabaseDriver = "sqlite"
-	DatabaseDriverMySQL      DatabaseDriver = "mysql"
-	DatabaseDriverPostgreSQL DatabaseDriver = "postgres"
-	DatabaseDriverPostgres                  = DatabaseDriverPostgreSQL
-)
-
-// DatabaseConfig is the normalized database connection target. DSN contains
-// a driver-ready DSN; SQLite URLs are normalized to the native SQLite DSN
-// while network database URLs remain URLs until storage opens them.
-type DatabaseConfig struct {
-	Driver DatabaseDriver
-	DSN    string
-}
-
-// DatabasePoolConfig contains connection-pool limits for network databases.
-// SQLite always uses one open and one idle connection regardless of these values.
+// DatabasePoolConfig contains PostgreSQL connection-pool limits.
 type DatabasePoolConfig struct {
 	MaxOpenConnections int
 	MaxIdleConnections int
 }
 
-// DefaultDatabasePoolConfig returns the default network database pool limits.
+// DefaultDatabasePoolConfig returns the default PostgreSQL pool limits.
 func DefaultDatabasePoolConfig() DatabasePoolConfig {
 	return DatabasePoolConfig{
 		MaxOpenConnections: defaultDatabaseMaxOpenConns,
 		MaxIdleConnections: defaultDatabaseMaxIdleConns,
 	}
-}
-
-// DatabaseMetadata describes database ownership without retaining its DSN or
-// path.
-type DatabaseMetadata struct {
-	Source DatabaseSource
-	Driver DatabaseDriver
 }
 
 // ClusterConfig contains the Redis settings every gateway instance shares.
@@ -111,7 +74,6 @@ type ClusterConfig struct {
 type Config struct {
 	Server                    ServerConfig
 	DatabaseDSN               string
-	DatabaseMetadata          DatabaseMetadata
 	DatabasePool              DatabasePoolConfig
 	EncryptionKey             string
 	AuthKey                   string
@@ -175,7 +137,7 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	database, err := requirePostgreSQLDSN(os.Getenv("DATABASE_DSN"))
+	databaseDSN, err := requirePostgreSQLDSN(os.Getenv("DATABASE_DSN"))
 	if err != nil {
 		return nil, err
 	}
@@ -189,11 +151,6 @@ func Load() (*Config, error) {
 	encryptionKey := os.Getenv("ENCRYPTION_KEY")
 	if encryptionKey == "" {
 		return nil, fmt.Errorf("ENCRYPTION_KEY is required")
-	}
-
-	databaseMetadata := DatabaseMetadata{
-		Source: DatabaseSourceExternal,
-		Driver: database.Driver,
 	}
 
 	logFormat := valueOrDefault("LOG_FORMAT", "text")
@@ -213,8 +170,7 @@ func Load() (*Config, error) {
 			ReadTimeout:             readTimeout,
 			IdleTimeout:             idleTimeout,
 		},
-		DatabaseDSN:      database.DSN,
-		DatabaseMetadata: databaseMetadata,
+		DatabaseDSN: databaseDSN,
 		DatabasePool: DatabasePoolConfig{
 			MaxOpenConnections: databaseMaxOpenConnections,
 			MaxIdleConnections: databaseMaxIdleConnections,
@@ -232,19 +188,19 @@ func Load() (*Config, error) {
 
 // requirePostgreSQLDSN parses DATABASE_DSN and rejects an empty or
 // non-PostgreSQL value.
-func requirePostgreSQLDSN(rawDSN string) (DatabaseConfig, error) {
+func requirePostgreSQLDSN(rawDSN string) (string, error) {
 	const message = "DATABASE_DSN is required and must be a PostgreSQL DSN"
 	if strings.TrimSpace(rawDSN) == "" {
-		return DatabaseConfig{}, errors.New(message)
+		return "", errors.New(message)
 	}
-	database, err := ParseDatabaseDSN(rawDSN)
+	dsn, err := ParseDatabaseDSN(rawDSN)
+	if errors.Is(err, errUnsupportedDatabaseScheme) {
+		return "", errors.New(message)
+	}
 	if err != nil {
-		return DatabaseConfig{}, fmt.Errorf("%s: %w", message, err)
+		return "", fmt.Errorf("%s: %w", message, err)
 	}
-	if database.Driver != DatabaseDriverPostgreSQL {
-		return DatabaseConfig{}, errors.New(message)
-	}
-	return database, nil
+	return dsn, nil
 }
 
 // parseClusterConfig reads the Redis variables. REDIS_DSN is a 1.x variable
@@ -306,103 +262,45 @@ func defaultInstanceID() (string, error) {
 	return hostname + "-" + hex.EncodeToString(suffix[:]), nil
 }
 
-// ParseDatabaseDSN parses the single DATABASE_DSN configuration format. Bare
-// paths and :memory: remain SQLite compatibility forms; network databases must
-// use a URL with a supported scheme.
-func ParseDatabaseDSN(rawDSN string) (DatabaseConfig, error) {
+// errUnsupportedDatabaseScheme marks a DATABASE_DSN that is not a
+// postgres:// or postgresql:// URL.
+var errUnsupportedDatabaseScheme = errors.New("DATABASE_DSN uses unsupported database scheme")
+
+// ParseDatabaseDSN validates DATABASE_DSN as a PostgreSQL URL and returns the
+// trimmed DSN. Every other form, including bare file paths, is rejected.
+func ParseDatabaseDSN(rawDSN string) (string, error) {
 	dsn := strings.TrimSpace(rawDSN)
 	if dsn == "" {
-		return DatabaseConfig{}, fmt.Errorf("DATABASE_DSN must not be empty")
+		return "", fmt.Errorf("DATABASE_DSN must not be empty")
 	}
-	baseDSN, _, _ := strings.Cut(dsn, "?")
-	if baseDSN == ":memory:" {
-		return DatabaseConfig{Driver: DatabaseDriverSQLite, DSN: dsn}, nil
-	}
-	if filepath.VolumeName(dsn) != "" {
-		return DatabaseConfig{Driver: DatabaseDriverSQLite, DSN: dsn}, nil
-	}
-
 	parsed, err := url.Parse(dsn)
 	if err != nil {
-		return DatabaseConfig{}, fmt.Errorf("DATABASE_DSN is invalid")
+		return "", errUnsupportedDatabaseScheme
 	}
-	if parsed.Scheme == "" {
-		return DatabaseConfig{Driver: DatabaseDriverSQLite, DSN: dsn}, nil
-	}
-
-	scheme := strings.ToLower(parsed.Scheme)
-	switch scheme {
-	case "file":
-		if !strings.HasPrefix(dsn, "file:") {
-			return DatabaseConfig{}, fmt.Errorf("DATABASE_DSN uses an unsupported SQLite URI")
-		}
-		return DatabaseConfig{Driver: DatabaseDriverSQLite, DSN: dsn}, nil
-	case "sqlite":
-		normalizedDSN, err := normalizeSQLiteURL(parsed)
-		if err != nil {
-			return DatabaseConfig{}, err
-		}
-		return DatabaseConfig{Driver: DatabaseDriverSQLite, DSN: normalizedDSN}, nil
-	case "mysql":
-		if err := validateNetworkDatabaseURL(parsed, DatabaseDriverMySQL); err != nil {
-			return DatabaseConfig{}, err
-		}
-		return DatabaseConfig{Driver: DatabaseDriverMySQL, DSN: dsn}, nil
+	switch strings.ToLower(parsed.Scheme) {
 	case "postgres", "postgresql":
-		if err := validateNetworkDatabaseURL(parsed, DatabaseDriverPostgreSQL); err != nil {
-			return DatabaseConfig{}, err
-		}
-		return DatabaseConfig{Driver: DatabaseDriverPostgreSQL, DSN: dsn}, nil
 	default:
-		return DatabaseConfig{}, fmt.Errorf("DATABASE_DSN uses unsupported database scheme")
+		return "", errUnsupportedDatabaseScheme
 	}
+	if err := validatePostgreSQLURL(parsed); err != nil {
+		return "", err
+	}
+	return dsn, nil
 }
 
-func normalizeSQLiteURL(parsed *url.URL) (string, error) {
-	if parsed.User != nil || parsed.Fragment != "" {
-		return "", fmt.Errorf("DATABASE_DSN uses an invalid SQLite URL")
-	}
-
-	databasePath := parsed.Opaque
-	if databasePath == "" {
-		databasePath = parsed.Path
-		switch parsed.Host {
-		case "":
-		case ".":
-			databasePath = "." + databasePath
-		case "localhost":
-		default:
-			databasePath = parsed.Host + databasePath
-		}
-	}
-	if databasePath == "/:memory:" {
-		databasePath = ":memory:"
-	}
-	if databasePath == "" {
-		return "", fmt.Errorf("DATABASE_DSN SQLite URL must include a database path")
-	}
-	if parsed.RawQuery != "" {
-		if _, err := url.ParseQuery(parsed.RawQuery); err != nil {
-			return "", fmt.Errorf("DATABASE_DSN has an invalid SQLite query")
-		}
-		databasePath += "?" + parsed.RawQuery
-	}
-	return databasePath, nil
-}
-
-func validateNetworkDatabaseURL(parsed *url.URL, driver DatabaseDriver) error {
+func validatePostgreSQLURL(parsed *url.URL) error {
 	if parsed.Hostname() == "" {
-		return fmt.Errorf("DATABASE_DSN %s URL must include a host", driver)
+		return fmt.Errorf("DATABASE_DSN postgres URL must include a host")
 	}
 	databaseName := strings.TrimPrefix(parsed.Path, "/")
 	if databaseName == "" || strings.Contains(databaseName, "/") {
-		return fmt.Errorf("DATABASE_DSN %s URL must include one database name", driver)
+		return fmt.Errorf("DATABASE_DSN postgres URL must include one database name")
 	}
 	if parsed.Fragment != "" {
-		return fmt.Errorf("DATABASE_DSN %s URL must not include a fragment", driver)
+		return fmt.Errorf("DATABASE_DSN postgres URL must not include a fragment")
 	}
 	if _, err := url.ParseQuery(parsed.RawQuery); err != nil {
-		return fmt.Errorf("DATABASE_DSN has an invalid %s query", driver)
+		return fmt.Errorf("DATABASE_DSN has an invalid postgres query")
 	}
 	return nil
 }

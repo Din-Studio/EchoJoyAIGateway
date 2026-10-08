@@ -26,7 +26,6 @@ secrets/
 data/
 data_bak/
 *.db*
-*.sqlite*
 *.log
 
 # Temporary and profiling output

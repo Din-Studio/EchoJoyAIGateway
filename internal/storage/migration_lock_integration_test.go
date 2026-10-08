@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"gpt-load/internal/platform/config"
 	"gpt-load/internal/testutil/pgtest"
 )
 
@@ -15,9 +14,9 @@ import (
 // connection and verifies a second connection observes its context deadline.
 func TestExternalPostgresMigrationLockTimesOut(t *testing.T) {
 	dsn := pgtest.DSN(t)
-	db, err := OpenWithSource(dsn, config.DatabaseSourceExternal)
+	db, err := Open(dsn)
 	if err != nil {
-		t.Fatalf("OpenWithSource() error = %v", err)
+		t.Fatalf("Open() error = %v", err)
 	}
 	sqlDB, err := db.DB()
 	if err != nil {

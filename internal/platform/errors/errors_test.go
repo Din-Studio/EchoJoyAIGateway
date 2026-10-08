@@ -44,21 +44,10 @@ func TestGroupInUseContract(t *testing.T) {
 	}
 }
 
-func TestParseDBErrorRecognizesSQLiteUniqueConstraint(t *testing.T) {
-	err := errors.New("constraint failed: UNIQUE constraint failed: groups.name (2067)")
+func TestParseDBErrorRecognizesNativePostgreSQLUniqueConstraint(t *testing.T) {
+	err := errors.New("duplicate key value violates unique constraint groups_name_key")
 	if got := ParseDBError(err); got != ErrDuplicateResource {
-		t.Fatalf("ParseDBError() = %#v, want duplicate resource", got)
-	}
-}
-
-func TestParseDBErrorRecognizesNativeMySQLAndPostgreSQLUniqueConstraints(t *testing.T) {
-	for _, err := range []error{
-		errors.New("Error 1062: Duplicate entry 'group' for key 'groups.name'"),
-		errors.New("duplicate key value violates unique constraint groups_name_key"),
-	} {
-		if got := ParseDBError(err); got != ErrDuplicateResource {
-			t.Fatalf("ParseDBError(%v) = %#v, want duplicate resource", err, got)
-		}
+		t.Fatalf("ParseDBError(%v) = %#v, want duplicate resource", err, got)
 	}
 }
 

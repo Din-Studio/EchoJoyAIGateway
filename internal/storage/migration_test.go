@@ -35,8 +35,7 @@ func TestMigrationRegistryContainsOrderedMigrations(t *testing.T) {
 		t.Fatalf("migration registry length = %d, want %d", len(migrations), len(wantIDs))
 	}
 	for index, entry := range migrations {
-		if entry.ID != wantIDs[index] || entry.Up == nil ||
-			entry.Validate == nil || entry.ValidateRecoverable == nil {
+		if entry.ID != wantIDs[index] || entry.Up == nil || entry.Validate == nil {
 			t.Fatalf("migration registry entry %d = %#v", index, entry)
 		}
 	}
@@ -88,8 +87,7 @@ func testMigrationRegistry() ([]migration, *[]string) {
 				calls = append(calls, id)
 				return nil
 			},
-			Validate:            func(*gorm.DB) error { return nil },
-			ValidateRecoverable: func(*gorm.DB) error { return nil },
+			Validate: func(*gorm.DB) error { return nil },
 		}
 	}
 	return []migration{entry("0001_test"), entry("0002_test")}, &calls

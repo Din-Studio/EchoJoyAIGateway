@@ -110,36 +110,6 @@ func schemaDefinitions0002(db *gorm.DB) ([]schemaDefinition0002, error) {
 	return definitions, nil
 }
 
-// ValidateRecoverable0002 rejects unsafe partial MySQL migration state.
-func ValidateRecoverable0002(db *gorm.DB) error {
-	definitions, err := schemaDefinitions0002(db)
-	if err != nil {
-		return err
-	}
-	for _, definition := range definitions {
-		if !db.Migrator().HasTable(definition.model) {
-			continue
-		}
-		var count int64
-		if err := db.Table(definition.table).Count(&count).Error; err != nil {
-			return fmt.Errorf("count interrupted access key cost limit table %q: %w", definition.table, err)
-		}
-		if count != 0 {
-			return fmt.Errorf("table %q contains data", definition.table)
-		}
-		columns, err := db.Migrator().ColumnTypes(definition.table)
-		if err != nil {
-			return fmt.Errorf("inspect interrupted access key cost limit table %q: %w", definition.table, err)
-		}
-		for _, column := range columns {
-			if _, expected := definition.columns[strings.ToLower(column.Name())]; !expected {
-				return fmt.Errorf("table %q contains unexpected column %q", definition.table, column.Name())
-			}
-		}
-	}
-	return nil
-}
-
 // Validate0002 verifies the tables, columns, indexes, and constraints owned by 0002.
 func Validate0002(db *gorm.DB) error {
 	definitions, err := schemaDefinitions0002(db)

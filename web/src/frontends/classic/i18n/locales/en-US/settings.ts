@@ -189,23 +189,16 @@ export default {
       viewRelease: 'View release',
       checkUpdateFailed: 'Unable to check for updates. Please try again later.',
       deployment: 'Deployment',
-      single: 'Single instance',
       databases: {
-        sqlite: 'SQLite',
-        mysql: 'MySQL',
         postgres: 'PostgreSQL',
       },
-      singleBinary: 'Single binary',
       authKey: 'AUTH_KEY source',
       encryption: 'Encryption',
       enabled: 'Enabled',
-      copyPath: 'Copy path',
       sources: {
         environment: 'Environment variable',
-        key_file: 'Key file',
       },
-      securityNote:
-        'Only non-secret paths can be copied. AUTH_KEY and encryption-key contents are never shown.',
+      securityNote: 'AUTH_KEY and encryption-key contents are never shown.',
     },
   },
 } as const

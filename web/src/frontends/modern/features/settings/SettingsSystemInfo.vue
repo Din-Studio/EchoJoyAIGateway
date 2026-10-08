@@ -7,7 +7,6 @@ import {
   AppBadge,
   AppButton,
   AppCollectionState,
-  AppCopyValue,
   AppExternalLink,
   AppIcon,
 } from '@modern/components/ui'
@@ -17,7 +16,7 @@ defineProps<{ data?: SystemInfo; loading: boolean; failed: boolean }>()
 defineEmits<{ retry: [] }>()
 const { t } = useI18n()
 const { checkState, update, checkForUpdate } = useSystemStatus()
-const databaseNames = { sqlite: 'SQLite', mysql: 'MySQL', postgres: 'PostgreSQL' }
+const databaseNames = { postgres: 'PostgreSQL' }
 const updateMessage = computed(() => {
   if (checkState.value === 'failed') return { text: t('system.checkFailed'), error: true }
   if (checkState.value === 'authRequired') return { text: t('system.authRequired'), error: true }
@@ -40,7 +39,6 @@ const updateMessage = computed(() => {
       <div class="modern-settings-system-version">
         <span>{{ t('settingsForm.system.version') }}</span>
         <strong>{{ data.version }}</strong>
-        <AppBadge size="xs">{{ t('settingsForm.system.deploymentValue') }}</AppBadge>
       </div>
       <div class="modern-settings-system-actions">
         <div class="modern-settings-system-update" aria-live="polite">
@@ -91,7 +89,6 @@ const updateMessage = computed(() => {
         <dt>{{ t('settingsForm.system.' + key + 'Source') }}</dt>
         <dd>
           <AppBadge size="xs">{{ t('settingsForm.system.sources.' + data[key].source) }}</AppBadge>
-          <AppCopyValue v-if="data[key].path" :value="data[key].path!" />
         </dd>
       </div>
     </dl>

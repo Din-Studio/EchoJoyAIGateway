@@ -1,39 +1,20 @@
 package control
 
 import (
-	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
 
-	"gpt-load/internal/platform/config"
 	"gpt-load/internal/platform/version"
 )
 
-func TestSystemInfoResponseContainsOnlySafeMetadata(t *testing.T) {
+// The exact-map comparison also proves no DSN, AUTH_KEY, or encryption key
+// value is part of the response.
+func TestSystemInfoResponseReportsOnlyDeploymentFacts(t *testing.T) {
 	t.Parallel()
-	cfg := &config.Config{
-		DatabaseDSN: "file:distinctive-secret-dsn",
-		DatabaseMetadata: config.DatabaseMetadata{
-			Source: config.DatabaseSourceExternal,
-		},
-		AuthKey:       "distinctive-auth-secret",
-		EncryptionKey: "distinctive-encryption-secret",
-	}
-
-	encoded, err := json.Marshal(newSystemInfoResponse(cfg))
+	encoded, err := json.Marshal(newSystemInfoResponse())
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
-	}
-	for _, forbidden := range []string{
-		"distinctive-auth-secret",
-		"distinctive-encryption-secret",
-		"distinctive-secret-dsn",
-		"external",
-	} {
-		if bytes.Contains(encoded, []byte(forbidden)) {
-			t.Fatalf("response exposed %q: %s", forbidden, encoded)
-		}
 	}
 
 	var got map[string]any
@@ -41,68 +22,12 @@ func TestSystemInfoResponseContainsOnlySafeMetadata(t *testing.T) {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
 	want := map[string]any{
-		"version": version.Version,
-		"deployment": map[string]any{
-			"instance_mode": "single",
-			"database":      "sqlite",
-			"distribution":  "single_binary",
-		},
-		"auth_key": map[string]any{
-			"source": "environment",
-			"path":   nil,
-		},
-		"encryption": map[string]any{
-			"enabled": true,
-			"source":  "environment",
-			"path":    nil,
-		},
+		"version":    version.Version,
+		"deployment": map[string]any{"database": "postgres"},
+		"auth_key":   map[string]any{"source": "environment"},
+		"encryption": map[string]any{"source": "environment"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("system info = %#v, want %#v", got, want)
-	}
-}
-
-func TestSystemInfoResponseUsesNullPathsForEnvironmentSources(t *testing.T) {
-	t.Parallel()
-	encoded, err := json.Marshal(newSystemInfoResponse(&config.Config{}))
-	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
-	}
-
-	var got struct {
-		AuthKey struct {
-			Path *string `json:"path"`
-		} `json:"auth_key"`
-		Encryption struct {
-			Path *string `json:"path"`
-		} `json:"encryption"`
-	}
-	if err := json.Unmarshal(encoded, &got); err != nil {
-		t.Fatalf("Unmarshal() error = %v", err)
-	}
-	if got.AuthKey.Path != nil || got.Encryption.Path != nil {
-		t.Fatalf("environment paths = %#v/%#v, want nil/nil", got.AuthKey.Path, got.Encryption.Path)
-	}
-}
-
-func TestSystemInfoResponseReportsSelectedDatabaseDriver(t *testing.T) {
-	t.Parallel()
-	for _, test := range []struct {
-		name   string
-		driver config.DatabaseDriver
-		want   string
-	}{
-		{name: "sqlite", driver: config.DatabaseDriverSQLite, want: "sqlite"},
-		{name: "mysql", driver: config.DatabaseDriverMySQL, want: "mysql"},
-		{name: "postgres", driver: config.DatabaseDriverPostgreSQL, want: "postgres"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			response := newSystemInfoResponse(&config.Config{
-				DatabaseMetadata: config.DatabaseMetadata{Driver: test.driver},
-			})
-			if response.Deployment.Database != test.want {
-				t.Fatalf("database = %q, want %q", response.Deployment.Database, test.want)
-			}
-		})
 	}
 }

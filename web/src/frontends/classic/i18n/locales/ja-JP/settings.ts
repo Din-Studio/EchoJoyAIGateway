@@ -182,23 +182,16 @@ export default {
       viewRelease: 'リリースを表示',
       checkUpdateFailed: '更新を確認できません。後でもう一度お試しください。',
       deployment: 'デプロイ',
-      single: '単一インスタンス',
       databases: {
-        sqlite: 'SQLite',
-        mysql: 'MySQL',
         postgres: 'PostgreSQL',
       },
-      singleBinary: '単一バイナリ',
       authKey: 'AUTH_KEY の取得元',
       encryption: '暗号化',
       enabled: '有効',
-      copyPath: 'パスをコピー',
       sources: {
         environment: '環境変数',
-        key_file: 'キーファイル',
       },
-      securityNote:
-        'コピーできるのは機密でないパスだけです。AUTH_KEY や暗号化キーの内容は表示しません。',
+      securityNote: 'AUTH_KEY や暗号化キーの内容は表示しません。',
     },
   },
 } as const

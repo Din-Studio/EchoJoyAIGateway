@@ -7,7 +7,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"gpt-load/internal/platform/config"
 	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/testutil/pgtest"
@@ -16,7 +15,7 @@ import (
 // 与现有数据库合同共用入口，在真实驱动上验证混合查询和多天分桶 SQL。
 func TestExternalDatabaseUsageExactWindow(t *testing.T) {
 	dsn := pgtest.DSN(t)
-	db, err := storage.OpenWithSource(dsn, config.DatabaseSourceExternal)
+	db, err := storage.Open(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

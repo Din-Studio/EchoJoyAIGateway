@@ -2042,7 +2042,7 @@ func TestRequestRecorderBoundsModelsAtUTF8Boundary(t *testing.T) {
 	if len(event.Attempts) != 1 || len(attemptModel) <= 255 ||
 		event.Attempts[0].UpstreamModel != attemptModel {
 		t.Fatalf(
-			"attempt upstream model was changed before SQLite projection: %#v",
+			"attempt upstream model was changed before database projection: %#v",
 			event.Attempts,
 		)
 	}

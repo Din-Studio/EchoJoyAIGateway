@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
@@ -27,72 +26,14 @@ func Up0010(db *gorm.DB) error {
 			return err
 		}
 	}
-	if strings.EqualFold(db.Dialector.Name(), "sqlite") {
-		// SQLite 更换 CHECK 需要重建表，按原定义恢复全部独立索引。
-		var indexes []string
-		if err := db.Raw("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL", modelCooldownTable0010).Scan(&indexes).Error; err != nil {
-			return err
-		}
-		if err := rebuildModelCooldownSQLite0010(db); err != nil {
-			return err
-		}
-		for _, index := range indexes {
-			if err := db.Exec(index).Error; err != nil {
-				return err
-			}
-		}
-	} else {
-		drop := "DROP CONSTRAINT"
-		if dialector, ok := db.Dialector.(*gormmysql.Dialector); ok && dialector.Config != nil &&
-			mysqlRequiresCheckDropSyntax0003(dialector.ServerVersion) {
-			drop = "DROP CHECK"
-		}
-		// 同一条 DDL 原子替换，避免 MySQL 中断后因旧迁移约束缺失而无法恢复。
-		if err := db.Exec("ALTER TABLE request_log_attempts " + drop + " chk_request_log_attempt_effect, ADD CONSTRAINT chk_request_log_attempt_effect CHECK (" + modelCooldownEffectExpression0010 + ")").Error; err != nil {
-			return err
-		}
+	// 同一条 DDL 内替换 effect 约束，事务失败时不会留下缺约束的中间态。
+	if err := db.Exec("ALTER TABLE request_log_attempts DROP CONSTRAINT chk_request_log_attempt_effect, ADD CONSTRAINT chk_request_log_attempt_effect CHECK (" + modelCooldownEffectExpression0010 + ")").Error; err != nil {
+		return err
 	}
 	return Validate0010(db)
 }
 
-func rebuildModelCooldownSQLite0010(db *gorm.DB) error {
-	var ddl string
-	if err := db.Raw("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", modelCooldownTable0010).Scan(&ddl).Error; err != nil {
-		return err
-	}
-	const old = "effect IN ('','none','cooldown_credential','record_credential_failure','skip_group')"
-	if strings.Count(ddl, old) != 1 {
-		return fmt.Errorf("unexpected prior model cooldown effect constraint")
-	}
-	start := strings.Index(ddl, "(")
-	if start < 0 {
-		return fmt.Errorf("invalid prior request attempts DDL")
-	}
-	ddl = "CREATE TABLE request_log_attempts__0010 " + strings.Replace(ddl[start:], old, modelCooldownEffectExpression0010, 1)
-	columns, err := db.Migrator().ColumnTypes(modelCooldownTable0010)
-	if err != nil {
-		return err
-	}
-	names := make([]string, 0, len(columns))
-	for _, column := range columns {
-		if strings.ContainsAny(column.Name(), "\"`\x00") {
-			return fmt.Errorf("invalid attempt column")
-		}
-		names = append(names, `"`+column.Name()+`"`)
-	}
-	projection := strings.Join(names, ",")
-	// 由迁移执行器持有写事务，不能在这里通过 Migrator 再次 BEGIN。
-	for _, statement := range []string{ddl,
-		"INSERT INTO request_log_attempts__0010 (" + projection + ") SELECT " + projection + " FROM request_log_attempts",
-		"DROP TABLE request_log_attempts", "ALTER TABLE request_log_attempts__0010 RENAME TO request_log_attempts"} {
-		if err := db.Exec(statement).Error; err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// ValidateRecoverable0010 接受 MySQL 的列已添加或约束已完成原子替换状态。
+// ValidateRecoverable0010 是 Up0010 与 Validate0010 的前置校验：已存在的冷却列必须是可空整数并带约束。
 func ValidateRecoverable0010(db *gorm.DB) error {
 	if !db.Migrator().HasTable(modelCooldownTable0010) {
 		return fmt.Errorf("model cooldown attempts table is missing")
@@ -150,18 +91,7 @@ func Validate0010(db *gorm.DB) error {
 
 func modelCooldownConstraint0010(db *gorm.DB, name string) (string, error) {
 	var definition string
-	var err error
-	switch strings.ToLower(db.Dialector.Name()) {
-	case "sqlite":
-		err = db.Raw("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", modelCooldownTable0010).Scan(&definition).Error
-	case "mysql":
-		err = db.Raw("SELECT CHECK_CLAUSE FROM information_schema.check_constraints WHERE constraint_schema = DATABASE() AND constraint_name = ?", name).Scan(&definition).Error
-	case "postgres", "postgresql":
-		err = db.Raw("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = ? AND conrelid = ?::regclass", name, modelCooldownTable0010).Scan(&definition).Error
-	default:
-		return "", fmt.Errorf("unsupported model cooldown migration driver %q", db.Dialector.Name())
-	}
-	if err != nil {
+	if err := db.Raw("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = ? AND conrelid = ?::regclass", name, modelCooldownTable0010).Scan(&definition).Error; err != nil {
 		return "", err
 	}
 	if definition == "" {

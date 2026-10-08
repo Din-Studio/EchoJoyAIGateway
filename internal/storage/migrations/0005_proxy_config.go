@@ -40,26 +40,6 @@ func Up0005(db *gorm.DB) error {
 	return nil
 }
 
-func ValidateRecoverable0005(db *gorm.DB) error {
-	for _, definition := range []struct {
-		model any
-		table string
-	}{
-		{model: &groupProxyConfig0005{}, table: "groups"},
-		{model: &credentialProxyConfig0005{}, table: "credentials"},
-	} {
-		if !db.Migrator().HasTable(definition.model) {
-			return fmt.Errorf("validate recoverable proxy config: table %q is missing", definition.table)
-		}
-		if db.Migrator().HasColumn(definition.model, "proxy_config") {
-			if err := validateProxyColumn0005(db, definition.table); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func Validate0005(db *gorm.DB) error {
 	for _, table := range []string{"groups", "credentials"} {
 		if !db.Migrator().HasColumn(table, "proxy_config") {

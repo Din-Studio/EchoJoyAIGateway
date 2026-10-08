@@ -124,7 +124,7 @@ export default {
       title: 'Header rules',
       description: 'Set or remove upstream request headers.',
       storageNotice:
-        'Password masking only reduces shoulder-surfing exposure; it is not encryption at rest. Ordinary HeaderRules literals are stored in plaintext in SQLite and backups. Provider credential headers must use the {template} template.',
+        'Password masking only reduces shoulder-surfing exposure; it is not encryption at rest. Ordinary HeaderRules literals are stored in plaintext in the database and backups. Provider credential headers must use the {template} template.',
       add: 'Add rule',
       action: 'Action',
       set: 'Set',

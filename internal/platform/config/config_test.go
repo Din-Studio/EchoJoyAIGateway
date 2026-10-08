@@ -31,9 +31,6 @@ func TestLoadUsesDefaultConfiguration(t *testing.T) {
 	if cfg.DatabaseDSN != testPostgresDSN {
 		t.Fatalf("DatabaseDSN = %q", cfg.DatabaseDSN)
 	}
-	if cfg.DatabaseMetadata.Source != DatabaseSourceExternal || cfg.DatabaseMetadata.Driver != DatabaseDriverPostgreSQL {
-		t.Fatalf("DatabaseMetadata = %#v, want external PostgreSQL", cfg.DatabaseMetadata)
-	}
 	if len(cfg.Cluster.RedisAddrs) == 0 {
 		t.Fatal("Cluster.RedisAddrs is empty")
 	}
@@ -142,70 +139,58 @@ func boolPointer(value bool) *bool {
 	return &value
 }
 
-func TestLoadClassifiesNetworkDatabaseURLs(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		dsn    string
-		driver DatabaseDriver
-	}{
-		{name: "postgres", dsn: "postgres://user:password@db.example:5432/gpt_load", driver: DatabaseDriverPostgreSQL},
-		{name: "postgresql alias", dsn: "postgresql://user:password@db.example:5432/gpt_load", driver: DatabaseDriverPostgreSQL},
+func TestLoadAcceptsPostgreSQLURLs(t *testing.T) {
+	for _, dsn := range []string{
+		"postgres://user:password@db.example:5432/gpt_load",
+		"postgresql://user:password@db.example:5432/gpt_load",
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(dsn, func(t *testing.T) {
 			setRequiredEnv(t)
-			t.Setenv("DATABASE_DSN", test.dsn)
+			t.Setenv("DATABASE_DSN", dsn)
 
 			cfg, err := Load()
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
-			if cfg.DatabaseMetadata.Source != DatabaseSourceExternal {
-				t.Fatalf("DatabaseMetadata.Source = %q, want %q", cfg.DatabaseMetadata.Source, DatabaseSourceExternal)
-			}
-			if cfg.DatabaseMetadata.Driver != test.driver {
-				t.Fatalf("DatabaseMetadata.Driver = %q, want %q", cfg.DatabaseMetadata.Driver, test.driver)
-			}
-			if cfg.DatabaseDSN != test.dsn {
-				t.Fatalf("DatabaseDSN = %q, want %q", cfg.DatabaseDSN, test.dsn)
+			if cfg.DatabaseDSN != dsn {
+				t.Fatalf("DatabaseDSN = %q, want %q", cfg.DatabaseDSN, dsn)
 			}
 		})
 	}
 }
 
-func TestParseDatabaseDSNSupportsURLAndSQLiteCompatibilityForms(t *testing.T) {
-	tests := []struct {
-		name       string
-		dsn        string
-		wantDriver DatabaseDriver
-		wantDSN    string
+func TestParseDatabaseDSNAcceptsPostgreSQLURLs(t *testing.T) {
+	for _, test := range []struct {
+		dsn  string
+		want string
 	}{
-		{name: "bare path", dsn: "data/gpt-load.db", wantDriver: DatabaseDriverSQLite, wantDSN: "data/gpt-load.db"},
-		{name: "memory", dsn: ":memory:?cache=shared", wantDriver: DatabaseDriverSQLite, wantDSN: ":memory:?cache=shared"},
-		{name: "sqlite URL", dsn: "sqlite:///var/lib/gpt-load/gpt-load.db", wantDriver: DatabaseDriverSQLite, wantDSN: "/var/lib/gpt-load/gpt-load.db"},
-		{name: "mysql URL", dsn: "mysql://user:password@db.example:3306/gpt_load?tls=true", wantDriver: DatabaseDriverMySQL, wantDSN: "mysql://user:password@db.example:3306/gpt_load?tls=true"},
-		{name: "postgres URL", dsn: "postgres://user:password@db.example:5432/gpt_load?sslmode=require", wantDriver: DatabaseDriverPostgreSQL, wantDSN: "postgres://user:password@db.example:5432/gpt_load?sslmode=require"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := ParseDatabaseDSN(test.dsn)
-			if err != nil {
-				t.Fatalf("ParseDatabaseDSN(%q) error = %v", test.dsn, err)
-			}
-			if got.Driver != test.wantDriver || got.DSN != test.wantDSN {
-				t.Fatalf("ParseDatabaseDSN(%q) = %#v, want driver %q DSN %q", test.dsn, got, test.wantDriver, test.wantDSN)
-			}
-		})
+		{dsn: "postgres://user:password@db.example:5432/gpt_load?sslmode=require", want: "postgres://user:password@db.example:5432/gpt_load?sslmode=require"},
+		{dsn: " postgresql://user@db.example/gpt_load ", want: "postgresql://user@db.example/gpt_load"},
+		{dsn: "POSTGRES://user@db.example/gpt_load", want: "POSTGRES://user@db.example/gpt_load"},
+	} {
+		got, err := ParseDatabaseDSN(test.dsn)
+		if err != nil {
+			t.Fatalf("ParseDatabaseDSN(%q) error = %v", test.dsn, err)
+		}
+		if got != test.want {
+			t.Fatalf("ParseDatabaseDSN(%q) = %q, want %q", test.dsn, got, test.want)
+		}
 	}
 }
 
-func TestParseDatabaseDSNRejectsUnsupportedOrIncompleteURLs(t *testing.T) {
+func TestParseDatabaseDSNRejectsEverythingElse(t *testing.T) {
 	for _, dsn := range []string{
 		"",
+		":memory:",
+		"data/gpt-load.db",
+		"file:gpt-load.db",
+		"sqlite:///var/lib/gpt-load/gpt-load.db",
+		"mysql://user:password@db.example:3306/gpt_load",
 		"redis://localhost/0",
-		"mysql://localhost",
 		"postgres://localhost",
-		"mysql://localhost/gpt_load/%2Fextra",
+		"postgres:///gpt_load",
+		"postgres://localhost/gpt_load/extra",
+		"postgres://localhost/gpt_load#fragment",
 	} {
 		if _, err := ParseDatabaseDSN(dsn); err == nil {
 			t.Fatalf("ParseDatabaseDSN(%q) error = nil, want validation error", dsn)

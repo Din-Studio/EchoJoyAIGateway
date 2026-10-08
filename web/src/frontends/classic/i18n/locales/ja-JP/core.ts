@@ -124,7 +124,7 @@ export default {
       title: 'HeaderRules',
       description: 'アップストリーム要求ヘッダーを設定または削除します。',
       storageNotice:
-        'パスワード表示のマスクは覗き見による漏えいを減らすだけで、保存時の暗号化ではありません。通常の HeaderRules リテラルは SQLite とバックアップに平文で保存されます。Provider 認証情報ヘッダーには {template} テンプレートを使用してください。',
+        'パスワード表示のマスクは覗き見による漏えいを減らすだけで、保存時の暗号化ではありません。通常の HeaderRules リテラルは データベースとバックアップに平文で保存されます。Provider 認証情報ヘッダーには {template} テンプレートを使用してください。',
       add: 'ルールを追加',
       action: '操作',
       set: '設定',

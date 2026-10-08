@@ -92,12 +92,12 @@ Race tests for that module run in CI; per repository convention they are not run
 
 ## 合并 upstream / Merging upstream
 
-本 fork 只提供容器 + PostgreSQL + Redis 的部署形态，已删除 upstream 的 Windows 服务、安装包、原生二进制发布脚本，以及后续阶段删除的 SQLite / MySQL 代码。合并 upstream 时：
+本 fork 只提供容器 + PostgreSQL + Redis 的部署形态，已删除 upstream 的 Windows 服务、安装包、原生二进制发布脚本，以及 SQLite / MySQL 支持。合并 upstream 时：
 
 - upstream 修改了本 fork 已删除的文件（modify/delete 冲突）时，一律保持删除。
 - 数据库方言分支只保留 PostgreSQL 分支。
 
-This fork ships only the container + PostgreSQL + Redis deployment. It has removed upstream's Windows service, installer, and native binary release scripts, and later phases remove the SQLite / MySQL code. When merging upstream:
+This fork ships only the container + PostgreSQL + Redis deployment. It has removed upstream's Windows service, installer, and native binary release scripts, and SQLite / MySQL support. When merging upstream:
 
 - If upstream changed a file this fork deleted (a modify/delete conflict), keep it deleted.
 - For database dialect branches, keep only the PostgreSQL branch.

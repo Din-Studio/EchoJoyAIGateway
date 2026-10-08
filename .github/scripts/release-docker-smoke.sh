@@ -176,7 +176,6 @@ docker run --name "${probe}" \
     test -r /app/licenses/THIRD_PARTY_NOTICES.md
     test -r /app/licenses/Apache-2.0.txt
     test -r /app/licenses/MIT.txt
-    test -r /app/licenses/MPL-2.0.txt
   '
 docker rm "${probe}" >/dev/null
 

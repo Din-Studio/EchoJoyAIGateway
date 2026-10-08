@@ -28,32 +28,13 @@ import (
 // failing the test when either is not configured.
 func externalClusterTarget(t *testing.T) (string, string) {
 	t.Helper()
-	dsn := pgtest.DSN(t)
-	database, err := config.ParseDatabaseDSN(dsn)
-	if err != nil {
-		t.Fatalf("ParseDatabaseDSN() error = %v", err)
-	}
-	// The MySQL contract shard has no Redis; skip on the driver before
-	// requiring the Redis address.
-	if database.Driver != config.DatabaseDriverPostgreSQL {
-		t.Skipf("cluster mode requires PostgreSQL, got %s", database.Driver)
-	}
-	return dsn, pgtest.RedisAddr(t)
+	return pgtest.DSN(t), pgtest.RedisAddr(t)
 }
 
-// externalDatabaseDSN returns the database a database-only external contract
-// runs on. PostgreSQL gets an isolated migrated clone, so the contract runs in
-// parallel; other drivers share GPT_LOAD_DATABASE_TEST_DSN and stay serial.
+// externalDatabaseDSN returns an isolated migrated clone for a database-only
+// external contract, so the contract runs in parallel.
 func externalDatabaseDSN(t *testing.T) string {
 	t.Helper()
-	dsn := pgtest.DSN(t)
-	database, err := config.ParseDatabaseDSN(dsn)
-	if err != nil {
-		t.Fatalf("ParseDatabaseDSN() error = %v", err)
-	}
-	if database.Driver != config.DatabaseDriverPostgreSQL {
-		return dsn
-	}
 	t.Parallel()
 	return pgtest.NewDatabase(t)
 }

@@ -8,10 +8,9 @@ import (
 func TestSelfHostedCIKeepsPlatformGatesAndLocalCaches(t *testing.T) {
 	ci := readRepositoryFile(t, ".github/workflows/ci.yml")
 	for job, runner := range map[string]string{
-		"test":              "[self-hosted, macOS, ARM64]",
-		"race-tests":        "[self-hosted, Linux, ARM64]",
-		"race-cpa":          "[self-hosted, Linux, ARM64]",
-		"database-contract": "[self-hosted, Linux, ARM64]",
+		"test":       "[self-hosted, macOS, ARM64]",
+		"race-tests": "[self-hosted, Linux, ARM64]",
+		"race-cpa":   "[self-hosted, Linux, ARM64]",
 	} {
 		block := workflowJobBlock(t, ci, job)
 		if !strings.Contains(block, "runs-on: "+runner) {
@@ -22,15 +21,6 @@ func TestSelfHostedCIKeepsPlatformGatesAndLocalCaches(t *testing.T) {
 		content := readRepositoryFile(t, ".github/workflows/"+file)
 		if strings.Contains(content, "cache: true") || strings.Contains(content, ".go-cache-scope") {
 			t.Errorf("%s still restores remote Go caches over persistent local caches", file)
-		}
-		database := workflowJobBlock(t, content, "database-contract")
-		for _, fixedPort := range []string{"3306:3306", "5432:5432"} {
-			if strings.Contains(database, fixedPort) {
-				t.Errorf("%s database gate can collide with local services: %s", file, fixedPort)
-			}
-		}
-		if !strings.Contains(database, "job.services.database.ports[format('{0}', matrix.port)]") {
-			t.Errorf("%s database DSN does not use the assigned service port", file)
 		}
 	}
 }
@@ -58,18 +48,17 @@ func TestReleaseIsolatesDockerCredentials(t *testing.T) {
 func TestReleaseUsesSelfHostedValidationAndHostedPublicationRunners(t *testing.T) {
 	content := readRepositoryFile(t, ".github/workflows/release.yml")
 	for job, runner := range map[string]string{
-		"static-checks":     "[self-hosted, macOS, ARM64]",
-		"race-tests":        "[self-hosted, Linux, ARM64]",
-		"race-cpa":          "[self-hosted, Linux, ARM64]",
-		"database-contract": "[self-hosted, Linux, ARM64]",
+		"static-checks": "[self-hosted, macOS, ARM64]",
+		"race-tests":    "[self-hosted, Linux, ARM64]",
+		"race-cpa":      "[self-hosted, Linux, ARM64]",
 	} {
 		block := workflowJobBlock(t, content, job)
 		if !strings.Contains(block, "runs-on: "+runner) {
 			t.Errorf("%s is not assigned to %s", job, runner)
 		}
 	}
-	if count := strings.Count(content, "self-hosted"); count != 4 {
-		t.Fatalf("release workflow contains %d self-hosted runner assignments, want 4", count)
+	if count := strings.Count(content, "self-hosted"); count != 3 {
+		t.Fatalf("release workflow contains %d self-hosted runner assignments, want 3", count)
 	}
 	for _, job := range []string{
 		"validate-tag", "verify-and-build-web", "package-metadata", "package-checksums", "docker-smoke",

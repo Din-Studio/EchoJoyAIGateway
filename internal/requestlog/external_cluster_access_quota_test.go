@@ -23,20 +23,10 @@ import (
 	"gpt-load/internal/testutil/pgtest"
 )
 
-// externalClusterEnv returns the shared PostgreSQL DSN and Redis address. It
-// skips on a non-PostgreSQL DSN before reading Redis, so the MySQL contract
-// shard never requires Redis.
+// externalClusterEnv returns the shared PostgreSQL DSN and Redis address.
 func externalClusterEnv(t *testing.T) (string, string) {
 	t.Helper()
-	dsn := pgtest.DSN(t)
-	database, err := config.ParseDatabaseDSN(dsn)
-	if err != nil {
-		t.Fatalf("ParseDatabaseDSN() error = %v", err)
-	}
-	if database.Driver != config.DatabaseDriverPostgreSQL {
-		t.Skipf("cluster mode requires PostgreSQL, got %s", database.Driver)
-	}
-	return dsn, pgtest.RedisAddr(t)
+	return pgtest.DSN(t), pgtest.RedisAddr(t)
 }
 
 func externalClusterClient(t *testing.T, redisAddr, keyPrefix, instanceID string) *cluster.Client {
@@ -66,9 +56,9 @@ func externalClusterClient(t *testing.T, redisAddr, keyPrefix, instanceID string
 func TestExternalClusterAccessQuotaCheckpointHydration(t *testing.T) {
 	// 不标记 t.Parallel()：依赖共享的外部数据库与 Redis。
 	dsn, redisAddr := externalClusterEnv(t)
-	db, err := storage.OpenWithSource(dsn, config.DatabaseSourceExternal)
+	db, err := storage.Open(dsn)
 	if err != nil {
-		t.Fatalf("OpenWithSource() error = %v", err)
+		t.Fatalf("Open() error = %v", err)
 	}
 	if sqlDB, err := db.DB(); err == nil {
 		t.Cleanup(func() { _ = sqlDB.Close() })

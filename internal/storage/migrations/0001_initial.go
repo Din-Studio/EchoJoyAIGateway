@@ -324,15 +324,6 @@ func Up0001(db *gorm.DB) error {
 	if err := db.AutoMigrate(SchemaModels0001()...); err != nil {
 		return fmt.Errorf("create initial schema: %w", err)
 	}
-	if db.Dialector.Name() == "mysql" {
-		// MySQL's database default is commonly case-insensitive. Model IDs are
-		// wire identities, so preserve exact casing within the composite key.
-		if err := db.Exec(
-			"ALTER TABLE model_prices MODIFY model_id varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL",
-		).Error; err != nil {
-			return fmt.Errorf("configure exact MySQL model price identity: %w", err)
-		}
-	}
 	return nil
 }
 
@@ -420,38 +411,6 @@ func initialSchemaDefinitions(db *gorm.DB) ([]initialSchemaDefinition, error) {
 		definitions = append(definitions, definition)
 	}
 	return definitions, nil
-}
-
-// ValidateRecoverable0001 rejects unsafe partial MySQL initialization while
-// ignoring tables owned by external applications or database extensions.
-func ValidateRecoverable0001(db *gorm.DB) error {
-	definitions, err := initialSchemaDefinitions(db)
-	if err != nil {
-		return err
-	}
-	for _, definition := range definitions {
-		if !db.Migrator().HasTable(definition.model) {
-			continue
-		}
-		table := definition.table
-		var count int64
-		if err := db.Table(table).Count(&count).Error; err != nil {
-			return fmt.Errorf("count interrupted baseline table %q: %w", table, err)
-		}
-		if count != 0 {
-			return fmt.Errorf("table %q contains data", table)
-		}
-		columns, err := db.Migrator().ColumnTypes(table)
-		if err != nil {
-			return fmt.Errorf("inspect interrupted baseline table %q: %w", table, err)
-		}
-		for _, column := range columns {
-			if _, expected := definition.columns[strings.ToLower(column.Name())]; !expected {
-				return fmt.Errorf("table %q contains unexpected column %q", table, column.Name())
-			}
-		}
-	}
-	return nil
 }
 
 // Validate0001 verifies the tables, columns, indexes, and constraints owned by 0001.
