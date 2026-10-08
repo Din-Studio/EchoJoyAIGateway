@@ -19,7 +19,6 @@ import {
   type ReleaseUpdateDto,
 } from '@/app/resources/system-update'
 import AppButton from '@/components/ui/AppButton.vue'
-import CopyButton from '@/components/ui/CopyButton.vue'
 import AsyncRefreshIndicator from '@/components/ui/AsyncRefreshIndicator.vue'
 import QueryFeedback from '@/components/ui/QueryFeedback.vue'
 import SkeletonSurface from '@/components/ui/SkeletonSurface.vue'
@@ -184,11 +183,9 @@ async function checkForUpdate(): Promise<void> {
           <div class="settings-system__row">
             <dt>{{ t('settings.system.deployment') }}</dt>
             <dd class="settings-system__inline">
-              <StatusBadge size="compact">{{ t('settings.system.single') }}</StatusBadge>
               <StatusBadge size="compact">{{
                 databaseLabel(infoQuery.data.value.deployment.database)
               }}</StatusBadge>
-              <StatusBadge size="compact">{{ t('settings.system.singleBinary') }}</StatusBadge>
             </dd>
           </div>
 
@@ -198,18 +195,6 @@ async function checkForUpdate(): Promise<void> {
               <StatusBadge size="compact">{{
                 sourceLabel(infoQuery.data.value.auth_key.source)
               }}</StatusBadge>
-              <span
-                v-if="infoQuery.data.value.auth_key.path"
-                class="settings-system__path settings-system__mono"
-              >
-                <span>{{ infoQuery.data.value.auth_key.path }}</span>
-                <CopyButton
-                  :value="infoQuery.data.value.auth_key.path"
-                  :label="t('settings.system.copyPath')"
-                  :success-label="t('common.copied')"
-                  :failure-label="t('common.copyFailed')"
-                />
-              </span>
             </dd>
           </div>
 
@@ -222,18 +207,6 @@ async function checkForUpdate(): Promise<void> {
               <StatusBadge size="compact">{{
                 sourceLabel(infoQuery.data.value.encryption.source)
               }}</StatusBadge>
-              <span
-                v-if="infoQuery.data.value.encryption.path"
-                class="settings-system__path settings-system__mono"
-              >
-                <span>{{ infoQuery.data.value.encryption.path }}</span>
-                <CopyButton
-                  :value="infoQuery.data.value.encryption.path"
-                  :label="t('settings.system.copyPath')"
-                  :success-label="t('common.copied')"
-                  :failure-label="t('common.copyFailed')"
-                />
-              </span>
             </dd>
           </div>
         </dl>
@@ -326,17 +299,6 @@ async function checkForUpdate(): Promise<void> {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-}
-
-.settings-system__path {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.settings-system__path > span:first-child {
-  overflow-wrap: anywhere;
 }
 
 .settings-system__mono {

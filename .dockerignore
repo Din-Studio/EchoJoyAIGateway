@@ -23,7 +23,6 @@ temp/
 data/
 data_bak/
 *.db*
-*.sqlite*
 *.key
 *.log
 

@@ -6,13 +6,12 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"gorm.io/gorm"
 )
 
-// Mode controls the transaction behavior selected by the database driver.
+// Mode selects the isolation level a transaction begins with.
 type Mode uint8
 
 const (
@@ -25,7 +24,6 @@ type Phase string
 
 const (
 	PhaseInput      Phase = "validate transaction"
-	PhaseDriver     Phase = "detect database driver"
 	PhaseConnection Phase = "pin database connection"
 	PhaseBegin      Phase = "begin transaction"
 	PhaseCommit     Phase = "commit transaction"
@@ -70,80 +68,13 @@ func IsInfrastructure(err error) bool {
 	return errors.As(err, &target)
 }
 
-// Capabilities describes the transaction statements required by a driver.
-// The read modes deliberately establish one stable snapshot for all reads in
-// a report, while SQLite retains its deferred snapshot and immediate write
-// behavior.
-type Capabilities struct {
-	Driver     string
-	WriteBegin BeginMode
-	ReadBegin  BeginMode
-}
-
-// BeginMode is the driver-specific SQL transaction start strategy.
-type BeginMode string
-
-const (
-	BeginStandard                BeginMode = "standard"
-	BeginSQLiteImmediate         BeginMode = "sqlite_immediate"
-	BeginMySQLConsistentSnapshot BeginMode = "mysql_consistent_snapshot"
-	BeginPostgresRepeatableRead  BeginMode = "postgres_repeatable_read"
-	BeginPostgresReadCommitted   BeginMode = "postgres_read_committed"
-)
-
-// CapabilitiesForDriver maps the GORM driver name to the transaction
-// capability used by Run. The aliases accepted here avoid coupling callers to
-// one spelling of the PostgreSQL driver name.
-func CapabilitiesForDriver(driverName string) (Capabilities, error) {
-	switch strings.ToLower(strings.TrimSpace(driverName)) {
-	case "sqlite":
-		return Capabilities{
-			Driver:     "sqlite",
-			WriteBegin: BeginSQLiteImmediate,
-			ReadBegin:  BeginStandard,
-		}, nil
-	case "mysql":
-		return Capabilities{
-			Driver:     "mysql",
-			WriteBegin: BeginStandard,
-			ReadBegin:  BeginMySQLConsistentSnapshot,
-		}, nil
-	case "postgres", "postgresql":
-		// Write transactions pin READ COMMITTED explicitly: the incremental
-		// ON CONFLICT DO UPDATE upserts in requestlog rely on PostgreSQL
-		// re-evaluating the assignment against the latest committed row, and
-		// a server whose default_transaction_isolation was raised would
-		// otherwise turn concurrent writers into serialization failures.
-		return Capabilities{
-			Driver:     "postgres",
-			WriteBegin: BeginPostgresReadCommitted,
-			ReadBegin:  BeginPostgresRepeatableRead,
-		}, nil
-	default:
-		return Capabilities{}, &Error{
-			Phase: PhaseDriver,
-			Err:   fmt.Errorf("unsupported GORM driver %q", driverName),
-		}
-	}
-}
-
-func CapabilitiesFor(db *gorm.DB) (Capabilities, error) {
-	if db == nil || db.Dialector == nil {
-		return Capabilities{}, &Error{
-			Phase: PhaseInput,
-			Err:   errors.New("database is nil"),
-		}
-	}
-	return CapabilitiesForDriver(db.Dialector.Name())
-}
-
 type Options struct {
 	Mode           Mode
 	CleanupTimeout time.Duration
 	Operation      string
 }
 
-// Run executes callback inside a pinned SQL connection and a driver-aware
+// Run executes callback inside a pinned SQL connection and a PostgreSQL
 // transaction. A failed callback is rolled back; a failed rollback or commit
 // causes the connection to be discarded so it cannot return to the pool in an
 // unknown transaction state.
@@ -166,11 +97,7 @@ func Run(
 		return err
 	}
 
-	capabilities, err := CapabilitiesFor(db)
-	if err != nil {
-		return withOperation(err, options.Operation)
-	}
-	beginStatements, err := capabilities.beginStatements(options.Mode)
+	beginStatement, err := beginStatementFor(options.Mode)
 	if err != nil {
 		return withOperation(err, options.Operation)
 	}
@@ -189,17 +116,9 @@ func Run(
 			)
 		}
 
-		for index, statement := range beginStatements {
-			if _, err := sqlConn.ExecContext(ctx, statement); err != nil {
-				cleanupErr := discardBadConnection(options.Operation, sqlConn, err)
-				// MySQL's SET TRANSACTION applies to the next transaction on this
-				// connection. If START TRANSACTION then fails, discard the connection
-				// so the pending one-shot isolation level cannot leak to another caller.
-				if index > 0 && !errors.Is(err, driver.ErrBadConn) {
-					cleanupErr = errors.Join(cleanupErr, discardConnection(options.Operation, sqlConn))
-				}
-				return errors.Join(newError(options.Operation, PhaseBegin, err), cleanupErr)
-			}
+		if _, err := sqlConn.ExecContext(ctx, beginStatement); err != nil {
+			cleanupErr := discardBadConnection(options.Operation, sqlConn, err)
+			return errors.Join(newError(options.Operation, PhaseBegin, err), cleanupErr)
 		}
 
 		transaction := connection.Session(&gorm.Session{
@@ -246,42 +165,24 @@ func Run(
 	})
 }
 
-func (capabilities Capabilities) beginStatements(mode Mode) ([]string, error) {
-	beginMode := capabilities.WriteBegin
-	if mode == ReadSnapshot {
-		beginMode = capabilities.ReadBegin
-	} else if mode != Write {
-		return nil, &Error{
+// beginStatementFor returns the PostgreSQL BEGIN statement for mode.
+//
+// Write transactions pin READ COMMITTED explicitly: the incremental
+// ON CONFLICT DO UPDATE upserts in requestlog rely on PostgreSQL re-evaluating
+// the assignment against the latest committed row, and a server whose
+// default_transaction_isolation was raised would otherwise turn concurrent
+// writers into serialization failures. Read snapshots use REPEATABLE READ so
+// every read in a report sees one stable snapshot.
+func beginStatementFor(mode Mode) (string, error) {
+	switch mode {
+	case Write:
+		return "BEGIN ISOLATION LEVEL READ COMMITTED", nil
+	case ReadSnapshot:
+		return "BEGIN ISOLATION LEVEL REPEATABLE READ", nil
+	default:
+		return "", &Error{
 			Phase: PhaseInput,
 			Err:   fmt.Errorf("unsupported transaction mode %d", mode),
-		}
-	}
-
-	switch beginMode {
-	case BeginStandard:
-		// SQLite BEGIN is its deferred transaction form and retains the
-		// existing read-snapshot behavior without exposing DEFERRED SQL to
-		// every caller.
-		return []string{"BEGIN"}, nil
-	case BeginSQLiteImmediate:
-		return []string{"BEGIN IMMEDIATE"}, nil
-	case BeginMySQLConsistentSnapshot:
-		// WITH CONSISTENT SNAPSHOT only provides a stable snapshot while the
-		// transaction isolation is REPEATABLE READ. Operators can configure a
-		// MySQL connection for READ COMMITTED, so establish the one-shot level
-		// on the same pinned connection before opening the transaction.
-		return []string{
-			"SET TRANSACTION ISOLATION LEVEL REPEATABLE READ",
-			"START TRANSACTION WITH CONSISTENT SNAPSHOT",
-		}, nil
-	case BeginPostgresRepeatableRead:
-		return []string{"BEGIN ISOLATION LEVEL REPEATABLE READ"}, nil
-	case BeginPostgresReadCommitted:
-		return []string{"BEGIN ISOLATION LEVEL READ COMMITTED"}, nil
-	default:
-		return nil, &Error{
-			Phase: PhaseDriver,
-			Err:   fmt.Errorf("unsupported transaction begin mode %q", beginMode),
 		}
 	}
 }

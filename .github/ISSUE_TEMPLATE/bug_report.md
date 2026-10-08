@@ -29,7 +29,7 @@ assignees: ""
 <!--
 - 部署方式（Docker、原生二进制或源码）/ Deployment method
 - 操作系统与架构 / Operating system and architecture
-- 数据库及版本（SQLite、MySQL 或 PostgreSQL）/ Database and version
+- 数据库：PostgreSQL 与 Redis 版本 / Database: PostgreSQL and Redis versions
 - 浏览器或客户端 SDK 及版本 / Browser or client SDK and version
 -->
 

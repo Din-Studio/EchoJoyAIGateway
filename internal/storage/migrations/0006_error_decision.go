@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
@@ -81,13 +80,6 @@ func Up0006(db *gorm.DB) error {
 	if !db.Migrator().HasTable(requestLogAttemptTable0006) {
 		return fmt.Errorf("add error decision: table %q is missing", requestLogAttemptTable0006)
 	}
-	if strings.EqualFold(db.Dialector.Name(), "sqlite") {
-		if Validate0006(db) == nil {
-			return nil
-		}
-		return rebuildSQLiteRequestLogAttempts0006(db)
-	}
-
 	model := &requestLogAttemptDecision0006{}
 	for _, column := range requestLogAttemptDecisionColumns0006 {
 		if db.Migrator().HasColumn(model, column.column) {
@@ -117,9 +109,8 @@ func Up0006(db *gorm.DB) error {
 }
 
 func createCheckConstraint0006(db *gorm.DB, name, expression string) error {
-	table, constraint := quoteMigrationIdentifier0006(db, requestLogAttemptTable0006), quoteMigrationIdentifier0006(db, name)
 	if err := db.Exec(fmt.Sprintf(
-		"ALTER TABLE %s ADD CONSTRAINT %s CHECK (%s)", table, constraint, expression,
+		`ALTER TABLE "%s" ADD CONSTRAINT "%s" CHECK (%s)`, requestLogAttemptTable0006, name, expression,
 	)).Error; err != nil {
 		return fmt.Errorf("create request log decision constraint %q: %w", name, err)
 	}
@@ -127,107 +118,11 @@ func createCheckConstraint0006(db *gorm.DB, name, expression string) error {
 }
 
 func dropCheckConstraint0006(db *gorm.DB, name string) error {
-	if strings.EqualFold(db.Dialector.Name(), "mysql") {
-		if dialector, ok := db.Dialector.(*gormmysql.Dialector); ok && dialector.Config != nil &&
-			mysqlRequiresCheckDropSyntax0003(dialector.ServerVersion) {
-			return db.Exec(fmt.Sprintf(
-				"ALTER TABLE `request_log_attempts` DROP CHECK `%s`", name,
-			)).Error
-		}
-	}
 	return db.Migrator().DropConstraint(requestLogAttemptTable0006, name)
 }
 
-func quoteMigrationIdentifier0006(db *gorm.DB, value string) string {
-	if strings.EqualFold(db.Dialector.Name(), "mysql") {
-		return "`" + value + "`"
-	}
-	return `"` + value + `"`
-}
-
-func rebuildSQLiteRequestLogAttempts0006(db *gorm.DB) error {
-	statements := []string{
-		`CREATE TABLE request_log_attempts__0006 (
-			request_id varchar(36) NOT NULL,
-			sequence integer NOT NULL,
-			completed_at_ms integer NOT NULL,
-			group_id integer NOT NULL,
-			group_name varchar(255) NOT NULL,
-			channel_id varchar(64) NOT NULL DEFAULT '',
-			credential_id integer NOT NULL,
-			operation varchar(64) NOT NULL DEFAULT '',
-			route_mode varchar(32) NOT NULL DEFAULT '',
-			upstream_model varchar(255) NOT NULL DEFAULT '',
-			upstream_request_id varchar(255) NOT NULL DEFAULT '',
-			dispatch_state varchar(32) NOT NULL DEFAULT '',
-			response_started numeric NOT NULL DEFAULT false,
-			upstream_protocol varchar(32) NOT NULL DEFAULT '',
-			reasoning_mode varchar(64) NOT NULL DEFAULT '',
-			reasoning_effort varchar(64) NOT NULL DEFAULT '',
-			reasoning_budget_tokens integer,
-			status_code integer NOT NULL,
-			duration_ms integer NOT NULL,
-			failure_category varchar(32) NOT NULL,
-			failure_origin varchar(16) NOT NULL DEFAULT '',
-			failure_scope varchar(16) NOT NULL DEFAULT '',
-			retry_directive varchar(32) NOT NULL DEFAULT '',
-			effect varchar(32) NOT NULL DEFAULT '',
-			rule_id varchar(128) NOT NULL DEFAULT '',
-			action varchar(32) NOT NULL,
-			will_retry numeric NOT NULL DEFAULT false,
-			error_code varchar(64) NOT NULL DEFAULT '',
-			error_summary text NOT NULL,
-			committed numeric NOT NULL DEFAULT false,
-			pricing_receipt json,
-			PRIMARY KEY (request_id, sequence),
-			CONSTRAINT fk_request_log_attempts_request_log FOREIGN KEY (request_id)
-				REFERENCES request_logs(id) ON DELETE CASCADE ON UPDATE CASCADE,
-			CONSTRAINT chk_request_log_attempt_sequence CHECK (sequence > 0),
-			CONSTRAINT chk_request_log_attempt_completed_at CHECK (completed_at_ms >= 0),
-			CONSTRAINT chk_request_log_attempt_group CHECK (group_id > 0),
-			CONSTRAINT chk_request_log_attempt_credential CHECK (credential_id > 0),
-			CONSTRAINT chk_request_log_attempt_duration CHECK (duration_ms >= 0),
-			CONSTRAINT chk_request_log_attempt_failure_category CHECK (` + failureCategoryExpression0006 + `),
-			CONSTRAINT chk_request_log_attempt_failure_origin CHECK (failure_origin IN ('','client','upstream','downstream','internal')),
-			CONSTRAINT chk_request_log_attempt_failure_scope CHECK (failure_scope IN ('','request','model','credential','group')),
-			CONSTRAINT chk_request_log_attempt_retry_directive CHECK (retry_directive IN ('','none','refresh_credential','next_candidate')),
-			CONSTRAINT chk_request_log_attempt_effect CHECK (effect IN ('','none','cooldown_credential','record_credential_failure','skip_group')),
-			CONSTRAINT chk_request_log_attempt_action CHECK (action IN ('terminate','retry','cooldown_credential','fail_credential','skip_group'))
-		)`,
-		`INSERT INTO request_log_attempts__0006 (
-			request_id, sequence, completed_at_ms, group_id, group_name, channel_id,
-			credential_id, operation, route_mode, upstream_model, upstream_request_id,
-			dispatch_state, response_started, upstream_protocol, reasoning_mode,
-			reasoning_effort, reasoning_budget_tokens, status_code, duration_ms,
-			failure_category, failure_origin, failure_scope, retry_directive, effect,
-			rule_id, action, will_retry, error_code, error_summary, committed, pricing_receipt
-		) SELECT
-			request_id, sequence, completed_at_ms, group_id, group_name, channel_id,
-			credential_id, operation, route_mode, upstream_model, upstream_request_id,
-			dispatch_state, response_started, upstream_protocol, reasoning_mode,
-			reasoning_effort, reasoning_budget_tokens, status_code, duration_ms,
-			failure_category, '', '', '', '', '', action, will_retry, error_code,
-			error_summary, committed, pricing_receipt
-		FROM request_log_attempts`,
-		`DROP TABLE request_log_attempts`,
-		`ALTER TABLE request_log_attempts__0006 RENAME TO request_log_attempts`,
-		`CREATE INDEX idx_request_log_attempts_group_completed_request ON request_log_attempts(group_id, completed_at_ms DESC, request_id)`,
-		`CREATE INDEX idx_request_log_attempts_channel_completed_request ON request_log_attempts(channel_id, completed_at_ms DESC, request_id)`,
-		`CREATE INDEX idx_request_log_attempts_credential_completed_request ON request_log_attempts(credential_id, completed_at_ms DESC, request_id)`,
-		`CREATE INDEX idx_request_log_attempts_model_completed_request ON request_log_attempts(upstream_model, completed_at_ms DESC, request_id)`,
-		`CREATE INDEX idx_request_log_attempts_status_completed_request ON request_log_attempts(status_code, completed_at_ms DESC, request_id)`,
-		`CREATE INDEX idx_request_log_attempts_failure_completed_request ON request_log_attempts(failure_category, completed_at_ms DESC, request_id)`,
-		`CREATE INDEX idx_request_log_attempts_error_completed_request ON request_log_attempts(error_code, completed_at_ms DESC, request_id)`,
-	}
-	for _, statement := range statements {
-		if err := db.Exec(statement).Error; err != nil {
-			return fmt.Errorf("rebuild SQLite request log attempts: %w", err)
-		}
-	}
-	return nil
-}
-
-// ValidateRecoverable0006 accepts any idempotent prefix of the MySQL DDL.
+// ValidateRecoverable0006 checks that any decision column already present has
+// the expected text type and NOT NULL shape; Validate0006 builds on it.
 func ValidateRecoverable0006(db *gorm.DB) error {
 	if !db.Migrator().HasTable(requestLogAttemptTable0006) {
 		return fmt.Errorf("validate recoverable error decision: table %q is missing", requestLogAttemptTable0006)
@@ -245,11 +140,10 @@ func ValidateRecoverable0006(db *gorm.DB) error {
 			continue
 		}
 		typeName := strings.ToLower(column.DatabaseTypeName())
-		if !strings.Contains(typeName, "char") && !strings.Contains(typeName, "text") && typeName != "clob" {
+		if !strings.Contains(typeName, "char") && !strings.Contains(typeName, "text") {
 			return fmt.Errorf("column %q has an incompatible type", column.Name())
 		}
-		if nullable, known := column.Nullable(); known && nullable &&
-			!strings.EqualFold(db.Dialector.Name(), "sqlite") {
+		if nullable, known := column.Nullable(); known && nullable {
 			return fmt.Errorf("column %q is nullable", column.Name())
 		}
 	}
@@ -296,30 +190,11 @@ func decisionConstraintNames0006() []string {
 
 func failureCategoryConstraintDefinition0006(db *gorm.DB) (string, error) {
 	var definition string
-	switch strings.ToLower(db.Dialector.Name()) {
-	case "sqlite":
-		if err := db.Raw(
-			"SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
-			requestLogAttemptTable0006,
-		).Scan(&definition).Error; err != nil {
-			return "", fmt.Errorf("inspect SQLite failure category constraint: %w", err)
-		}
-	case "mysql":
-		if err := db.Raw(
-			"SELECT CHECK_CLAUSE FROM information_schema.check_constraints WHERE constraint_schema = DATABASE() AND constraint_name = ?",
-			failureCategoryConstraint0006,
-		).Scan(&definition).Error; err != nil {
-			return "", fmt.Errorf("inspect MySQL failure category constraint: %w", err)
-		}
-	case "postgres", "postgresql":
-		if err := db.Raw(
-			"SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = ? AND conrelid = 'request_log_attempts'::regclass",
-			failureCategoryConstraint0006,
-		).Scan(&definition).Error; err != nil {
-			return "", fmt.Errorf("inspect PostgreSQL failure category constraint: %w", err)
-		}
-	default:
-		return "", fmt.Errorf("inspect failure category constraint: unsupported driver %q", db.Dialector.Name())
+	if err := db.Raw(
+		"SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = ? AND conrelid = 'request_log_attempts'::regclass",
+		failureCategoryConstraint0006,
+	).Scan(&definition).Error; err != nil {
+		return "", fmt.Errorf("inspect PostgreSQL failure category constraint: %w", err)
 	}
 	if strings.TrimSpace(definition) == "" {
 		return "", fmt.Errorf("failure category constraint definition is missing")

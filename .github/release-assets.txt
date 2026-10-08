@@ -1,7 +1,6 @@
 Apache-2.0.txt
 LICENSE
 MIT.txt
-MPL-2.0.txt
 SHA256SUMS
 THIRD_PARTY_NOTICES.md
 bom.cdx.json

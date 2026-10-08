@@ -14,7 +14,7 @@ import (
 )
 
 // TestExternalDatabaseConcurrentIdempotentOperation proves the cross-instance
-// idempotency contract on a shared MySQL or PostgreSQL: two Service instances
+// idempotency contract on a shared PostgreSQL: two Service instances
 // submitting the same Idempotency-Key at the same time both receive the same
 // committed result, create one resource, and leave one completed operation row.
 func TestExternalDatabaseConcurrentIdempotentOperation(t *testing.T) {

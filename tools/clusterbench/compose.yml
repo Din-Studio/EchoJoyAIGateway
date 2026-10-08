@@ -108,4 +108,15 @@ services:
       GOFLAGS: -buildvcs=false
       GPT_LOAD_DATABASE_TEST_DSN: postgres://gpt_load:${POSTGRES_PASSWORD}@postgres:5432/gpt_load_contract?sslmode=disable
       GPT_LOAD_REDIS_TEST_ADDR: redis-1:6379,redis-2:6379,redis-3:6379
-    entrypoint: ["bash", ".github/scripts/ci-database-contract.sh", "postgres"]
+    entrypoint:
+      [
+        "go",
+        "test",
+        "-v",
+        "-count=1",
+        "./internal/storage",
+        "./internal/control",
+        "./internal/requestlog",
+        "-run",
+        "^TestExternal",
+      ]

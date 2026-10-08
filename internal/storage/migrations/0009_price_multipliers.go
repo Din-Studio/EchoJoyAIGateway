@@ -15,7 +15,7 @@ var priceMultiplierTables0009 = []struct{ table, constraint string }{
 	{"access_keys", "chk_access_key_price_multiplier"},
 }
 
-// Up0009 用独立且原子的列 DDL 保持 MySQL 中断后的安全恢复。
+// Up0009 为每张表独立添加带约束的倍率列，已存在的列先经前置校验。
 func Up0009(db *gorm.DB) error {
 	if err := ValidateRecoverable0009(db); err != nil {
 		return err
@@ -24,7 +24,7 @@ func Up0009(db *gorm.DB) error {
 		if db.Migrator().HasColumn(definition.table, "price_multiplier_micros") {
 			continue
 		}
-		statement := fmt.Sprintf("ALTER TABLE %s ADD COLUMN price_multiplier_micros BIGINT NOT NULL DEFAULT 1000000 CONSTRAINT %s CHECK (price_multiplier_micros >= 0 AND price_multiplier_micros <= 1000000000)", quotePriceMultiplierIdentifier0009(db, definition.table), quotePriceMultiplierIdentifier0009(db, definition.constraint))
+		statement := fmt.Sprintf(`ALTER TABLE "%s" ADD COLUMN price_multiplier_micros BIGINT NOT NULL DEFAULT 1000000 CONSTRAINT "%s" CHECK (price_multiplier_micros >= 0 AND price_multiplier_micros <= 1000000000)`, definition.table, definition.constraint)
 		if err := db.Exec(statement).Error; err != nil {
 			return fmt.Errorf("add %s.price_multiplier_micros: %w", definition.table, err)
 		}
@@ -76,13 +76,6 @@ func validatePriceMultiplierColumn0009(db *gorm.DB, table, constraint string) er
 			return fmt.Errorf("%s price multiplier is nullable", table)
 		}
 		defaultValue, known := column.DefaultValue()
-		if strings.EqualFold(db.Dialector.Name(), "sqlite") {
-			// SQLite 驱动解析列尾约束时可能把 CHECK 也并入默认值，读取数据库元数据。
-			if err := db.Raw("SELECT dflt_value FROM pragma_table_info(?) WHERE name = ?", table, "price_multiplier_micros").Scan(&defaultValue).Error; err != nil {
-				return fmt.Errorf("inspect %s price multiplier default: %w", table, err)
-			}
-			known = defaultValue != ""
-		}
 		defaultValue = strings.Trim(strings.Split(defaultValue, "::")[0], "()' \"")
 		value, parseErr := strconv.ParseInt(defaultValue, 10, 64)
 		if !known || parseErr != nil || value != 1_000_000 {
@@ -96,17 +89,7 @@ func validatePriceMultiplierColumn0009(db *gorm.DB, table, constraint string) er
 		return fmt.Errorf("%s price multiplier constraint is missing", table)
 	}
 	var definition string
-	switch strings.ToLower(db.Dialector.Name()) {
-	case "sqlite":
-		err = db.Raw("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&definition).Error
-	case "mysql":
-		err = db.Raw("SELECT CHECK_CLAUSE FROM information_schema.check_constraints WHERE constraint_schema = DATABASE() AND constraint_name = ?", constraint).Scan(&definition).Error
-	case "postgres", "postgresql":
-		err = db.Raw("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = ? AND conrelid = ?::regclass", constraint, table).Scan(&definition).Error
-	default:
-		return fmt.Errorf("unsupported price multiplier migration driver %q", db.Dialector.Name())
-	}
-	if err != nil {
+	if err := db.Raw("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = ? AND conrelid = ?::regclass", constraint, table).Scan(&definition).Error; err != nil {
 		return fmt.Errorf("inspect %s price multiplier constraint: %w", table, err)
 	}
 	normalized := strings.NewReplacer(" ", "", "\n", "", "\t", "", "(", "", ")", "", "`", "", `"`, "", "::bigint", "").Replace(strings.ToLower(definition))
@@ -121,11 +104,4 @@ func validatePriceMultiplierColumn0009(db *gorm.DB, table, constraint string) er
 		return fmt.Errorf("%s contains invalid price multipliers", table)
 	}
 	return nil
-}
-
-func quotePriceMultiplierIdentifier0009(db *gorm.DB, value string) string {
-	if strings.EqualFold(db.Dialector.Name(), "mysql") {
-		return "`" + value + "`"
-	}
-	return `"` + value + `"`
 }

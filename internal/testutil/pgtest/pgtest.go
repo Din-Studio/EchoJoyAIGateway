@@ -70,7 +70,7 @@ func Run(m *testing.M, migrateSchema func(*gorm.DB) error) {
 }
 
 // DSN returns the configured test database DSN and fails the test when it is
-// missing. External contract tests use it as-is for every supported driver.
+// missing. External contract tests use this PostgreSQL server as-is.
 func DSN(t testing.TB) string {
 	t.Helper()
 	return requireEnv(t, DSNEnv)

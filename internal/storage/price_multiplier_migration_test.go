@@ -65,12 +65,8 @@ func testPriceMultiplierMigrationContract(t *testing.T, open func(*testing.T) *g
 				if err := applyMigrationRegistry(db, entries); err == nil {
 					t.Fatal("interrupted migration succeeded")
 				}
-				if db.Dialector.Name() == "mysql" {
-					if !db.Migrator().HasColumn("groups", "price_multiplier_micros") {
-						t.Fatal("MySQL did not retain first DDL")
-					}
-				} else if db.Migrator().HasColumn("groups", "price_multiplier_micros") {
-					t.Fatal("transactional driver did not roll back interrupted DDL")
+				if db.Migrator().HasColumn("groups", "price_multiplier_micros") {
+					t.Fatal("PostgreSQL did not roll back interrupted DDL")
 				}
 			}
 			if err := AutoMigrate(db); err != nil {

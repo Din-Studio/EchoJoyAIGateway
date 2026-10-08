@@ -67,7 +67,7 @@ func NewServer(cfg *config.Config, service *Service, sharedAuthFailures *cluster
 	return &Server{
 		authDigest:         sha256.Sum256([]byte(cfg.AuthKey)),
 		service:            service,
-		systemInfo:         newSystemInfoResponse(cfg),
+		systemInfo:         newSystemInfoResponse(),
 		authFailures:       newAuthFailureLimiter(),
 		sharedAuthFailures: sharedAuthFailures,
 		sharedAuthErrors:   utils.NewRateLimitedEventCounter(time.Minute, time.Now),

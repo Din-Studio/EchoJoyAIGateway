@@ -15,11 +15,7 @@ func Up0013(db *gorm.DB) error {
 		return err
 	}
 	if !db.Migrator().HasColumn("groups", "validation_protocol") {
-		table := `"groups"`
-		if db.Dialector.Name() == "mysql" {
-			table = "`groups`"
-		}
-		if err := db.Exec("ALTER TABLE " + table + " ADD COLUMN validation_protocol VARCHAR(32) NULL").Error; err != nil {
+		if err := db.Exec(`ALTER TABLE "groups" ADD COLUMN validation_protocol VARCHAR(32) NULL`).Error; err != nil {
 			return fmt.Errorf("add validation protocol: %w", err)
 		}
 	}

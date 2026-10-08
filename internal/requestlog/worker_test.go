@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	gormmysql "gorm.io/driver/mysql"
 	gormpostgres "gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -29,7 +28,7 @@ import (
 	"gpt-load/internal/usage"
 )
 
-func TestUsageStatUpsertUsesDialectSpecificGORMConflictSQL(t *testing.T) {
+func TestUsageStatUpsertUsesPostgreSQLConflictSQL(t *testing.T) {
 	stat := models.UsageStat{
 		BucketStartMS: 1_784_894_400_000,
 		AccessKeyID:   1,
@@ -42,18 +41,6 @@ func TestUsageStatUpsertUsesDialectSpecificGORMConflictSQL(t *testing.T) {
 		mustContain    []string
 		mustNotContain []string
 	}{
-		{
-			name: "mysql",
-			dialector: gormmysql.New(gormmysql.Config{
-				DSN:                       "user:password@tcp(127.0.0.1:3306)/gpt_load",
-				SkipInitializeWithVersion: true,
-			}),
-			mustContain: []string{
-				"ON DUPLICATE KEY UPDATE",
-				"`request_count`=CASE WHEN `usage_stats`.`request_count` > 9223372036854775806 THEN -1 ELSE `usage_stats`.`request_count` + 1 END",
-			},
-			mustNotContain: []string{"ON CONFLICT", "VALUES(`request_count`)"},
-		},
 		{
 			name: "postgres",
 			dialector: gormpostgres.New(gormpostgres.Config{

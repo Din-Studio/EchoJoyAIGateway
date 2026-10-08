@@ -144,13 +144,12 @@ export const zhCN = {
   },
   system: {
     version: '当前版本',
-    deploymentValue: '单实例 · 单二进制',
     database: '数据库',
     authKeySource: '管理员密钥来源',
     encryptionSource: '加密密钥来源',
     encryption: '静态加密',
     encryptionEnabled: '已启用',
-    sources: { environment: '环境变量', key_file: '密钥文件' },
+    sources: { environment: '环境变量' },
     failed: '系统信息加载失败',
   },
 }
@@ -306,13 +305,12 @@ export const enUS = {
   },
   system: {
     version: 'Current version',
-    deploymentValue: 'Single instance · Single binary',
     database: 'Database',
     authKeySource: 'Admin key source',
     encryptionSource: 'Encryption key source',
     encryption: 'Encryption at rest',
     encryptionEnabled: 'Enabled',
-    sources: { environment: 'Environment variable', key_file: 'Key file' },
+    sources: { environment: 'Environment variable' },
     failed: 'Unable to load system information',
   },
 }
@@ -468,13 +466,12 @@ export const jaJP = {
   },
   system: {
     version: '現在のバージョン',
-    deploymentValue: '単一インスタンス · 単一バイナリ',
     database: 'データベース',
     authKeySource: '管理者キーの取得元',
     encryptionSource: '暗号化キーの取得元',
     encryption: '保存時の暗号化',
     encryptionEnabled: '有効',
-    sources: { environment: '環境変数', key_file: 'キーファイル' },
+    sources: { environment: '環境変数' },
     failed: 'システム情報を読み込めません',
   },
 }

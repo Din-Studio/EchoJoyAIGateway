@@ -9,7 +9,6 @@ import (
 	"gorm.io/gorm"
 
 	"gpt-load/internal/accessquota"
-	"gpt-load/internal/platform/config"
 	"gpt-load/internal/platform/redact"
 	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/models"
@@ -18,15 +17,15 @@ import (
 )
 
 // TestExternalDatabaseRequestLogLifecycle covers the request-log write,
-// aggregate upsert, duplicate replay, and retention chain on real MySQL and
-// PostgreSQL servers. Unit tests cover each branch; this keeps driver SQL and
-// transaction differences inside the release contract.
+// aggregate upsert, duplicate replay, and retention chain on a real PostgreSQL
+// server. Unit tests cover each branch; this keeps the real SQL and
+// transaction behavior inside the release contract.
 func TestExternalDatabaseRequestLogLifecycle(t *testing.T) {
 	dsn := pgtest.DSN(t)
 
-	db, err := storage.OpenWithSource(dsn, config.DatabaseSourceExternal)
+	db, err := storage.Open(dsn)
 	if err != nil {
-		t.Fatalf("OpenWithSource() error = %v", err)
+		t.Fatalf("Open() error = %v", err)
 	}
 	sqlDB, err := db.DB()
 	if err != nil {

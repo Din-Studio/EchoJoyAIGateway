@@ -22,7 +22,7 @@ func Up0012(db *gorm.DB) error {
 	return Validate0012(db)
 }
 
-// ValidateRecoverable0012 接受原子加列前后的状态，以支持 MySQL 的 DDL 中断恢复。
+// ValidateRecoverable0012 是 Up0012 的前置校验，接受加列前后两种状态。
 func ValidateRecoverable0012(db *gorm.DB) error {
 	if !db.Migrator().HasTable("access_keys") {
 		return fmt.Errorf("access key mask table is missing")

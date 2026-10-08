@@ -9,7 +9,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"gpt-load/internal/platform/config"
 	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/telemetry"
@@ -17,7 +16,7 @@ import (
 )
 
 // TestExternalDatabaseConcurrentUsageAggregation proves that two request-log
-// writers on a shared MySQL or PostgreSQL never lose each other's increments:
+// writers on a shared PostgreSQL never lose each other's increments:
 // each writer folds 1000 requests into the same hourly bucket concurrently and
 // the bucket ends up with the exact sum.
 func TestExternalDatabaseConcurrentUsageAggregation(t *testing.T) {
@@ -27,9 +26,9 @@ func TestExternalDatabaseConcurrentUsageAggregation(t *testing.T) {
 	const rowsPerWriter = 1000
 
 	openWriter := func() *gorm.DB {
-		db, err := storage.OpenWithSource(dsn, config.DatabaseSourceExternal)
+		db, err := storage.Open(dsn)
 		if err != nil {
-			t.Fatalf("OpenWithSource() error = %v", err)
+			t.Fatalf("Open() error = %v", err)
 		}
 		sqlDB, err := db.DB()
 		if err != nil {

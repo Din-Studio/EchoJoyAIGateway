@@ -116,7 +116,7 @@ export default {
       title: 'HeaderRules',
       description: '设置或移除上游请求 Header。',
       storageNotice:
-        '密码遮挡仅减少旁观泄露，并不代表静态加密。普通 HeaderRules 字面值会以明文写入 SQLite 和备份。Provider 凭据 Header 必须使用 {template} 模板。',
+        '密码遮挡仅减少旁观泄露，并不代表静态加密。普通 HeaderRules 字面值会以明文写入数据库和备份。Provider 凭据 Header 必须使用 {template} 模板。',
       add: '添加规则',
       action: '操作',
       set: '设置',

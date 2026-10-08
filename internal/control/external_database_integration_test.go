@@ -30,7 +30,7 @@ func TestExternalDatabaseReservedIdentifierQueries(t *testing.T) {
 }
 
 // TestExternalDatabaseAccessKeyCostLimitPeriodPermutation verifies that the
-// retained-rule two-phase period move obeys the real MySQL/PostgreSQL unique
+// retained-rule two-phase period move obeys the real PostgreSQL unique
 // index while preserving IDs and resetting each changed revision.
 func TestExternalDatabaseAccessKeyCostLimitPeriodPermutation(t *testing.T) {
 	dsn := externalDatabaseDSN(t)

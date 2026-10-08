@@ -2,9 +2,7 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -17,29 +15,9 @@ const (
 )
 
 func acquireMigrationLock(db *gorm.DB) error {
-	if db == nil {
-		return fmt.Errorf("acquire migration lock: database is nil")
-	}
-	if db.Dialector == nil {
-		return fmt.Errorf("acquire migration lock: database dialector is nil")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), migrationLockTimeout)
 	defer cancel()
-	switch strings.ToLower(db.Dialector.Name()) {
-	case "mysql":
-		var result sql.NullInt64
-		if err := db.WithContext(ctx).Raw("SELECT GET_LOCK(?, ?)", migrationLockName, int(migrationLockTimeout/time.Second)).Scan(&result).Error; err != nil {
-			return fmt.Errorf("acquire MySQL migration lock: %w", err)
-		}
-		if !result.Valid || result.Int64 != 1 {
-			return fmt.Errorf("acquire MySQL migration lock: timed out")
-		}
-		return nil
-	case "postgres", "postgresql":
-		return acquirePostgresMigrationLock(ctx, db, migrationLockRetry)
-	default:
-		return fmt.Errorf("acquire migration lock: unsupported database driver %q", db.Dialector.Name())
-	}
+	return acquirePostgresMigrationLock(ctx, db, migrationLockRetry)
 }
 
 func acquirePostgresMigrationLock(ctx context.Context, db *gorm.DB, retryInterval time.Duration) error {
@@ -77,26 +55,12 @@ func acquirePostgresMigrationLock(ctx context.Context, db *gorm.DB, retryInterva
 }
 
 func releaseMigrationLock(db *gorm.DB) error {
-	switch strings.ToLower(db.Dialector.Name()) {
-	case "mysql":
-		var result sql.NullInt64
-		if err := db.Raw("SELECT RELEASE_LOCK(?)", migrationLockName).Scan(&result).Error; err != nil {
-			return fmt.Errorf("release MySQL migration lock: %w", err)
-		}
-		if !result.Valid || result.Int64 != 1 {
-			return fmt.Errorf("release MySQL migration lock: lock was not held")
-		}
-		return nil
-	case "postgres", "postgresql":
-		var released bool
-		if err := db.Raw("SELECT pg_advisory_unlock(hashtext(?))", migrationLockName).Scan(&released).Error; err != nil {
-			return fmt.Errorf("release PostgreSQL migration lock: %w", err)
-		}
-		if !released {
-			return fmt.Errorf("release PostgreSQL migration lock: lock was not held")
-		}
-		return nil
-	default:
-		return fmt.Errorf("release migration lock: unsupported database driver %q", db.Dialector.Name())
+	var released bool
+	if err := db.Raw("SELECT pg_advisory_unlock(hashtext(?))", migrationLockName).Scan(&released).Error; err != nil {
+		return fmt.Errorf("release PostgreSQL migration lock: %w", err)
 	}
+	if !released {
+		return fmt.Errorf("release PostgreSQL migration lock: lock was not held")
+	}
+	return nil
 }

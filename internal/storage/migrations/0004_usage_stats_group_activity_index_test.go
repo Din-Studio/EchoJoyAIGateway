@@ -21,9 +21,6 @@ func TestUsageStatsGroupActivityIndexMigrationCreatesAndValidatesIndex(t *testin
 	if db.Migrator().HasIndex("usage_stats", "idx_usage_stats_group_bucket") {
 		t.Fatal("usage_stats group activity index exists before migration")
 	}
-	if err := migrations.ValidateRecoverable0004(db); err != nil {
-		t.Fatalf("ValidateRecoverable0004() before index = %v", err)
-	}
 	if err := migrations.Up0004(db); err != nil {
 		t.Fatalf("Up0004() error = %v", err)
 	}

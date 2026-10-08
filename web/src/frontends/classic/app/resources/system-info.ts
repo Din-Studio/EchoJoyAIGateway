@@ -4,31 +4,22 @@ import type { ApiClient } from '@shared/http/client'
 import { InvalidResponseError } from '@shared/http/errors'
 import { controlQueryKeys } from '@/app/query-keys'
 
-import {
-  assertNoSecretLikeFields,
-  projectBoolean,
-  projectEnum,
-  projectRecord,
-  projectString,
-} from './projector'
+import { assertNoSecretLikeFields, projectEnum, projectRecord, projectString } from './projector'
 
-export type SecretSource = 'environment' | 'key_file'
-export type DatabaseDriver = 'sqlite' | 'mysql' | 'postgres'
+export type SecretSource = 'environment'
+export type DatabaseDriver = 'postgres'
 
 export interface SecretSourceInfo {
   source: SecretSource
-  path: string | null
 }
 
 export interface SystemInfoDto {
   version: string
   deployment: {
-    instance_mode: 'single'
     database: DatabaseDriver
-    distribution: 'single_binary'
   }
   auth_key: SecretSourceInfo
-  encryption: SecretSourceInfo & { enabled: true }
+  encryption: SecretSourceInfo
 }
 
 function invalidResponse(): never {
@@ -51,41 +42,24 @@ function projectNonBlankTrimmedString(value: unknown): string {
   return result
 }
 
-function projectSecretSource(value: unknown, includeEnabled: boolean): SecretSourceInfo {
+function projectSecretSource(value: unknown): SecretSourceInfo {
   const record = projectRecord(value)
-  const fields = includeEnabled ? ['enabled', 'source', 'path'] : ['source', 'path']
-  assertExactFields(record, fields)
-  if (includeEnabled && projectBoolean(record.enabled) !== true) invalidResponse()
-  const source = projectEnum(record.source, ['environment', 'key_file'] as const)
-  const path = record.path === null ? null : projectNonBlankTrimmedString(record.path)
-  if ((source === 'environment' && path !== null) || (source === 'key_file' && path === null)) {
-    invalidResponse()
-  }
-  return { source, path }
+  assertExactFields(record, ['source'])
+  return { source: projectEnum(record.source, ['environment'] as const) }
 }
 
 export function projectSystemInfo(value: unknown): SystemInfoDto {
   const record = projectRecord(value)
   assertExactFields(record, ['version', 'deployment', 'auth_key', 'encryption'])
   const deployment = projectRecord(record.deployment)
-  assertExactFields(deployment, ['instance_mode', 'database', 'distribution'])
-  if (
-    projectEnum(deployment.instance_mode, ['single'] as const) !== 'single' ||
-    projectEnum(deployment.distribution, ['single_binary'] as const) !== 'single_binary'
-  ) {
-    invalidResponse()
-  }
-  const database = projectEnum(deployment.database, ['sqlite', 'mysql', 'postgres'] as const)
-  const encryption = projectSecretSource(record.encryption, true)
+  assertExactFields(deployment, ['database'])
   return {
     version: projectNonBlankTrimmedString(record.version),
     deployment: {
-      instance_mode: 'single',
-      database,
-      distribution: 'single_binary',
+      database: projectEnum(deployment.database, ['postgres'] as const),
     },
-    auth_key: projectSecretSource(record.auth_key, false),
-    encryption: { enabled: true, ...encryption },
+    auth_key: projectSecretSource(record.auth_key),
+    encryption: projectSecretSource(record.encryption),
   }
 }
 
