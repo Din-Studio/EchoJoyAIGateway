@@ -253,4 +253,7 @@ func TestRequirePostgreSQLDSNReportsUnparsableURLAsInvalid(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "DATABASE_DSN is invalid") {
 		t.Fatalf("error = %v, want DATABASE_DSN is invalid diagnostic", err)
 	}
+	if strings.Contains(err.Error(), "p%zz") {
+		t.Fatalf("error leaks DSN password: %v", err)
+	}
 }

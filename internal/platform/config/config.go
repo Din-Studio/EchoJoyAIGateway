@@ -275,6 +275,11 @@ func ParseDatabaseDSN(rawDSN string) (string, error) {
 	}
 	parsed, err := url.Parse(dsn)
 	if err != nil {
+		// url.Error embeds the raw DSN (including the password); report only the cause.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
 		return "", fmt.Errorf("DATABASE_DSN is invalid: %w", err)
 	}
 	switch strings.ToLower(parsed.Scheme) {

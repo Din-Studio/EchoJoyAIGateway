@@ -15,9 +15,6 @@ const (
 )
 
 func acquireMigrationLock(db *gorm.DB) error {
-	if db == nil {
-		return fmt.Errorf("acquire migration lock: database is nil")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), migrationLockTimeout)
 	defer cancel()
 	return acquirePostgresMigrationLock(ctx, db, migrationLockRetry)
