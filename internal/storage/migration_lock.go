@@ -18,9 +18,6 @@ func acquireMigrationLock(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("acquire migration lock: database is nil")
 	}
-	if db.Dialector == nil {
-		return fmt.Errorf("acquire migration lock: database dialector is nil")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), migrationLockTimeout)
 	defer cancel()
 	return acquirePostgresMigrationLock(ctx, db, migrationLockRetry)

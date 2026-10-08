@@ -62,9 +62,6 @@ func applyMigrationRegistry(db *gorm.DB, entries []migration) error {
 	if db == nil {
 		return fmt.Errorf("apply migrations: db is nil")
 	}
-	if db.Dialector == nil {
-		return fmt.Errorf("apply migrations: database dialector is nil")
-	}
 	if err := validateMigrationRegistry(entries); err != nil {
 		return err
 	}

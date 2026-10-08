@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -244,5 +245,12 @@ func clearEnvironment(t *testing.T) {
 		"RESPONSE_BINDING_TTL",
 	} {
 		t.Setenv(key, "")
+	}
+}
+
+func TestRequirePostgreSQLDSNReportsUnparsableURLAsInvalid(t *testing.T) {
+	_, err := requirePostgreSQLDSN("postgres://user:p%zz@db:5432/gpt_load")
+	if err == nil || !strings.Contains(err.Error(), "DATABASE_DSN is invalid") {
+		t.Fatalf("error = %v, want DATABASE_DSN is invalid diagnostic", err)
 	}
 }

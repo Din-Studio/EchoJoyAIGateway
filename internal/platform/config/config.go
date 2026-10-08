@@ -275,7 +275,7 @@ func ParseDatabaseDSN(rawDSN string) (string, error) {
 	}
 	parsed, err := url.Parse(dsn)
 	if err != nil {
-		return "", errUnsupportedDatabaseScheme
+		return "", fmt.Errorf("DATABASE_DSN is invalid: %w", err)
 	}
 	switch strings.ToLower(parsed.Scheme) {
 	case "postgres", "postgresql":

@@ -28,7 +28,7 @@ type quotaHistory0016 struct {
 
 func (quotaHistory0016) TableName() string { return "credential_quota_histories" }
 
-// Up0016 使用冻结模型扩展三数据库的同一增量链。
+// Up0016 使用冻结模型扩展同一增量链。
 func Up0016(db *gorm.DB) error {
 	if Validate0016(db) == nil {
 		return nil
