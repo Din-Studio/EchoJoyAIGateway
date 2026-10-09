@@ -177,15 +177,6 @@ func TestExternalDatabaseRequestLogLifecycle(t *testing.T) {
 		1,
 	)
 	assertExternalCredentialAttemptStat(t, db, row.CompletedAtMS, credentialID, 1)
-	var journals int64
-	if err := db.Model(&models.UsageAggregationJournal{}).
-		Where("request_id = ?", requestID).
-		Count(&journals).Error; err != nil {
-		t.Fatalf("count usage aggregation journals: %v", err)
-	}
-	if journals != 0 {
-		t.Fatalf("usage aggregation journals for %q = %d, want 0", requestID, journals)
-	}
 }
 
 func assertExternalCredentialAttemptStat(

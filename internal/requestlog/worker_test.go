@@ -871,7 +871,6 @@ func TestWriteBatchPersistsZeroAttemptRequestWithoutUsageAggregation(t *testing.
 	}
 
 	assertRequestLogAndUsageStatCounts(t, db, 2, 1)
-	assertUsageJournalCount(t, db, 1)
 	var persisted models.RequestLog
 	if err := db.First(&persisted, "id = ?", zeroAttempt.ID).Error; err != nil {
 		t.Fatalf("query zero-attempt RequestLog: %v", err)
@@ -913,7 +912,6 @@ func TestWriteBatchRollsBackRequestLogsAndStatsOnFailure(t *testing.T) {
 			t.Fatal("WriteBatch() error = nil, want existing ID query failure")
 		}
 		assertRequestLogAndUsageStatCounts(t, db, 0, 0)
-		assertUsageJournalCount(t, db, 0)
 	})
 
 	t.Run("RequestLog insert", func(t *testing.T) {
@@ -923,7 +921,6 @@ func TestWriteBatchRollsBackRequestLogsAndStatsOnFailure(t *testing.T) {
 			t.Fatal("WriteBatch() error = nil, want RequestLog insert failure")
 		}
 		assertRequestLogAndUsageStatCounts(t, db, 0, 0)
-		assertUsageJournalCount(t, db, 0)
 	})
 
 	// 写入路径不再读取现有统计行；损坏的现有列值由数据库在增量 upsert 时拒绝。
@@ -950,7 +947,6 @@ func TestWriteBatchRollsBackRequestLogsAndStatsOnFailure(t *testing.T) {
 			t.Fatalf("WriteBatch() error = %v, want UsageStat upsert rejection", err)
 		}
 		assertRequestLogAndUsageStatCounts(t, db, 0, 1)
-		assertUsageJournalCount(t, db, 0)
 
 		var persisted models.UsageStat
 		if err := db.Where(
@@ -973,7 +969,6 @@ func TestWriteBatchRollsBackRequestLogsAndStatsOnFailure(t *testing.T) {
 			t.Fatal("WriteBatch() error = nil, want UsageStat UPSERT failure")
 		}
 		assertRequestLogAndUsageStatCounts(t, db, 0, 0)
-		assertUsageJournalCount(t, db, 0)
 	})
 
 	t.Run("commit", func(t *testing.T) {
@@ -985,7 +980,6 @@ func TestWriteBatchRollsBackRequestLogsAndStatsOnFailure(t *testing.T) {
 		}
 		release()
 		assertRequestLogAndUsageStatCounts(t, db, 0, 0)
-		assertUsageJournalCount(t, db, 0)
 	})
 }
 
@@ -1190,60 +1184,6 @@ func TestWorkerCountsDuplicateReplayAsSuccessfulDeliveryWithoutReaggregation(t *
 	}
 }
 
-func TestWriteBatchRollsBackUsageJournalWithFailedRequestLogTransaction(t *testing.T) {
-	db := openRequestLogQueryDB(t)
-	row := aggregationRow(
-		aggregationRequestID(70),
-		time.Date(2026, time.July, 24, 16, 30, 0, 0, time.UTC),
-		17,
-		"journal-model",
-	)
-	row.UncachedInputTokens = 12
-	row.OutputTokens = 3
-
-	pgtest.FailOn(t, db, "request_logs", "INSERT", "", "forced request log failure")
-	writer := &gormBatchWriter{db: db}
-	if err := writer.WriteBatch(context.Background(), []models.RequestLog{row}); err == nil {
-		t.Fatal("WriteBatch() error = nil, want request log transaction failure")
-	}
-
-	assertRequestLogAndUsageStatCounts(t, db, 0, 0)
-	assertUsageJournalCount(t, db, 0)
-}
-
-func TestServiceStartDoesNotAggregateOrphanUsageJournal(t *testing.T) {
-	db := openRequestLogQueryDB(t)
-	journal := models.UsageAggregationJournal{
-		RequestID:           aggregationRequestID(71),
-		BucketStartMS:       1_784_901_600_000,
-		AccessKeyID:         2,
-		GroupID:             18,
-		Model:               "startup-replay-model",
-		RequestCount:        1,
-		SuccessCount:        1,
-		UncachedInputTokens: 21,
-		OutputTokens:        8,
-	}
-	if err := db.Create(&journal).Error; err != nil {
-		t.Fatalf("create pending journal: %v", err)
-	}
-	service := NewService(db, redact.New(), staticRetentionPolicy{days: 7})
-	if err := service.Start(); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	if err := service.Stop(context.Background()); err != nil {
-		t.Fatalf("Stop() error = %v", err)
-	}
-
-	assertRequestLogAndUsageStatCounts(t, db, 0, 0)
-	if err := db.Where("request_id = ?", journal.RequestID).Take(&journal).Error; err != nil {
-		t.Fatalf("query orphan journal: %v", err)
-	}
-	if journal.Applied {
-		t.Fatalf("orphan journal was applied: %+v", journal)
-	}
-}
-
 func assertRequestLogAndUsageStatCounts(
 	t *testing.T,
 	db *gorm.DB,
@@ -1261,17 +1201,6 @@ func assertRequestLogAndUsageStatCounts(
 	if requestLogs != wantRequestLogs || usageStats != wantUsageStats {
 		t.Fatalf("row counts = RequestLog:%d UsageStat:%d, want %d/%d",
 			requestLogs, usageStats, wantRequestLogs, wantUsageStats)
-	}
-}
-
-func assertUsageJournalCount(t *testing.T, db *gorm.DB, want int64) {
-	t.Helper()
-	var count int64
-	if err := db.Model(&models.UsageAggregationJournal{}).Count(&count).Error; err != nil {
-		t.Fatalf("count UsageAggregationJournals: %v", err)
-	}
-	if count != want {
-		t.Fatalf("UsageAggregationJournal count = %d, want %d", count, want)
 	}
 }
 

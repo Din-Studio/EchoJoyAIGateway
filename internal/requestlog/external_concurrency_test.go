@@ -73,7 +73,6 @@ func TestExternalDatabaseConcurrentUsageAggregation(t *testing.T) {
 			query string
 			value any
 		}{
-			{&models.UsageAggregationJournal{}, "request_id IN ?", requestIDs},
 			{&models.RequestLogAttempt{}, "request_id IN ?", requestIDs},
 			{&models.RequestLog{}, "id IN ?", requestIDs},
 			{&models.UsageStat{}, "credential_id = ?", credentialID},
@@ -135,14 +134,5 @@ func TestExternalDatabaseConcurrentUsageAggregation(t *testing.T) {
 	}
 	if len(attemptStats) != 1 || attemptStats[0].SuccessCount != total || attemptStats[0].FailureCount != 0 {
 		t.Fatalf("credential attempt stats = %+v, want %d successes in one bucket", attemptStats, total)
-	}
-	var applied int64
-	if err := control.Model(&models.UsageAggregationJournal{}).
-		Where("request_id IN ? AND applied = ?", requestIDs, true).
-		Count(&applied).Error; err != nil {
-		t.Fatalf("count applied journals: %v", err)
-	}
-	if applied != total {
-		t.Fatalf("applied journals = %d, want %d", applied, total)
 	}
 }

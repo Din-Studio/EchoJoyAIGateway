@@ -94,38 +94,6 @@ type CredentialAttemptStat struct {
 	FailureCount  int64 `gorm:"not null;default:0;check:chk_credential_attempt_stat_failure_count,failure_count >= 0"`
 }
 
-// UsageAggregationJournal is the request-idempotent input for hourly usage
-// aggregation. It is staged, applied, and committed in the same transaction as
-// its RequestLog, and intentionally excludes request and error payloads.
-type UsageAggregationJournal struct {
-	RequestID               string `gorm:"column:request_id;type:varchar(36);primaryKey;not null"`
-	BucketStartMS           int64  `gorm:"column:bucket_start_ms;not null;check:chk_usage_journal_bucket, bucket_start_ms >= 0;index:idx_usage_aggregation_journal_pending_bucket,priority:2"`
-	AccessKeyID             uint   `gorm:"not null"`
-	GroupID                 uint   `gorm:"not null"`
-	ChannelID               string `gorm:"type:varchar(64);not null;default:''"`
-	CredentialID            uint   `gorm:"not null;default:0"`
-	Model                   string `gorm:"type:varchar(255);not null"`
-	RequestCount            int64  `gorm:"not null;check:chk_usage_journal_request_count,request_count = 1;check:chk_usage_journal_request_outcome,request_count = success_count + failure_count"`
-	SuccessCount            int64  `gorm:"not null;check:chk_usage_journal_success_count,success_count >= 0"`
-	FailureCount            int64  `gorm:"not null;check:chk_usage_journal_failure_count,failure_count >= 0"`
-	UncachedInputTokens     int64  `gorm:"column:uncached_input_tokens;not null;check:chk_usage_journal_uncached_input,uncached_input_tokens >= 0"`
-	OutputTokens            int64  `gorm:"not null;check:chk_usage_journal_output,output_tokens >= 0"`
-	CacheReadTokens         int64  `gorm:"not null;check:chk_usage_journal_cache_read,cache_read_tokens >= 0"`
-	CacheWrite5MTokens      int64  `gorm:"column:cache_write_5m_tokens;not null;check:chk_usage_journal_cache_write_5m,cache_write_5m_tokens >= 0"`
-	CacheWrite1HTokens      int64  `gorm:"column:cache_write_1h_tokens;not null;check:chk_usage_journal_cache_write_1h,cache_write_1h_tokens >= 0"`
-	CacheWriteUnknownTokens int64  `gorm:"column:cache_write_unknown_tokens;not null;check:chk_usage_journal_cache_write_unknown,cache_write_unknown_tokens >= 0"`
-	EstimatedCostNanoUSD    int64  `gorm:"column:estimated_cost_nano_usd;not null;check:chk_usage_journal_cost_nano,estimated_cost_nano_usd >= 0"`
-	UsageMissingCount       int64  `gorm:"not null;check:chk_usage_journal_usage_missing,usage_missing_count >= 0"`
-	PartialCount            int64  `gorm:"not null;check:chk_usage_journal_partial,partial_count >= 0"`
-	UnpricedRequestCount    int64  `gorm:"not null;check:chk_usage_journal_unpriced,unpriced_request_count >= 0"`
-	PricingPartialCount     int64  `gorm:"not null;check:chk_usage_journal_pricing_partial,pricing_partial_count >= 0"`
-	Applied                 bool   `gorm:"not null;default:false;check:chk_usage_journal_applied,applied IN (TRUE, FALSE);index:idx_usage_aggregation_journal_pending_bucket,priority:1"`
-}
-
-func (UsageAggregationJournal) TableName() string {
-	return "usage_aggregation_journal"
-}
-
 // UsageStat is an hourly aggregate by access key, channel, upstream group,
 // credential, and upstream model.
 type UsageStat struct {

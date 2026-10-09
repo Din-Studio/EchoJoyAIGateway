@@ -218,7 +218,7 @@ func TestOpenConfiguresParameterizedSQLLogging(t *testing.T) {
 	}
 }
 
-func TestAutoMigrateCreatesUsageJournalAndMigrationLedger(t *testing.T) {
+func TestAutoMigrateCreatesSchemaAndMigrationLedger(t *testing.T) {
 	t.Parallel()
 
 	db := openMigratedDatabase(t)
@@ -230,7 +230,6 @@ func TestAutoMigrateCreatesUsageJournalAndMigrationLedger(t *testing.T) {
 		"access_key_cost_limit_rules",
 		"access_key_cost_limit_states",
 		"request_logs",
-		"usage_aggregation_journal",
 		"usage_stats",
 		"model_prices",
 		"system_settings",
@@ -249,6 +248,9 @@ func TestAutoMigrateCreatesUsageJournalAndMigrationLedger(t *testing.T) {
 	}
 	if db.Migrator().HasTable("auto_response_bindings") {
 		t.Fatal("AutoMigrate() created an unnecessary shared binding table")
+	}
+	if db.Migrator().HasTable("usage_aggregation_journal") {
+		t.Fatal("AutoMigrate() created the retired usage aggregation journal table")
 	}
 
 	var migrationIDs []string

@@ -87,7 +87,7 @@ func TestExternalDatabaseLifecycle(t *testing.T) {
 	}
 	for _, table := range []string{
 		"groups", "credentials", "access_keys", "request_logs", "request_log_attempts",
-		"usage_aggregation_journal", "usage_stats", "model_prices", "system_settings",
+		"usage_stats", "model_prices", "system_settings",
 		"jobs", "control_operations", "credential_stages", "credential_observations",
 		"credential_reset_operations", "credential_attempt_stats", "schema_migrations",
 		"access_key_cost_limit_rules", "access_key_cost_limit_states",
