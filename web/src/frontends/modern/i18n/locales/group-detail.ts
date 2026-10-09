@@ -89,7 +89,6 @@ export const zhCN = {
   deleteConfirmation: '确定删除选中的 {count} 个凭据？删除后无法恢复。',
   refreshFailed: '刷新失败，当前保留上次的数据。',
   channelFailed: '渠道信息加载失败，暂时无法添加凭据或修改连接参数。',
-  credentialsHelp: '每行一个密钥；结构化凭据可粘贴渠道支持的 JSON。',
   importFailed: '添加失败，请检查凭据后重试。',
   stageExpired: '授权已过期，请重新登录账号。',
   importResult: '已添加 {added} 个凭据，跳过 {duplicated} 个重复凭据。',
@@ -229,8 +228,6 @@ export const enUS: typeof zhCN = {
   refreshFailed: 'Refresh failed. Showing the previous data.',
   channelFailed:
     'Channel information is unavailable. Adding credentials and editing connection parameters are temporarily unavailable.',
-  credentialsHelp:
-    'One key per line. Structured credentials may use the JSON format supported by the channel.',
   importFailed: 'Unable to add credentials. Check the input and retry.',
   stageExpired: 'Authorization expired. Sign in again.',
   importResult: 'Added {added} credentials; skipped {duplicated} duplicates.',
@@ -365,8 +362,6 @@ export const jaJP: typeof zhCN = {
   refreshFailed: '更新に失敗しました。前回のデータを表示しています。',
   channelFailed:
     'チャネル情報を読み込めません。認証情報の追加と接続パラメータの編集は一時的に利用できません。',
-  credentialsHelp:
-    '1 行に 1 つのキー。構造化された認証情報はチャネル対応の JSON 形式で入力できます。',
   importFailed: '追加できませんでした。入力を確認して再試行してください。',
   stageExpired: '認証の有効期限が切れました。再度ログインしてください。',
   importResult: '{added} 件を追加し、重複する {duplicated} 件をスキップしました。',

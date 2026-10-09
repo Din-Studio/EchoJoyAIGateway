@@ -22,7 +22,7 @@ func TestGroupDetailLedgerRoutesReplaceLegacyContracts(t *testing.T) {
 	mustEnsureInitialPrices(t, fixture)
 	created, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: stringPointer("credential-ledger-route"), ChannelID: channel.OpenAI,
-		Params: json.RawMessage(`{}`), Models: optionalGroupModels{Set: true}, Credentials: "sk-ledger-route", ConnectionType: "api_key",
+		Params: json.RawMessage(`{}`), Models: optionalGroupModels{Set: true}, Credentials: apiKeyEntries("sk-ledger-route"), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatal(err)

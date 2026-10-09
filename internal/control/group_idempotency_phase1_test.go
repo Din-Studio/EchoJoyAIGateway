@@ -20,7 +20,7 @@ func TestCreateGroupIdempotentReplaysOriginalCountsAndPreservesCredentialMultipl
 		ChannelID:   channel.OpenAICompatible,
 		Params:      json.RawMessage(`{"base_url":"https://idempotent.example.com/v1"}`),
 		Models:      optionalGroupModels{Set: true, Values: []GroupModel{}},
-		Credentials: " K \r\nK\n", ConnectionType: "api_key",
+		Credentials: apiKeyEntries(" K \r\nK\n"), ConnectionType: "api_key",
 	}
 	const key = "218f47a2-9c35-4d6e-8b1a-1234567890ab"
 
@@ -50,7 +50,7 @@ func TestCreateGroupIdempotentReplaysOriginalCountsAndPreservesCredentialMultipl
 	}
 
 	different := request
-	different.Credentials = "K"
+	different.Credentials = apiKeyEntries("K")
 	_, err = fixture.service.CreateGroupIdempotent(t.Context(), key, different)
 	assertAPIErrorCode(t, err, app_errors.ErrIdempotencyKeyReused.Code)
 }
@@ -68,7 +68,7 @@ func TestCreateGroupIdempotentCanonicalizesDisabledAliasesAndReplaysNarrowResult
 				ID: "provider-model", Alias: "discarded-a", AliasEnabled: false,
 			}},
 		},
-		Credentials: "key-one", ConnectionType: "api_key",
+		Credentials: apiKeyEntries("key-one"), ConnectionType: "api_key",
 	}
 	const key = "238f47a2-9c35-4d6e-8b1a-1234567890ab"
 

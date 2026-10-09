@@ -1407,7 +1407,7 @@ func TestCredentialLabelsMasksFromRegistryWithoutDatabaseReads(t *testing.T) {
 		Name: stringPointer("log labels"), ChannelID: channel.OpenAI,
 		ConnectionType: models.ConnectionTypeAPIKey,
 		Models:         optionalGroupModels{Set: true},
-		Credentials:    "sk-log-label-abcdefghijklmnop",
+		Credentials:    apiKeyEntries("sk-log-label-abcdefghijklmnop"),
 	})
 	if err != nil {
 		t.Fatalf("CreateGroup() error = %v", err)

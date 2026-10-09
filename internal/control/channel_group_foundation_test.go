@@ -150,18 +150,18 @@ func TestGroupCreateWireAcceptsOnlyChannelContract(t *testing.T) {
 		"connection_type":"api_key",
 		"params":{"base_url":"https://proxy.example/v1"},
 		"models":[],
-		"credentials":"sk-one",
+		"credentials":[{"fields":{"api_key":"sk-one"}}],
 		"confirm_same_target":true
 	}`)
 	if err := decodeStrictControlJSONObject(valid, &request); err != nil {
 		t.Fatalf("decode channel GroupCreateRequest: %v", err)
 	}
 	if request.ChannelID != channel.OpenAICompatible || request.ConnectionType != models.ConnectionTypeAPIKey ||
-		request.Credentials != "sk-one" || !request.ConfirmSameTarget {
+		len(request.Credentials) != 1 || request.Credentials[0].Fields["api_key"] != "sk-one" || !request.ConfirmSameTarget {
 		t.Fatalf("GroupCreateRequest = %#v", request)
 	}
 	for _, legacy := range []string{"keys", "provider_id", "upstream_url", "protocols", "confirm_same_upstream_url"} {
-		body := []byte(`{"channel_id":"openai","models":[],"credentials":"sk-one","` + legacy + `":null}`)
+		body := []byte(`{"channel_id":"openai","models":[],"credentials":[{"fields":{"api_key":"sk-one"}}],"` + legacy + `":null}`)
 		if err := decodeStrictControlJSONObject(body, &GroupCreateRequest{ConnectionType: "api_key"}); err == nil {
 			t.Fatalf("legacy field %q was accepted", legacy)
 		}
@@ -174,7 +174,7 @@ func TestGroupCreateRequiresConnectionTypeAndValidatesSubscriptionContract(t *te
 	fixture := newServiceFixture(t)
 	_, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: stringPointer("missing connection"), ChannelID: channel.OpenAI,
-		Models: optionalGroupModels{Set: true}, Credentials: "sk-default",
+		Models: optionalGroupModels{Set: true}, Credentials: apiKeyEntries("sk-default"),
 	})
 	if !errors.Is(err, app_errors.ErrValidation) {
 		t.Fatalf("missing connection_type error = %v", err)
@@ -182,7 +182,7 @@ func TestGroupCreateRequiresConnectionTypeAndValidatesSubscriptionContract(t *te
 	created, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: stringPointer("default api key"), ChannelID: channel.OpenAI,
 		ConnectionType: models.ConnectionTypeAPIKey,
-		Models:         optionalGroupModels{Set: true}, Credentials: "sk-default",
+		Models:         optionalGroupModels{Set: true}, Credentials: apiKeyEntries("sk-default"),
 	})
 	if err != nil {
 		t.Fatalf("CreateGroup(api_key) error = %v", err)
@@ -206,7 +206,7 @@ func TestGroupCreateRequiresConnectionTypeAndValidatesSubscriptionContract(t *te
 	_, err = fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: stringPointer("mixed input"), ChannelID: channel.Codex,
 		ConnectionType: models.ConnectionTypeSubscription,
-		Models:         optionalGroupModels{Set: true}, Credentials: "sk-mixed",
+		Models:         optionalGroupModels{Set: true}, Credentials: apiKeyEntries("sk-mixed"),
 		StagedCredentialIDs: []string{"stage-one"},
 	})
 	if !errors.Is(err, app_errors.ErrValidation) {
@@ -237,7 +237,7 @@ func TestSameTargetIncludesConnectionType(t *testing.T) {
 	fixture := newServiceFixture(t)
 	first, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: stringPointer("api target"), ChannelID: channel.OpenAI,
-		Models: optionalGroupModels{Set: true}, Credentials: "sk-target", ConnectionType: "api_key",
+		Models: optionalGroupModels{Set: true}, Credentials: apiKeyEntries("sk-target"), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -273,7 +273,7 @@ func TestCreateChannelGroupPersistsCanonicalCredentialsAndPublishes(t *testing.T
 		Models: optionalGroupModels{Set: true, Values: []GroupModel{
 			{ID: " provider-model ", Alias: " public ", AliasEnabled: true},
 		}},
-		Credentials: " sk-one \n sk-one\nsk-two\n", ConnectionType: "api_key",
+		Credentials: apiKeyEntries(" sk-one \n sk-one\nsk-two\n"), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatalf("CreateGroup() error = %v", err)
@@ -341,7 +341,7 @@ func TestCreateChannelGroupUsesChannelAndCanonicalParamsForSimilarity(t *testing
 		ChannelID:   channel.OpenAICompatible,
 		Params:      json.RawMessage(`{"base_url":"HTTPS://Same.Example/v1/"}`),
 		Models:      optionalGroupModels{Set: true, Values: []GroupModel{}},
-		Credentials: "first", ConnectionType: "api_key",
+		Credentials: apiKeyEntries("first"), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatalf("first CreateGroup() error = %v", err)
@@ -350,7 +350,7 @@ func TestCreateChannelGroupUsesChannelAndCanonicalParamsForSimilarity(t *testing
 		ChannelID:   channel.OpenAICompatible,
 		Params:      json.RawMessage(`{"base_url":"https://same.example/v1"}`),
 		Models:      optionalGroupModels{Set: true, Values: []GroupModel{}},
-		Credentials: "second", ConnectionType: "api_key",
+		Credentials: apiKeyEntries("second"), ConnectionType: "api_key",
 	})
 	var apiErr *app_errors.APIError
 	if !errors.As(err, &apiErr) || apiErr.Code != app_errors.ErrChannelTargetConflict.Code {
@@ -365,7 +365,7 @@ func TestCreateChannelGroupUsesChannelAndCanonicalParamsForSimilarity(t *testing
 		ChannelID:         channel.OpenAICompatible,
 		Params:            json.RawMessage(`{"base_url":"https://same.example/v1"}`),
 		Models:            optionalGroupModels{Set: true, Values: []GroupModel{}},
-		Credentials:       "second",
+		Credentials:       apiKeyEntries("second"),
 		ConfirmSameTarget: true, ConnectionType: "api_key",
 	})
 	if err != nil || confirmed.GroupID == 0 {
@@ -377,7 +377,7 @@ func TestCreateChannelGroupUsesChannelAndCanonicalParamsForSimilarity(t *testing
 		ChannelID:   channel.Anthropic,
 		Params:      json.RawMessage(`{"base_url":"https://same.example"}`),
 		Models:      optionalGroupModels{Set: true, Values: []GroupModel{}},
-		Credentials: "third", ConnectionType: "api_key",
+		Credentials: apiKeyEntries("third"), ConnectionType: "api_key",
 	})
 	if err != nil || otherChannel.GroupID == 0 {
 		t.Fatalf("other-channel CreateGroup() = %#v, %v", otherChannel, err)
@@ -392,7 +392,7 @@ func TestCreateChannelGroupIdempotencyReplaysCredentialCounts(t *testing.T) {
 		ChannelID:   channel.OpenAI,
 		Params:      json.RawMessage(`{}`),
 		Models:      optionalGroupModels{Set: true, Values: []GroupModel{}},
-		Credentials: " repeated \nrepeated\n", ConnectionType: "api_key",
+		Credentials: apiKeyEntries(" repeated \nrepeated\n"), ConnectionType: "api_key",
 	}
 	const idempotencyKey = "328f47a2-9c35-4d6e-8b1a-1234567890ab"
 	first, err := fixture.service.CreateGroupIdempotent(t.Context(), idempotencyKey, request)
@@ -423,7 +423,7 @@ func TestChannelGroupSettingsExposeImmutableChannelAndEditableParams(t *testing.
 		ChannelID:   channel.OpenAICompatible,
 		Params:      json.RawMessage(`{"base_url":"https://first.example/v1"}`),
 		Models:      optionalGroupModels{Set: true, Values: []GroupModel{}},
-		Credentials: "settings-key", ConnectionType: "api_key",
+		Credentials: apiKeyEntries("settings-key"), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatalf("CreateGroup() error = %v", err)
@@ -480,7 +480,7 @@ func TestChannelGroupCollectionDetailAndOptionsUseChannelCredentialContract(t *t
 		Models: optionalGroupModels{Set: true, Values: []GroupModel{
 			{ID: "provider-model", Alias: "public-model", AliasEnabled: true},
 		}},
-		Credentials: "collection-key", ConnectionType: "api_key",
+		Credentials: apiKeyEntries("collection-key"), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatalf("CreateGroup() error = %v", err)

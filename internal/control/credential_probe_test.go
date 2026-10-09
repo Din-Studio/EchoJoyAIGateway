@@ -405,7 +405,7 @@ func TestGroupCredentialProbeRevokesRestoreEligibilityWhenTargetChangesDuringPro
 				ChannelID:   channel.OpenAICompatible,
 				Params:      json.RawMessage(`{"base_url":"https://initial-probe-target.example/v1"}`),
 				Models:      optionalGroupModels{Set: true, Values: []GroupModel{{ID: "gpt-4o"}}},
-				Credentials: "probe-target-change-secret", ConnectionType: "api_key",
+				Credentials: apiKeyEntries("probe-target-change-secret"), ConnectionType: "api_key",
 			})
 			if err != nil {
 				t.Fatal(err)

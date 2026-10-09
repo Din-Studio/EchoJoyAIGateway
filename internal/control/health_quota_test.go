@@ -125,7 +125,7 @@ func TestRuntimeHealthReportsResetCreditsExpiringWithinFortyEightHours(t *testin
 	fixture := newServiceFixture(t)
 	now := healthNow()
 	fixture.service.now = func() time.Time { return now }
-	groupID := createGroupWithCredentials(t, fixture, `{"api_key":"sk-expiring-reset-credit"}`)
+	groupID := createGroupWithCredentials(t, fixture, "sk-expiring-reset-credit")
 
 	var credential models.Credential
 	if err := fixture.db.Where("group_id = ?", groupID).First(&credential).Error; err != nil {
@@ -191,7 +191,7 @@ func TestRuntimeHealthHonorsRecordedResetCreditAvailability(t *testing.T) {
 			fixture := newServiceFixture(t)
 			now := healthNow()
 			fixture.service.now = func() time.Time { return now }
-			groupID := createGroupWithCredentials(t, fixture, `{"api_key":"sk-reset-credit-availability"}`)
+			groupID := createGroupWithCredentials(t, fixture, "sk-reset-credit-availability")
 
 			var credential models.Credential
 			if err := fixture.db.Where("group_id = ?", groupID).First(&credential).Error; err != nil {

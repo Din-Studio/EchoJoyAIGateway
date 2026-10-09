@@ -52,7 +52,7 @@ func createCompatibleGroup(t *testing.T, fixture serviceFixture, baseURL, creden
 		Name: &name, ChannelID: channel.OpenAICompatible, ConnectionType: models.ConnectionTypeAPIKey,
 		Params:      json.RawMessage(fmt.Sprintf(`{"base_url":%q}`, baseURL)),
 		Models:      optionalGroupModels{Set: true, Values: []GroupModel{{ID: "gpt-4o"}}},
-		Credentials: credential,
+		Credentials: apiKeyEntries(credential),
 	})
 	if err != nil {
 		t.Fatalf("CreateGroup(%q) error = %v", name, err)

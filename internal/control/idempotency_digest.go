@@ -122,25 +122,34 @@ func canonicalIdempotencyBody(value any) ([]byte, error) {
 	return body, nil
 }
 
-func normalizeIdempotencyKeyLines(raw string) ([]string, error) {
-	normalizedNewlines := strings.ReplaceAll(raw, "\r\n", "\n")
-	normalizedNewlines = strings.ReplaceAll(normalizedNewlines, "\r", "\n")
-	lines := make([]string, 0)
-	for _, line := range strings.Split(normalizedNewlines, "\n") {
-		normalized := strings.TrimSpace(line)
-		if normalized == "" {
-			continue
-		}
-		lines = append(lines, normalized)
-		if len(lines) > maxCredentialLines {
-			return nil, app_errors.ErrValidation
-		}
-	}
-	if len(lines) == 0 {
+// credentialEntriesDigest makes the digest independent of row order and of
+// whitespace the credential normalizer would trim anyway.
+func credentialEntriesDigest(entries []CredentialEntryInput) ([]CredentialEntryInput, error) {
+	if len(entries) == 0 || len(entries) > maxCredentialEntries {
 		return nil, app_errors.ErrValidation
 	}
-	sort.Slice(lines, func(left, right int) bool {
-		return bytes.Compare([]byte(lines[left]), []byte(lines[right])) < 0
+	type keyedEntry struct {
+		key   []byte
+		entry CredentialEntryInput
+	}
+	keyed := make([]keyedEntry, 0, len(entries))
+	for _, entry := range entries {
+		normalized := CredentialEntryInput{
+			Fields:           trimmedCredentialFields(entry.Fields),
+			ConcurrencyLimit: entry.ConcurrencyLimit,
+		}
+		key, err := canonicaljson.Marshal(normalized)
+		if err != nil {
+			return nil, app_errors.ErrInternalServer
+		}
+		keyed = append(keyed, keyedEntry{key: key, entry: normalized})
+	}
+	sort.Slice(keyed, func(left, right int) bool {
+		return bytes.Compare(keyed[left].key, keyed[right].key) < 0
 	})
-	return lines, nil
+	digest := make([]CredentialEntryInput, 0, len(keyed))
+	for _, item := range keyed {
+		digest = append(digest, item.entry)
+	}
+	return digest, nil
 }

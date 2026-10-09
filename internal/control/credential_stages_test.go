@@ -915,7 +915,7 @@ func TestSubscriptionCredentialCannotBeRevealedOrImportedAsText(t *testing.T) {
 	if _, err := fixture.service.RevealGroupCredential(t.Context(), created.GroupID, credential.ID); !errors.Is(err, app_errors.ErrForbidden) {
 		t.Fatalf("RevealGroupCredential() error = %v", err)
 	}
-	if _, err := fixture.service.ImportGroupCredentials(t.Context(), created.GroupID, CredentialImportRequest{Credentials: "secret"}); !errors.Is(err, app_errors.ErrValidation) {
+	if _, err := fixture.service.ImportGroupCredentials(t.Context(), created.GroupID, CredentialImportRequest{Credentials: apiKeyEntries("secret")}); !errors.Is(err, app_errors.ErrValidation) {
 		t.Fatalf("ImportGroupCredentials() error = %v", err)
 	}
 }

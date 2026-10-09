@@ -32,7 +32,7 @@ func TestDownloadAllAPIKeysReturnsOneTextFileAcrossAllStatuses(t *testing.T) {
 	if _, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: stringPointer("other export group"), ChannelID: channel.OpenAI,
 		ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: optionalGroupModels{Set: true},
-		Credentials: "synthetic-other-group-key", ConfirmSameTarget: true,
+		Credentials: apiKeyEntries("synthetic-other-group-key"), ConfirmSameTarget: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestDownloadAllAPIKeysReturnsOneTextFileAcrossAllStatuses(t *testing.T) {
 	if file.Content != strings.Join(lines, "\n")+"\n" {
 		t.Fatal("download must contain every group credential once in ID order")
 	}
-	imported, err := fixture.service.ImportGroupCredentials(t.Context(), groupID, CredentialImportRequest{Credentials: file.Content})
+	imported, err := fixture.service.ImportGroupCredentials(t.Context(), groupID, CredentialImportRequest{Credentials: apiKeyEntries(file.Content)})
 	if err != nil || imported.CredentialsAdded != 0 || imported.CredentialsDuplicated != len(lines) {
 		t.Fatalf("reimport added=%d duplicates=%d error=%v", imported.CredentialsAdded, imported.CredentialsDuplicated, err)
 	}
@@ -95,7 +95,7 @@ func TestDownloadAllAPIKeysPreservesStructuredCredentials(t *testing.T) {
 			fixture := newServiceFixture(t)
 			created, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 				Name: stringPointer(test.name), ChannelID: test.channel, Params: json.RawMessage(test.params),
-				ConnectionType: "api_key", Models: optionalGroupModels{Set: true}, Credentials: test.credential,
+				ConnectionType: "api_key", Models: optionalGroupModels{Set: true}, Credentials: structuredEntry(t, test.credential),
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -123,10 +123,20 @@ func TestDownloadAllAPIKeysPreservesStructuredCredentials(t *testing.T) {
 			if strings.Count(content, "\n") != 1 || !json.Valid([]byte(strings.TrimSpace(content))) {
 				t.Fatal("structured credential must occupy one complete JSON line")
 			}
-			imported, err := fixture.service.ImportGroupCredentials(t.Context(), created.GroupID, CredentialImportRequest{Credentials: content})
+			imported, err := fixture.service.ImportGroupCredentials(t.Context(), created.GroupID, CredentialImportRequest{Credentials: structuredEntry(t, strings.TrimSpace(content))})
 			if err != nil || imported.CredentialsAdded != 0 || imported.CredentialsDuplicated != 1 {
 				t.Fatalf("round trip added=%d duplicates=%d error=%v", imported.CredentialsAdded, imported.CredentialsDuplicated, err)
 			}
 		})
 	}
+}
+
+// structuredEntry turns one downloaded JSON credential line back into form fields.
+func structuredEntry(t *testing.T, raw string) []CredentialEntryInput {
+	t.Helper()
+	var fields map[string]string
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+		t.Fatalf("decode credential fields: %v", err)
+	}
+	return []CredentialEntryInput{{Fields: fields}}
 }

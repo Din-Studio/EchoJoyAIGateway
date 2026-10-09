@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -76,7 +77,7 @@ func createGroupWithCredentials(t *testing.T, fixture serviceFixture, credential
 	result, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: &name, ChannelID: channel.OpenAI, Params: json.RawMessage(`{}`),
 		Models:      optionalGroupModels{Set: true, Values: []GroupModel{{ID: "gpt-4o"}}},
-		Credentials: credentials, ConnectionType: "api_key",
+		Credentials: apiKeyEntries(credentials), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatalf("CreateGroup(%q) error = %v", name, err)
@@ -377,4 +378,16 @@ func blacklistSharedCredential(t *testing.T, fixture serviceFixture, credentialI
 	if _, err := fixture.sharedHealth.CooldownCredential(t.Context(), ref, cooldownUntil, 0); err != nil {
 		t.Fatalf("CooldownCredential(%d) error = %v", credentialID, err)
 	}
+}
+
+// apiKeyEntries builds one api_key entry per non-blank line so tests can keep
+// describing key batches as pasted text.
+func apiKeyEntries(raw string) []CredentialEntryInput {
+	entries := make([]CredentialEntryInput, 0)
+	for _, line := range strings.Split(raw, "\n") {
+		if strings.TrimSpace(line) != "" {
+			entries = append(entries, CredentialEntryInput{Fields: map[string]string{"api_key": line}})
+		}
+	}
+	return entries
 }

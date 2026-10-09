@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"gpt-load/internal/channel"
 	"gpt-load/internal/platform/config"
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/storage/models"
@@ -83,5 +84,54 @@ func TestUpdateCredentialConcurrencyLimitPersistsAndPublishes(t *testing.T) {
 				t.Fatalf("modern concurrency_limit = %s, want %d", got, test.want)
 			}
 		})
+	}
+}
+
+func TestCreateAndImportStorePerEntryConcurrencyLimit(t *testing.T) {
+	t.Parallel()
+	fixture := newServiceFixture(t)
+	entry := func(key string, limit int) CredentialEntryInput {
+		return CredentialEntryInput{Fields: map[string]string{"api_key": key}, ConcurrencyLimit: limit}
+	}
+	created, err := fixture.service.CreateGroupIdempotent(t.Context(), "00000000-0000-4000-8000-0000000c0001", GroupCreateRequest{
+		Name: stringPointer("entry concurrency"), ChannelID: channel.OpenAI, Params: json.RawMessage(`{}`),
+		Models: optionalGroupModels{Set: true}, ConnectionType: "api_key",
+		Credentials: []CredentialEntryInput{entry("sk-limited", 7), entry("sk-unlimited", 0)},
+	})
+	if err != nil {
+		t.Fatalf("CreateGroupIdempotent() error = %v", err)
+	}
+	if _, err := fixture.service.ImportGroupCredentialsIdempotent(
+		t.Context(), "00000000-0000-4000-8000-0000000c0002", created.GroupID,
+		CredentialImportRequest{Credentials: []CredentialEntryInput{entry("sk-imported", 3)}},
+	); err != nil {
+		t.Fatalf("ImportGroupCredentialsIdempotent() error = %v", err)
+	}
+	var rows []models.Credential
+	if err := fixture.db.Where("group_id = ?", created.GroupID).Order("id").Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	want := []int{7, 0, 3}
+	if len(rows) != len(want) {
+		t.Fatalf("stored credentials = %d, want %d", len(rows), len(want))
+	}
+	for index, row := range rows {
+		ref, ok := fixture.registry.CredentialRef(row.ID)
+		if row.ConcurrencyLimit != want[index] || !ok || ref.ConcurrencyLimit != want[index] {
+			t.Fatalf("credential %d concurrency_limit db=%d registry=%d (%v), want %d",
+				index, row.ConcurrencyLimit, ref.ConcurrencyLimit, ok, want[index])
+		}
+	}
+
+	_, err = fixture.service.ImportGroupCredentialsIdempotent(
+		t.Context(), "00000000-0000-4000-8000-0000000c0003", created.GroupID,
+		CredentialImportRequest{Credentials: []CredentialEntryInput{entry("sk-ok", 1), entry("sk-too-many", 10001)}},
+	)
+	var apiErr *app_errors.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != app_errors.ErrValidation.Code {
+		t.Fatalf("out-of-range concurrency_limit error = %v, want validation", err)
+	}
+	if data, ok := apiErr.Data.(credentialValidationData); !ok || data.Entry != 2 || data.Field != "concurrency_limit" {
+		t.Fatalf("validation data = %#v, want entry 2 concurrency_limit", apiErr.Data)
 	}
 }

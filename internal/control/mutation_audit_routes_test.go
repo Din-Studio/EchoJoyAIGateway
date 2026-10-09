@@ -1225,7 +1225,7 @@ func groupMutationAuditCases() []groupMutationAuditCase {
 						path: "/api/groups/" +
 							strconv.FormatUint(uint64(groupID), 10) +
 							"/credentials/import",
-						body: `{"credentials":"sk-new-audit-key"}`,
+						body: `{"credentials":[{"fields":{"api_key":"sk-new-audit-key"}}]}`,
 					},
 					fmt.Sprintf("group:%d/credentials", groupID),
 					app_errors.ErrIdempotencyKeyRequired.Code
@@ -1241,7 +1241,7 @@ func groupCreateAuditBody(name string, upstreamURL string) string {
 	return fmt.Sprintf(
 		`{"name":%q,"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":%q},`+
 			`"models":[{"id":"gpt-4o","alias_enabled":false}],`+
-			`"credentials":"sk-audit-upstream"}`,
+			`"credentials":[{"fields":{"api_key":"sk-audit-upstream"}}]}`,
 		name,
 		upstreamURL,
 	)
@@ -1325,7 +1325,7 @@ func groupCredentialImportAuditSeedRequest(
 				"/api/groups/%d/credentials/import",
 				groupID,
 			),
-			body:           `{"credentials":"sk-new-audit-key"}`,
+			body:           `{"credentials":[{"fields":{"api_key":"sk-new-audit-key"}}]}`,
 			idempotencyKey: idempotencyKey,
 		}, fmt.Sprintf("group:%d/credentials", groupID)
 	}

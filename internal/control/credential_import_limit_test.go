@@ -10,28 +10,28 @@ import (
 	app_errors "gpt-load/internal/platform/errors"
 )
 
-func TestAPIKeyImportAccepts5000AndReplaysWithoutDuplicates(t *testing.T) {
+func TestAPIKeyImportAccepts500AndReplaysWithoutDuplicates(t *testing.T) {
 	fixture := newServiceFixture(t)
 	groupID := createGroupForCredentialImport(t, fixture, "sk-synthetic-existing")
 	if err := fixture.service.DeleteGroupCredential(t.Context(), groupID, fixture.registry.Snapshot()[0].ID); err != nil {
 		t.Fatalf("remove seed credential: %v", err)
 	}
-	credentials := syntheticImportCredentials(5000)
-	request := CredentialImportRequest{Credentials: "\n \r\n" + credentials + "\n\n"}
-	const idempotencyKey = "00000000-0000-4000-8000-000000005000"
+	credentials := syntheticImportCredentials(500)
+	request := CredentialImportRequest{Credentials: apiKeyEntries("\n \r\n" + credentials + "\n\n")}
+	const idempotencyKey = "00000000-0000-4000-8000-000000000500"
 	beforeSnapshot := fixture.manager.Current()
 
 	started := time.Now()
 	first, err := fixture.service.ImportGroupCredentialsIdempotent(t.Context(), idempotencyKey, groupID, request)
 	elapsed := time.Since(started)
 	if err != nil {
-		t.Fatalf("import 5000 API keys: %v", err)
+		t.Fatalf("import 500 API keys: %v", err)
 	}
-	t.Logf("PostgreSQL synchronous import of 5000 synthetic API keys: %s", elapsed)
-	if first.GroupID != groupID || first.CredentialsAdded != 5000 || first.CredentialsDuplicated != 0 {
-		t.Fatalf("import result = %#v, want 5000 added and 0 duplicates", first)
+	t.Logf("PostgreSQL synchronous import of 500 synthetic API keys: %s", elapsed)
+	if first.GroupID != groupID || first.CredentialsAdded != 500 || first.CredentialsDuplicated != 0 {
+		t.Fatalf("import result = %#v, want 500 added and 0 duplicates", first)
 	}
-	assertImportedCredentialState(t, fixture, groupID, 5000)
+	assertImportedCredentialState(t, fixture, groupID, 500)
 	if fixture.manager.Current() != beforeSnapshot {
 		t.Fatal("credential import republished the configuration snapshot")
 	}
@@ -44,53 +44,53 @@ func TestAPIKeyImportAccepts5000AndReplaysWithoutDuplicates(t *testing.T) {
 		t.Fatalf("replay changed resource counts: before=%#v after=%#v", beforeReplay, afterReplay)
 	}
 	duplicate, err := fixture.service.ImportGroupCredentialsIdempotent(
-		t.Context(), "00000000-0000-4000-8000-000000005002", groupID, request,
+		t.Context(), "00000000-0000-4000-8000-000000000502", groupID, request,
 	)
-	if err != nil || duplicate.CredentialsAdded != 0 || duplicate.CredentialsDuplicated != 5000 {
-		t.Fatalf("duplicate import result/error = %#v/%v, want 0 added and 5000 duplicates", duplicate, err)
+	if err != nil || duplicate.CredentialsAdded != 0 || duplicate.CredentialsDuplicated != 500 {
+		t.Fatalf("duplicate import result/error = %#v/%v, want 0 added and 500 duplicates", duplicate, err)
 	}
-	assertImportedCredentialState(t, fixture, groupID, 5000)
+	assertImportedCredentialState(t, fixture, groupID, 500)
 
 	started = time.Now()
 	download, err := fixture.service.DownloadAllGroupCredentials(t.Context(), groupID)
 	elapsed = time.Since(started)
 	if err != nil {
-		t.Fatalf("download 5000 API keys: %v", err)
+		t.Fatalf("download 500 API keys: %v", err)
 	}
-	t.Logf("PostgreSQL synchronous download of 5000 synthetic API keys: %s", elapsed)
-	if download.CredentialCount != 5000 || len(download.Files) != 1 {
-		t.Fatalf("download credential/file count = %d/%d, want 5000/1", download.CredentialCount, len(download.Files))
+	t.Logf("PostgreSQL synchronous download of 500 synthetic API keys: %s", elapsed)
+	if download.CredentialCount != 500 || len(download.Files) != 1 {
+		t.Fatalf("download credential/file count = %d/%d, want 500/1", download.CredentialCount, len(download.Files))
 	}
 	content := download.Files[0].Content
-	if content == nil || strings.Count(*content, "\n") != 5000 || *content != credentials+"\n" {
-		t.Fatal("download content must contain the same 5000 API keys in order, each followed by a newline")
+	if content == nil || strings.Count(*content, "\n") != 500 || *content != credentials+"\n" {
+		t.Fatal("download content must contain the same 500 API keys in order, each followed by a newline")
 	}
 }
 
-func TestAPIKeyImportRejects5001NonEmptyEntriesWithoutWriting(t *testing.T) {
+func TestAPIKeyImportRejects501NonEmptyEntriesWithoutWriting(t *testing.T) {
 	t.Parallel()
 	for _, idempotent := range []bool{false, true} {
 		for _, repeated := range []bool{false, true} {
 			t.Run(fmt.Sprintf("idempotent=%t/repeated=%t", idempotent, repeated), func(t *testing.T) {
 				fixture := newServiceFixture(t)
 				groupID := createGroupForCredentialImport(t, fixture, "sk-synthetic-existing")
-				raw := syntheticImportCredentials(5001)
+				raw := syntheticImportCredentials(501)
 				if repeated {
-					raw = strings.Repeat("sk-synthetic-repeated\n", 5001)
+					raw = strings.Repeat("sk-synthetic-repeated\n", 501)
 				}
-				request := CredentialImportRequest{Credentials: raw}
+				request := CredentialImportRequest{Credentials: apiKeyEntries(raw)}
 				beforeRows := countCreateImportRows(t, fixture)
 				beforeSnapshot := fixture.manager.Current()
 				var err error
 				if idempotent {
 					_, err = fixture.service.ImportGroupCredentialsIdempotent(
-						t.Context(), "00000000-0000-4000-8000-000000005001", groupID, request,
+						t.Context(), "00000000-0000-4000-8000-000000000501", groupID, request,
 					)
 				} else {
 					_, err = fixture.service.ImportGroupCredentials(t.Context(), groupID, request)
 				}
 				if !errors.Is(err, app_errors.ErrValidation) {
-					t.Fatalf("import 5001 non-empty entries error = %v, want validation error", err)
+					t.Fatalf("import 501 non-empty entries error = %v, want validation error", err)
 				}
 				if afterRows := countCreateImportRows(t, fixture); afterRows != beforeRows {
 					t.Fatalf("rejected import changed resource counts: before=%#v after=%#v", beforeRows, afterRows)

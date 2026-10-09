@@ -99,12 +99,12 @@ func TestCreateAndImportEndpointsRequireCanonicalIdempotencyKeyBeforeMutation(t 
 		{
 			name: "Group create",
 			path: "/api/groups",
-			body: `{"channel_id":"openai","params":{},"models":[],"credentials":"K"}`,
+			body: `{"channel_id":"openai","params":{},"models":[],"credentials":[{"fields":{"api_key":"K"}}]}`,
 		},
 		{
 			name: "Group credential import",
 			path: "/api/groups/" + strconv.FormatUint(uint64(groupID), 10) + "/credentials/import",
-			body: `{"credentials":"K"}`,
+			body: `{"credentials":[{"fields":{"api_key":"K"}}]}`,
 		},
 	}
 	for _, test := range tests {

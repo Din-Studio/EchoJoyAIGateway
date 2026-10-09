@@ -29,7 +29,6 @@ import {
   AppProtocolTag,
   AppSearchSelect,
   AppSegmentedField,
-  AppTextArea,
   AppTextField,
 } from '@modern/components/ui'
 import { useLoadingFeedback } from '@modern/components/ui/loading'
@@ -38,12 +37,18 @@ import { ApiError } from '@shared/http/errors'
 import GroupModelPicker from './GroupModelPicker.vue'
 import GroupEditorSurface from './GroupEditorSurface.vue'
 import SubscriptionCredentialStager from './SubscriptionCredentialStager.vue'
+import CredentialEntryList from './CredentialEntryList.vue'
 import { useGroupCreateOperation } from './group-create-operation'
 import { validProxyURL } from '@modern/app/proxy'
 import {
-  credentialCount,
+  credentialEntriesInvalid,
+  credentialFieldError,
+  credentialEntriesPayload,
+  filledCredentialEntries,
+  maxCredentialEntries,
   modelErrors,
   validBaseURL,
+  type CredentialEntryDraft,
   type GroupDraftModel,
 } from './group-create-rules'
 
@@ -67,7 +72,7 @@ const subscription = computed(() => channel.value?.connectionType === 'subscript
 const params = ref<Record<string, string>>({})
 const name = ref('')
 const price = ref('1')
-const credentials = ref('')
+const credentials = ref<CredentialEntryDraft[]>([])
 const stages = ref<CredentialStage[]>([])
 const authorizationPending = computed(() =>
   stages.value.some((stage) =>
@@ -104,7 +109,7 @@ const channelInput = ref<InstanceType<typeof AppSearchSelect>>()
 const nameInput = ref<InstanceType<typeof AppTextField>>()
 const priceInput = ref<InstanceType<typeof AppTextField>>()
 const proxyInput = ref<InstanceType<typeof AppTextField>>()
-const credentialInput = ref<InstanceType<typeof AppTextArea>>()
+const credentialInput = ref<InstanceType<typeof CredentialEntryList>>()
 const paramInputs = new Map<string, { focus(): void }>()
 const modelPicker = ref<InstanceType<typeof GroupModelPicker>>()
 const errorBox = ref<HTMLElement>()
@@ -121,7 +126,7 @@ function snapshot(): string {
     params: params.value,
     name: name.value,
     price: price.value,
-    credentials: credentials.value,
+    credentials: credentialEntriesPayload(credentials.value),
     stages: stages.value.map((stage) => stage.id),
     models: models.value,
     proxyMode: proxyMode.value,
@@ -146,12 +151,12 @@ function expireReadyStages(): void {
     )
 }
 const count = computed(() =>
-  subscription.value ? currentReadyIDs().length : credentialCount(credentials.value, channel.value),
+  subscription.value ? currentReadyIDs().length : filledCredentialEntries(credentials.value).length,
 )
 const credentialError = computed(() =>
   !count.value
     ? t(subscription.value ? 'subscriptions.readyRequired' : 'groupCreate.credentialsRequired')
-    : count.value > (subscription.value ? 1000 : 5000)
+    : count.value > (subscription.value ? 1000 : maxCredentialEntries)
       ? t(subscription.value ? 'subscriptions.stageLimit' : 'groupCreate.credentialsLimit')
       : '',
 )
@@ -192,21 +197,6 @@ const paramErrors = computed(() =>
     }),
   ),
 )
-const structured = computed(
-  () =>
-    channel.value &&
-    (channel.value.credentialFields.length !== 1 ||
-      channel.value.credentialFields[0]?.key !== 'api_key'),
-)
-const credentialPlaceholder = computed(() =>
-  structured.value
-    ? JSON.stringify(
-        Object.fromEntries(channel.value!.credentialFields.map((field) => [field.key, ''])),
-        null,
-        2,
-      )
-    : t('groupCreate.credentialsPlaceholder'),
-)
 const proxyOptions = computed(() => [
   { value: 'inherit', label: t('groupCreate.proxyInherit') },
   { value: 'direct', label: t('groupCreate.proxyDirect') },
@@ -226,7 +216,7 @@ function selectChannel(value: string): void {
       field.defaultValue || (field.key === 'base_url' ? (channel.value?.defaultBaseURL ?? '') : ''),
     ]),
   )
-  credentials.value = ''
+  credentials.value = []
   stages.value = []
   stagingDirty.value = false
   models.value = []
@@ -239,7 +229,7 @@ function selectChannel(value: string): void {
 }
 function requestChannel(value: string): void {
   if (inputLocked.value || value === channelID.value) return
-  if (channelID.value && (credentials.value.trim() || models.value.length || dirty.value)) {
+  if (channelID.value && (count.value || models.value.length || dirty.value)) {
     requestedChannel = value
     confirmAction.value = 'channel'
   } else selectChannel(value)
@@ -262,7 +252,12 @@ function invalidateDiscovery(): void {
   candidates.value = []
   discoveryError.value = ''
 }
-watch([channelID, params, credentials, proxyMode, proxyURL], invalidateDiscovery, { deep: true })
+watch([channelID, params, proxyMode, proxyURL], invalidateDiscovery, { deep: true })
+// 只有凭据内容影响模型发现；并发上限和空行不打断当前选择。
+watch(
+  () => JSON.stringify(credentialEntriesPayload(credentials.value).map((entry) => entry.fields)),
+  invalidateDiscovery,
+)
 // 只跟踪实际用于发现模型的账号，其他账号就绪不打断当前模型选择。
 watch(() => currentReadyIDs()[0], invalidateDiscovery)
 function toggleSecret(key: string): void {
@@ -284,7 +279,10 @@ function request(): GroupCreateRequest {
     ...connection(),
     ...(subscription.value
       ? { connection_type: 'subscription' as const, staged_credential_ids: currentReadyIDs() }
-      : { connection_type: 'api_key' as const, credentials: credentials.value }),
+      : {
+          connection_type: 'api_key' as const,
+          credentials: credentialEntriesPayload(credentials.value),
+        }),
     ...(name.value.trim() ? { name: name.value.trim() } : {}),
     price_multiplier: price.value.trim(),
     models: models.value.map((model) => ({
@@ -302,6 +300,7 @@ function validConnection(): boolean {
     (!subscription.value || currentReadyIDs().length > 0) &&
     !Object.keys(paramErrors.value).length &&
     !credentialError.value &&
+    (subscription.value || !credentialEntriesInvalid(credentials.value)) &&
     !proxyError.value
   )
 }
@@ -314,7 +313,10 @@ function focusConnectionError(): void {
   const field = Object.keys(paramErrors.value)[0]
   if (!channel.value) channelInput.value?.focus()
   else if (field) paramInputs.get(field)?.focus()
-  else if (credentialError.value) {
+  else if (
+    credentialError.value ||
+    (!subscription.value && credentialEntriesInvalid(credentials.value))
+  ) {
     if (subscription.value) stager.value?.focus()
     else credentialInput.value?.focus()
   } else if (proxyError.value) proxyInput.value?.focus()
@@ -342,7 +344,11 @@ async function discover(): Promise<void> {
           connection_type: 'subscription' as const,
           staged_credential_id: stagedID!,
         }
-      : { ...connection(), connection_type: 'api_key' as const, credentials: credentials.value }
+      : {
+          ...connection(),
+          connection_type: 'api_key' as const,
+          credentials: credentialEntriesPayload(credentials.value),
+        }
     const result = await discoverGroupDraftModels(client, body, controller.signal)
     if (!controller.signal.aborted) {
       candidates.value = result
@@ -370,7 +376,7 @@ async function execute(): Promise<void> {
   if (!result || disposed) return
   if (result.kind === 'success') {
     completed.value = true
-    credentials.value = ''
+    credentials.value = []
     operation.reset()
     emit('created', result.result, result.appended)
   } else if (result.kind === 'rejected') {
@@ -394,23 +400,10 @@ async function execute(): Promise<void> {
       }
     }
     operation.reset()
-    errorText.value = result.error.message || t('groupCreate.failed')
-    const data = result.error.data
-    if (
-      result.error.code === 'VALIDATION_FAILED' &&
-      data &&
-      typeof data === 'object' &&
-      'entry' in data &&
-      Number.isSafeInteger(data.entry) &&
-      'field' in data &&
-      typeof data.field === 'string' &&
-      /^[a-z][a-z0-9_]*$/u.test(data.field)
-    ) {
-      errorText.value = t('groupCreate.credentialFieldError', {
-        entry: data.entry,
-        field: data.field,
-      })
-    }
+    const fieldError = credentialFieldError(result.error)
+    errorText.value = fieldError
+      ? t('groupCreate.credentialFieldError', fieldError)
+      : result.error.message || t('groupCreate.failed')
     await nextTick()
     errorBox.value?.focus()
   } else {
@@ -437,6 +430,8 @@ async function submit(): Promise<void> {
     return
   }
   cancelDiscovery()
+  // 去掉空行，使后端返回的条目序号与界面行号一致。
+  if (!subscription.value) credentials.value = filledCredentialEntries(credentials.value)
   try {
     operation.begin({ kind: 'create', request: request() })
   } catch {
@@ -528,7 +523,7 @@ onScopeDispose(() => {
   cancelDiscovery()
   resolveLeave?.(false)
   window.removeEventListener('beforeunload', beforeUnload)
-  credentials.value = ''
+  credentials.value = []
   stages.value = []
   params.value = {}
 })
@@ -648,20 +643,13 @@ useMessageSource(() => (errorText.value ? { text: errorText.value, tone: 'danger
               />
             </template>
           </AppTextField>
-          <AppTextArea
+          <CredentialEntryList
             v-if="!subscription"
             ref="credentialInput"
             v-model="credentials"
-            :label="t('groupCreate.credentials')"
-            :description="
-              t(structured ? 'groupCreate.structuredHelp' : 'groupCreate.credentialsHelp')
-            "
-            :placeholder="credentialPlaceholder"
-            :rows="6"
-            mono
-            autocomplete="off"
-            spellcheck="false"
+            :channel="channel"
             :disabled="inputLocked"
+            :attempted="attempted"
             :error="attempted ? credentialError : undefined"
           />
           <p v-if="!subscription" class="modern-group-create-count">

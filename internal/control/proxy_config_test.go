@@ -216,7 +216,7 @@ func TestUnsupportedChannelRejectsManagedGroupAndCredentialProxy(t *testing.T) {
 		ConnectionType: models.ConnectionTypeAPIKey,
 		Params:         json.RawMessage(`{"endpoint":"https://resource.openai.azure.com"}`),
 		Models:         optionalGroupModels{Set: true, Values: []GroupModel{{ID: "gpt-4o"}}},
-		Credentials:    "azure-key",
+		Credentials:    apiKeyEntries("azure-key"),
 	})
 	if err != nil {
 		t.Fatalf("CreateGroup() error = %v", err)
@@ -249,7 +249,7 @@ func TestUnsupportedChannelRejectsManagedGroupAndCredentialProxy(t *testing.T) {
 		ConnectionType: models.ConnectionTypeAPIKey,
 		Params:         json.RawMessage(`{"endpoint":"https://another.openai.azure.com"}`),
 		Models:         optionalGroupModels{Set: true, Values: []GroupModel{{ID: "gpt-4o"}}},
-		Credentials:    "another-azure-key",
+		Credentials:    apiKeyEntries("another-azure-key"),
 		Proxy:          proxy,
 	}
 	*withProxy.Name = "azure-with-managed-proxy"

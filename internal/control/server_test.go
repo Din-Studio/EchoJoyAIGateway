@@ -485,7 +485,7 @@ func TestControlJSONBodyLimitAppliesToEveryJSONEndpoint(t *testing.T) {
 			path: func(groupID, _, _ uint) string {
 				return "/api/groups/" + strconv.FormatUint(uint64(groupID), 10) + "/credentials/import"
 			},
-			jsonPrefix: `{"credentials":"sk-body-limit-import"}`,
+			jsonPrefix: `{"credentials":[{"fields":{"api_key":"sk-body-limit-import"}}]}`,
 		},
 		{
 			name: "update group settings", method: http.MethodPut,
@@ -519,7 +519,7 @@ func TestControlJSONBodyLimitAppliesToEveryJSONEndpoint(t *testing.T) {
 			name: "discover draft models", method: http.MethodPost,
 			path: func(uint, uint, uint) string { return "/api/models/discover" },
 			jsonPrefix: `{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://body-limit-discover.example.com/v1"},` +
-				`"credentials":"sk-body-limit-discover"}`,
+				`"credentials":[{"fields":{"api_key":"sk-body-limit-discover"}}]}`,
 		},
 		{
 			name: "create access key", method: http.MethodPost,
@@ -790,7 +790,7 @@ func TestGroupCreateHTTPReturnsNarrowSuccessAndConflictEnvelopes(t *testing.T) {
 	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/groups", strings.NewReader(
-		`{"name":"primary","channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com/v1/"},"models":[{"id":"gpt-4o","alias":"public-gpt","alias_enabled":true}],"credentials":"sk-first"}`,
+		`{"name":"primary","channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com/v1/"},"models":[{"id":"gpt-4o","alias":"public-gpt","alias_enabled":true}],"credentials":[{"fields":{"api_key":"sk-first"}}]}`,
 	))
 	request.Header.Set("Authorization", "Bearer test-auth-key")
 	request.Header.Set("Content-Type", "application/json")
@@ -830,7 +830,7 @@ func TestGroupCreateHTTPReturnsNarrowSuccessAndConflictEnvelopes(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodPost, "/api/groups", strings.NewReader(
-		`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":" HTTPS://API.example.com/v1 "},"models":[],"credentials":"sk-second"}`,
+		`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":" HTTPS://API.example.com/v1 "},"models":[],"credentials":[{"fields":{"api_key":"sk-second"}}]}`,
 	))
 	request.Header.Set("Authorization", "Bearer test-auth-key")
 	request.Header.Set("Content-Type", "application/json")
@@ -874,25 +874,25 @@ func TestGroupCreateHTTPRejectsLegacyMissingAndMalformedContractsWithoutMutation
 		{
 			name: "omitted models",
 			body: `{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},` +
-				`"credentials":"sk-secret"}`,
+				`"credentials":[{"fields":{"api_key":"sk-secret"}}]}`,
 			code: app_errors.ErrValidation.Code,
 		},
 		{
 			name: "null models",
 			body: `{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},` +
-				`"models":null,"credentials":"sk-secret"}`,
+				`"models":null,"credentials":[{"fields":{"api_key":"sk-secret"}}]}`,
 			code: app_errors.ErrValidation.Code,
 		},
 		{
 			name: "unknown model field",
 			body: `{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},` +
-				`"models":[{"id":"gpt-4o","unknown":true}],"credentials":"sk-secret"}`,
+				`"models":[{"id":"gpt-4o","unknown":true}],"credentials":[{"fields":{"api_key":"sk-secret"}}]}`,
 			code: app_errors.ErrInvalidJSON.Code,
 		},
 		{
 			name: "malformed JSON",
 			body: `{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},` +
-				`"models":[],"credentials":"sk-secret"`,
+				`"models":[],"credentials":[{"fields":{"api_key":"sk-secret"}}]`,
 			code: app_errors.ErrInvalidJSON.Code,
 		},
 	}
@@ -933,7 +933,7 @@ func TestImportGroupCredentialsEndpointReturnsSuccessEnvelope(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/groups/"+strconv.FormatUint(uint64(groupID), 10)+"/credentials/import", strings.NewReader(
-		`{"credentials":"sk-existing\nsk-new\nsk-new"}`,
+		`{"credentials":[{"fields":{"api_key":"sk-existing"}},{"fields":{"api_key":"sk-new"}},{"fields":{"api_key":"sk-new"}}]}`,
 	))
 	request.Header.Set("Authorization", "Bearer test-auth-key")
 	request.Header.Set("Content-Type", "application/json")
@@ -987,11 +987,11 @@ func TestImportGroupCredentialsEndpointRejectsUnknownFieldsAndInvalidGroupID(t *
 		groupID string
 		body    string
 	}{
-		{name: "unknown field", groupID: strconv.FormatUint(uint64(groupID), 10), body: `{"credentials":"sk-new","name":"must-not-change"}`},
-		{name: "multiple JSON values", groupID: strconv.FormatUint(uint64(groupID), 10), body: `{"credentials":"sk-new"} {"credentials":"sk-other"}`},
-		{name: "zero group ID", groupID: "0", body: `{"credentials":"sk-new"}`},
-		{name: "non-numeric group ID", groupID: "not-a-number", body: `{"credentials":"sk-new"}`},
-		{name: "overflowing group ID", groupID: "18446744073709551616", body: `{"credentials":"sk-new"}`},
+		{name: "unknown field", groupID: strconv.FormatUint(uint64(groupID), 10), body: `{"credentials":[{"fields":{"api_key":"sk-new"}}],"name":"must-not-change"}`},
+		{name: "multiple JSON values", groupID: strconv.FormatUint(uint64(groupID), 10), body: `{"credentials":[{"fields":{"api_key":"sk-new"}}]} {"credentials":[{"fields":{"api_key":"sk-other"}}]}`},
+		{name: "zero group ID", groupID: "0", body: `{"credentials":[{"fields":{"api_key":"sk-new"}}]}`},
+		{name: "non-numeric group ID", groupID: "not-a-number", body: `{"credentials":[{"fields":{"api_key":"sk-new"}}]}`},
+		{name: "overflowing group ID", groupID: "18446744073709551616", body: `{"credentials":[{"fields":{"api_key":"sk-new"}}]}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1022,7 +1022,7 @@ func TestImportGroupCredentialsEndpointReturnsGroupNotFound(t *testing.T) {
 	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/groups/999/credentials/import", strings.NewReader(`{"credentials":"sk-new"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/groups/999/credentials/import", strings.NewReader(`{"credentials":[{"fields":{"api_key":"sk-new"}}]}`))
 	request.Header.Set("Authorization", "Bearer test-auth-key")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept-Language", "zh-CN")
@@ -1049,7 +1049,7 @@ func createGroupForCredentialImport(t *testing.T, fixture serviceFixture, creden
 	result, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name:      stringPointer("credential-import-" + strconv.FormatUint(testIdempotencySequence.Add(1), 10)),
 		ChannelID: channel.OpenAI, Params: json.RawMessage(`{}`),
-		Models: optionalGroupModels{Set: true}, Credentials: credentials, ConnectionType: "api_key",
+		Models: optionalGroupModels{Set: true}, Credentials: apiKeyEntries(credentials), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatalf("CreateGroup() error = %v", err)
@@ -1296,7 +1296,7 @@ func TestUpdateGroupSettingsEndpointAllowsURLReuseAndPreservesI18nAndAuth(t *tes
 	first, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: stringPointer("first-group"), ChannelID: channel.OpenAICompatible,
 		Params: json.RawMessage(`{"base_url":"https://first.example.com/v1"}`),
-		Models: optionalGroupModels{Set: true}, Credentials: "sk-update-first", ConnectionType: "api_key",
+		Models: optionalGroupModels{Set: true}, Credentials: apiKeyEntries("sk-update-first"), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1305,7 +1305,7 @@ func TestUpdateGroupSettingsEndpointAllowsURLReuseAndPreservesI18nAndAuth(t *tes
 	second, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: stringPointer("other-group"), ChannelID: channel.OpenAICompatible,
 		Params: json.RawMessage(`{"base_url":"https://conflict.example.com/v1"}`),
-		Models: optionalGroupModels{Set: true, Values: []GroupModel{}}, Credentials: "sk-update-second", ConnectionType: "api_key",
+		Models: optionalGroupModels{Set: true, Values: []GroupModel{}}, Credentials: apiKeyEntries("sk-update-second"), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1427,7 +1427,7 @@ func TestUpdateGroupModelsEndpointRejectsStrictInvalidBodiesWithoutMutation(t *t
 			Set:    true,
 			Values: []GroupModel{{ID: "provider-old", Alias: "old-public", AliasEnabled: true}},
 		},
-		Credentials: "sk-model-save-http-invalid", ConnectionType: "api_key",
+		Credentials: apiKeyEntries("sk-model-save-http-invalid"), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1560,7 +1560,7 @@ func TestUpdateGroupModelsEndpointIDsAuthNotFoundAndSuccessDTO(t *testing.T) {
 			Set:    true,
 			Values: []GroupModel{{ID: "provider-old", Alias: "old-public", AliasEnabled: true}},
 		},
-		Credentials: "sk-model-save-http", ConnectionType: "api_key",
+		Credentials: apiKeyEntries("sk-model-save-http"), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1795,7 +1795,7 @@ func TestModelDiscoveryHTTPContract(t *testing.T) {
 		})
 		recorder := serveDiscoveryRequest(t, engine, authKey,
 			`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},`+
-				`"credentials":"sk-upstream"}`,
+				`"credentials":[{"fields":{"api_key":"sk-upstream"}}]}`,
 		)
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
@@ -1834,7 +1834,7 @@ func TestModelDiscoveryHTTPContract(t *testing.T) {
 		})
 		recorder := serveDiscoveryRequest(t, engine, authKey,
 			`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},`+
-				`"credentials":"sk-upstream"}`,
+				`"credentials":[{"fields":{"api_key":"sk-upstream"}}]}`,
 		)
 		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"models":[]`) {
 			t.Fatalf("response = %d %s", recorder.Code, recorder.Body.String())
@@ -1852,7 +1852,7 @@ func TestModelDiscoveryHTTPContract(t *testing.T) {
 		for _, token := range []string{"", "wrong-key"} {
 			recorder := serveDiscoveryRequest(t, engine, token,
 				`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},`+
-					`"credentials":"sk-upstream"}`,
+					`"credentials":[{"fields":{"api_key":"sk-upstream"}}]}`,
 			)
 			if recorder.Code != http.StatusUnauthorized || !strings.Contains(recorder.Body.String(), `"code":"UNAUTHORIZED"`) {
 				t.Fatalf("auth %q response = %d %s", token, recorder.Code, recorder.Body.String())
@@ -1869,10 +1869,10 @@ func TestModelDiscoveryHTTPContract(t *testing.T) {
 			},
 		})
 		for _, payload := range []string{
-			`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},"credentials":"sk-upstream","config":{}}`,
-			`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},"credentials":"sk-upstream","unknown":true}`,
-			`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},"credentials":"sk-upstream"}{}`,
-			`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},"credentials":"sk-upstream"`,
+			`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},"credentials":[{"fields":{"api_key":"sk-upstream"}}],"config":{}}`,
+			`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},"credentials":[{"fields":{"api_key":"sk-upstream"}}],"unknown":true}`,
+			`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},"credentials":[{"fields":{"api_key":"sk-upstream"}}]}{}`,
+			`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},"credentials":[{"fields":{"api_key":"sk-upstream"}}]`,
 			`{"upstream_url":"https://api.example.com","protocols":["openai-completions"],"keys":"sk-upstream"}`,
 		} {
 			recorder := serveDiscoveryRequest(t, engine, authKey, payload)
@@ -1889,8 +1889,8 @@ func TestModelDiscoveryHTTPContract(t *testing.T) {
 			status  int
 			code    string
 		}{
-			{payload: `{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"/relative"},"credentials":"secret-key"}`, status: http.StatusBadRequest, code: "VALIDATION_FAILED"},
-			{payload: `{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com?token=query-secret"},"credentials":"secret-key"}`, status: http.StatusBadRequest, code: "VALIDATION_FAILED"},
+			{payload: `{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"/relative"},"credentials":[{"fields":{"api_key":"secret-key"}}]}`, status: http.StatusBadRequest, code: "VALIDATION_FAILED"},
+			{payload: `{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com?token=query-secret"},"credentials":[{"fields":{"api_key":"secret-key"}}]}`, status: http.StatusBadRequest, code: "VALIDATION_FAILED"},
 		} {
 			recorder := serveDiscoveryRequest(t, engine, authKey, test.payload)
 			if recorder.Code != test.status || !strings.Contains(recorder.Body.String(), `"code":"`+test.code+`"`) {
@@ -1921,7 +1921,7 @@ func TestModelDiscoveryHTTPContract(t *testing.T) {
 		} {
 			recorder := serveDiscoveryRequestWithLanguage(t, engine, authKey,
 				`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},`+
-					`"credentials":"secret-key"}`,
+					`"credentials":[{"fields":{"api_key":"secret-key"}}]}`,
 				test.language,
 			)
 			if recorder.Code != http.StatusBadGateway ||
@@ -1948,7 +1948,7 @@ func TestModelDiscoveryHTTPContract(t *testing.T) {
 		service.modelDiscoveryTimeout = 20 * time.Millisecond
 		recorder := serveDiscoveryRequest(t, engine, authKey,
 			`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},`+
-				`"credentials":"sk-upstream"}`,
+				`"credentials":[{"fields":{"api_key":"sk-upstream"}}]}`,
 		)
 		if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), `"code":"BAD_GATEWAY"`) {
 			t.Fatalf("response = %d %s", recorder.Code, recorder.Body.String())
@@ -1970,7 +1970,7 @@ func TestModelDiscoveryHTTPContract(t *testing.T) {
 		newTestServer(t, &config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
 		recorder := serveDiscoveryRequest(t, engine, authKey,
 			`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},`+
-				`"credentials":"sk-upstream"}`,
+				`"credentials":[{"fields":{"api_key":"sk-upstream"}}]}`,
 		)
 		if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), `"code":"BAD_GATEWAY"`) {
 			t.Fatalf("response = %d %s", recorder.Code, recorder.Body.String())
@@ -2006,7 +2006,7 @@ func TestServerDraftModelDiscoveryLogsOnlyMetadata(t *testing.T) {
 
 	recorder := serveDiscoveryRequest(t, engine, authSecret,
 		`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},`+
-			`"credentials":"`+keySecret+`"}`,
+			`"credentials":[{"fields":{"api_key":"`+keySecret+`"}}]}`,
 	)
 	if recorder.Code != http.StatusBadGateway {
 		t.Fatalf("response = %d %s", recorder.Code, recorder.Body.String())
@@ -2039,7 +2039,7 @@ func TestServerGroupModelDiscoveryBodyContract(t *testing.T) {
 			ChannelID:   channel.OpenAICompatible,
 			Params:      json.RawMessage(`{"base_url":"https://persisted-server.example.com/v1"}`),
 			Models:      optionalGroupModels{Set: true, Values: []GroupModel{}},
-			Credentials: "persisted-server-key", ConnectionType: "api_key",
+			Credentials: apiKeyEntries("persisted-server-key"), ConnectionType: "api_key",
 		})
 		if err != nil {
 			t.Fatalf("seed CreateGroup() error = %v", err)

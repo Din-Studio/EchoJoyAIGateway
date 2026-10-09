@@ -71,7 +71,7 @@ func TestModernCredentialFiltersRunBeforePagination(t *testing.T) {
 	created, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: stringPointer("modern-filter"), ChannelID: channel.OpenAI,
 		Params: json.RawMessage(`{}`), Models: optionalGroupModels{Set: true},
-		Credentials: strings.Join(keys, "\n"), ConnectionType: "api_key",
+		Credentials: apiKeyEntries(strings.Join(keys, "\n")), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +126,7 @@ func TestModernCredentialFiltersRunBeforePagination(t *testing.T) {
 	otherGroup, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: stringPointer("other-group"), ChannelID: channel.OpenAI,
 		Params: json.RawMessage(`{}`), Models: optionalGroupModels{Set: true},
-		Credentials: "sk-other-group", ConnectionType: "api_key", ConfirmSameTarget: true,
+		Credentials: apiKeyEntries("sk-other-group"), ConnectionType: "api_key", ConfirmSameTarget: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +162,7 @@ func TestModernCredentialRoutesLoadActivity(t *testing.T) {
 				created, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 					Name: stringPointer("modern-activity"), ChannelID: channel.OpenAI,
 					Params: json.RawMessage(`{}`), Models: optionalGroupModels{Set: true},
-					Credentials: "sk-modern-activity", ConnectionType: "api_key",
+					Credentials: apiKeyEntries("sk-modern-activity"), ConnectionType: "api_key",
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -229,7 +229,7 @@ func TestModernCredentialRoutesExposeManualWeightWithoutChangingClassic(t *testi
 	created, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: stringPointer("modern-credential-weight"), ChannelID: channel.OpenAI,
 		Params: json.RawMessage(`{}`), Models: optionalGroupModels{Set: true},
-		Credentials: "sk-modern-credential-weight", ConnectionType: "api_key",
+		Credentials: apiKeyEntries("sk-modern-credential-weight"), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatal(err)

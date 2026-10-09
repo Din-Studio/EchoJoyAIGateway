@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"strings"
 
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
@@ -30,7 +29,7 @@ type GroupCreateRequest struct {
 	ConnectionType      models.ConnectionType               `json:"connection_type"`
 	Params              json.RawMessage                     `json:"params"`
 	Models              optionalGroupModels                 `json:"models"`
-	Credentials         string                              `json:"credentials"`
+	Credentials         []CredentialEntryInput              `json:"credentials"`
 	StagedCredentialIDs []string                            `json:"staged_credential_ids"`
 	ConfirmSameTarget   bool                                `json:"confirm_same_target"`
 	Proxy               optionalField[outboundproxy.Config] `json:"proxy"`
@@ -182,7 +181,7 @@ func (s *Service) normalizeGroupCreate(
 		if len(request.StagedCredentialIDs) != 0 {
 			return normalizedGroupCreate{}, app_errors.ErrValidation
 		}
-	} else if strings.TrimSpace(request.Credentials) != "" || len(request.StagedCredentialIDs) == 0 {
+	} else if len(request.Credentials) != 0 || len(request.StagedCredentialIDs) == 0 {
 		return normalizedGroupCreate{}, app_errors.ErrValidation
 	}
 	params, err := s.channelRegistry.ValidateParams(request.ChannelID, request.Params)

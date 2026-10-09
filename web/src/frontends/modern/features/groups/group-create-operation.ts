@@ -4,6 +4,7 @@ import { ApiError } from '@shared/http/errors'
 import {
   appendAPIKeyCredentials,
   createGroup,
+  type CredentialEntryInput,
   type GroupCreateRequest,
   type GroupCreateResult,
 } from '@modern/api/group-create'
@@ -11,7 +12,7 @@ import { connectCredentialStages } from '@modern/api/credential-stages'
 
 type Submission =
   | { kind: 'create'; request: GroupCreateRequest }
-  | { kind: 'append'; group: { id: number; name: string }; credentials: string }
+  | { kind: 'append'; group: { id: number; name: string }; credentials: CredentialEntryInput[] }
   | { kind: 'connect'; group: { id: number; name: string }; stageIDs: string[] }
 type Outcome =
   | { kind: 'success'; result: GroupCreateResult; appended: boolean }

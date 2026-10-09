@@ -69,7 +69,7 @@ func TestDiscoverModelsUsesSystemDefaultsAndNormalizesSuccessfulResult(t *testin
 	result, err := fixture.service.DiscoverModels(context.Background(), ModelDiscoveryRequest{
 		ChannelID:   channel.OpenAICompatible,
 		Params:      json.RawMessage(`{"base_url":" HTTPS://API.Example.COM/v1/ "}`),
-		Credentials: " key-a \nkey-a\n\n key-b \nkey-b", ConnectionType: "api_key",
+		Credentials: apiKeyEntries(" key-a \nkey-a\n\n key-b \nkey-b"), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatalf("DiscoverModels() error = %v", err)
@@ -577,7 +577,7 @@ func TestDiscoverModelsRejectsInvalidDraftBeforeHTTP(t *testing.T) {
 	valid := ModelDiscoveryRequest{
 		ChannelID:   channel.OpenAICompatible,
 		Params:      json.RawMessage(`{"base_url":"https://api.example.com"}`),
-		Credentials: "key-a", ConnectionType: "api_key",
+		Credentials: apiKeyEntries("key-a"), ConnectionType: "api_key",
 	}
 	tests := []struct {
 		name   string
@@ -591,7 +591,7 @@ func TestDiscoverModelsRejectsInvalidDraftBeforeHTTP(t *testing.T) {
 		{name: "unknown channel", mutate: func(value *ModelDiscoveryRequest) {
 			value.ChannelID = channel.ID("unknown")
 		}},
-		{name: "empty credentials", mutate: func(value *ModelDiscoveryRequest) { value.Credentials = " \n\t" }},
+		{name: "empty credentials", mutate: func(value *ModelDiscoveryRequest) { value.Credentials = nil }},
 		{name: "unsupported channel proxy", mutate: func(value *ModelDiscoveryRequest) {
 			value.ChannelID = channel.AzureOpenAI
 			value.Params = json.RawMessage(`{"endpoint":"https://resource.openai.azure.com"}`)
@@ -638,7 +638,7 @@ func TestDiscoverModelsUsesChannelNativeDiscoveryProtocol(t *testing.T) {
 		ModelDiscoveryRequest{
 			ChannelID:   channel.OpenAICompatible,
 			Params:      json.RawMessage(`{"base_url":"https://api.example.com"}`),
-			Credentials: "key-a", ConnectionType: "api_key",
+			Credentials: apiKeyEntries("key-a"), ConnectionType: "api_key",
 		},
 	)
 	if err != nil {
@@ -673,8 +673,10 @@ func TestDiscoverModelsPassesStructuredCloudCredentialToExecutor(t *testing.T) {
 	result, err := fixture.service.DiscoverModels(context.Background(), ModelDiscoveryRequest{
 		ChannelID: channel.AWSBedrock,
 		Params:    json.RawMessage(`{"region":"us-east-1"}`),
-		Credentials: `{"access_key":"AKIA_TEST","secret_key":"bedrock-secret",` +
-			`"session_token":"bedrock-session"}`, ConnectionType: "api_key",
+		Credentials: []CredentialEntryInput{{Fields: map[string]string{
+			"access_key": "AKIA_TEST", "secret_key": "bedrock-secret", "session_token": "bedrock-session",
+		}}},
+		ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatalf("DiscoverModels() error = %v", err)
@@ -698,7 +700,7 @@ func TestDiscoverModelsDoesNotReadOrMutateRuntimeState(t *testing.T) {
 	fixture := newServiceFixture(t)
 	created, err := fixture.service.CreateGroup(context.Background(), GroupCreateRequest{
 		Name: stringPointer("discover-runtime-state"), ChannelID: channel.OpenAICompatible,
-		Params: json.RawMessage(`{"base_url":"https://state.example.com"}`), Credentials: "sk-state",
+		Params: json.RawMessage(`{"base_url":"https://state.example.com"}`), Credentials: apiKeyEntries("sk-state"),
 		Models: optionalGroupModels{
 			Set: true, Values: []GroupModel{{ID: "gpt-4o"}},
 		}, ConnectionType: "api_key",
@@ -758,7 +760,7 @@ func TestDiscoverModelsDoesNotReadOrMutateRuntimeState(t *testing.T) {
 	result, err := fixture.service.DiscoverModels(context.Background(), ModelDiscoveryRequest{
 		ChannelID:   channel.OpenAICompatible,
 		Params:      json.RawMessage(`{"base_url":"https://discover.example.com"}`),
-		Credentials: "sk-discovery", ConnectionType: "api_key",
+		Credentials: apiKeyEntries("sk-discovery"), ConnectionType: "api_key",
 	})
 	if err != nil || !reflect.DeepEqual(result.Models, []ModelCandidate{
 		{ID: "remote-only", Name: "remote-only", Sources: []string{"live"}, PricingStatus: PricingStatusPending},
@@ -808,7 +810,7 @@ func TestDiscoverModelsDoesNotAcquireWriteMu(t *testing.T) {
 		_, err := fixture.service.DiscoverModels(ctx, ModelDiscoveryRequest{
 			ChannelID:   channel.OpenAICompatible,
 			Params:      json.RawMessage(`{"base_url":"https://discover.example.com"}`),
-			Credentials: "sk-discovery", ConnectionType: "api_key",
+			Credentials: apiKeyEntries("sk-discovery"), ConnectionType: "api_key",
 		})
 		done <- err
 	}()
@@ -849,7 +851,7 @@ func TestDiscoverModelsDoesNotBlockMutation(t *testing.T) {
 		_, err := fixture.service.DiscoverModels(context.Background(), ModelDiscoveryRequest{
 			ChannelID:   channel.Anthropic,
 			Params:      json.RawMessage(`{"base_url":"https://discover.example.com"}`),
-			Credentials: "sk-discovery", ConnectionType: "api_key",
+			Credentials: apiKeyEntries("sk-discovery"), ConnectionType: "api_key",
 		})
 		discoveryDone <- err
 	}()
@@ -863,7 +865,7 @@ func TestDiscoverModelsDoesNotBlockMutation(t *testing.T) {
 	go func() {
 		_, err := fixture.service.CreateGroup(context.Background(), GroupCreateRequest{
 			Name: stringPointer("discover-concurrent-mutation"), ChannelID: channel.OpenAICompatible,
-			Params: json.RawMessage(`{"base_url":"https://mutation.example.com"}`), Credentials: "sk-mutation",
+			Params: json.RawMessage(`{"base_url":"https://mutation.example.com"}`), Credentials: apiKeyEntries("sk-mutation"),
 			Models: optionalGroupModels{
 				Set: true, Values: []GroupModel{{ID: "gpt-4o"}},
 			}, ConnectionType: "api_key",

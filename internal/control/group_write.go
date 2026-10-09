@@ -16,10 +16,11 @@ import (
 	"gpt-load/internal/channel"
 	"gpt-load/internal/platform/epochms"
 	app_errors "gpt-load/internal/platform/errors"
+	"gpt-load/internal/state"
 	"gpt-load/internal/storage/models"
 )
 
-const maxCredentialLines = 5000
+const maxCredentialEntries = 500
 
 type GroupModel struct {
 	ID           string `json:"id"`
@@ -52,13 +53,14 @@ func (model *GroupModel) UnmarshalJSON(data []byte) error {
 }
 
 type credentialCandidate struct {
-	canonical   json.RawMessage
-	fingerprint string
+	canonical        json.RawMessage
+	fingerprint      string
+	concurrencyLimit int
 }
 
 type normalizedCredentials struct {
-	candidates     []credentialCandidate
-	duplicateLines int
+	candidates       []credentialCandidate
+	duplicateEntries int
 }
 
 type credentialValidationData struct {
@@ -254,50 +256,57 @@ func normalizeGroupName(value *string) (*string, error) {
 
 func (s *Service) normalizeCredentials(
 	channelID channel.ID,
-	raw string,
+	entries []CredentialEntryInput,
 ) (normalizedCredentials, error) {
 	if s == nil || s.channelRegistry == nil || s.encryption == nil {
 		return normalizedCredentials{}, app_errors.ErrInternalServer
 	}
-	result := normalizedCredentials{candidates: make([]credentialCandidate, 0)}
-	seen := make(map[string]struct{})
-	nonEmptyLines := 0
-	for _, line := range credentialInputEntries(channelID, raw) {
-		plaintext := strings.TrimSpace(line)
-		if plaintext == "" {
-			continue
+	if len(entries) == 0 || len(entries) > maxCredentialEntries {
+		return normalizedCredentials{}, app_errors.ErrValidation
+	}
+	result := normalizedCredentials{candidates: make([]credentialCandidate, 0, len(entries))}
+	seen := make(map[string]struct{}, len(entries))
+	for index, entry := range entries {
+		if entry.ConcurrencyLimit < 0 || entry.ConcurrencyLimit > state.MaxCredentialConcurrencyLimit {
+			return normalizedCredentials{}, app_errors.NewAPIErrorWithData(
+				app_errors.ErrValidation,
+				credentialValidationData{Entry: index + 1, Field: "concurrency_limit", ReasonCode: "invalid_value"},
+			)
 		}
-		nonEmptyLines++
-		if nonEmptyLines > maxCredentialLines {
-			return normalizedCredentials{}, app_errors.ErrValidation
-		}
-		encoded, err := encodeCredentialEntry(channelID, plaintext)
+		encoded, err := json.Marshal(trimmedCredentialFields(entry.Fields))
 		if err != nil {
-			return normalizedCredentials{}, err
+			return normalizedCredentials{}, app_errors.ErrInternalServer
 		}
 		credential, err := s.channelRegistry.ValidateCredential(channelID, encoded)
 		if err != nil {
-			return normalizedCredentials{}, s.credentialValidationError(
-				channelID,
-				nonEmptyLines,
-				err,
-			)
+			return normalizedCredentials{}, s.credentialValidationError(channelID, index+1, err)
 		}
 		canonical := credential.CanonicalJSON()
 		fingerprint := s.encryption.Hash(string(canonical))
 		if _, duplicate := seen[fingerprint]; duplicate {
-			result.duplicateLines++
+			result.duplicateEntries++
 			continue
 		}
 		seen[fingerprint] = struct{}{}
 		result.candidates = append(result.candidates, credentialCandidate{
-			canonical: append(json.RawMessage(nil), canonical...), fingerprint: fingerprint,
+			canonical:        append(json.RawMessage(nil), canonical...),
+			fingerprint:      fingerprint,
+			concurrencyLimit: entry.ConcurrencyLimit,
 		})
 	}
-	if len(result.candidates) == 0 {
-		return normalizedCredentials{}, app_errors.ErrValidation
-	}
 	return result, nil
+}
+
+// trimmedCredentialFields drops blank values so optional fields left empty in
+// the form do not reach channel validation.
+func trimmedCredentialFields(fields map[string]string) map[string]string {
+	trimmed := make(map[string]string, len(fields))
+	for key, value := range fields {
+		if value = strings.TrimSpace(value); value != "" {
+			trimmed[key] = value
+		}
+	}
+	return trimmed
 }
 
 func (s *Service) credentialValidationError(
@@ -362,44 +371,6 @@ func credentialValidationReasonCode(reason string) string {
 	}
 }
 
-func credentialInputEntries(_ channel.ID, raw string) []string {
-	trimmed := strings.TrimSpace(raw)
-	if !strings.HasPrefix(trimmed, "{") || !json.Valid([]byte(trimmed)) {
-		return strings.Split(raw, "\n")
-	}
-	return []string{trimmed}
-}
-
-func encodeCredentialEntry(channelID channel.ID, plaintext string) (json.RawMessage, error) {
-	if !strings.HasPrefix(plaintext, "{") {
-		encoded, err := json.Marshal(map[string]string{"api_key": plaintext})
-		if err != nil {
-			return nil, app_errors.ErrInternalServer
-		}
-		return encoded, nil
-	}
-	encoded := json.RawMessage(plaintext)
-	if channelID != channel.GoogleVertex {
-		return encoded, nil
-	}
-	var object map[string]json.RawMessage
-	if json.Unmarshal(encoded, &object) != nil {
-		return encoded, nil
-	}
-	if _, wrapped := object["service_account_json"]; wrapped {
-		return encoded, nil
-	}
-	var credentialType string
-	if json.Unmarshal(object["type"], &credentialType) != nil || credentialType != "service_account" {
-		return encoded, nil
-	}
-	wrapped, err := json.Marshal(map[string]string{"service_account_json": plaintext})
-	if err != nil {
-		return nil, app_errors.ErrInternalServer
-	}
-	return wrapped, nil
-}
-
 func (s *Service) persistCredentials(
 	tx *gorm.DB,
 	groupID uint,
@@ -427,7 +398,7 @@ func (s *Service) persistCredentials(
 		nowMS = 1
 	}
 	added := 0
-	duplicated := normalized.duplicateLines
+	duplicated := normalized.duplicateEntries
 	for _, candidate := range normalized.candidates {
 		if _, exists := existingByFingerprint[candidate.fingerprint]; exists {
 			duplicated++
@@ -441,7 +412,8 @@ func (s *Service) persistCredentials(
 			GroupID: groupID, Data: ciphertext, Fingerprint: candidate.fingerprint,
 			IdentityFingerprint: candidate.fingerprint, SecretVersion: 1,
 			AuthState: models.CredentialAuthStateReady,
-			Status:    models.CredentialStatusActive, CreatedAtMS: nowMS, UpdatedAtMS: nowMS,
+			Status:    models.CredentialStatusActive, ConcurrencyLimit: candidate.concurrencyLimit,
+			CreatedAtMS: nowMS, UpdatedAtMS: nowMS,
 		}
 		if err := tx.Create(&row).Error; err != nil {
 			return 0, 0, app_errors.ParseDBError(err)
