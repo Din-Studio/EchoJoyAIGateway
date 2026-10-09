@@ -31,9 +31,10 @@ type CredentialImportResult struct {
 }
 
 type CredentialUpdateRequest struct {
-	Status       optionalField[state.CredentialStatus] `json:"status"`
-	WeightManual optionalField[int]                    `json:"weight_manual"`
-	Proxy        optionalField[outboundproxy.Config]   `json:"proxy"`
+	Status           optionalField[state.CredentialStatus] `json:"status"`
+	WeightManual     optionalField[int]                    `json:"weight_manual"`
+	ConcurrencyLimit optionalField[int]                    `json:"concurrency_limit"`
+	Proxy            optionalField[outboundproxy.Config]   `json:"proxy"`
 }
 
 type CredentialRevealResult struct {
@@ -87,6 +88,7 @@ type CredentialItemResponse struct {
 	EffectiveStatus         string                         `json:"effective_status"`
 	Weight                  int                            `json:"weight"`
 	WeightManual            *int                           `json:"-"` // 仅新版展示投影使用，经典接口不增加字段。
+	ConcurrencyLimit        int                            `json:"-"` // 同上，仅新版展示投影使用。
 	RecentSuccessCount      uint64                         `json:"recent_success_count"`
 	RecentFailureCount      uint64                         `json:"recent_failure_count"`
 	ConsecutiveFailureCount uint64                         `json:"consecutive_failure_count"`

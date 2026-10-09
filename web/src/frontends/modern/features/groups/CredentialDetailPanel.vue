@@ -43,6 +43,7 @@ const item = computed(() => query.data.value ?? props.row)
 const state = computed(() => credentialStatus(item.value))
 const saved = ref<CredentialRow>()
 const weight = ref('')
+const concurrency = ref('')
 const proxyMode = ref('inherit')
 const proxyURL = ref('')
 const saving = ref(false)
@@ -55,6 +56,7 @@ const dirty = computed(
     !completed.value &&
     Boolean(saved.value) &&
     (weight.value !== String(saved.value!.weightManual ?? '') ||
+      concurrency.value !== concurrencyText(saved.value!) ||
       proxyMode.value !== saved.value!.proxy.mode ||
       Boolean(proxyURL.value)),
 )
@@ -64,6 +66,7 @@ watch(
     if (!value || dirty.value || saving.value) return
     saved.value = value
     weight.value = String(value.weightManual ?? '')
+    concurrency.value = concurrencyText(value)
     proxyMode.value = value.proxy.mode
     proxyURL.value = ''
   },
@@ -75,6 +78,15 @@ const weightInvalid = computed(
     (!/^\d+$/u.test(weight.value) ||
       (Number(weight.value) < 1 && Number(weight.value) !== saved.value?.weight) ||
       Number(weight.value) > 100),
+)
+// An empty field means unlimited, which the API stores as 0.
+function concurrencyText(row: CredentialRow): string {
+  return row.concurrencyLimit ? String(row.concurrencyLimit) : ''
+}
+const concurrencyInvalid = computed(
+  () =>
+    Boolean(concurrency.value) &&
+    (!/^\d+$/u.test(concurrency.value) || Number(concurrency.value) > 10000),
 )
 const proxyChanged = computed(
   () => proxyMode.value !== saved.value?.proxy.mode || Boolean(proxyURL.value),
@@ -97,10 +109,12 @@ function failure(): string {
 async function save(): Promise<void> {
   if (!saved.value || !dirty.value || saving.value) return
   attempted.value = true
-  if (weightInvalid.value || proxyInvalid.value) return
+  if (weightInvalid.value || concurrencyInvalid.value || proxyInvalid.value) return
   const patch: Parameters<typeof updateCredential>[3] = {}
   if (weight.value !== String(saved.value.weightManual ?? ''))
     patch.weight_manual = weight.value ? Number(weight.value) : null
+  if (concurrency.value !== concurrencyText(saved.value))
+    patch.concurrency_limit = concurrency.value ? Number(concurrency.value) : 0
   if (proxyChanged.value)
     patch.proxy =
       proxyMode.value === 'inherit'
@@ -275,6 +289,18 @@ useMessageSource(() =>
             :disabled="saving"
           />
         </div>
+        <AppTextField
+          v-model="concurrency"
+          :label="t('groups.edit.concurrencyLimit')"
+          :placeholder="t('groups.edit.concurrencyUnlimited')"
+          :description="t('groups.edit.concurrencyLimitHelp')"
+          size="sm"
+          inputmode="numeric"
+          :disabled="saving"
+          :error="
+            attempted && concurrencyInvalid ? t('groups.edit.concurrencyLimitError') : undefined
+          "
+        />
         <AppTextField
           v-if="channel?.proxy && proxyMode === 'custom'"
           v-model="proxyURL"

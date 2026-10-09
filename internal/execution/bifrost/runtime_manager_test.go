@@ -642,6 +642,23 @@ func TestRuntimeManagerPartitionsCredentialProxyByCredential(t *testing.T) {
 	if config.credentialPartitionID != 17 || config.baseFingerprint == "" || config.targetFingerprint == "" {
 		t.Fatalf("credential proxy partition = %#v", config)
 	}
+	if got := config.providerConfig.ConcurrencyAndBufferSize; got.Concurrency != 256 || got.BufferSize != 1024 {
+		t.Fatalf("partitioned concurrency = %+v, want 256/1024", got)
+	}
+	shared, failure := manager.configForAttempt(execution.AttemptSpec{
+		ChannelID:    string(channel.OpenAI),
+		TargetConfig: resolved.TargetConfig,
+		Credential:   execution.NewCredentialSnapshot(18, 1, 23, []byte(`{"api_key":"secret"}`)),
+	})
+	if failure != nil {
+		t.Fatalf("configForAttempt() failure = %#v", failure)
+	}
+	if shared.credentialPartitionID != 0 {
+		t.Fatalf("shared config partition = %d, want 0", shared.credentialPartitionID)
+	}
+	if got := shared.providerConfig.ConcurrencyAndBufferSize; got.Concurrency != 1000 || got.BufferSize != 5000 {
+		t.Fatalf("shared concurrency = %+v, want 1000/5000", got)
+	}
 }
 
 func TestRuntimeManagerRetiresCredentialPartitionAfterLastLease(t *testing.T) {

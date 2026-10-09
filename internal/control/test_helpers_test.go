@@ -274,10 +274,11 @@ func newTestServer(t testing.TB, cfg *config.Config, service *Service) *Server {
 // the fixture's Redis.
 func newTestGatewaySharedState(fixture serviceFixture) gateway.SharedState {
 	return gateway.SharedState{
-		AccessQuota:      fixture.accessQuota,
-		Health:           fixture.sharedHealth,
-		ResponseBindings: cluster.NewResponseBindings(fixture.cluster, time.Hour),
-		Affinity:         cluster.NewAffinity(fixture.cluster),
+		AccessQuota:           fixture.accessQuota,
+		Health:                fixture.sharedHealth,
+		ResponseBindings:      cluster.NewResponseBindings(fixture.cluster, time.Hour),
+		Affinity:              cluster.NewAffinity(fixture.cluster),
+		CredentialConcurrency: cluster.NewCredentialConcurrency(fixture.cluster),
 	}
 }
 

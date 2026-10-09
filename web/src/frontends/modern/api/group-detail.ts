@@ -195,6 +195,8 @@ export interface CredentialRow {
   enabled: boolean
   weight: number
   weightManual?: number | null
+  /** 0 means unlimited; only the modern credential routes return it. */
+  concurrencyLimit?: number
   successes: number
   failures: number
   failuresInRow: number
@@ -243,6 +245,8 @@ export function readCredential(value: unknown): CredentialRow {
         : row.weight_manual === null
           ? null
           : integer(row.weight_manual),
+    concurrencyLimit:
+      row.concurrency_limit === undefined ? undefined : integer(row.concurrency_limit),
     successes: integer(row.recent_success_count),
     failures: integer(row.recent_failure_count),
     failuresInRow: integer(row.consecutive_failure_count),

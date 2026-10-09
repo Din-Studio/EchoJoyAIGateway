@@ -276,10 +276,11 @@ func newGatewaySharedState(
 	credentialHealth *cluster.CredentialHealth,
 ) gateway.SharedState {
 	return gateway.SharedState{
-		AccessQuota:      quota,
-		Health:           credentialHealth,
-		ResponseBindings: cluster.NewResponseBindings(client, cfg.Cluster.ResponseBindingTTL),
-		Affinity:         cluster.NewAffinity(client),
+		AccessQuota:           quota,
+		Health:                credentialHealth,
+		ResponseBindings:      cluster.NewResponseBindings(client, cfg.Cluster.ResponseBindingTTL),
+		Affinity:              cluster.NewAffinity(client),
+		CredentialConcurrency: cluster.NewCredentialConcurrency(client),
 	}
 }
 

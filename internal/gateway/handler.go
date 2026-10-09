@@ -68,6 +68,14 @@ type AccessKeyRPMLimiter interface {
 	Allow(ctx context.Context, accessKeyID uint, limit int64) (ratelimit.LimitDecision, error)
 }
 
+// CredentialConcurrencyLimiter caps the upstream requests in flight per
+// credential across every instance. A non-positive limit is unlimited. When
+// acquired, release must be called once the upstream exchange has finished;
+// an error means the shared state is unavailable.
+type CredentialConcurrencyLimiter interface {
+	Acquire(ctx context.Context, credentialID uint, limit int) (release func(), acquired bool, err error)
+}
+
 // ResponseBindingStore owns Responses ownership, shared through Redis.
 type ResponseBindingStore interface {
 	Lookup(ctx context.Context, accessKeyID uint, responseID string) (state.ResponseBinding, bool, error)
@@ -135,6 +143,7 @@ type Handler struct {
 	lifecycle           *httplifecycle.Coordinator
 	affinity            AffinityStore
 	responseBindings    ResponseBindingStore
+	concurrency         CredentialConcurrencyLimiter
 	websocketLimits     websocketLimits
 	websocketBudget     websocketBudget
 }
@@ -168,10 +177,11 @@ func (handler *Handler) freezeAttemptPricing(
 // SharedState groups the Redis-backed request state every gateway instance
 // shares. Every field is required.
 type SharedState struct {
-	AccessQuota      AccessQuotaGate
-	Health           state.SharedCredentialHealthStore
-	ResponseBindings ResponseBindingStore
-	Affinity         AffinityStore
+	AccessQuota           AccessQuotaGate
+	Health                state.SharedCredentialHealthStore
+	ResponseBindings      ResponseBindingStore
+	Affinity              AffinityStore
+	CredentialConcurrency CredentialConcurrencyLimiter
 }
 
 func NewHandler(
@@ -205,6 +215,7 @@ func NewHandler(
 		sharedHealth:     shared.Health,
 		affinity:         shared.Affinity,
 		responseBindings: shared.ResponseBindings,
+		concurrency:      shared.CredentialConcurrency,
 		websocketLimits:  defaultWebsocketLimits(),
 		newRequestID:     newRequestID,
 		requestNow:       time.Now,
@@ -956,6 +967,12 @@ func (handler *Handler) executeAttempts(
 	}
 	var refreshRetry *credentialRefreshRetry
 	authRefreshReplayUsed := false
+	// attemptRelease frees the current attempt's credential concurrency slot.
+	// It runs as soon as the upstream exchange returns; the defer covers every
+	// return between acquisition and dispatch.
+	attemptRelease := func() {}
+	defer func() { attemptRelease() }()
+	concurrencySaturated := false
 	type preparedRequest struct {
 		request               *dialect.ParsedRequest
 		observations          dialect.RequestMetadata
@@ -1237,6 +1254,20 @@ func (handler *Handler) executeAttempts(
 			}
 			continue
 		}
+		// A full credential is skipped without spending a forward attempt; the
+		// iterator never returns it again for this request.
+		release, acquired, err := handler.concurrency.Acquire(
+			ginContext.Request.Context(), selection.CredentialID, ref.ConcurrencyLimit,
+		)
+		if err != nil {
+			handler.completeLimitStateFailure(ginContext, recorder, err)
+			return
+		}
+		if !acquired {
+			concurrencySaturated = true
+			continue
+		}
+		attemptRelease = release
 		if quotaAdmission != nil && !quotaAdmission.admitted {
 			ticket, decision, err := handler.accessQuota.Admit(
 				ginContext.Request.Context(),
@@ -1320,6 +1351,7 @@ func (handler *Handler) executeAttempts(
 		} else {
 			result = handler.forwarder.Forward(ginContext.Request.Context(), input)
 		}
+		attemptRelease()
 		result = normalizeUpstreamResultContract(result)
 		if !stream && result.HasResponse() && !result.ProviderErrorBeforeCommit &&
 			result.DispatchState != execution.DispatchLocal &&
@@ -1559,6 +1591,11 @@ func (handler *Handler) executeAttempts(
 	if until, limited := iterator.CooldownUntil(); limited {
 		setCooldownRetryAfter(ginContext, until, handler.now())
 		handler.completeReason(ginContext, recorder, reasonUpstreamRateLimited)
+		return
+	}
+	if concurrencySaturated {
+		ginContext.Writer.Header().Set("Retry-After", "1")
+		handler.completeReason(ginContext, recorder, reasonCredentialConcurrencyLimited)
 		return
 	}
 	handler.completeReason(ginContext, recorder, reasonNoCandidate)
