@@ -757,7 +757,7 @@ func TestBuildGroupCredentialEntriesReadsOnlyRequestedGroupInStableOrder(t *test
 		{
 			GroupID: firstGroup.ID, Data: "second-cipher",
 			Fingerprint: "second-fingerprint", Status: models.CredentialStatusDisabled,
-			WeightManual: &weight,
+			WeightManual: &weight, ConcurrencyLimit: 7,
 		},
 	}
 	for index := range credentials {
@@ -772,6 +772,7 @@ func TestBuildGroupCredentialEntriesReadsOnlyRequestedGroupInStableOrder(t *test
 		t.Fatalf("BuildGroupCredentialEntries() = %#v", got)
 	}
 	if got[1].WeightManual == nil || *got[1].WeightManual != weight ||
+		got[1].ConcurrencyLimit != 7 || got[0].ConcurrencyLimit != 0 ||
 		got[1].Status != state.CredentialStatusDisabled ||
 		got[1].EncryptedValue != "second-cipher" {
 		t.Fatalf("second entry = %#v", got[1])

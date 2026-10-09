@@ -19,36 +19,60 @@ import (
 	"gpt-load/internal/storage/models"
 )
 
+// credentialUpdate is a validated CredentialUpdateRequest; nil pointers and
+// false *Set flags leave the stored value unchanged.
+type credentialUpdate struct {
+	status           *state.CredentialStatus
+	weight           *int
+	weightSet        bool
+	proxy            *string
+	proxySet         bool
+	concurrencyLimit *int
+}
+
 func normalizeCredentialUpdate(
 	request CredentialUpdateRequest,
 	encryptionService encryption.Service,
-) (status *state.CredentialStatus, weight *int, weightSet bool, proxy *string, proxySet bool, err error) {
-	if !request.Status.Set && !request.WeightManual.Set && !request.Proxy.Set {
-		return nil, nil, false, nil, false, app_errors.ErrBadRequest
+) (credentialUpdate, error) {
+	if !request.Status.Set && !request.WeightManual.Set && !request.Proxy.Set && !request.ConcurrencyLimit.Set {
+		return credentialUpdate{}, app_errors.ErrBadRequest
 	}
+	var update credentialUpdate
 	if request.Status.Set {
 		if request.Status.Null ||
 			(request.Status.Value != state.CredentialStatusActive && request.Status.Value != state.CredentialStatusDisabled) {
-			return nil, nil, false, nil, false, app_errors.ErrValidation
+			return credentialUpdate{}, app_errors.ErrValidation
 		}
 		value := request.Status.Value
-		status = &value
+		update.status = &value
 	}
 	if request.WeightManual.Set {
-		weightSet = true
+		update.weightSet = true
 		if !request.WeightManual.Null {
 			if request.WeightManual.Value < 1 || request.WeightManual.Value > state.MaxWeight {
-				return nil, nil, false, nil, false, app_errors.ErrValidation
+				return credentialUpdate{}, app_errors.ErrValidation
 			}
 			value := request.WeightManual.Value
-			weight = &value
+			update.weight = &value
 		}
 	}
-	proxy, proxySet, err = normalizeProxyOverride(request.Proxy, encryptionService)
-	if err != nil {
-		return nil, nil, false, nil, false, err
+	if request.ConcurrencyLimit.Set {
+		// null clears the limit, which is stored as 0 (unlimited).
+		value := 0
+		if !request.ConcurrencyLimit.Null {
+			value = request.ConcurrencyLimit.Value
+		}
+		if value < 0 || value > state.MaxCredentialConcurrencyLimit {
+			return credentialUpdate{}, app_errors.ErrValidation
+		}
+		update.concurrencyLimit = &value
 	}
-	return status, weight, weightSet, proxy, proxySet, nil
+	var err error
+	update.proxy, update.proxySet, err = normalizeProxyOverride(request.Proxy, encryptionService)
+	if err != nil {
+		return credentialUpdate{}, err
+	}
+	return update, nil
 }
 
 func nextCredentialUpdatedAtMS(now time.Time, previous int64) (int64, error) {
@@ -137,7 +161,7 @@ func (s *Service) UpdateGroupCredential(
 	if groupID == 0 || credentialID == 0 {
 		return CredentialItemResponse{}, app_errors.ErrBadRequest
 	}
-	status, weight, weightSet, proxy, proxySet, err := normalizeCredentialUpdate(request, s.encryption)
+	update, err := normalizeCredentialUpdate(request, s.encryption)
 	if err != nil {
 		return CredentialItemResponse{}, err
 	}
@@ -173,17 +197,21 @@ func (s *Service) UpdateGroupCredential(
 			return app_errors.ErrInternalServer
 		}
 		updates := map[string]any{"updated_at_ms": updatedAtMS}
-		if status != nil {
-			committed.Status = models.CredentialStatus(*status)
+		if update.status != nil {
+			committed.Status = models.CredentialStatus(*update.status)
 			updates["status"] = committed.Status
 		}
-		if weightSet {
-			committed.WeightManual = cloneInt(weight)
+		if update.weightSet {
+			committed.WeightManual = cloneInt(update.weight)
 			updates["weight_manual"] = committed.WeightManual
 		}
-		if proxySet {
-			committed.ProxyConfig = proxy
-			updates["proxy_config"] = proxy
+		if update.concurrencyLimit != nil {
+			committed.ConcurrencyLimit = *update.concurrencyLimit
+			updates["concurrency_limit"] = committed.ConcurrencyLimit
+		}
+		if update.proxySet {
+			committed.ProxyConfig = update.proxy
+			updates["proxy_config"] = update.proxy
 		}
 		committed.UpdatedAtMS = updatedAtMS
 		committedProxy, committedProxyFingerprint, err = storedProxyIdentity(s.encryption, committed.ProxyConfig)
@@ -196,7 +224,7 @@ func (s *Service) UpdateGroupCredential(
 		}
 		return nil
 	}, func() error {
-		committedProxyUpdate = proxySet
+		committedProxyUpdate = update.proxySet
 		entries, snapshotErr := s.registry.SnapshotGroupCredentialEntriesExact(groupID, []uint{credentialID})
 		if snapshotErr != nil {
 			return dbRegistryMismatch(mismatchMissingRegistry, groupID, credentialID)
@@ -204,6 +232,7 @@ func (s *Service) UpdateGroupCredential(
 		entry := entries[0]
 		entry.Status = state.CredentialStatus(committed.Status)
 		entry.WeightManual = cloneInt(committed.WeightManual)
+		entry.ConcurrencyLimit = committed.ConcurrencyLimit
 		entry.Version = groupCollectionCredentialVersion(committed.SecretVersion)
 		entry.IdentityGeneration = groupCollectionCredentialIdentity(
 			committed.IdentityFingerprint,

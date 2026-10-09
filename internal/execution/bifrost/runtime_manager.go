@@ -721,6 +721,11 @@ func partitionProviderRuntime(
 		return effectiveProviderConfig{}, fmt.Errorf("encode provider runtime partition: %w", err)
 	}
 	digest := sha256.Sum256(canonical)
+	config.providerConfig = cloneProviderConfig(config.providerConfig)
+	config.providerConfig.ConcurrencyAndBufferSize = schemas.ConcurrencyAndBufferSize{
+		Concurrency: partitionedProviderConcurrency,
+		BufferSize:  partitionedProviderBufferSize,
+	}
 	config.baseCanonical = baseCanonical
 	config.baseFingerprint = baseFingerprint
 	config.credentialPartitionID = credential.ID

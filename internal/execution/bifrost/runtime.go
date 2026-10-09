@@ -17,8 +17,15 @@ import (
 )
 
 const (
-	providerConcurrency = 32
-	providerBufferSize  = 256
+	// Match the Bifrost defaults so the shared per-upstream worker pool never
+	// becomes the throughput limit; per-credential limits are enforced by the
+	// gateway with cluster-wide leases instead.
+	providerConcurrency = 1000
+	providerBufferSize  = 5000
+	// A credential-partitioned core serves exactly one credential, so it gets a
+	// smaller pool to keep goroutines bounded when many credentials partition.
+	partitionedProviderConcurrency = 256
+	partitionedProviderBufferSize  = 1024
 	// Keep the SDK transport timeout at the largest whole-second value that
 	// fits time.Duration so each attempt context remains the effective owner.
 	providerTimeoutSecs              = 9_223_372_036

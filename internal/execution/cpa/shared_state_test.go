@@ -22,9 +22,10 @@ func newGatewaySharedState(
 	_, client := clustertest.NewClient(t)
 	quota := cluster.NewAccessQuota(client, clustertest.PublishedQuotaCheckpoints{Manager: manager})
 	return gateway.SharedState{
-		AccessQuota:      quota,
-		Health:           cluster.NewCredentialHealth(client, registry),
-		ResponseBindings: cluster.NewResponseBindings(client, time.Hour),
-		Affinity:         cluster.NewAffinity(client),
+		AccessQuota:           quota,
+		Health:                cluster.NewCredentialHealth(client, registry),
+		ResponseBindings:      cluster.NewResponseBindings(client, time.Hour),
+		Affinity:              cluster.NewAffinity(client),
+		CredentialConcurrency: cluster.NewCredentialConcurrency(client),
 	}, quota
 }

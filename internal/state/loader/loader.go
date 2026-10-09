@@ -753,7 +753,8 @@ func mapCredentials(rows []models.Credential, groups []models.Group) []state.Cre
 				target.params,
 			),
 			Fingerprint: row.Fingerprint, WeightManual: cloneWeight(row.WeightManual),
-			Status: state.CredentialStatus(row.Status), AuthState: state.CredentialAuthState(row.AuthState), EncryptedValue: row.Data,
+			ConcurrencyLimit: row.ConcurrencyLimit,
+			Status:           state.CredentialStatus(row.Status), AuthState: state.CredentialAuthState(row.AuthState), EncryptedValue: row.Data,
 		})
 	}
 	return result

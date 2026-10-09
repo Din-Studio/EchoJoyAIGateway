@@ -27,10 +27,11 @@ func newTestSharedState(t testing.TB, registry *state.CredentialRegistry) Shared
 // several instances sharing one Redis.
 func newTestSharedStateOn(client *cluster.Client, registry *state.CredentialRegistry) SharedState {
 	return SharedState{
-		AccessQuota:      cluster.NewAccessQuota(client, emptyAccessQuotaStates{}),
-		Health:           cluster.NewCredentialHealth(client, registry),
-		ResponseBindings: cluster.NewResponseBindings(client, testResponseBindingTTL),
-		Affinity:         cluster.NewAffinity(client),
+		AccessQuota:           cluster.NewAccessQuota(client, emptyAccessQuotaStates{}),
+		Health:                cluster.NewCredentialHealth(client, registry),
+		ResponseBindings:      cluster.NewResponseBindings(client, testResponseBindingTTL),
+		Affinity:              cluster.NewAffinity(client),
+		CredentialConcurrency: cluster.NewCredentialConcurrency(client),
 	}
 }
 

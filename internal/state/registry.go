@@ -34,6 +34,7 @@ type CredentialEntry struct {
 	IdentityGeneration      uint64
 	Fingerprint             string
 	WeightManual            *int
+	ConcurrencyLimit        int
 	Status                  CredentialStatus
 	AuthState               CredentialAuthState
 	CooldownUntil           time.Time
@@ -73,6 +74,7 @@ type CredentialRef struct {
 	ProxyFingerprint        string
 	FailureGeneration       uint64
 	ModelCooldownGeneration uint64
+	ConcurrencyLimit        int
 }
 
 type CredentialRegistry struct {
@@ -107,6 +109,12 @@ func ValidateCredentialEntries(entries []CredentialEntry) error {
 		}
 		if err := validateManualWeight(fmt.Sprintf("credential %d", entry.ID), entry.WeightManual); err != nil {
 			return err
+		}
+		if entry.ConcurrencyLimit < 0 || entry.ConcurrencyLimit > MaxCredentialConcurrencyLimit {
+			return fmt.Errorf(
+				"credential %d concurrency limit must be between 0 and %d",
+				entry.ID, MaxCredentialConcurrencyLimit,
+			)
 		}
 		if entry.EncryptedValue == "" {
 			return fmt.Errorf("credential %d encrypted value is required", entry.ID)
@@ -355,7 +363,8 @@ func samePersistedCredentialConfig(left, right CredentialEntry) bool {
 		left.Status != right.Status ||
 		left.EncryptedValue != right.EncryptedValue ||
 		left.EncryptedProxy != right.EncryptedProxy ||
-		left.ProxyFingerprint != right.ProxyFingerprint {
+		left.ProxyFingerprint != right.ProxyFingerprint ||
+		left.ConcurrencyLimit != right.ConcurrencyLimit {
 		return false
 	}
 	if left.WeightManual == nil || right.WeightManual == nil {
@@ -603,14 +612,7 @@ func (r *CredentialRegistry) CaptureActiveCredentialRefs(groupIDs []uint) []Cred
 			if entry.Status != CredentialStatusActive || entry.AuthState.normalize() != CredentialAuthStateReady {
 				continue
 			}
-			refs = append(refs, CredentialRef{
-				ID: entry.ID, GroupID: entry.GroupID,
-				Version: entry.Version, IdentityGeneration: entry.IdentityGeneration,
-				Fingerprint: entry.Fingerprint, EncryptedValue: entry.EncryptedValue,
-				EncryptedProxy: entry.EncryptedProxy, ProxyFingerprint: entry.ProxyFingerprint,
-				FailureGeneration:       entry.FailureGeneration,
-				ModelCooldownGeneration: entry.ModelCooldownGeneration,
-			})
+			refs = append(refs, credentialRef(entry))
 		}
 	}
 	r.mu.RUnlock()
@@ -664,13 +666,18 @@ func (r *CredentialRegistry) CredentialRef(credentialID uint) (CredentialRef, bo
 	if !ok {
 		return CredentialRef{}, false
 	}
+	return credentialRef(entry), true
+}
+
+func credentialRef(entry *CredentialEntry) CredentialRef {
 	return CredentialRef{
 		ID: entry.ID, GroupID: entry.GroupID, Version: entry.Version,
 		IdentityGeneration: entry.IdentityGeneration, Fingerprint: entry.Fingerprint,
 		EncryptedValue: entry.EncryptedValue, EncryptedProxy: entry.EncryptedProxy,
 		ProxyFingerprint: entry.ProxyFingerprint, FailureGeneration: entry.FailureGeneration,
 		ModelCooldownGeneration: entry.ModelCooldownGeneration,
-	}, true
+		ConcurrencyLimit:        entry.ConcurrencyLimit,
+	}
 }
 
 // CollectCredentialCandidates returns currently schedulable credentials.
@@ -993,14 +1000,7 @@ func (r *CredentialRegistry) BlacklistedCredentials() []CredentialRef {
 			if entry.Status != CredentialStatusActive || !entry.Blacklisted {
 				continue
 			}
-			refs = append(refs, CredentialRef{
-				ID: entry.ID, GroupID: entry.GroupID,
-				Version: entry.Version, IdentityGeneration: entry.IdentityGeneration,
-				Fingerprint: entry.Fingerprint, EncryptedValue: entry.EncryptedValue,
-				EncryptedProxy: entry.EncryptedProxy, ProxyFingerprint: entry.ProxyFingerprint,
-				FailureGeneration:       entry.FailureGeneration,
-				ModelCooldownGeneration: entry.ModelCooldownGeneration,
-			})
+			refs = append(refs, credentialRef(entry))
 		}
 	}
 	r.mu.RUnlock()

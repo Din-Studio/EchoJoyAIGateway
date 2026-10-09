@@ -5,6 +5,8 @@ import "fmt"
 const (
 	DefaultWeight = 50
 	MaxWeight     = 100
+	// MaxCredentialConcurrencyLimit bounds the per-credential in-flight limit; 0 means unlimited.
+	MaxCredentialConcurrencyLimit = 10000
 )
 
 func cloneWeight(weight *int) *int {

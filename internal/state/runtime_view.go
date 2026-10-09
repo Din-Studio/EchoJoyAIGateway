@@ -12,6 +12,7 @@ type CredentialRuntimeView struct {
 	IdentityGeneration uint64
 	ProxyFingerprint   string
 	WeightManual       *int
+	ConcurrencyLimit   int
 	Status             CredentialStatus
 	AuthState          CredentialAuthState
 	CooldownUntil      time.Time
@@ -60,6 +61,7 @@ func runtimeView(entry *CredentialEntry) CredentialRuntimeView {
 		IdentityGeneration: entry.IdentityGeneration,
 		ProxyFingerprint:   entry.ProxyFingerprint,
 		WeightManual:       cloneWeight(entry.WeightManual),
+		ConcurrencyLimit:   entry.ConcurrencyLimit,
 		Status:             entry.Status,
 		AuthState:          entry.AuthState.normalize(),
 		CooldownUntil:      entry.CooldownUntil,

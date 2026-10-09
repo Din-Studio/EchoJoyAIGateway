@@ -24,7 +24,11 @@ export async function updateCredential(
   client: ApiClient,
   group: number,
   id: number,
-  patch: { weight_manual?: number | null; proxy?: ProxyOverride | null },
+  patch: {
+    weight_manual?: number | null
+    concurrency_limit?: number
+    proxy?: ProxyOverride | null
+  },
   signal: AbortSignal,
 ) {
   const row = readCredential(
@@ -34,7 +38,12 @@ export async function updateCredential(
       signal,
     }),
   )
-  return Object.hasOwn(patch, 'weight_manual') ? { ...row, weightManual: patch.weight_manual } : row
+  // The classic update response omits both fields; carry the saved values forward.
+  return {
+    ...row,
+    ...(Object.hasOwn(patch, 'weight_manual') && { weightManual: patch.weight_manual }),
+    ...(Object.hasOwn(patch, 'concurrency_limit') && { concurrencyLimit: patch.concurrency_limit }),
+  }
 }
 
 export async function exportAllCredentials(client: ApiClient, group: number, signal: AbortSignal) {
