@@ -1,13 +1,7 @@
-import { getPreferredFrontend } from '@shared/frontend/preference'
 import { getBrowserLocale } from '@shared/preferences/locale'
 
 async function bootstrap(): Promise<void> {
-  const frontend = await getPreferredFrontend()
-  document.documentElement.dataset.frontend = frontend
-  const module =
-    frontend === 'classic'
-      ? await import('./frontends/classic/bootstrap')
-      : await import('./frontends/modern/bootstrap')
+  const module = await import('./frontends/modern/bootstrap')
   await module.bootstrap()
 }
 

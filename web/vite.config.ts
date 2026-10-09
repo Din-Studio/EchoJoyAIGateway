@@ -1,6 +1,5 @@
 import { fileURLToPath, URL } from 'node:url'
 
-import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vite'
 
@@ -21,10 +20,9 @@ const proxyTarget = process.env.VITE_DEV_PROXY_TARGET || 'http://127.0.0.1:3001'
 
 export default defineConfig({
   root: webRootPath,
-  plugins: [vue(), tailwindcss()],
+  plugins: [vue()],
   resolve: {
     alias: {
-      '@': fileURLToPath(new URL('./src/frontends/classic', import.meta.url)),
       '@modern': fileURLToPath(new URL('./src/frontends/modern', import.meta.url)),
       '@shared': fileURLToPath(new URL('./src/shared', import.meta.url)),
     },

@@ -3,7 +3,6 @@ import { fileURLToPath } from 'node:url'
 
 const sourceRoot = fileURLToPath(new URL('../src/', import.meta.url))
 const aliases = {
-  '@/': 'frontends/classic/',
   '@modern/': 'frontends/modern/',
   '@shared/': 'shared/',
 }
@@ -11,7 +10,6 @@ const aliases = {
 function owner(filename) {
   const relative = path.relative(sourceRoot, filename).split(path.sep).join('/')
   if (relative.startsWith('../') || path.isAbsolute(relative)) return null
-  if (relative.startsWith('frontends/classic/')) return 'classic'
   if (relative.startsWith('frontends/modern/')) return 'modern'
   if (relative.startsWith('shared/')) return 'shared'
   return 'entry'

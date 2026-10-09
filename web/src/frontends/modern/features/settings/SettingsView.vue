@@ -4,7 +4,6 @@ import {
   Database,
   FlaskConical,
   Globe,
-  Monitor,
   RotateCcw,
   Route,
   Save,
@@ -38,7 +37,6 @@ import {
 import { useLoadingActivity } from '@modern/components/ui/loading'
 import AppDraftGuard from '@modern/components/AppDraftGuard.vue'
 import { useApiClient } from '@shared/http/client-context'
-import FrontendPicker from './FrontendPicker.vue'
 import AutoModelEditor from './AutoModelEditor.vue'
 import SettingItem from './SettingItem.vue'
 import SettingsHeadersEditor from './SettingsHeadersEditor.vue'
@@ -73,7 +71,6 @@ const sectionIDs = [
   'connection',
   'browser',
   'maintenance',
-  'interface',
   'experimental',
   'system',
 ] as const
@@ -92,7 +89,6 @@ const sectionFields: Record<SectionID, readonly SettingKey[]> = {
   ],
   browser: ['cors', 'header_rules', 'response_header_rules'],
   maintenance: ['request_log_retention_days', 'models_dev_auto_sync_enabled'],
-  interface: [],
   experimental: ['auto_model'],
   system: [],
 }
@@ -101,7 +97,6 @@ const sectionIcons = {
   connection: Cable,
   browser: Globe,
   maintenance: Database,
-  interface: Monitor,
   experimental: FlaskConical,
   system: Server,
 }
@@ -162,13 +157,11 @@ function matches(key: SettingKey): boolean {
 const visibleSections = computed(() =>
   sectionIDs.filter((id) => {
     const extra =
-      id === 'interface'
-        ? [t('settingsForm.frontend'), t('frontend.modern.title'), t('frontend.classic.title')]
-        : id === 'system'
-          ? ['version', 'database', 'authKeySource', 'encryptionSource', 'encryption'].map((key) =>
-              t('settingsForm.system.' + key),
-            )
-          : []
+      id === 'system'
+        ? ['version', 'database', 'authKeySource', 'encryptionSource', 'encryption'].map((key) =>
+            t('settingsForm.system.' + key),
+          )
+        : []
     const text = (sectionText(id) + ' ' + extra.join(' ')).toLocaleLowerCase()
     return sectionFields[id].some(matches) || words.value.every((word) => text.includes(word))
   }),
@@ -293,12 +286,6 @@ async function submit(): Promise<void> {
 function confirmDiscard(): void {
   discardOpen.value = false
   discard()
-}
-async function beforeFrontendSwitch(): Promise<boolean> {
-  if (!(await guard.value?.confirm())) return false
-  discard()
-  await nextTick()
-  return true
 }
 async function refresh(): Promise<void> {
   await Promise.all([query.refetch(), info.refetch()])
@@ -672,11 +659,6 @@ onScopeDispose(() => {
                 />
               </SettingItem>
             </template>
-            <FrontendPicker
-              v-else-if="id === 'interface'"
-              :disabled="saving"
-              :before-switch="beforeFrontendSwitch"
-            />
             <template v-else-if="id === 'experimental'">
               <SettingItem
                 v-bind="settingItem('auto_model')"
