@@ -7,6 +7,7 @@ import (
 	"gpt-load/internal/execution"
 	"gpt-load/internal/pricing"
 	"gpt-load/internal/storage/models"
+	"gpt-load/internal/telemetry"
 	"gpt-load/internal/usage"
 )
 
@@ -20,11 +21,20 @@ func TestCodexSearchLogsDoNotContributeToModelUsage(t *testing.T) {
 	row.CostState = string(pricing.CostStateNotApplicable)
 	row.PricingCompleteness = string(pricing.CompletenessNotApplicable)
 	row.UncachedInputTokens, row.OutputTokens, row.EstimatedCostNanoUSD = 0, 0, 0
+	row.AttemptRows = []models.RequestLogAttempt{
+		credentialAttemptRow(row.ID, 1, completed, row.CredentialID, telemetry.FailureCategoryOK),
+	}
 	if err := (&gormBatchWriter{db: db}).WriteBatch(t.Context(), []models.RequestLog{row}); err != nil {
 		t.Fatal(err)
 	}
 	assertRequestLogAndUsageStatCounts(t, db, 1, 0)
-	assertUsageJournalCount(t, db, 0)
+	var attemptStats int64
+	if err := db.Model(&models.CredentialAttemptStat{}).Count(&attemptStats).Error; err != nil {
+		t.Fatalf("count CredentialAttemptStats: %v", err)
+	}
+	if attemptStats != 0 {
+		t.Fatalf("CredentialAttemptStat rows = %d, want web search attempts excluded", attemptStats)
+	}
 	service := newRequestLogTestService(db)
 	report, err := service.QueryUsage(t.Context(), minuteUsageQuery(completed.Add(-time.Minute)))
 	if err != nil || report.Summary.RequestCount != 0 {

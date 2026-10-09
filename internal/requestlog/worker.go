@@ -50,7 +50,16 @@ func (writer *gormBatchWriter) WriteBatch(ctx context.Context, rows []models.Req
 	if len(newRows) == 0 {
 		return nil
 	}
-	journals, err := buildUsageAggregationJournals(newRows)
+	usageRows := usageAggregationRows(newRows)
+	usageDeltas, err := buildUsageStatDeltas(usageRows)
+	if err != nil {
+		return err
+	}
+	attemptRows := make([]models.RequestLogAttempt, 0, len(usageRows))
+	for _, row := range usageRows {
+		attemptRows = append(attemptRows, row.AttemptRows...)
+	}
+	attemptDeltas, err := buildCredentialAttemptStatDeltas(attemptRows)
 	if err != nil {
 		return err
 	}
@@ -59,11 +68,27 @@ func (writer *gormBatchWriter) WriteBatch(ctx context.Context, rows []models.Req
 		CleanupTimeout: requestLogTransactionCleanupTimeout,
 		Operation:      "request log transaction",
 	}, func(transaction *gorm.DB) error {
-		if err := stageUsageAggregationJournals(transaction, journals); err != nil {
+		if err := writeRequestLogBatch(transaction, newRows); err != nil {
 			return err
 		}
-		return writeRequestLogBatch(transaction, newRows)
+		if err := applyCredentialAttemptStats(transaction, attemptDeltas); err != nil {
+			return err
+		}
+		return applyUsageStatDeltas(transaction, usageDeltas)
 	})
+}
+
+// usageAggregationRows 返回参与小时用量聚合的请求。
+// 未转发请求和独立搜索只保留日志明细，不参与模型用量聚合。
+func usageAggregationRows(rows []models.RequestLog) []models.RequestLog {
+	usageRows := make([]models.RequestLog, 0, len(rows))
+	for _, row := range rows {
+		if row.AttemptCount == 0 || row.Operation == string(execution.OperationWebSearch) {
+			continue
+		}
+		usageRows = append(usageRows, row)
+	}
+	return usageRows
 }
 
 func (writer *gormBatchWriter) prepareNewRequestLogRows(
@@ -105,20 +130,6 @@ func (writer *gormBatchWriter) prepareNewRequestLogRows(
 	return newRows, nil
 }
 
-func stageUsageAggregationJournals(
-	tx *gorm.DB,
-	journals []models.UsageAggregationJournal,
-) error {
-	if len(journals) == 0 {
-		return nil
-	}
-	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).
-		CreateInBatches(journals, batchSize).Error; err != nil {
-		return fmt.Errorf("stage usage aggregation journals: %w", err)
-	}
-	return nil
-}
-
 type usageStatKey struct {
 	BucketStartMS int64
 	AccessKeyID   uint
@@ -155,39 +166,17 @@ func writeRequestLogBatch(tx *gorm.DB, rows []models.RequestLog) error {
 	if err := writeAutoDecisionUsage(tx, rows); err != nil {
 		return err
 	}
-	attemptRows := make([]models.RequestLogAttempt, 0)
-	ids := make([]string, 0, len(rows))
+	attemptRows := make([]models.RequestLogAttempt, 0, len(rows))
 	for _, row := range rows {
-		ids = append(ids, row.ID)
 		attemptRows = append(attemptRows, row.AttemptRows...)
 	}
-	if len(attemptRows) > 0 {
-		if err := tx.CreateInBatches(attemptRows, batchSize).Error; err != nil {
-			return fmt.Errorf("insert request log attempts: %w", err)
-		}
+	if len(attemptRows) == 0 {
+		return nil
 	}
-
-	var journals []models.UsageAggregationJournal
-	if err := tx.Where("request_id IN ? AND applied = ?", ids, false).
-		Order("request_id ASC").Find(&journals).Error; err != nil {
-		return fmt.Errorf("query current usage journals: %w", err)
+	if err := tx.CreateInBatches(attemptRows, batchSize).Error; err != nil {
+		return fmt.Errorf("insert request log attempts: %w", err)
 	}
-	if len(attemptRows) > 0 && len(journals) > 0 {
-		pendingRequestIDs := make(map[string]struct{}, len(journals))
-		for _, journal := range journals {
-			pendingRequestIDs[journal.RequestID] = struct{}{}
-		}
-		pendingAttempts := make([]models.RequestLogAttempt, 0, len(attemptRows))
-		for _, attempt := range attemptRows {
-			if _, pending := pendingRequestIDs[attempt.RequestID]; pending {
-				pendingAttempts = append(pendingAttempts, attempt)
-			}
-		}
-		if err := applyCredentialAttemptStats(tx, pendingAttempts); err != nil {
-			return err
-		}
-	}
-	return applyUsageJournalBatch(tx, journals)
+	return nil
 }
 
 type credentialAttemptStatKey struct {
@@ -200,11 +189,10 @@ type credentialAttemptStatDelta struct {
 	FailureCount int64
 }
 
-func applyCredentialAttemptStats(tx *gorm.DB, attempts []models.RequestLogAttempt) error {
-	deltas, err := buildCredentialAttemptStatDeltas(attempts)
-	if err != nil {
-		return err
-	}
+func applyCredentialAttemptStats(
+	tx *gorm.DB,
+	deltas map[credentialAttemptStatKey]credentialAttemptStatDelta,
+) error {
 	if len(deltas) == 0 {
 		return nil
 	}
@@ -293,17 +281,7 @@ func buildCredentialAttemptStatDeltas(
 	return deltas, nil
 }
 
-func applyUsageJournalBatch(
-	tx *gorm.DB,
-	journals []models.UsageAggregationJournal,
-) error {
-	if len(journals) == 0 {
-		return nil
-	}
-	deltas, err := buildUsageJournalDeltas(journals)
-	if err != nil {
-		return err
-	}
+func applyUsageStatDeltas(tx *gorm.DB, deltas map[usageStatKey]usageStatDelta) error {
 	// 固定的行访问顺序是跨实例一致的行锁获取顺序，避免共享数据库上的死锁。
 	for _, key := range sortedUsageStatKeys(deltas) {
 		delta := deltas[key]
@@ -311,23 +289,6 @@ func applyUsageJournalBatch(
 		if err := tx.Clauses(usageStatUpsertClause(delta)).Create(&stat).Error; err != nil {
 			return fmt.Errorf("upsert usage stat: %w", err)
 		}
-	}
-	ids := make([]string, 0, len(journals))
-	for _, journal := range journals {
-		ids = append(ids, journal.RequestID)
-	}
-	result := tx.Model(&models.UsageAggregationJournal{}).
-		Where("request_id IN ? AND applied = ?", ids, false).
-		Update("applied", true)
-	if result.Error != nil {
-		return fmt.Errorf("mark usage journals applied: %w", result.Error)
-	}
-	if result.RowsAffected != int64(len(ids)) {
-		return fmt.Errorf(
-			"mark usage journals applied: updated %d of %d rows",
-			result.RowsAffected,
-			len(ids),
-		)
 	}
 	return nil
 }
@@ -390,103 +351,6 @@ func usageStatUpsertClause(delta usageStatDelta) clause.OnConflict {
 		},
 		DoUpdates: clause.Assignments(incrementAssignments(delta.columnAmounts())),
 	}
-}
-
-func buildUsageAggregationJournals(
-	rows []models.RequestLog,
-) ([]models.UsageAggregationJournal, error) {
-	journals := make([]models.UsageAggregationJournal, 0, len(rows))
-	for _, row := range rows {
-		// 未转发请求和独立搜索只保留日志明细，不参与模型用量聚合。
-		if row.AttemptCount == 0 || row.Operation == string(execution.OperationWebSearch) {
-			continue
-		}
-		deltas, err := buildUsageStatDeltas([]models.RequestLog{row})
-		if err != nil {
-			return nil, err
-		}
-		if len(deltas) != 1 {
-			return nil, fmt.Errorf("build usage journal %q: unexpected delta count", row.ID)
-		}
-		for key, delta := range deltas {
-			journals = append(journals, models.UsageAggregationJournal{
-				RequestID:               row.ID,
-				BucketStartMS:           key.BucketStartMS,
-				AccessKeyID:             key.AccessKeyID,
-				ChannelID:               key.ChannelID,
-				GroupID:                 key.GroupID,
-				CredentialID:            key.CredentialID,
-				Model:                   key.Model,
-				RequestCount:            delta.RequestCount,
-				SuccessCount:            delta.SuccessCount,
-				FailureCount:            delta.FailureCount,
-				UncachedInputTokens:     delta.UncachedInputTokens,
-				OutputTokens:            delta.OutputTokens,
-				CacheReadTokens:         delta.CacheReadTokens,
-				CacheWrite5MTokens:      delta.CacheWrite5MTokens,
-				CacheWrite1HTokens:      delta.CacheWrite1HTokens,
-				CacheWriteUnknownTokens: delta.CacheWriteUnknownTokens,
-				EstimatedCostNanoUSD:    delta.EstimatedCostNanoUSD,
-				UsageMissingCount:       delta.UsageMissingCount,
-				PartialCount:            delta.PartialCount,
-				UnpricedRequestCount:    delta.UnpricedRequestCount,
-				PricingPartialCount:     delta.PricingPartialCount,
-			})
-		}
-	}
-	return journals, nil
-}
-
-func buildUsageJournalDeltas(
-	journals []models.UsageAggregationJournal,
-) (map[usageStatKey]usageStatDelta, error) {
-	deltas := make(map[usageStatKey]usageStatDelta)
-	for _, journal := range journals {
-		key := usageStatKey{
-			BucketStartMS: journal.BucketStartMS,
-			AccessKeyID:   journal.AccessKeyID,
-			ChannelID:     journal.ChannelID,
-			GroupID:       journal.GroupID,
-			CredentialID:  journal.CredentialID,
-			Model:         journal.Model,
-		}
-		delta := deltas[key]
-		for _, field := range []struct {
-			name   string
-			target *int64
-			value  int64
-		}{
-			{name: "request_count", target: &delta.RequestCount, value: journal.RequestCount},
-			{name: "success_count", target: &delta.SuccessCount, value: journal.SuccessCount},
-			{name: "failure_count", target: &delta.FailureCount, value: journal.FailureCount},
-			{name: "uncached_input_tokens", target: &delta.UncachedInputTokens, value: journal.UncachedInputTokens},
-			{name: "output_tokens", target: &delta.OutputTokens, value: journal.OutputTokens},
-			{name: "cache_read_tokens", target: &delta.CacheReadTokens, value: journal.CacheReadTokens},
-			{name: "cache_write_5m_tokens", target: &delta.CacheWrite5MTokens, value: journal.CacheWrite5MTokens},
-			{name: "cache_write_1h_tokens", target: &delta.CacheWrite1HTokens, value: journal.CacheWrite1HTokens},
-			{name: "cache_write_unknown_tokens", target: &delta.CacheWriteUnknownTokens, value: journal.CacheWriteUnknownTokens},
-			{name: "usage_missing_count", target: &delta.UsageMissingCount, value: journal.UsageMissingCount},
-			{name: "partial_count", target: &delta.PartialCount, value: journal.PartialCount},
-			{name: "unpriced_request_count", target: &delta.UnpricedRequestCount, value: journal.UnpricedRequestCount},
-			{name: "pricing_partial_count", target: &delta.PricingPartialCount, value: journal.PricingPartialCount},
-		} {
-			if err := checkedInt64Add(field.target, field.value, field.name); err != nil {
-				return nil, err
-			}
-		}
-		cost, ok := pricing.CheckedAddNanoUSD(
-			pricing.NanoUSD(delta.EstimatedCostNanoUSD),
-			pricing.NanoUSD(journal.EstimatedCostNanoUSD),
-		)
-		if !ok {
-			return nil, fmt.Errorf(
-				"aggregate usage journal estimated_cost_nano_usd: checked addition failed",
-			)
-		}
-		delta.EstimatedCostNanoUSD = int64(cost)
-		deltas[key] = delta
-	}
-	return deltas, nil
 }
 
 func buildUsageStatDeltas(rows []models.RequestLog) (map[usageStatKey]usageStatDelta, error) {

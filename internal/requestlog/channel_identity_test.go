@@ -148,15 +148,6 @@ func TestUsageAggregationKeepsChannelAndCredentialIdentitiesSeparate(t *testing.
 	if len(deltas) != 3 {
 		t.Fatalf("usage identities = %#v, want three channel/credential identities", deltas)
 	}
-
-	journals, err := buildUsageAggregationJournals([]models.RequestLog{first})
-	if err != nil {
-		t.Fatalf("buildUsageAggregationJournals() error = %v", err)
-	}
-	if len(journals) != 1 || journals[0].ChannelID != first.ChannelID ||
-		journals[0].CredentialID != first.CredentialID {
-		t.Fatalf("journal attribution = %#v", journals)
-	}
 }
 
 func TestUsageWriterPersistsSeparateChannelCredentialStats(t *testing.T) {

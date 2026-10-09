@@ -48,7 +48,6 @@ func TestExternalDatabaseUsageExactWindow(t *testing.T) {
 			query string
 			value any
 		}{
-			{&models.UsageAggregationJournal{}, "request_id IN ?", requestIDs},
 			{&models.RequestLog{}, "id IN ?", requestIDs},
 			{&models.UsageStat{}, "credential_id = ?", credentialID},
 		} {

@@ -14,13 +14,12 @@ type RetentionPolicyProvider interface {
 }
 
 const (
-	retentionBatchSize                   = 1000
-	usageAggregationJournalRetentionDays = 35
-	quotaHistoryRetentionDays            = 35
+	retentionBatchSize        = 1000
+	quotaHistoryRetentionDays = 35
 )
 
-// Sweep removes request logs and aggregation journals strictly older than
-// their respective retention boundaries. Hourly aggregates are retained
+// Sweep removes request logs and quota history strictly older than their
+// respective retention boundaries. Hourly aggregates are retained
 // indefinitely. Failures are isolated from the data plane.
 func (service *Service) Sweep(ctx context.Context, now time.Time) {
 	if ctx == nil {
@@ -41,20 +40,7 @@ func (service *Service) Sweep(ctx context.Context, now time.Time) {
 		service.recordRetentionDeleteFailure(now)
 		return
 	}
-	journalCutoffMS, err := retentionCutoffMS(nowMS, usageAggregationJournalRetentionDays)
-	if err != nil {
-		service.recordRetentionDeleteFailure(now)
-		return
-	}
 	quotaHistoryCutoffMS, err := retentionCutoffMS(nowMS, quotaHistoryRetentionDays)
-	if err != nil {
-		service.recordRetentionDeleteFailure(now)
-		return
-	}
-	journalCutoffMS, err = epochms.AlignDown(
-		journalCutoffMS,
-		epochms.MillisecondsPerHour,
-	)
 	if err != nil {
 		service.recordRetentionDeleteFailure(now)
 		return
@@ -64,7 +50,6 @@ func (service *Service) Sweep(ctx context.Context, now time.Time) {
 	if ctx.Err() != nil {
 		return
 	}
-	service.deleteExpiredUsageJournals(ctx, journalCutoffMS, now)
 	service.deleteExpiredQuotaHistory(ctx, quotaHistoryCutoffMS, now)
 }
 
@@ -140,49 +125,6 @@ func (service *Service) deleteExpiredRequestLogs(
 			return false
 		}
 		if len(ids) < retentionBatchSize {
-			return true
-		}
-	}
-}
-
-func (service *Service) deleteExpiredUsageJournals(
-	ctx context.Context,
-	cutoffMS int64,
-	now time.Time,
-) bool {
-	for {
-		if ctx.Err() != nil {
-			return false
-		}
-
-		var requestIDs []string
-		result := service.db.WithContext(ctx).
-			Model(&models.UsageAggregationJournal{}).
-			Where("bucket_start_ms < ?", cutoffMS).
-			Order("bucket_start_ms ASC").
-			Order("request_id ASC").
-			Limit(retentionBatchSize).
-			Pluck("request_id", &requestIDs)
-		if result.Error != nil {
-			if ctx.Err() == nil {
-				service.recordRetentionDeleteFailure(now)
-			}
-			return false
-		}
-		if len(requestIDs) == 0 {
-			return true
-		}
-
-		result = service.db.WithContext(ctx).
-			Where("request_id IN ?", requestIDs).
-			Delete(&models.UsageAggregationJournal{})
-		if result.Error != nil {
-			if ctx.Err() == nil {
-				service.recordRetentionDeleteFailure(now)
-			}
-			return false
-		}
-		if len(requestIDs) < retentionBatchSize {
 			return true
 		}
 	}

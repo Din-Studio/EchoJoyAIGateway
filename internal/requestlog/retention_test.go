@@ -15,9 +15,7 @@ import (
 
 	"gpt-load/internal/platform/redact"
 	"gpt-load/internal/storage/models"
-	"gpt-load/internal/telemetry"
 	"gpt-load/internal/testutil/pgtest"
-	"gpt-load/internal/usage"
 )
 
 func TestRetentionSweepUsesSnapshotRetentionPolicy(t *testing.T) {
@@ -99,7 +97,7 @@ func TestRetentionSweepDeletesStrictlyOlderRowsInBatches(t *testing.T) {
 	}
 }
 
-func TestRetentionSweepKeepsAggregatesAndExpiresJournalAtFixedThirtyFiveDayBoundary(t *testing.T) {
+func TestRetentionSweepKeepsHourlyAggregatesIndefinitely(t *testing.T) {
 	db := openRequestLogQueryDB(t)
 	service := NewService(
 		db,
@@ -107,11 +105,11 @@ func TestRetentionSweepKeepsAggregatesAndExpiresJournalAtFixedThirtyFiveDayBound
 		staticRetentionPolicy{days: 1},
 	)
 	now := time.Date(2026, time.July, 24, 12, 34, 56, 789_000_000, time.UTC)
-	const journalCutoffMS int64 = 1_781_870_400_000
+	const aggregateBoundaryMS int64 = 1_781_870_400_000
 	for index, bucketStartMS := range []int64{
-		journalCutoffMS - 3_600_000,
-		journalCutoffMS,
-		journalCutoffMS + 3_600_000,
+		aggregateBoundaryMS - 3_600_000,
+		aggregateBoundaryMS,
+		aggregateBoundaryMS + 3_600_000,
 	} {
 		if err := db.Create(&models.UsageStat{
 			BucketStartMS: bucketStartMS,
@@ -129,28 +127,6 @@ func TestRetentionSweepKeepsAggregatesAndExpiresJournalAtFixedThirtyFiveDayBound
 			t.Fatalf("create CredentialAttemptStat at %d: %v", bucketStartMS, err)
 		}
 	}
-	for index, item := range []struct {
-		bucketStartMS int64
-		applied       bool
-	}{
-		{bucketStartMS: journalCutoffMS - 3_600_000, applied: true},
-		{bucketStartMS: journalCutoffMS, applied: true},
-		{bucketStartMS: journalCutoffMS - 3_600_000, applied: false},
-	} {
-		if err := db.Create(&models.UsageAggregationJournal{
-			RequestID:     fmt.Sprintf("00000000-0000-4000-9000-%012d", index),
-			BucketStartMS: item.bucketStartMS,
-			AccessKeyID:   uint(index),
-			GroupID:       17,
-			Model:         "retention-model",
-			RequestCount:  1,
-			SuccessCount:  1,
-			Applied:       item.applied,
-		}).Error; err != nil {
-			t.Fatalf("create UsageAggregationJournal at %d: %v", item.bucketStartMS, err)
-		}
-	}
-
 	service.Sweep(context.Background(), now)
 
 	var remaining []models.UsageStat
@@ -158,9 +134,9 @@ func TestRetentionSweepKeepsAggregatesAndExpiresJournalAtFixedThirtyFiveDayBound
 		t.Fatalf("query remaining UsageStats: %v", err)
 	}
 	if len(remaining) != 3 ||
-		remaining[0].BucketStartMS != journalCutoffMS-3_600_000 ||
-		remaining[1].BucketStartMS != journalCutoffMS ||
-		remaining[2].BucketStartMS != journalCutoffMS+3_600_000 {
+		remaining[0].BucketStartMS != aggregateBoundaryMS-3_600_000 ||
+		remaining[1].BucketStartMS != aggregateBoundaryMS ||
+		remaining[2].BucketStartMS != aggregateBoundaryMS+3_600_000 {
 		t.Fatalf("remaining UsageStats = %+v, want all aggregate buckets", remaining)
 	}
 	var remainingAttempts []models.CredentialAttemptStat
@@ -168,21 +144,13 @@ func TestRetentionSweepKeepsAggregatesAndExpiresJournalAtFixedThirtyFiveDayBound
 		t.Fatalf("query remaining CredentialAttemptStats: %v", err)
 	}
 	if len(remainingAttempts) != 3 ||
-		remainingAttempts[0].BucketStartMS != journalCutoffMS-3_600_000 ||
-		remainingAttempts[1].BucketStartMS != journalCutoffMS ||
-		remainingAttempts[2].BucketStartMS != journalCutoffMS+3_600_000 {
+		remainingAttempts[0].BucketStartMS != aggregateBoundaryMS-3_600_000 ||
+		remainingAttempts[1].BucketStartMS != aggregateBoundaryMS ||
+		remainingAttempts[2].BucketStartMS != aggregateBoundaryMS+3_600_000 {
 		t.Fatalf(
 			"remaining CredentialAttemptStats = %+v, want all aggregate buckets",
 			remainingAttempts,
 		)
-	}
-	var journals []models.UsageAggregationJournal
-	if err := db.Order("request_id ASC").Find(&journals).Error; err != nil {
-		t.Fatalf("query remaining UsageAggregationJournals: %v", err)
-	}
-	if len(journals) != 1 || journals[0].BucketStartMS != journalCutoffMS ||
-		!journals[0].Applied {
-		t.Fatalf("remaining UsageAggregationJournals = %+v", journals)
 	}
 }
 
@@ -348,73 +316,6 @@ func TestRetentionSweepStopsOnContextAndDeleteFailure(t *testing.T) {
 		}
 	})
 
-}
-
-func TestRetentionReplayBoundaryKeepsAggregationIdempotentWithoutRequestLog(t *testing.T) {
-	db := openRequestLogQueryDB(t)
-	writer := &gormBatchWriter{db: db}
-	now := time.Date(2026, time.July, 24, 12, 0, 0, 0, time.UTC)
-	row := aggregationRow(aggregationRequestID(70), now.Add(-8*24*time.Hour), 15, "retention-aggregate")
-	row.Status = string(telemetry.RequestStatusSuccess)
-	row.UsageState = string(usage.StateComplete)
-	row.AttemptRows = []models.RequestLogAttempt{credentialAttemptRow(
-		row.ID,
-		1,
-		now.Add(-8*24*time.Hour),
-		23,
-		telemetry.FailureCategoryOK,
-	)}
-
-	if err := writer.WriteBatch(context.Background(), []models.RequestLog{row}); err != nil {
-		t.Fatalf("initial WriteBatch() error = %v", err)
-	}
-	assertRetentionReplayState(t, db, 1, 1)
-
-	if err := writer.WriteBatch(context.Background(), []models.RequestLog{row}); err != nil {
-		t.Fatalf("retained replay WriteBatch() error = %v", err)
-	}
-	assertRetentionReplayState(t, db, 1, 1)
-
-	newRequestLogTestService(db).Sweep(context.Background(), now)
-	assertRetentionReplayState(t, db, 0, 1)
-
-	if err := writer.WriteBatch(context.Background(), []models.RequestLog{row}); err != nil {
-		t.Fatalf("post-retention replay WriteBatch() error = %v", err)
-	}
-	assertRetentionReplayState(t, db, 1, 1)
-}
-
-func assertRetentionReplayState(
-	t *testing.T,
-	db *gorm.DB,
-	wantRequestLogs int64,
-	wantAggregatedRequests int64,
-) {
-	t.Helper()
-	var requestLogs int64
-	if err := db.Model(&models.RequestLog{}).Count(&requestLogs).Error; err != nil {
-		t.Fatalf("count RequestLogs: %v", err)
-	}
-	var stats []models.UsageStat
-	if err := db.Find(&stats).Error; err != nil {
-		t.Fatalf("query UsageStats: %v", err)
-	}
-	var attemptStats []models.CredentialAttemptStat
-	if err := db.Find(&attemptStats).Error; err != nil {
-		t.Fatalf("query CredentialAttemptStats: %v", err)
-	}
-	if requestLogs != wantRequestLogs || len(stats) != 1 ||
-		stats[0].RequestCount != wantAggregatedRequests || len(attemptStats) != 1 ||
-		attemptStats[0].SuccessCount != 1 || attemptStats[0].FailureCount != 0 {
-		t.Fatalf(
-			"retention replay state = logs:%d stats:%+v attempt stats:%+v, want logs:%d requests:%d and one attempt",
-			requestLogs,
-			stats,
-			attemptStats,
-			wantRequestLogs,
-			wantAggregatedRequests,
-		)
-	}
 }
 
 func createRetentionRow(t *testing.T, db *gorm.DB, index int, completedAt time.Time) {
