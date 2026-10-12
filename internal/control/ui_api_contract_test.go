@@ -15,20 +15,12 @@ func TestSharedAPIOperationsMatchUIContract(t *testing.T) {
 	if len(operations) == 0 {
 		t.Fatal("execution operation contract is empty")
 	}
-	for _, test := range []struct {
-		path  string
-		array string
-	}{
-		{"frontends/modern/api/logs.ts", "logOperations"},
-	} {
-		t.Run(test.path, func(t *testing.T) {
-			allowed := readUIContractArray(t, readUIContractFile(t, filepath.Join("web", "src", test.path)), test.array)
-			for _, operation := range operations {
-				if !allowed[operation[1]] {
-					t.Errorf("shared API operation %q is rejected by %s", operation[1], test.path)
-				}
-			}
-		})
+	logsPath := filepath.Join("web", "src", "frontends", "modern", "api", "logs.ts")
+	allowed := readUIContractArray(t, readUIContractFile(t, logsPath), "logOperations")
+	for _, operation := range operations {
+		if !allowed[operation[1]] {
+			t.Errorf("shared API operation %q is rejected by %s", operation[1], logsPath)
+		}
 	}
 }
 
