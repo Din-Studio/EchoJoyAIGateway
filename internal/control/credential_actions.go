@@ -148,14 +148,13 @@ func (s *Service) DownloadAllGroupCredentials(
 	return CredentialDownloadAllResult{Files: files, CredentialCount: len(rows)}, nil
 }
 
-// credentialTextLine 保持普通 Key 一行一个，结构化凭据保留完整 JSON 以便重新导入。
+// credentialTextLine 让每条凭据占一行：普通 Key 原样输出，其余凭据输出紧凑 JSON。
 func credentialTextLine(canonical json.RawMessage) (string, error) {
 	var fields map[string]string
 	if err := json.Unmarshal(canonical, &fields); err != nil {
 		return "", app_errors.ErrInternalServer
 	}
-	if key, ok := fields["api_key"]; ok && len(fields) == 1 &&
-		!strings.ContainsAny(key, "\r\n") && !strings.HasPrefix(key, "{") {
+	if key, ok := fields["api_key"]; ok && len(fields) == 1 && !strings.ContainsAny(key, "\r\n") {
 		return key, nil
 	}
 	var compact bytes.Buffer

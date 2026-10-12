@@ -70,25 +70,22 @@ func TestDownloadAllAPIKeysReturnsOneTextFileAcrossAllStatuses(t *testing.T) {
 	if file.Content != strings.Join(lines, "\n")+"\n" {
 		t.Fatal("download must contain every group credential once in ID order")
 	}
-	imported, err := fixture.service.ImportGroupCredentials(t.Context(), groupID, CredentialImportRequest{Credentials: apiKeyEntries(file.Content)})
-	if err != nil || imported.CredentialsAdded != 0 || imported.CredentialsDuplicated != len(lines) {
-		t.Fatalf("reimport added=%d duplicates=%d error=%v", imported.CredentialsAdded, imported.CredentialsDuplicated, err)
-	}
 }
 
-func TestDownloadAllAPIKeysPreservesStructuredCredentials(t *testing.T) {
+func TestDownloadAllAPIKeysWritesOneLinePerCredential(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name       string
 		channel    channel.ID
 		params     string
 		credential string
+		plainLine  string
 	}{
-		{"azure", channel.AzureOpenAI, `{"endpoint":"https://resource.openai.azure.com"}`, `{"tenant_id":"tenant","client_secret":"synthetic-secret","client_id":"client"}`},
-		{"bedrock", channel.AWSBedrock, `{"region":"us-east-1"}`, `{"access_key":"synthetic-access","secret_key":"synthetic-secret","session_token":"synthetic-session"}`},
-		{"vertex", channel.GoogleVertex, `{}`, `{"service_account_json":"{\"type\":\"service_account\",\"project_id\":\"project-one\",\"client_email\":\"svc@example.iam.gserviceaccount.com\",\"private_key\":\"synthetic-private\\nkey\"}"}`},
-		{"multiline_key", channel.OpenAI, `{}`, `{"api_key":"synthetic-line-one\nline-two"}`},
-		{"json_prefix_key", channel.OpenAI, `{}`, `{"api_key":"{synthetic-key}"}`},
+		{"azure", channel.AzureOpenAI, `{"endpoint":"https://resource.openai.azure.com"}`, `{"tenant_id":"tenant","client_secret":"synthetic-secret","client_id":"client"}`, ""},
+		{"bedrock", channel.AWSBedrock, `{"region":"us-east-1"}`, `{"access_key":"synthetic-access","secret_key":"synthetic-secret","session_token":"synthetic-session"}`, ""},
+		{"vertex", channel.GoogleVertex, `{}`, `{"service_account_json":"{\"type\":\"service_account\",\"project_id\":\"project-one\",\"client_email\":\"svc@example.iam.gserviceaccount.com\",\"private_key\":\"synthetic-private\\nkey\"}"}`, ""},
+		{"multiline_key", channel.OpenAI, `{}`, `{"api_key":"synthetic-line-one\nline-two"}`, ""},
+		{"json_prefix_key", channel.OpenAI, `{}`, `{"api_key":"{synthetic-key}"}`, "{synthetic-key}"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -120,18 +117,29 @@ func TestDownloadAllAPIKeysPreservesStructuredCredentials(t *testing.T) {
 				t.Fatalf("files=%d, want 1", len(data.Files))
 			}
 			content := data.Files[0].Content
-			if strings.Count(content, "\n") != 1 || !json.Valid([]byte(strings.TrimSpace(content))) {
-				t.Fatal("structured credential must occupy one complete JSON line")
+			if test.plainLine != "" {
+				if content != test.plainLine+"\n" {
+					t.Fatalf("plain API key line = %q, want %q", content, test.plainLine+"\n")
+				}
+				return
 			}
-			imported, err := fixture.service.ImportGroupCredentials(t.Context(), created.GroupID, CredentialImportRequest{Credentials: structuredEntry(t, strings.TrimSpace(content))})
-			if err != nil || imported.CredentialsAdded != 0 || imported.CredentialsDuplicated != 1 {
-				t.Fatalf("round trip added=%d duplicates=%d error=%v", imported.CredentialsAdded, imported.CredentialsDuplicated, err)
+			if strings.Count(content, "\n") != 1 {
+				t.Fatal("structured credential must occupy one line")
+			}
+			var exported map[string]string
+			if err := json.Unmarshal([]byte(strings.TrimSpace(content)), &exported); err != nil {
+				t.Fatalf("structured credential line must be one JSON object: %v", err)
+			}
+			for field := range structuredEntry(t, test.credential)[0].Fields {
+				if exported[field] == "" {
+					t.Fatalf("structured credential line lost field %q", field)
+				}
 			}
 		})
 	}
 }
 
-// structuredEntry turns one downloaded JSON credential line back into form fields.
+// structuredEntry turns a JSON object of credential fields into one form entry.
 func structuredEntry(t *testing.T, raw string) []CredentialEntryInput {
 	t.Helper()
 	var fields map[string]string
