@@ -25,7 +25,7 @@ func TestGPTLoadChannelContract(t *testing.T) {
 	if !reflect.DeepEqual(descriptor.SearchTerms, wantSearchTerms) {
 		t.Fatalf("GPT-Load search terms = %#v, want %#v", descriptor.SearchTerms, wantSearchTerms)
 	}
-	if descriptor.Connection.Type != "api_key" || descriptor.Connection.CredentialInput != "batch_text" {
+	if descriptor.Connection.Type != "api_key" || descriptor.Connection.CredentialInput != "entries" {
 		t.Fatalf("GPT-Load connection = %#v", descriptor.Connection)
 	}
 	if len(descriptor.ParamFields) != 1 {

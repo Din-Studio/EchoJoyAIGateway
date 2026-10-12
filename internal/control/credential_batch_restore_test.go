@@ -22,7 +22,7 @@ func TestBatchRestoreAllCredentialsPreservesConfigurationAndHistory(t *testing.T
 	other, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: stringPointer("other restore group"), ChannelID: channel.OpenAI,
 		Params: json.RawMessage(`{}`), Models: optionalGroupModels{Set: true},
-		Credentials: "other-secret", ConnectionType: models.ConnectionTypeAPIKey, ConfirmSameTarget: true,
+		Credentials: apiKeyEntries("other-secret"), ConnectionType: models.ConnectionTypeAPIKey, ConfirmSameTarget: true,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -16,12 +16,12 @@ import (
 )
 
 type ModelDiscoveryRequest struct {
-	ChannelID          channel.ID            `json:"channel_id"`
-	ConnectionType     models.ConnectionType `json:"connection_type"`
-	Params             json.RawMessage       `json:"params"`
-	Credentials        string                `json:"credentials"`
-	StagedCredentialID string                `json:"staged_credential_id"`
-	Proxy              *outboundproxy.Config `json:"proxy"`
+	ChannelID          channel.ID             `json:"channel_id"`
+	ConnectionType     models.ConnectionType  `json:"connection_type"`
+	Params             json.RawMessage        `json:"params"`
+	Credentials        []CredentialEntryInput `json:"credentials"`
+	StagedCredentialID string                 `json:"staged_credential_id"`
+	Proxy              *outboundproxy.Config  `json:"proxy"`
 }
 
 type ModelDiscoveryResult struct {
@@ -59,7 +59,7 @@ func (s *Service) DiscoverModels(
 	}
 	if bindings.ModelDiscovery != "" {
 		if connectionType != models.ConnectionTypeSubscription ||
-			strings.TrimSpace(request.Credentials) != "" || strings.TrimSpace(request.StagedCredentialID) == "" {
+			len(request.Credentials) != 0 || strings.TrimSpace(request.StagedCredentialID) == "" {
 			return ModelDiscoveryResult{}, app_errors.ErrValidation
 		}
 		network, networkErr := s.draftNetworkContext(ctx, request.Proxy)
@@ -74,7 +74,7 @@ func (s *Service) DiscoverModels(
 		return ModelDiscoveryResult{}, app_errors.ErrValidation
 	}
 	if connectionType == models.ConnectionTypeSubscription &&
-		(strings.TrimSpace(request.Credentials) != "" || strings.TrimSpace(request.StagedCredentialID) == "") {
+		(len(request.Credentials) != 0 || strings.TrimSpace(request.StagedCredentialID) == "") {
 		return ModelDiscoveryResult{}, app_errors.ErrValidation
 	}
 	var discoveryCredentials []discoveryCredential

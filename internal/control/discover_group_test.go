@@ -706,7 +706,7 @@ func TestDiscoverGroupModelsDoesNotMutateDatabaseSnapshotOrRegistry(t *testing.T
 			created, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 				ChannelID:   channel.OpenAICompatible,
 				Params:      []byte(`{"base_url":"https://state.example.com/v1"}`),
-				Credentials: "state-key",
+				Credentials: apiKeyEntries("state-key"),
 				Models: optionalGroupModels{
 					Set: true, Values: []GroupModel{{ID: "persisted-model"}},
 				}, ConnectionType: "api_key",
@@ -746,7 +746,7 @@ func TestDiscoverGroupModelsDoesNotAcquireWriteMuOrBlockWrites(t *testing.T) {
 		ChannelID:   channel.OpenAICompatible,
 		Params:      []byte(`{"base_url":"https://discovery-lock.example.com/v1"}`),
 		Models:      optionalGroupModels{Set: true, Values: []GroupModel{}},
-		Credentials: "key-1", ConnectionType: "api_key",
+		Credentials: apiKeyEntries("key-1"), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatalf("seed CreateGroup() error = %v", err)
@@ -807,7 +807,7 @@ func TestDiscoverGroupModelsDoesNotAcquireWriteMuOrBlockWrites(t *testing.T) {
 			ChannelID:   channel.Anthropic,
 			Params:      []byte(`{"base_url":"https://concurrent-group-write.example.com"}`),
 			Models:      optionalGroupModels{Set: true, Values: []GroupModel{}},
-			Credentials: "concurrent-group-key", ConnectionType: "api_key",
+			Credentials: apiKeyEntries("concurrent-group-key"), ConnectionType: "api_key",
 		})
 		groupWriteDone <- err
 	}()
@@ -823,7 +823,7 @@ func TestDiscoverGroupModelsDoesNotAcquireWriteMuOrBlockWrites(t *testing.T) {
 	keyWriteDone := make(chan error, 1)
 	go func() {
 		_, err := fixture.service.ImportGroupCredentials(t.Context(), created.GroupID, CredentialImportRequest{
-			Credentials: "concurrent-imported-key",
+			Credentials: apiKeyEntries("concurrent-imported-key"),
 		})
 		keyWriteDone <- err
 	}()

@@ -23,7 +23,7 @@ func TestSub2APIChannelContract(t *testing.T) {
 	if !reflect.DeepEqual(descriptor.SearchTerms, []string{"sub 2 api", "s2a"}) {
 		t.Fatalf("Sub2API search terms = %#v", descriptor.SearchTerms)
 	}
-	if descriptor.Connection.Type != "api_key" || descriptor.Connection.CredentialInput != "batch_text" {
+	if descriptor.Connection.Type != "api_key" || descriptor.Connection.CredentialInput != "entries" {
 		t.Fatalf("Sub2API connection = %#v", descriptor.Connection)
 	}
 	if len(descriptor.ParamFields) != 1 {

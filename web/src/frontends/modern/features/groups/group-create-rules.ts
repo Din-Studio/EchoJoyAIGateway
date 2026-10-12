@@ -1,4 +1,5 @@
-import type { GroupChannel, ModelDraft } from '@modern/api/group-create'
+import type { CredentialEntryInput, ModelDraft } from '@modern/api/group-create'
+import type { ApiError } from '@shared/http/errors'
 
 export interface GroupDraftModel extends ModelDraft {
   key: number
@@ -19,22 +20,56 @@ export function modelErrors(models: readonly GroupDraftModel[]): Map<number, 'id
   return errors
 }
 
-export function credentialCount(raw: string, channel: GroupChannel | undefined): number {
-  const value = raw.trim()
-  if (!value) return 0
+export const maxCredentialEntries = 500
+
+// 每行一条 API 密钥凭据；key 只用于列表渲染，不提交。
+export interface CredentialEntryDraft {
+  key: number
+  fields: Record<string, string>
+  concurrencyLimit: string
+}
+// 留空表示不限，与后端的 0 一致。
+export function concurrencyLimitInvalid(value: string): boolean {
+  return Boolean(value) && (!/^\d+$/u.test(value) || Number(value) > 10000)
+}
+export function credentialEntryFilled(entry: CredentialEntryDraft): boolean {
+  return Object.values(entry.fields).some((value) => value.trim())
+}
+export function filledCredentialEntries(
+  entries: readonly CredentialEntryDraft[],
+): CredentialEntryDraft[] {
+  return entries.filter(credentialEntryFilled)
+}
+export function credentialEntriesInvalid(entries: readonly CredentialEntryDraft[]): boolean {
+  return filledCredentialEntries(entries).some((entry) =>
+    concurrencyLimitInvalid(entry.concurrencyLimit),
+  )
+}
+export function credentialEntriesPayload(
+  entries: readonly CredentialEntryDraft[],
+): CredentialEntryInput[] {
+  return filledCredentialEntries(entries).map((entry) => ({
+    fields: { ...entry.fields },
+    concurrency_limit: Number(entry.concurrencyLimit || 0),
+  }))
+}
+// 后端只在凭据校验失败时返回条目序号和字段名，其余错误交给调用方的通用文案。
+export function credentialFieldError(
+  error: ApiError,
+): { entry: number; field: string } | undefined {
+  const data = error.data
   if (
-    channel &&
-    (channel.credentialFields.length !== 1 || channel.credentialFields[0]?.key !== 'api_key') &&
-    value.startsWith('{')
-  ) {
-    try {
-      const parsed: unknown = JSON.parse(value)
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return 1
-    } catch {
-      /* 多行 JSON 凭据继续按行统计，完整校验交给后端。 */
-    }
-  }
-  return value.split(/\r?\n/u).filter((line) => line.trim()).length
+    error.code === 'VALIDATION_FAILED' &&
+    data &&
+    typeof data === 'object' &&
+    'entry' in data &&
+    typeof data.entry === 'number' &&
+    Number.isSafeInteger(data.entry) &&
+    'field' in data &&
+    typeof data.field === 'string' &&
+    /^[a-z][a-z0-9_]*$/u.test(data.field)
+  )
+    return { entry: data.entry, field: data.field }
 }
 export function validBaseURL(value: string): boolean {
   try {

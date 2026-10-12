@@ -5,9 +5,17 @@ import { useI18n } from 'vue-i18n'
 import type { GroupChannel, GroupCreateResult } from '@modern/api/group-create'
 import type { CredentialStage } from '@modern/api/credential-stages'
 import type { GroupRow } from '@modern/api/groups'
-import { AppButton, AppNotice, AppTextArea } from '@modern/components/ui'
+import { AppButton, AppNotice } from '@modern/components/ui'
 import { useApiClient } from '@shared/http/client-context'
-import { credentialCount } from './group-create-rules'
+import {
+  credentialEntriesInvalid,
+  credentialFieldError,
+  credentialEntriesPayload,
+  filledCredentialEntries,
+  maxCredentialEntries,
+  type CredentialEntryDraft,
+} from './group-create-rules'
+import CredentialEntryList from './CredentialEntryList.vue'
 import { useGroupCreateOperation } from './group-create-operation'
 import GroupWorkspacePanel from './GroupWorkspacePanel.vue'
 import SubscriptionCredentialStager from './SubscriptionCredentialStager.vue'
@@ -16,7 +24,9 @@ const props = defineProps<{ group: GroupRow; channel: GroupChannel }>()
 const emit = defineEmits<{ close: []; saved: [result: GroupCreateResult] }>()
 const { t, n, te } = useI18n()
 const client = useApiClient()
-const credentials = ref('')
+const credentials = ref<CredentialEntryDraft[]>([])
+const credentialList = ref<InstanceType<typeof CredentialEntryList>>()
+const attempted = ref(false)
 const completed = ref(false)
 const stages = ref<CredentialStage[]>([])
 const stageBusy = ref(false)
@@ -28,7 +38,7 @@ const subscription = computed(() => props.group.connectionType === 'subscription
 const count = computed(() =>
   subscription.value
     ? stages.value.filter((stage) => stage.status === 'ready').length
-    : credentialCount(credentials.value, props.channel),
+    : filledCredentialEntries(credentials.value).length,
 )
 const awaiting = computed(() =>
   stages.value.some((stage) =>
@@ -43,7 +53,10 @@ const dirty = computed(
   () =>
     !completed.value &&
     Boolean(
-      credentials.value || stages.value.length || stageDirty.value || operation.operation.value,
+      (!subscription.value && count.value) ||
+      stages.value.length ||
+      stageDirty.value ||
+      operation.operation.value,
     ),
 )
 async function execute(): Promise<void> {
@@ -51,13 +64,18 @@ async function execute(): Promise<void> {
   if (!result) return
   if (result.kind === 'success') {
     completed.value = true
-    credentials.value = ''
+    credentials.value = []
     operation.reset()
     emit('saved', result.result)
     emit('close')
   } else if (result.kind === 'rejected') {
     const key = 'subscriptions.errors.' + result.error.code
-    error.value = te(key) ? t(key) : t('groupDetail.importFailed')
+    const fieldError = credentialFieldError(result.error)
+    error.value = te(key)
+      ? t(key)
+      : fieldError
+        ? t('groupCreate.credentialFieldError', fieldError)
+        : t('groupDetail.importFailed')
     operation.reset()
   }
 }
@@ -80,12 +98,20 @@ async function save(): Promise<void> {
       group: { id: props.group.id, name: props.group.name },
       stageIDs: ready.map((stage) => stage.id),
     })
-  } else
+  } else {
+    attempted.value = true
+    if (count.value > maxCredentialEntries || credentialEntriesInvalid(credentials.value)) {
+      credentialList.value?.focus()
+      return
+    }
+    // 去掉空行，使后端返回的条目序号与界面行号一致。
+    credentials.value = filledCredentialEntries(credentials.value)
     operation.begin({
       kind: 'append',
       group: { id: props.group.id, name: props.group.name },
-      credentials: credentials.value,
+      credentials: credentialEntriesPayload(credentials.value),
     })
+  }
   await execute()
 }
 useMessageSource(() => (error.value ? { text: error.value, tone: 'danger' } : undefined))
@@ -111,15 +137,16 @@ useMessageSource(() => (error.value ? { text: error.value, tone: 'danger' } : un
       @busy="stageBusy = $event"
       @dirty="stageDirty = $event"
     />
-    <AppTextArea
+    <CredentialEntryList
       v-else
+      ref="credentialList"
       v-model="credentials"
-      :label="t('groupCreate.credentials')"
-      :description="t('groupDetail.credentialsHelp')"
-      :rows="12"
+      :channel="channel"
       :disabled="locked"
-      autocomplete="off"
-      spellcheck="false"
+      :attempted="attempted"
+      :error="
+        attempted && count > maxCredentialEntries ? t('groupCreate.credentialsLimit') : undefined
+      "
     />
     <AppNotice v-if="uncertain" tone="warning">
       {{ t('groupCreate.outcome.' + outcome!.kind) }}

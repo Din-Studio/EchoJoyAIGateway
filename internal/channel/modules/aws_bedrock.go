@@ -21,7 +21,7 @@ func AWSBedrock() spec.Module {
 			Description: "Amazon Bedrock",
 			Connection: spec.Connection{
 				Type:            spec.ConnectionAPIKey,
-				CredentialInput: "batch_text",
+				CredentialInput: "entries",
 			},
 			Params: []spec.Field{{
 				Key: "region", Label: "AWS region", InputKind: spec.InputText,

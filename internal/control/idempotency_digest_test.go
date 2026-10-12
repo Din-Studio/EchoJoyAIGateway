@@ -117,49 +117,32 @@ func TestIdempotencyDigestV1MatchesAccessKeyCreateFixture(t *testing.T) {
 	}
 }
 
-func TestNormalizeIdempotencyKeyLinesPreservesSortedMultiplicity(t *testing.T) {
+func TestCredentialEntriesDigestIgnoresOrderAndWhitespaceButKeepsLimitsAndMultiplicity(t *testing.T) {
 	t.Parallel()
-	one, err := normalizeIdempotencyKeyLines(" K \r\n")
-	if err != nil {
-		t.Fatalf("normalizeIdempotencyKeyLines(K) error = %v", err)
+	body := func(entries []CredentialEntryInput) string {
+		t.Helper()
+		normalized, err := credentialEntriesDigest(entries)
+		if err != nil {
+			t.Fatalf("credentialEntriesDigest() error = %v", err)
+		}
+		encoded, err := canonicalIdempotencyBody(credentialImportDigestBody{Credentials: normalized})
+		if err != nil {
+			t.Fatalf("canonicalIdempotencyBody() error = %v", err)
+		}
+		return string(encoded)
 	}
-	two, err := normalizeIdempotencyKeyLines("K\r\n K\n")
-	if err != nil {
-		t.Fatalf("normalizeIdempotencyKeyLines(K twice) error = %v", err)
+	entry := func(key string, limit int) CredentialEntryInput {
+		return CredentialEntryInput{Fields: map[string]string{"api_key": key}, ConcurrencyLimit: limit}
 	}
-	if len(one) != 1 || one[0] != "K" {
-		t.Fatalf("one = %#v, want [K]", one)
+	base := body([]CredentialEntryInput{entry("A", 2), entry("B", 0)})
+	if got := body([]CredentialEntryInput{entry(" B ", 0), entry("A", 2)}); got != base {
+		t.Fatalf("reordered body = %s, want %s", got, base)
 	}
-	if len(two) != 2 || two[0] != "K" || two[1] != "K" {
-		t.Fatalf("two = %#v, want [K K]", two)
+	if got := body([]CredentialEntryInput{entry("A", 3), entry("B", 0)}); got == base {
+		t.Fatal("changing a concurrency limit kept the same digest body")
 	}
-
-	oneBody, err := canonicalIdempotencyBody(map[string]any{"credentials": one})
-	if err != nil {
-		t.Fatalf("canonicalIdempotencyBody(one) error = %v", err)
-	}
-	twoBody, err := canonicalIdempotencyBody(map[string]any{"credentials": two})
-	if err != nil {
-		t.Fatalf("canonicalIdempotencyBody(two) error = %v", err)
-	}
-	oneDigest, err := buildIdempotencyDigest(idempotencyDigestInput{
-		Version: 1, Method: "POST", OperationKind: operationKindCredentialImport,
-		PathTemplate: "/api/groups/:group_id/credentials/import", ResourceLocator: "group:7",
-		AuthScopeID: "control-admin-v1", CanonicalBody: oneBody,
-	})
-	if err != nil {
-		t.Fatalf("buildIdempotencyDigest(one) error = %v", err)
-	}
-	twoDigest, err := buildIdempotencyDigest(idempotencyDigestInput{
-		Version: 1, Method: "POST", OperationKind: operationKindCredentialImport,
-		PathTemplate: "/api/groups/:group_id/credentials/import", ResourceLocator: "group:7",
-		AuthScopeID: "control-admin-v1", CanonicalBody: twoBody,
-	})
-	if err != nil {
-		t.Fatalf("buildIdempotencyDigest(two) error = %v", err)
-	}
-	if oneDigest.Digest == twoDigest.Digest {
-		t.Fatal("K and K\\nK produced the same digest")
+	if body([]CredentialEntryInput{entry("K", 0)}) == body([]CredentialEntryInput{entry("K", 0), entry("K", 0)}) {
+		t.Fatal("K and K twice produced the same digest body")
 	}
 }
 

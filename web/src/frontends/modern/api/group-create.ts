@@ -59,7 +59,7 @@ export async function getGroupChannels(
     )
     if (
       connection.credential_input !==
-        (connectionType === 'api_key' ? 'batch_text' : 'authorization') ||
+        (connectionType === 'api_key' ? 'entries' : 'authorization') ||
       (connectionType === 'subscription' && !authorizationMethods.length) ||
       (connectionType === 'api_key' && authorizationMethods.length) ||
       new Set(authorizationMethods).size !== authorizationMethods.length
@@ -126,8 +126,13 @@ export interface GroupConnectionDraft {
   params: Record<string, string>
   proxy?: ProxyOverride
 }
+// fields 按渠道 credential_fields 填写；concurrency_limit 为 0 表示不限。
+export interface CredentialEntryInput {
+  fields: Record<string, string>
+  concurrency_limit: number
+}
 export type GroupCreateCredentials =
-  | { connection_type: 'api_key'; credentials: string }
+  | { connection_type: 'api_key'; credentials: CredentialEntryInput[] }
   | { connection_type: 'subscription'; staged_credential_ids: string[] }
 export type GroupCreateRequest = GroupConnectionDraft &
   GroupCreateCredentials & {
@@ -146,7 +151,7 @@ export async function discoverGroupDraftModels(
   client: ApiClient,
   body: GroupConnectionDraft &
     (
-      | { connection_type: 'api_key'; credentials: string }
+      | { connection_type: 'api_key'; credentials: CredentialEntryInput[] }
       | { connection_type: 'subscription'; staged_credential_id: string }
     ),
   signal: AbortSignal,
@@ -180,7 +185,7 @@ export async function createGroup(
 export async function appendAPIKeyCredentials(
   client: ApiClient,
   group: { id: number; name: string },
-  credentials: string,
+  credentials: CredentialEntryInput[],
   key: string,
   signal: AbortSignal,
 ): Promise<GroupCreateResult> {

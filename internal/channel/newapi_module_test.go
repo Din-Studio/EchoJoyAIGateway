@@ -21,7 +21,7 @@ func TestNewAPIChannelContract(t *testing.T) {
 	if descriptor.Name != "New API" || descriptor.Mark != "NA" || descriptor.Icon != "new-api" {
 		t.Fatalf("New API identity = %#v", descriptor)
 	}
-	if descriptor.Connection.Type != "api_key" || descriptor.Connection.CredentialInput != "batch_text" {
+	if descriptor.Connection.Type != "api_key" || descriptor.Connection.CredentialInput != "entries" {
 		t.Fatalf("New API connection = %#v", descriptor.Connection)
 	}
 	if len(descriptor.ParamFields) != 1 {

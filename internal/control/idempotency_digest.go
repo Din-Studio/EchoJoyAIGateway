@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -122,25 +123,25 @@ func canonicalIdempotencyBody(value any) ([]byte, error) {
 	return body, nil
 }
 
-func normalizeIdempotencyKeyLines(raw string) ([]string, error) {
-	normalizedNewlines := strings.ReplaceAll(raw, "\r\n", "\n")
-	normalizedNewlines = strings.ReplaceAll(normalizedNewlines, "\r", "\n")
-	lines := make([]string, 0)
-	for _, line := range strings.Split(normalizedNewlines, "\n") {
-		normalized := strings.TrimSpace(line)
-		if normalized == "" {
-			continue
-		}
-		lines = append(lines, normalized)
-		if len(lines) > maxCredentialLines {
-			return nil, app_errors.ErrValidation
-		}
-	}
-	if len(lines) == 0 {
+// credentialEntriesDigest makes the digest independent of row order and of
+// whitespace the credential normalizer would trim anyway.
+func credentialEntriesDigest(entries []CredentialEntryInput) ([]json.RawMessage, error) {
+	if len(entries) == 0 || len(entries) > maxCredentialEntries {
 		return nil, app_errors.ErrValidation
 	}
-	sort.Slice(lines, func(left, right int) bool {
-		return bytes.Compare([]byte(lines[left]), []byte(lines[right])) < 0
+	digest := make([]json.RawMessage, 0, len(entries))
+	for _, entry := range entries {
+		encoded, err := canonicaljson.Marshal(CredentialEntryInput{
+			Fields:           trimmedCredentialFields(entry.Fields),
+			ConcurrencyLimit: entry.ConcurrencyLimit,
+		})
+		if err != nil {
+			return nil, app_errors.ErrInternalServer
+		}
+		digest = append(digest, encoded)
+	}
+	sort.Slice(digest, func(left, right int) bool {
+		return bytes.Compare(digest[left], digest[right]) < 0
 	})
-	return lines, nil
+	return digest, nil
 }

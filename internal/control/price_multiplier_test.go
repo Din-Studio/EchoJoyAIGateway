@@ -169,7 +169,7 @@ func TestPriceMultiplierGroupDefaultPreservesLegacyDigest(t *testing.T) {
 	fixture := newServiceFixture(t)
 	request := GroupCreateRequest{
 		Name: stringPointer("legacy multiplier"), ChannelID: channel.OpenAI, ConnectionType: "api_key",
-		Params: json.RawMessage(`{}`), Models: optionalGroupModels{Set: true}, Credentials: "K",
+		Params: json.RawMessage(`{}`), Models: optionalGroupModels{Set: true}, Credentials: apiKeyEntries("K"),
 	}
 	const idempotencyKey = "218f47a2-9c35-4d6e-8b1a-123456789013"
 	created, err := fixture.service.CreateGroupIdempotent(t.Context(), idempotencyKey, request)
@@ -179,7 +179,7 @@ func TestPriceMultiplierGroupDefaultPreservesLegacyDigest(t *testing.T) {
 	legacyDigest, err := buildIdempotencyDigest(idempotencyDigestInput{
 		Version: 1, Method: "POST", OperationKind: operationKindGroupCreate,
 		PathTemplate: "/api/groups", ResourceLocator: "new", AuthScopeID: idempotencyAuthScopeID,
-		CanonicalBody: []byte(`{"channel_id":"openai","connection_type":"api_key","credentials":["K"],"models":null,"name":"legacy multiplier","params":{}}`),
+		CanonicalBody: []byte(`{"channel_id":"openai","connection_type":"api_key","credentials":[{"concurrency_limit":0,"fields":{"api_key":"K"}}],"models":null,"name":"legacy multiplier","params":{}}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +203,7 @@ func TestPriceMultiplierCreationAndIdempotency(t *testing.T) {
 	request := GroupCreateRequest{
 		Name: stringPointer("multiplier-group"), ChannelID: channel.OpenAICompatible,
 		ConnectionType: "api_key", Params: json.RawMessage(`{"base_url":"https://multiplier.example/v1"}`),
-		Models: optionalGroupModels{Set: true, Values: []GroupModel{{ID: "model"}}}, Credentials: "sk-multiplier",
+		Models: optionalGroupModels{Set: true, Values: []GroupModel{{ID: "model"}}}, Credentials: apiKeyEntries("sk-multiplier"),
 		PriceMultiplier: optionalField[string]{Set: true, Value: "0"},
 	}
 	created, err := fixture.service.CreateGroupIdempotent(t.Context(), "218f47a2-9c35-4d6e-8b1a-123456789008", request)
@@ -273,7 +273,7 @@ func TestPriceMultiplierConfigurationRejectsInvalidValues(t *testing.T) {
 				assertAPIErrorCode(t, err, app_errors.ErrValidation.Code)
 			}
 			var groupCreate GroupCreateRequest
-			if err := json.Unmarshal([]byte(`{"name":"bad multiplier group","channel_id":"openai","connection_type":"api_key","params":{},"models":[],"credentials":"sk-invalid","price_multiplier":`+raw+`}`), &groupCreate); err == nil {
+			if err := json.Unmarshal([]byte(`{"name":"bad multiplier group","channel_id":"openai","connection_type":"api_key","params":{},"models":[],"credentials":[{"fields":{"api_key":"sk-invalid"}}],"price_multiplier":`+raw+`}`), &groupCreate); err == nil {
 				_, err = fixture.service.CreateGroup(t.Context(), groupCreate)
 				assertAPIErrorCode(t, err, app_errors.ErrValidation.Code)
 			}

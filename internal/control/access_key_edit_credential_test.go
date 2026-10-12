@@ -94,7 +94,7 @@ func TestEditAccessKeyReplaysEquivalentFilters(t *testing.T) {
 		group, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 			ChannelID: channel.OpenAICompatible, ConnectionType: models.ConnectionTypeAPIKey,
 			Params: json.RawMessage(fmt.Sprintf(`{"base_url":"https://group-%d.example.com/v1"}`, index)),
-			Models: optionalGroupModels{Set: true, Values: []GroupModel{}}, Credentials: "test-credential",
+			Models: optionalGroupModels{Set: true, Values: []GroupModel{}}, Credentials: apiKeyEntries("test-credential"),
 		})
 		if err != nil {
 			t.Fatal(err)

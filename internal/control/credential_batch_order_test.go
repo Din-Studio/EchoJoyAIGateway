@@ -135,7 +135,7 @@ func TestBatchAllCredentialsAffectsOnlyCurrentGroup(t *testing.T) {
 		ChannelID:         channel.OpenAI,
 		Params:            json.RawMessage(`{}`),
 		Models:            optionalGroupModels{Set: true, Values: []GroupModel{{ID: "gpt-4o"}}},
-		Credentials:       "other-secret",
+		Credentials:       apiKeyEntries("other-secret"),
 		ConnectionType:    models.ConnectionTypeAPIKey,
 		ConfirmSameTarget: true,
 	})

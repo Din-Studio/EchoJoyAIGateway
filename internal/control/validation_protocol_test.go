@@ -140,7 +140,7 @@ func TestGatewayValidationProtocolsAndExplicitSelection(t *testing.T) {
 			fixture := newServiceFixture(t)
 			created, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 				ChannelID: id, Params: json.RawMessage(`{"base_url":"https://gateway.example/team-a"}`),
-				ConnectionType: "api_key", Credentials: "gateway-probe-test-secret",
+				ConnectionType: "api_key", Credentials: apiKeyEntries("gateway-probe-test-secret"),
 				Models: optionalGroupModels{Set: true, Values: []GroupModel{{ID: "probe-model", Alias: "client-alias", AliasEnabled: true}}},
 			})
 			if err != nil {

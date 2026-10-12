@@ -134,12 +134,4 @@ export default {
   },
   navigation: '主导航',
   skipToContent: '跳到主要内容',
-  interfaceSettings: '界面设置',
-  frontend: {
-    description: '切换后重新加载，仅影响当前浏览器。',
-    current: '当前界面',
-    saveFailed: '无法保存界面偏好，请允许本站使用浏览器存储后重试。',
-    modern: { title: '现代版' },
-    classic: { title: '经典版' },
-  },
 }

@@ -60,7 +60,7 @@ func TestExternalDatabaseGroupPriceReconciliation(t *testing.T) {
 			Models: optionalGroupModels{Set: true, Values: []GroupModel{{
 				ID: modelID,
 			}}},
-			Credentials: fmt.Sprintf("sk-external-control-%d", suffix), ConnectionType: "api_key",
+			Credentials: apiKeyEntries(fmt.Sprintf("sk-external-control-%d", suffix)), ConnectionType: "api_key",
 		})
 		if err != nil {
 			t.Fatalf("CreateGroup(%q) error = %v", name, err)

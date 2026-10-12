@@ -136,12 +136,4 @@ export default {
   },
   navigation: 'メインナビゲーション',
   skipToContent: 'メインコンテンツへ移動',
-  interfaceSettings: '画面設定',
-  frontend: {
-    description: '切り替えると再読み込みされ、このブラウザにのみ適用されます。',
-    current: '現在の画面',
-    saveFailed: '設定を保存できません。このサイトのブラウザストレージを許可してください。',
-    modern: { title: 'モダン版' },
-    classic: { title: 'クラシック版' },
-  },
 }

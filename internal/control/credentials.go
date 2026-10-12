@@ -20,8 +20,15 @@ import (
 	"gpt-load/internal/storage/models"
 )
 
+// CredentialEntryInput is one API-key credential entered by an operator.
+// Fields follows the channel's credential_fields; ConcurrencyLimit 0 means unlimited.
+type CredentialEntryInput struct {
+	Fields           map[string]string `json:"fields"`
+	ConcurrencyLimit int               `json:"concurrency_limit"`
+}
+
 type CredentialImportRequest struct {
-	Credentials string `json:"credentials"`
+	Credentials []CredentialEntryInput `json:"credentials"`
 }
 
 type CredentialImportResult struct {

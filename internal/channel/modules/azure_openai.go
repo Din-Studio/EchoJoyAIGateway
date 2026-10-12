@@ -21,7 +21,7 @@ func AzureOpenAI() spec.Module {
 			Description: "Azure OpenAI and Microsoft Foundry",
 			Connection: spec.Connection{
 				Type:            spec.ConnectionAPIKey,
-				CredentialInput: "batch_text",
+				CredentialInput: "entries",
 			},
 			Params: []spec.Field{{
 				Key: "endpoint", Label: "Azure endpoint", InputKind: spec.InputURL,

@@ -30,3 +30,9 @@
 - **Focus**: Finish current work before pursuing adjacent ideas.
 
 Relax the format for explanations, destructive-action confirmations, stalled debugging that needs explicit assumptions, ambiguous requests, or when it hinders the task.
+
+## 测试环境
+
+服务器：xlqy
+访问方式：ssh免密登录
+部署位置：~/projects/EchoJoyAIGateway

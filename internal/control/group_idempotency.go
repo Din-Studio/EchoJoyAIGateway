@@ -27,14 +27,14 @@ type groupCreateDigestBody struct {
 	ConnectionType      models.ConnectionType `json:"connection_type"`
 	Params              json.RawMessage       `json:"params"`
 	Models              []GroupModel          `json:"models"`
-	Credentials         []string              `json:"credentials"`
+	Credentials         []json.RawMessage     `json:"credentials"`
 	StagedCredentialIDs []string              `json:"staged_credential_ids,omitempty"`
 	ConfirmSameTarget   bool                  `json:"confirm_same_target,omitempty"`
 	Proxy               *outboundproxy.Config `json:"proxy,omitempty"`
 }
 
 type credentialImportDigestBody struct {
-	Credentials []string `json:"credentials"`
+	Credentials []json.RawMessage `json:"credentials"`
 }
 
 func (s *Service) CreateGroupIdempotent(
@@ -46,9 +46,9 @@ func (s *Service) CreateGroupIdempotent(
 	if err != nil {
 		return GroupCreateResult{}, err
 	}
-	credentialLines := []string(nil)
+	var credentialEntries []json.RawMessage
 	if normalized.connectionType == models.ConnectionTypeAPIKey {
-		credentialLines, err = normalizeIdempotencyKeyLines(request.Credentials)
+		credentialEntries, err = credentialEntriesDigest(request.Credentials)
 		if err != nil {
 			return GroupCreateResult{}, err
 		}
@@ -60,7 +60,7 @@ func (s *Service) CreateGroupIdempotent(
 		ConnectionType:      normalized.connectionType,
 		Params:              append(json.RawMessage(nil), normalized.params...),
 		Models:              append([]GroupModel(nil), normalized.models...),
-		Credentials:         credentialLines,
+		Credentials:         credentialEntries,
 		StagedCredentialIDs: append([]string(nil), normalized.stagedCredentialIDs...),
 		ConfirmSameTarget:   normalized.confirmSameTarget,
 		Proxy:               normalized.proxy,
@@ -218,11 +218,11 @@ func (s *Service) ImportGroupCredentialsIdempotent(
 	if groupID == 0 {
 		return CredentialImportResult{}, app_errors.ErrValidation
 	}
-	credentialLines, err := normalizeIdempotencyKeyLines(request.Credentials)
+	credentialEntries, err := credentialEntriesDigest(request.Credentials)
 	if err != nil {
 		return CredentialImportResult{}, err
 	}
-	canonicalBody, err := canonicalIdempotencyBody(credentialImportDigestBody{Credentials: credentialLines})
+	canonicalBody, err := canonicalIdempotencyBody(credentialImportDigestBody{Credentials: credentialEntries})
 	if err != nil {
 		return CredentialImportResult{}, app_errors.ErrInternalServer
 	}

@@ -27,7 +27,7 @@ func TestRestoreGroupCredentialLogsRuntimeRecovery(t *testing.T) {
 	fixture := newServiceFixture(t)
 	created, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: stringPointer("restore log"), ChannelID: channel.OpenAI,
-		Params: json.RawMessage(`{}`), Models: optionalGroupModels{Set: true}, Credentials: "restore-secret", ConnectionType: "api_key",
+		Params: json.RawMessage(`{}`), Models: optionalGroupModels{Set: true}, Credentials: apiKeyEntries("restore-secret"), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -118,13 +118,13 @@ func TestImportAndListGroupCredentialsUseCanonicalCredentialStorage(t *testing.T
 	fixture := newServiceFixture(t)
 	created, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: stringPointer("credential api"), ChannelID: channel.OpenAI,
-		Params: json.RawMessage(`{}`), Models: optionalGroupModels{Set: true}, Credentials: "first-secret", ConnectionType: "api_key",
+		Params: json.RawMessage(`{}`), Models: optionalGroupModels{Set: true}, Credentials: apiKeyEntries("first-secret"), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatalf("CreateGroup() error = %v", err)
 	}
 	result, err := fixture.service.ImportGroupCredentials(t.Context(), created.GroupID, CredentialImportRequest{
-		Credentials: " second-secret \nfirst-secret\nsecond-secret\n",
+		Credentials: apiKeyEntries(" second-secret \nfirst-secret\nsecond-secret\n"),
 	})
 	if err != nil {
 		t.Fatalf("ImportGroupCredentials() error = %v", err)
@@ -154,33 +154,33 @@ func TestImportAndListGroupCredentialsUseCanonicalCredentialStorage(t *testing.T
 	}
 }
 
-func TestCloudCredentialImportAcceptsOneStrictJSONObjectPerLine(t *testing.T) {
+func TestCloudCredentialImportTrimsStructuredFieldsAndDeduplicates(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
 	tests := []struct {
-		name        string
-		channelID   channel.ID
-		params      string
-		credentials string
-		want        string
+		name      string
+		channelID channel.ID
+		params    string
+		fields    map[string]string
+		want      string
 	}{
 		{
 			name: "Azure Entra", channelID: channel.AzureOpenAI,
-			params:      `{"endpoint":"https://resource.openai.azure.com"}`,
-			credentials: `{"tenant_id":" tenant ","client_secret":" secret ","client_id":" client "}`,
-			want:        `{"client_id":"client","client_secret":"secret","tenant_id":"tenant"}`,
+			params: `{"endpoint":"https://resource.openai.azure.com"}`,
+			fields: map[string]string{"tenant_id": " tenant ", "client_secret": " secret ", "client_id": " client ", "api_key": " "},
+			want:   `{"client_id":"client","client_secret":"secret","tenant_id":"tenant"}`,
 		},
 		{
 			name: "Bedrock SigV4", channelID: channel.AWSBedrock,
-			params:      `{"region":"us-east-1"}`,
-			credentials: `{"secret_key":" secret ","access_key":" access "}`,
-			want:        `{"access_key":"access","secret_key":"secret"}`,
+			params: `{"region":"us-east-1"}`,
+			fields: map[string]string{"secret_key": " secret ", "access_key": " access "},
+			want:   `{"access_key":"access","secret_key":"secret"}`,
 		},
 		{
 			name: "Vertex service account", channelID: channel.GoogleVertex,
-			params:      `{"location":"us-central1"}`,
-			credentials: `{"service_account_json":"{\"type\":\"service_account\",\"project_id\":\"project-one\",\"client_email\":\"svc@example.iam.gserviceaccount.com\",\"private_key\":\"private-secret\"}"}`,
-			want:        `{"service_account_json":"{\"client_email\":\"svc@example.iam.gserviceaccount.com\",\"private_key\":\"private-secret\",\"project_id\":\"project-one\",\"type\":\"service_account\"}"}`,
+			params: `{"location":"us-central1"}`,
+			fields: map[string]string{"service_account_json": `{"type":"service_account","project_id":"project-one","client_email":"svc@example.iam.gserviceaccount.com","private_key":"private-secret"}`},
+			want:   `{"service_account_json":"{\"client_email\":\"svc@example.iam.gserviceaccount.com\",\"private_key\":\"private-secret\",\"project_id\":\"project-one\",\"type\":\"service_account\"}"}`,
 		},
 	}
 	for _, test := range tests {
@@ -188,7 +188,8 @@ func TestCloudCredentialImportAcceptsOneStrictJSONObjectPerLine(t *testing.T) {
 			created, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 				Name: stringPointer("cloud " + test.name), ChannelID: test.channelID,
 				Params: json.RawMessage(test.params), Models: optionalGroupModels{Set: true},
-				Credentials: test.credentials + "\n" + test.credentials, ConnectionType: "api_key",
+				Credentials:    []CredentialEntryInput{{Fields: test.fields}, {Fields: test.fields}},
+				ConnectionType: "api_key",
 			})
 			if err != nil {
 				t.Fatalf("CreateGroup() error = %v", err)
@@ -217,7 +218,7 @@ func TestCredentialValidationReturnsSafeFieldDiagnostic(t *testing.T) {
 	const secret = "sensitive-client-id"
 	_, err := fixture.service.normalizeCredentials(
 		channel.AzureOpenAI,
-		`{"client_id":"`+secret+`"}`,
+		[]CredentialEntryInput{{Fields: map[string]string{"client_id": secret}}},
 	)
 	var apiErr *app_errors.APIError
 	if !errors.As(err, &apiErr) || apiErr.Code != app_errors.ErrValidation.Code {
@@ -246,8 +247,10 @@ func TestVertexCredentialImportAcceptsPastedServiceAccountJSON(t *testing.T) {
 }`
 	created, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: stringPointer("vertex pasted credential"), ChannelID: channel.GoogleVertex,
-		Params: json.RawMessage(`{"location":"us-central1"}`),
-		Models: optionalGroupModels{Set: true}, Credentials: raw, ConnectionType: "api_key",
+		Params:         json.RawMessage(`{"location":"us-central1"}`),
+		Models:         optionalGroupModels{Set: true},
+		Credentials:    []CredentialEntryInput{{Fields: map[string]string{"service_account_json": raw}}},
+		ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatalf("CreateGroup() error = %v", err)
@@ -269,26 +272,6 @@ func TestVertexCredentialImportAcceptsPastedServiceAccountJSON(t *testing.T) {
 	}
 }
 
-func TestVertexCredentialImportAcceptsOneRawServiceAccountPerLine(t *testing.T) {
-	t.Parallel()
-	fixture := newServiceFixture(t)
-	credentials := strings.Join([]string{
-		`{"type":"service_account","project_id":"project-one","client_email":"first@example.iam.gserviceaccount.com","private_key":"first-secret"}`,
-		`{"type":"service_account","project_id":"project-one","client_email":"second@example.iam.gserviceaccount.com","private_key":"second-secret"}`,
-	}, "\n")
-	created, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
-		Name: stringPointer("vertex credential batch"), ChannelID: channel.GoogleVertex,
-		Params: json.RawMessage(`{"location":"us-central1"}`),
-		Models: optionalGroupModels{Set: true}, Credentials: credentials, ConnectionType: "api_key",
-	})
-	if err != nil {
-		t.Fatalf("CreateGroup() error = %v", err)
-	}
-	if created.CredentialsAdded != 2 || created.CredentialsDuplicated != 0 {
-		t.Fatalf("create result = %#v", created)
-	}
-}
-
 func TestGroupCredentialMutationsPreserveRuntimeIdentityAndHealthContracts(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
@@ -297,7 +280,7 @@ func TestGroupCredentialMutationsPreserveRuntimeIdentityAndHealthContracts(t *te
 	created, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: stringPointer("credential mutations"), ChannelID: channel.OpenAI,
 		Params: json.RawMessage(`{}`), Models: optionalGroupModels{Set: true},
-		Credentials: "first-secret\nsecond-secret", ConnectionType: "api_key",
+		Credentials: apiKeyEntries("first-secret\nsecond-secret"), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatalf("CreateGroup() error = %v", err)
@@ -400,7 +383,7 @@ func TestCredentialHTTPUsesCanonicalWireAndRejectsLegacyFields(t *testing.T) {
 	fixture := newServiceFixture(t)
 	created, err := fixture.service.CreateGroup(t.Context(), GroupCreateRequest{
 		Name: stringPointer("credential http"), ChannelID: channel.OpenAI,
-		Params: json.RawMessage(`{}`), Models: optionalGroupModels{Set: true}, Credentials: "first-secret", ConnectionType: "api_key",
+		Params: json.RawMessage(`{}`), Models: optionalGroupModels{Set: true}, Credentials: apiKeyEntries("first-secret"), ConnectionType: "api_key",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -422,14 +405,14 @@ func TestCredentialHTTPUsesCanonicalWireAndRejectsLegacyFields(t *testing.T) {
 	const idempotencyKey = "00000000-0000-4000-8000-0000000000c1"
 	imported := serveCredentialRequest(t, engine, http.MethodPost,
 		fmt.Sprintf("/api/groups/%d/credentials/import", created.GroupID),
-		`{"credentials":"second-secret"}`, auth, idempotencyKey)
+		`{"credentials":[{"fields":{"api_key":"second-secret"}}]}`, auth, idempotencyKey)
 	if imported.Code != http.StatusOK || !strings.Contains(imported.Body.String(), `"credentials_added":1`) ||
 		strings.Contains(imported.Body.String(), "keys_added") {
 		t.Fatalf("credential import = %d %s", imported.Code, imported.Body.String())
 	}
 	replayed := serveCredentialRequest(t, engine, http.MethodPost,
 		fmt.Sprintf("/api/groups/%d/credentials/import", created.GroupID),
-		`{"credentials":"second-secret"}`, auth, idempotencyKey)
+		`{"credentials":[{"fields":{"api_key":"second-secret"}}]}`, auth, idempotencyKey)
 	if replayed.Code != http.StatusOK || replayed.Body.String() != imported.Body.String() {
 		t.Fatalf("credential import replay = %d %s, want %s", replayed.Code, replayed.Body.String(), imported.Body.String())
 	}
@@ -482,7 +465,7 @@ func TestAPIKeyCredentialImportRejectsSubscriptionGroup(t *testing.T) {
 		t.Context(),
 		"00000000-0000-4000-8000-0000000000c3",
 		groupID,
-		CredentialImportRequest{Credentials: "must-not-enter-subscription-group"},
+		CredentialImportRequest{Credentials: apiKeyEntries("must-not-enter-subscription-group")},
 	)
 	if !errors.Is(err, app_errors.ErrValidation) {
 		t.Fatalf("ImportGroupCredentialsIdempotent() error = %v", err)

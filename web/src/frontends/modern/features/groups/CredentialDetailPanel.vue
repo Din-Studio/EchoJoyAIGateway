@@ -24,6 +24,7 @@ import {
 } from '@modern/components/ui'
 import { useApiClient } from '@shared/http/client-context'
 import { credentialStatus, credentialTime } from './credential-presentation'
+import { concurrencyLimitInvalid } from './group-create-rules'
 import { validProxyURL } from '@modern/app/proxy'
 import GroupWorkspacePanel from './GroupWorkspacePanel.vue'
 import CredentialAccountInfo from './CredentialAccountInfo.vue'
@@ -83,11 +84,7 @@ const weightInvalid = computed(
 function concurrencyText(row: CredentialRow): string {
   return row.concurrencyLimit ? String(row.concurrencyLimit) : ''
 }
-const concurrencyInvalid = computed(
-  () =>
-    Boolean(concurrency.value) &&
-    (!/^\d+$/u.test(concurrency.value) || Number(concurrency.value) > 10000),
-)
+const concurrencyInvalid = computed(() => concurrencyLimitInvalid(concurrency.value))
 const proxyChanged = computed(
   () => proxyMode.value !== saved.value?.proxy.mode || Boolean(proxyURL.value),
 )

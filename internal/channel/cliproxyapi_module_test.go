@@ -24,7 +24,7 @@ func TestCLIProxyAPIChannelContract(t *testing.T) {
 	if !reflect.DeepEqual(descriptor.SearchTerms, []string{"cpa", "cli proxy api"}) {
 		t.Fatalf("CLIProxyAPI search terms = %#v", descriptor.SearchTerms)
 	}
-	if descriptor.Connection.Type != "api_key" || descriptor.Connection.CredentialInput != "batch_text" {
+	if descriptor.Connection.Type != "api_key" || descriptor.Connection.CredentialInput != "entries" {
 		t.Fatalf("CLIProxyAPI connection = %#v", descriptor.Connection)
 	}
 	if len(descriptor.ParamFields) != 1 {
