@@ -21,20 +21,20 @@ import (
 )
 
 type groupCreateDigestBody struct {
-	PriceMultiplier     string                 `json:"price_multiplier,omitempty"`
-	Name                *string                `json:"name"`
-	ChannelID           channel.ID             `json:"channel_id"`
-	ConnectionType      models.ConnectionType  `json:"connection_type"`
-	Params              json.RawMessage        `json:"params"`
-	Models              []GroupModel           `json:"models"`
-	Credentials         []CredentialEntryInput `json:"credentials"`
-	StagedCredentialIDs []string               `json:"staged_credential_ids,omitempty"`
-	ConfirmSameTarget   bool                   `json:"confirm_same_target,omitempty"`
-	Proxy               *outboundproxy.Config  `json:"proxy,omitempty"`
+	PriceMultiplier     string                `json:"price_multiplier,omitempty"`
+	Name                *string               `json:"name"`
+	ChannelID           channel.ID            `json:"channel_id"`
+	ConnectionType      models.ConnectionType `json:"connection_type"`
+	Params              json.RawMessage       `json:"params"`
+	Models              []GroupModel          `json:"models"`
+	Credentials         []json.RawMessage     `json:"credentials"`
+	StagedCredentialIDs []string              `json:"staged_credential_ids,omitempty"`
+	ConfirmSameTarget   bool                  `json:"confirm_same_target,omitempty"`
+	Proxy               *outboundproxy.Config `json:"proxy,omitempty"`
 }
 
 type credentialImportDigestBody struct {
-	Credentials []CredentialEntryInput `json:"credentials"`
+	Credentials []json.RawMessage `json:"credentials"`
 }
 
 func (s *Service) CreateGroupIdempotent(
@@ -46,7 +46,7 @@ func (s *Service) CreateGroupIdempotent(
 	if err != nil {
 		return GroupCreateResult{}, err
 	}
-	var credentialEntries []CredentialEntryInput
+	var credentialEntries []json.RawMessage
 	if normalized.connectionType == models.ConnectionTypeAPIKey {
 		credentialEntries, err = credentialEntriesDigest(request.Credentials)
 		if err != nil {
