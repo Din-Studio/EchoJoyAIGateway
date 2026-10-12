@@ -265,7 +265,8 @@ func (s *Service) normalizeCredentials(
 		return normalizedCredentials{}, app_errors.ErrValidation
 	}
 	result := normalizedCredentials{candidates: make([]credentialCandidate, 0, len(entries))}
-	seen := make(map[string]struct{}, len(entries))
+	// 批内重复的凭据按指纹去重；同一凭据给出不同上限时无法确定保留哪个，直接拒绝。
+	seenLimits := make(map[string]int, len(entries))
 	for index, entry := range entries {
 		if entry.ConcurrencyLimit < 0 || entry.ConcurrencyLimit > state.MaxCredentialConcurrencyLimit {
 			return normalizedCredentials{}, app_errors.NewAPIErrorWithData(
@@ -283,11 +284,17 @@ func (s *Service) normalizeCredentials(
 		}
 		canonical := credential.CanonicalJSON()
 		fingerprint := s.encryption.Hash(string(canonical))
-		if _, duplicate := seen[fingerprint]; duplicate {
+		if limit, duplicate := seenLimits[fingerprint]; duplicate {
+			if limit != entry.ConcurrencyLimit {
+				return normalizedCredentials{}, app_errors.NewAPIErrorWithData(
+					app_errors.ErrValidation,
+					credentialValidationData{Entry: index + 1, Field: "concurrency_limit", ReasonCode: "conflicting_value"},
+				)
+			}
 			result.duplicateEntries++
 			continue
 		}
-		seen[fingerprint] = struct{}{}
+		seenLimits[fingerprint] = entry.ConcurrencyLimit
 		result.candidates = append(result.candidates, credentialCandidate{
 			canonical:        append(json.RawMessage(nil), canonical...),
 			fingerprint:      fingerprint,

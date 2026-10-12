@@ -134,4 +134,16 @@ func TestCreateAndImportStorePerEntryConcurrencyLimit(t *testing.T) {
 	if data, ok := apiErr.Data.(credentialValidationData); !ok || data.Entry != 2 || data.Field != "concurrency_limit" {
 		t.Fatalf("validation data = %#v, want entry 2 concurrency_limit", apiErr.Data)
 	}
+
+	_, err = fixture.service.ImportGroupCredentialsIdempotent(
+		t.Context(), "00000000-0000-4000-8000-0000000c0004", created.GroupID,
+		CredentialImportRequest{Credentials: []CredentialEntryInput{entry("sk-twice", 5), entry("sk-twice", 10)}},
+	)
+	if !errors.As(err, &apiErr) || apiErr.Code != app_errors.ErrValidation.Code {
+		t.Fatalf("conflicting duplicate limit error = %v, want validation", err)
+	}
+	if data, ok := apiErr.Data.(credentialValidationData); !ok || data.Entry != 2 || data.Field != "concurrency_limit" ||
+		data.ReasonCode != "conflicting_value" {
+		t.Fatalf("validation data = %#v, want entry 2 concurrency_limit conflicting_value", apiErr.Data)
+	}
 }
