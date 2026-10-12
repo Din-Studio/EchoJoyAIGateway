@@ -6,6 +6,7 @@ import type { GroupChannel } from '@modern/api/group-create'
 import { AppButton, AppIconButton, AppTextField } from '@modern/components/ui'
 import {
   concurrencyLimitInvalid,
+  credentialEntryFilled,
   filledCredentialEntries,
   maxCredentialEntries,
   type CredentialEntryDraft,
@@ -37,9 +38,6 @@ function blank(key: number, concurrencyLimit: string, apiKey = ''): CredentialEn
 }
 function nextKey(): number {
   return Math.max(0, ...entries.value.map((entry) => entry.key)) + 1
-}
-function filled(entry: CredentialEntryDraft): boolean {
-  return Object.values(entry.fields).some((value) => value.trim())
 }
 watch(
   entries,
@@ -88,7 +86,7 @@ function paste(event: ClipboardEvent, target: CredentialEntryDraft): void {
     .filter(Boolean)
   if (lines.length < 2) return
   event.preventDefault()
-  const reuse = !filled(target)
+  const reuse = !credentialEntryFilled(target)
   const added = reuse ? lines.slice(1) : lines
   if (filledCredentialEntries(entries.value).length + lines.length > maxCredentialEntries) {
     pasteError.value = t('groupCreate.credentialsLimit')
@@ -106,10 +104,11 @@ function paste(event: ClipboardEvent, target: CredentialEntryDraft): void {
 defineExpose({
   focus(): void {
     const invalid = entries.value.find(
-      (entry) => filled(entry) && concurrencyLimitInvalid(entry.concurrencyLimit),
+      (entry) => credentialEntryFilled(entry) && concurrencyLimitInvalid(entry.concurrencyLimit),
     )
     if (invalid) inputs.get(`${invalid.key}:concurrency`)?.focus()
-    else focusEntry(entries.value.find((entry) => !filled(entry)) ?? entries.value[0])
+    else
+      focusEntry(entries.value.find((entry) => !credentialEntryFilled(entry)) ?? entries.value[0])
   },
 })
 </script>
@@ -168,7 +167,9 @@ defineExpose({
         :placeholder="t('groups.edit.concurrencyUnlimited')"
         :disabled="disabled"
         :error="
-          attempted && filled(entry) && concurrencyLimitInvalid(entry.concurrencyLimit)
+          attempted &&
+          credentialEntryFilled(entry) &&
+          concurrencyLimitInvalid(entry.concurrencyLimit)
             ? t('groups.edit.concurrencyLimitError')
             : undefined
         "
@@ -181,7 +182,7 @@ defineExpose({
         :icon="Trash2"
         :label="t('groupCreate.removeCredential', { entry: index + 1 })"
         size="sm"
-        :disabled="disabled || (entries.length === 1 && !filled(entry))"
+        :disabled="disabled || (entries.length === 1 && !credentialEntryFilled(entry))"
         @click="remove(entry.key)"
       />
     </div>

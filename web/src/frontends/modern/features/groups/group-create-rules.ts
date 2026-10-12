@@ -32,10 +32,13 @@ export interface CredentialEntryDraft {
 export function concurrencyLimitInvalid(value: string): boolean {
   return Boolean(value) && (!/^\d+$/u.test(value) || Number(value) > 10000)
 }
+export function credentialEntryFilled(entry: CredentialEntryDraft): boolean {
+  return Object.values(entry.fields).some((value) => value.trim())
+}
 export function filledCredentialEntries(
   entries: readonly CredentialEntryDraft[],
 ): CredentialEntryDraft[] {
-  return entries.filter((entry) => Object.values(entry.fields).some((value) => value.trim()))
+  return entries.filter(credentialEntryFilled)
 }
 export function credentialEntriesInvalid(entries: readonly CredentialEntryDraft[]): boolean {
   return filledCredentialEntries(entries).some((entry) =>
