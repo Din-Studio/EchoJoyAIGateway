@@ -21,7 +21,7 @@ func GoogleVertex() spec.Module {
 			Description: "Google Cloud Vertex AI",
 			Connection: spec.Connection{
 				Type:            spec.ConnectionAPIKey,
-				CredentialInput: "batch_text",
+				CredentialInput: "entries",
 			},
 			Params: []spec.Field{{
 				Key: "location", Label: "Vertex location", InputKind: spec.InputText,

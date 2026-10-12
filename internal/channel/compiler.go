@@ -213,7 +213,7 @@ func validateConnection(source spec.Definition) error {
 	connection := source.Connection
 	switch connection.Type {
 	case spec.ConnectionAPIKey:
-		if connection.CredentialInput != "batch_text" || len(connection.AuthorizationMethods) != 0 {
+		if connection.CredentialInput != "entries" || len(connection.AuthorizationMethods) != 0 {
 			return fmt.Errorf("channel %q has invalid API key connection", id)
 		}
 		if source.Capabilities.SubscriptionDriver != "" || source.Capabilities.ModelDiscovery != "" ||

@@ -17,7 +17,7 @@ func Groq() spec.Module {
 			Description: "Managed API preset",
 			Connection: spec.Connection{
 				Type:            spec.ConnectionAPIKey,
-				CredentialInput: "batch_text",
+				CredentialInput: "entries",
 			},
 			Params: []spec.Field{{
 				Key: "base_url", Label: "Base URL", InputKind: spec.InputURL,

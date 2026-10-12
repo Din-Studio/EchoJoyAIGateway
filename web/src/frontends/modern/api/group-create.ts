@@ -59,7 +59,7 @@ export async function getGroupChannels(
     )
     if (
       connection.credential_input !==
-        (connectionType === 'api_key' ? 'batch_text' : 'authorization') ||
+        (connectionType === 'api_key' ? 'entries' : 'authorization') ||
       (connectionType === 'subscription' && !authorizationMethods.length) ||
       (connectionType === 'api_key' && authorizationMethods.length) ||
       new Set(authorizationMethods).size !== authorizationMethods.length
