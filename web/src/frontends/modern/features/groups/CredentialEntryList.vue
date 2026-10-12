@@ -48,6 +48,11 @@ function nextKey(): number {
 watch(
   entries,
   (value) => {
+    // 删除或重置的行不保留显示状态，避免复用同一 key 的新行直接显示明文。
+    const keys = new Set(value.map((entry) => String(entry.key)))
+    for (const id of secretsVisible.value) {
+      if (!keys.has(id.slice(0, id.indexOf(':')))) secretsVisible.value.delete(id)
+    }
     if (!value.length) entries.value = [blank(1, '')]
   },
   { immediate: true },
