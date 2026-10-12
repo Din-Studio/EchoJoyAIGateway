@@ -13,7 +13,7 @@
 
 新版目前提供 Coral Anchor 品牌框架：位于分隔线中部的侧栏折叠控件、移动端导航抽屉、宽工作区。顶栏是各页共用的固定结构，左侧为当前页标题，随后是数据更新时间与刷新，竖线之后依次是导入密钥入口、明暗模式、语言和退出。页面导航按“工作区”“运行观测”和“系统”直接展示，不通过二级 Tab 进入观测页面。
 
-`app/navigation.ts` 统一描述导航入口。`internal/webui/page_routes.json` 保存 9 个基础页面地址；`/monitor/usage`、`/monitor/logs`、`/monitor/health`、`/monitor/inspector` 放在 `internal/webui/modern_page_routes.json`。服务端与前端合并读取两份清单。所有页面返回同一个 HTML 入口；`/monitor` 跳转到用量页面。
+`app/navigation.ts` 统一描述导航入口。`internal/webui/page_routes.json` 保存全部 13 个页面地址，服务端与前端读取同一份清单。所有页面返回同一个 HTML 入口；`/monitor` 跳转到用量页面。
 
 新版已提供总览、分组列表与详情、访问密钥、模型管理、请求日志、用量统计、运行健康和全局设置。总览围绕客户端接入配置、请求趋势、订阅账号额度和健康待办组织内容；客户端选择与路由检查独立。`/monitor/inspector` 重定向到首页的路由检查区，保留检查参数；`/import` 重定向到分组页的导入入口，选择新建分组或为已有分组添加凭据。路由加载失败时提供刷新重试。
 

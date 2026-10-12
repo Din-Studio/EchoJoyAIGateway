@@ -16,9 +16,6 @@ var (
 	//go:embed page_routes.json
 	embeddedPageRouteManifest []byte
 
-	//go:embed modern_page_routes.json
-	embeddedModernPageRouteManifest []byte
-
 	staticPageSegmentPattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._~-]*$`)
 	parameterPageSegmentPattern = regexp.MustCompile(`^:[A-Za-z][A-Za-z0-9_]*$`)
 )
@@ -38,12 +35,7 @@ func loadPageRoutes() ([]pageRoute, error) {
 	if err != nil {
 		return nil, err
 	}
-	modernRoutes, err := parsePageRouteManifest(embeddedModernPageRouteManifest)
-	if err != nil {
-		return nil, err
-	}
-	// 新版地址只在服务端合并，旧版继续读取原有页面清单。
-	return validatePageRoutes(append(routes, modernRoutes...))
+	return validatePageRoutes(routes)
 }
 
 func parsePageRouteManifest(data []byte) ([]pageRoute, error) {
