@@ -2,7 +2,7 @@
 import { Eye, EyeOff, Plus, Trash2 } from '@lucide/vue'
 import { computed, nextTick, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { ChannelField, GroupChannel } from '@modern/api/group-create'
+import type { GroupChannel } from '@modern/api/group-create'
 import { AppButton, AppIconButton, AppTextField } from '@modern/components/ui'
 import {
   concurrencyLimitInvalid,
@@ -28,9 +28,6 @@ const pasteError = ref('')
 const inputs = new Map<string, { focus(): void }>()
 const secretsVisible = ref(new Set<string>())
 
-function secret(field: ChannelField): boolean {
-  return field.sensitive || field.inputKind === 'secret'
-}
 function toggleSecret(id: string): void {
   if (secretsVisible.value.has(id)) secretsVisible.value.delete(id)
   else secretsVisible.value.add(id)
@@ -153,7 +150,9 @@ defineExpose({
           "
           :label-hidden="plainKeys"
           :type="
-            secret(field) && !secretsVisible.has(`${entry.key}:${field.key}`) ? 'password' : 'text'
+            field.sensitive && !secretsVisible.has(`${entry.key}:${field.key}`)
+              ? 'password'
+              : 'text'
           "
           :placeholder="plainKeys ? t('groupCreate.credentialsPlaceholder') : undefined"
           :disabled="disabled"
@@ -163,7 +162,7 @@ defineExpose({
           @update:model-value="update(entry.key, field.key, $event)"
           @paste="paste($event, entry)"
         >
-          <template v-if="secret(field)" #suffix>
+          <template v-if="field.sensitive" #suffix>
             <AppIconButton
               :icon="secretsVisible.has(`${entry.key}:${field.key}`) ? EyeOff : Eye"
               :label="

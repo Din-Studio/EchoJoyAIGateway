@@ -614,11 +614,7 @@ useMessageSource(() => (errorText.value ? { text: errorText.value, tone: 'danger
             :ref="(element) => paramRef(field.key, element)"
             :model-value="params[field.key] ?? ''"
             :label="field.key === 'base_url' ? t('groupCreate.baseURL') : field.label"
-            :type="
-              (field.sensitive || field.inputKind === 'secret') && !secretsVisible.has(field.key)
-                ? 'password'
-                : 'text'
-            "
+            :type="field.sensitive && !secretsVisible.has(field.key) ? 'password' : 'text'"
             :placeholder="
               field.defaultValue || (field.inputKind === 'url' ? 'https://' : undefined)
             "
@@ -628,7 +624,7 @@ useMessageSource(() => (errorText.value ? { text: errorText.value, tone: 'danger
             spellcheck="false"
             @update:model-value="params[field.key] = $event"
           >
-            <template v-if="field.sensitive || field.inputKind === 'secret'" #suffix>
+            <template v-if="field.sensitive" #suffix>
               <AppIconButton
                 :icon="secretsVisible.has(field.key) ? EyeOff : Eye"
                 :label="
