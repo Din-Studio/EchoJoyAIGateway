@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { Plus, Trash2 } from '@lucide/vue'
+import { Eye, EyeOff, Plus, Trash2 } from '@lucide/vue'
 import { computed, nextTick, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { GroupChannel } from '@modern/api/group-create'
+import type { ChannelField, GroupChannel } from '@modern/api/group-create'
 import { AppButton, AppIconButton, AppTextField } from '@modern/components/ui'
 import {
   concurrencyLimitInvalid,
@@ -26,6 +26,15 @@ const fields = computed(() => props.channel.credentialFields)
 const plainKeys = computed(() => fields.value.length === 1 && fields.value[0]?.key === 'api_key')
 const pasteError = ref('')
 const inputs = new Map<string, { focus(): void }>()
+const secretsVisible = ref(new Set<string>())
+
+function secret(field: ChannelField): boolean {
+  return field.sensitive || field.inputKind === 'secret'
+}
+function toggleSecret(id: string): void {
+  if (secretsVisible.value.has(id)) secretsVisible.value.delete(id)
+  else secretsVisible.value.add(id)
+}
 
 function blank(key: number, concurrencyLimit: string, apiKey = ''): CredentialEntryDraft {
   return {
@@ -143,6 +152,9 @@ defineExpose({
               : field.label
           "
           :label-hidden="plainKeys"
+          :type="
+            secret(field) && !secretsVisible.has(`${entry.key}:${field.key}`) ? 'password' : 'text'
+          "
           :placeholder="plainKeys ? t('groupCreate.credentialsPlaceholder') : undefined"
           :disabled="disabled"
           autocomplete="off"
@@ -150,7 +162,22 @@ defineExpose({
           size="sm"
           @update:model-value="update(entry.key, field.key, $event)"
           @paste="paste($event, entry)"
-        />
+        >
+          <template v-if="secret(field)" #suffix>
+            <AppIconButton
+              :icon="secretsVisible.has(`${entry.key}:${field.key}`) ? EyeOff : Eye"
+              :label="
+                t(
+                  secretsVisible.has(`${entry.key}:${field.key}`)
+                    ? 'groupCreate.hideSecret'
+                    : 'groupCreate.showSecret',
+                )
+              "
+              size="xs"
+              @click="toggleSecret(`${entry.key}:${field.key}`)"
+            />
+          </template>
+        </AppTextField>
       </div>
       <AppTextField
         :ref="(element) => inputRef(`${entry.key}:concurrency`, element)"
