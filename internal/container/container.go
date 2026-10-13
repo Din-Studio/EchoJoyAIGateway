@@ -67,7 +67,7 @@ func BuildContainer() (*dig.Container, error) {
 		httplifecycle.NewCoordinator,
 		app.NewEngineWithLifecycle,
 		webui.NewServer,
-		state.NewCredentialRegistry,
+		state.NewStaggeredCredentialRegistry,
 		cluster.NewCredentialHealth,
 		cluster.NewRefreshLease,
 		cluster.NewJobLease,

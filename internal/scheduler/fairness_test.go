@@ -50,16 +50,69 @@ func TestIteratorSharesProgressAcrossRequestsAndCandidateSets(t *testing.T) {
 
 func newFairnessRegistry(t *testing.T) *state.CredentialRegistry {
 	t.Helper()
-	r := state.NewCredentialRegistry()
-	for _, id := range []uint{11, 12} {
+	return seedFairnessRegistry(t, state.NewCredentialRegistry(), nil, nil)
+}
+
+func seedFairnessRegistry(t *testing.T, r *state.CredentialRegistry, weights ...*int) *state.CredentialRegistry {
+	t.Helper()
+	for index, id := range []uint{11, 12} {
 		if err := r.ApplyCredentialImport(1, []state.CredentialEntry{{
-			ID: id, GroupID: 1, Version: 1, IdentityGeneration: 1,
+			ID: id, GroupID: 1, Version: 1, IdentityGeneration: 1, WeightManual: weights[index],
 			Status: state.CredentialStatusActive, Fingerprint: "fixture", EncryptedValue: "cipher",
 		}}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return r
+}
+
+func TestFairnessStaggerDesynchronizesFreshReplicas(t *testing.T) {
+	snapshot := schedulerSnapshot()
+	firstPicks := map[uint]int{}
+	for range 64 {
+		r := seedFairnessRegistry(t, state.NewStaggeredCredentialRegistry(), nil, nil)
+		firstPicks[fairnessPick(t, snapshot, r, 0)]++
+	}
+	if firstPicks[11] == 0 || firstPicks[12] == 0 {
+		t.Fatalf("fresh replicas picked in lockstep: %v", firstPicks)
+	}
+}
+
+func TestFairnessStaggerKeepsWeightedShare(t *testing.T) {
+	snapshot := schedulerSnapshot()
+	heavy, light := 100, 50
+	for range 20 {
+		r := seedFairnessRegistry(t, state.NewStaggeredCredentialRegistry(), &heavy, &light)
+		counts := map[uint]int{}
+		for pick := 1; pick <= 3000; pick++ {
+			counts[fairnessPick(t, snapshot, r, 0)]++
+			if ideal := pick * 2 / 3; counts[11] < ideal-1 || counts[11] > ideal+2 {
+				t.Fatalf("after %d picks heavy credential got %d, want about %d", pick, counts[11], ideal)
+			}
+		}
+	}
+}
+
+func TestFairnessStaggerKeepsNewMemberAtFrontier(t *testing.T) {
+	r := seedFairnessRegistry(t, state.NewStaggeredCredentialRegistry(), nil, nil)
+	snapshot := schedulerSnapshot()
+	for range 1000 {
+		fairnessPick(t, snapshot, r, 11)
+	}
+	if err := r.ApplyCredentialImport(1, []state.CredentialEntry{{ID: 13, GroupID: 1, Version: 1, IdentityGeneration: 1,
+		Status: state.CredentialStatusActive, Fingerprint: "new-member", EncryptedValue: "cipher"}}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if got := fairnessPick(t, snapshot, r, 0); got != 12 {
+			t.Fatalf("selected %d, want existing lagging member 12", got)
+		}
+	}
+	r.SchedulingState().WithLock(func(d *state.SchedulingLedger) {
+		if d.Members[13].Progress != d.Members[11].Progress {
+			t.Fatal("staggering moved a member that joined after allocation started")
+		}
+	})
 }
 
 func fairnessQuery(preferred uint) Query {

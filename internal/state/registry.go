@@ -92,6 +92,13 @@ func NewCredentialRegistry() *CredentialRegistry {
 	}
 }
 
+// NewStaggeredCredentialRegistry 是生产装配入口，见 NewStaggeredSchedulingState。
+func NewStaggeredCredentialRegistry() *CredentialRegistry {
+	r := NewCredentialRegistry()
+	r.scheduling = NewStaggeredSchedulingState()
+	return r
+}
+
 func ValidateCredentialEntries(entries []CredentialEntry) error {
 	seen := make(map[uint]struct{}, len(entries))
 	for _, entry := range entries {

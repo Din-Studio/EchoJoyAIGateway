@@ -52,6 +52,7 @@ func (iterator *Iterator) selectCredential(candidates []weightedCredential, pref
 				continue
 			}
 			eligible = append(eligible, candidate)
+			ledger.Stagger(member, uint64(candidate.weight))
 			if !member.Pending && (!hasBaseline || member.Progress.Compare(baseline) > 0) {
 				baseline, hasBaseline = member.Progress, true
 			}
