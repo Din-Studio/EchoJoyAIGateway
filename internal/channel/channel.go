@@ -44,6 +44,7 @@ const (
 	Volcengine       = spec.Volcengine
 	OpenRouter       = spec.OpenRouter
 	Groq             = spec.Groq
+	Vercel           = spec.Vercel
 	XAI              = spec.XAI
 )
 

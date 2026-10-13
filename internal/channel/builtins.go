@@ -27,6 +27,7 @@ func builtInModules() []spec.Module {
 		modules.Volcengine(),
 		modules.OpenRouter(),
 		modules.Groq(),
+		modules.Vercel(),
 		modules.XAI(),
 		modules.GPTLoad(),
 		modules.NewAPI(),
