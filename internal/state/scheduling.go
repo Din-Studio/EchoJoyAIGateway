@@ -3,6 +3,7 @@ package state
 import (
 	"cmp"
 	"math/bits"
+	"math/rand/v2"
 	"sync"
 	"time"
 )
@@ -44,6 +45,7 @@ type SchedulingMember struct {
 	LastSelected       uint64
 	Pending            bool
 	suspended          bool
+	staggered          bool
 	cooldownUntil      time.Time
 }
 
@@ -51,7 +53,8 @@ func (m *SchedulingMember) Admit(baseline SchedulingProgress) {
 	if m.Progress.Compare(baseline) < 0 {
 		m.Progress = baseline
 	}
-	m.Pending, m.suspended = false, false
+	// 中途加入与恢复的成员必须精确对齐领先进度，不再随机错开。
+	m.Pending, m.suspended, m.staggered = false, false, true
 }
 
 // SchedulingLedger 只在 SchedulingState.WithLock 回调内访问。
@@ -66,6 +69,24 @@ type SchedulingLedger struct {
 	Sequence      uint64
 	LastMember    uint
 	Consecutive   uint64
+	// jitter 返回 [0, n) 内的随机数；nil 表示不错开，保持确定性分配顺序。
+	jitter func(n uint64) uint64
+}
+
+// Stagger 给启动时已存在的成员一次步长内的随机起点：账本按副本独立，
+// 同起点会让各副本按相同顺序选中同一凭据。偏移小于一个步长，长期比例不变。
+func (d *SchedulingLedger) Stagger(member *SchedulingMember, weight uint64) {
+	if d.jitter == nil || member.staggered || member.Pending || weight == 0 {
+		return
+	}
+	step := ^uint64(0)
+	if weight > 1 {
+		step, _ = bits.Div64(1, 0, weight)
+	}
+	var carry uint64
+	member.Progress.Fraction, carry = bits.Add64(member.Progress.Fraction, d.jitter(step), 0)
+	member.Progress.Whole += carry
+	member.staggered = true
 }
 
 type SchedulingState struct {
@@ -77,6 +98,13 @@ func NewSchedulingState() *SchedulingState {
 	return &SchedulingState{ledger: SchedulingLedger{
 		Members: make(map[uint]*SchedulingMember), Groups: make(map[uint]bool),
 	}}
+}
+
+// NewStaggeredSchedulingState 用于多副本生产装配，各副本从随机相位开始轮询。
+func NewStaggeredSchedulingState() *SchedulingState {
+	s := NewSchedulingState()
+	s.ledger.jitter = rand.Uint64N
+	return s
 }
 
 func (s *SchedulingState) WithLock(fn func(*SchedulingLedger)) {
