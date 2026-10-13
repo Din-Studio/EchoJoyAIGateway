@@ -577,6 +577,46 @@ func (s *Service) ListAccessKeyOptions(ctx context.Context) ([]AccessKeyOption, 
 	return rows, nil
 }
 
+func (s *Service) GetAccessKey(
+	ctx context.Context,
+	id uint,
+) (AccessKeyMetadata, error) {
+	if id == 0 {
+		return AccessKeyMetadata{}, app_errors.ErrBadRequest
+	}
+	var row accessKeyMetadataRow
+	if err := s.db.WithContext(ctx).
+		Model(&models.AccessKey{}).
+		Select(
+			"id", "name", "key_prefix", "key_suffix", "status", "filters", "rpm_limit", "expires_at_ms", "price_multiplier_micros",
+			"created_at_ms", "updated_at_ms",
+		).
+		Where("id = ?", id).
+		Take(&row).Error; err != nil {
+		return AccessKeyMetadata{}, app_errors.ParseDBError(err)
+	}
+	costLimitRows, err := loadAccessKeyCostLimitRuleRows(s.db.WithContext(ctx), row.ID)
+	if err != nil {
+		return AccessKeyMetadata{}, err
+	}
+	result, err := mapAccessKeyMetadataRow(row)
+	if err != nil {
+		return AccessKeyMetadata{}, err
+	}
+	result.CostLimitRules = mapAccessKeyCostLimitRules(costLimitRows)
+	if len(costLimitRows) == 0 {
+		return result, nil
+	}
+	view, err := s.accessQuotaView(ctx, s.manager.Current(), row.ID, s.now())
+	if err != nil {
+		return AccessKeyMetadata{}, err
+	}
+	if status := mapAccessKeyCostLimitStatus(view); len(status.Rules) > 0 {
+		result.CostLimitStatus = &status
+	}
+	return result, nil
+}
+
 func (s *Service) RevealAccessKey(
 	ctx context.Context,
 	id uint,

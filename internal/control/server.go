@@ -930,6 +930,19 @@ func (s *Server) handleListAccessKeyOptions(c *gin.Context) {
 	response.SuccessI18n(c, "common.success", result)
 }
 
+func (s *Server) handleGetAccessKey(c *gin.Context) {
+	id, ok := accessKeyID(c)
+	if !ok {
+		return
+	}
+	result, err := s.service.GetAccessKey(c.Request.Context(), id)
+	if err != nil {
+		writeServiceError(c, "get_access_key", err)
+		return
+	}
+	response.SuccessI18n(c, "common.success", result)
+}
+
 func (s *Server) handleRevealAccessKey(c *gin.Context) {
 	id, ok := accessKeyID(c)
 	if !ok {

@@ -1,0 +1,826 @@
+openapi: 3.1.0
+info:
+  title: EchoJoy AI Gateway 控制面 API
+  version: 2.0.0
+  license:
+    name: MIT
+    identifier: MIT
+  description: |
+    控制面 HTTP 接口，路由前缀为 `/api`。当前收录范围：AccessKey 管理。
+
+    ## 鉴权
+    所有接口使用 `Authorization: Bearer <token>`。控制面只有两种身份：
+
+    - `admin`：token 等于服务端环境变量 `AUTH_KEY`，可访问全部控制面接口。
+    - `access_key`：token 为某个 AccessKey，仅能以 GET 访问只读白名单
+      （`/api/auth/session`、`/api/home`、`/api/models`、`/api/usage`、`/api/logs` 等）。
+
+    本文档中的 AccessKey 管理接口**仅限 `admin`**，AccessKey 调用返回 `403 FORBIDDEN`。
+    同一来源 IP 连续认证失败会被临时锁定，返回 `429 AUTH_LOCKED` 并带 `Retry-After`。
+
+    ## 响应包络
+    成功：HTTP 200，`{"code": 0, "message": "...", "data": ...}`；无返回体的操作省略 `data`。
+    失败：`{"code": "<ERROR_CODE>", "message": "...", "data"?: ...}`，`message` 随
+    `Accept-Language` 本地化。
+
+    ## 幂等
+    会生成或替换密钥明文的写操作要求 `Idempotency-Key` 请求头（小写规范 UUID v4）。
+    相同 key + 相同请求体重放时返回首次结果，`replayed=true`，且**不再返回明文 `key`**。
+    相同 key + 不同请求体返回 `409 IDEMPOTENCY_KEY_REUSED`。
+
+    ## 请求体
+    JSON 请求体严格解析：未知字段、重复字段、多个 JSON 值均拒绝；上限 32 MiB。
+
+    ## 约定
+    - 时间戳均为 Unix 毫秒（`*_at_ms`）。
+    - 金额均为十进制字符串：`*_usd` 单位美元，`*_nano_usd` 单位 1e-9 美元。
+servers:
+  - url: http://localhost:3001
+    description: 本地默认端口（`PORT`，默认 3001）
+security:
+  - adminBearer: []
+tags:
+  - name: AccessKeys
+    description: AccessKey 管理（仅 admin）
+
+paths:
+  /api/access-keys:
+    get:
+      tags: [AccessKeys]
+      operationId: listAccessKeys
+      summary: 分页查询 AccessKey
+      description: |
+        返回汇总、当前页条目与分页信息。每个条目附带最近 7 天用量（窗口见 `usage_window`），
+        配置了费用规则的条目附带实时 `cost_limit_status`。
+        只接受下列查询参数，出现其他参数或同一参数重复时返回 `400 BAD_REQUEST`。
+      parameters:
+        - name: q
+          in: query
+          description: 按名称或掩码密钥做大小写不敏感的包含匹配；首尾空白会被去除。
+          schema: { type: string, maxLength: 200 }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/AccessKeyStatus' }
+        - name: group_id
+          in: query
+          description: 只返回可访问该分组的密钥；未限制分组的密钥也会命中。
+          schema: { type: integer, minimum: 1 }
+        - name: expiry
+          in: query
+          description: |
+            `never` 永不过期；`active` 设置了过期时间且未过期；`expired` 已过期。
+          schema: { type: string, enum: [never, active, expired] }
+        - name: sort
+          in: query
+          description: |
+            默认按 `updated_at_ms` 倒序。`cost_desc` 按 7 天费用倒序；
+            `expires_asc` 按过期时间升序，未设置过期的排最后。
+          schema: { type: string, enum: [updated_desc, cost_desc, expires_asc], default: updated_desc }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: page_size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/AccessKeyCollection' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [AccessKeys]
+      operationId: createAccessKey
+      summary: 创建 AccessKey
+      description: |
+        不传 `key` 时服务端生成 `sk-gl-` + 32 位十六进制的密钥。明文 `key` 只在首次成功响应中返回，
+        之后需通过 reveal 接口获取。响应带 `Cache-Control: no-store`。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AccessKeyCreateRequest' }
+            example:
+              name: team-a
+              filters:
+                groups: [1]
+                protocols: [openai-completions, anthropic]
+                models: []
+                allowed_cidrs: [10.0.0.0/8]
+              rpm_limit: 60
+              cost_limit_rules:
+                - { kind: total, limit_usd: "100" }
+                - { kind: periodic, limit_usd: "5", period_seconds: 86400 }
+              expires_at_ms: 1798732800000
+      responses:
+        '200':
+          description: 创建成功或幂等重放
+          headers:
+            Cache-Control: { $ref: '#/components/headers/NoStore' }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/AccessKeySecretResult' }
+        '400':
+          description: |
+            `BAD_REQUEST` / `INVALID_JSON` / `VALIDATION_FAILED` / `INVALID_CUSTOM_ACCESS_KEY` /
+            `ACCESS_KEY_ADMIN_CONFLICT`（自定义 key 与 `AUTH_KEY` 相同）/ `INVALID_IDEMPOTENCY_KEY`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: |
+            `DUPLICATE_RESOURCE`（自定义 key 已被其他 AccessKey 使用）/ `IDEMPOTENCY_KEY_REUSED`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '410': { $ref: '#/components/responses/IdempotencyExpired' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '428': { $ref: '#/components/responses/IdempotencyKeyRequired' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/OperationIncomplete' }
+
+  /api/access-keys/options:
+    get:
+      tags: [AccessKeys]
+      operationId: listAccessKeyOptions
+      summary: 列出 AccessKey 下拉选项
+      description: 返回全部 AccessKey 的精简信息，按 `id` 升序，不分页。用于日志、用量页的筛选下拉框。
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: [array, 'null']
+                        items: { $ref: '#/components/schemas/AccessKeyOption' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/access-keys/{id}:
+    parameters:
+      - $ref: '#/components/parameters/AccessKeyID'
+    get:
+      tags: [AccessKeys]
+      operationId: getAccessKey
+      summary: 按 ID 获取 AccessKey
+      description: |
+        返回单个 AccessKey 的元数据，字段与更新接口的响应一致。
+        存在费用规则时附带 `cost_limit_status`；不返回密钥明文，明文请用 reveal 接口。
+      responses:
+        '200':
+          description: AccessKey 元数据
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/AccessKeyMetadata' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    put:
+      tags: [AccessKeys]
+      operationId: updateAccessKey
+      summary: 更新 AccessKey（部分更新）
+      description: |
+        只修改请求中出现的字段，至少要有一个字段，否则返回 `400 BAD_REQUEST`。
+
+        - `filters` 整体替换。
+        - `cost_limit_rules` 整体替换：带 `id` 的保留并更新该规则，不带 `id` 的新建，
+          未出现的已有规则被删除。修改周期会重置该规则的用量。
+        - `expires_at_ms` 传 `null` 表示改为永不过期。
+        - 传入非空 `key` 会替换密钥明文，此时必须带 `Idempotency-Key`；响应不回显明文。
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: 仅当请求体包含非空 `key` 时必填，格式同创建接口。
+          schema: { $ref: '#/components/schemas/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AccessKeyUpdateRequest' }
+            example:
+              status: disabled
+              expires_at_ms: null
+      responses:
+        '200':
+          description: 更新后的元数据
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/AccessKeyMetadata' }
+        '400':
+          description: |
+            `BAD_REQUEST` / `INVALID_JSON` / `VALIDATION_FAILED` / `INVALID_CUSTOM_ACCESS_KEY` /
+            `ACCESS_KEY_ADMIN_CONFLICT` / `INVALID_IDEMPOTENCY_KEY`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: '`DUPLICATE_RESOURCE` / `IDEMPOTENCY_KEY_REUSED`'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '410': { $ref: '#/components/responses/IdempotencyExpired' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '428': { $ref: '#/components/responses/IdempotencyKeyRequired' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/OperationIncomplete' }
+    delete:
+      tags: [AccessKeys]
+      operationId: deleteAccessKey
+      summary: 删除 AccessKey
+      responses:
+        '200':
+          description: 删除成功，响应不含 `data`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/access-keys/{id}/reveal:
+    parameters:
+      - $ref: '#/components/parameters/AccessKeyID'
+    post:
+      tags: [AccessKeys]
+      operationId: revealAccessKey
+      summary: 查看 AccessKey 明文
+      description: '解密并返回密钥明文，无请求体。操作会写入审计日志，响应带 `Cache-Control: no-store`。'
+      responses:
+        '200':
+          description: 成功
+          headers:
+            Cache-Control: { $ref: '#/components/headers/NoStore' }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/AccessKeyRevealResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/access-keys/{id}/rotate:
+    parameters:
+      - $ref: '#/components/parameters/AccessKeyID'
+    post:
+      tags: [AccessKeys]
+      operationId: rotateAccessKey
+      summary: 轮换 AccessKey
+      description: |
+        生成新的随机密钥替换旧密钥，旧密钥立即失效；其余配置不变。
+        请求体可省略或为 `{}`。明文 `key` 只在首次成功响应中返回。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        '200':
+          description: 轮换成功或幂等重放
+          headers:
+            Cache-Control: { $ref: '#/components/headers/NoStore' }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/AccessKeySecretResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/IdempotencyKeyReused' }
+        '410': { $ref: '#/components/responses/IdempotencyExpired' }
+        '428': { $ref: '#/components/responses/IdempotencyKeyRequired' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/OperationIncomplete' }
+
+  /api/access-keys/{id}/cost-limits/reset:
+    parameters:
+      - $ref: '#/components/parameters/AccessKeyID'
+    post:
+      tags: [AccessKeys]
+      operationId: resetAccessKeyCostLimits
+      summary: 重置费用规则用量
+      description: 将指定规则的已用金额清零，规则定义不变。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [rule_ids]
+              properties:
+                rule_ids:
+                  type: array
+                  description: 要重置的规则 ID，必须都属于该 AccessKey，不可重复。
+                  minItems: 1
+                  maxItems: 11
+                  uniqueItems: true
+                  items: { type: integer, minimum: 1 }
+            example: { rule_ids: [12, 13] }
+      responses:
+        '200':
+          description: 重置成功，响应不含 `data`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+components:
+  securitySchemes:
+    adminBearer:
+      type: http
+      scheme: bearer
+      description: 管理员密钥，即服务端环境变量 `AUTH_KEY` 的值。
+
+  parameters:
+    AccessKeyID:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { $ref: '#/components/schemas/IdempotencyKey' }
+
+  headers:
+    NoStore:
+      description: 响应含密钥明文，禁止缓存。
+      schema: { type: string, const: no-store }
+
+  responses:
+    BadRequest:
+      description: '`BAD_REQUEST` / `INVALID_JSON` / `VALIDATION_FAILED`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Unauthorized:
+      description: '`UNAUTHORIZED`：缺少或无效的 Bearer token'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Forbidden:
+      description: '`FORBIDDEN`：AccessKey 身份无权访问管理接口'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    NotFound:
+      description: '`NOT_FOUND`：AccessKey 不存在'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    IdempotencyKeyReused:
+      description: '`IDEMPOTENCY_KEY_REUSED`：同一 Idempotency-Key 已用于不同请求'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    IdempotencyExpired:
+      description: '`IDEMPOTENCY_RESULT_EXPIRED`：该 Idempotency-Key 的结果已过保留期'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    IdempotencyKeyRequired:
+      description: '`IDEMPOTENCY_KEY_REQUIRED`：缺少 Idempotency-Key 请求头'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    RequestTooLarge:
+      description: '`REQUEST_TOO_LARGE`：请求体超过 32 MiB'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    AuthLocked:
+      description: '`AUTH_LOCKED`：来源 IP 认证失败过多，暂时锁定'
+      headers:
+        Retry-After:
+          schema: { type: integer, minimum: 1 }
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorEnvelope'
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    required: [retry_after_seconds]
+                    properties:
+                      retry_after_seconds: { type: integer, minimum: 1 }
+    InternalError:
+      description: '`INTERNAL_SERVER_ERROR` / `DATABASE_ERROR`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    OperationIncomplete:
+      description: '`CONTROL_OPERATION_INCOMPLETE`：已提交但运行时恢复未完成，可用同一 Idempotency-Key 重试'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  schemas:
+    SuccessEnvelope:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: integer, const: 0 }
+        message: { type: string }
+        data: {}
+
+    ErrorEnvelope:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, examples: [VALIDATION_FAILED] }
+        message: { type: string }
+        data: {}
+
+    IdempotencyKey:
+      type: string
+      description: 小写规范 UUID v4。
+      pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+      examples: [3f2b8c1e-9a4d-4e6f-8b2a-1c3d5e7f9a0b]
+
+    AccessKeyStatus:
+      type: string
+      enum: [active, disabled]
+
+    Protocol:
+      type: string
+      enum:
+        - openai-completions
+        - openai-responses
+        - openai-images
+        - openai-embeddings
+        - rerank
+        - anthropic
+        - gemini
+
+    AccessKeyPlaintext:
+      type: string
+      description: 可打印 ASCII（0x21–0x7E，不含空格），1–256 字节，不能等于 `AUTH_KEY`。
+      minLength: 1
+      maxLength: 256
+      pattern: '^[!-~]+$'
+
+    AccessKeyName:
+      type: string
+      description: 去除首尾空白后非空，不超过 255 字节，不含控制字符。
+      minLength: 1
+      maxLength: 255
+
+    PriceMultiplier:
+      type: string
+      description: 计费倍率，非负十进制字符串，最多 6 位小数，范围 0–1000。
+      pattern: '^[0-9]+(\.[0-9]{1,6})?$'
+      examples: ['1', '0.8']
+
+    USDAmount:
+      type: string
+      description: 美元金额十进制字符串，最多 9 位小数。
+      pattern: '^[0-9]+(\.[0-9]{1,9})?$'
+      examples: ['5', '12.5']
+
+    AccessKeyFilters:
+      type: object
+      description: 数据面访问范围。各数组为空表示不限制。
+      additionalProperties: false
+      properties:
+        groups:
+          type: array
+          description: 允许访问的分组 ID，必须是已存在的分组；重复项会去重。
+          items: { type: integer, minimum: 1 }
+        protocols:
+          type: array
+          description: 允许的入口协议；输出时按固定协议顺序排列。
+          items: { $ref: '#/components/schemas/Protocol' }
+        models:
+          type: array
+          description: 允许的模型名；首尾空白会被去除，不能为空串。
+          items: { type: string, minLength: 1 }
+        allowed_cidrs:
+          type: array
+          description: |
+            允许的来源 IP 或 CIDR，最多 64 条；单个 IP 视为 /32 或 /128。
+            同时约束数据面调用和该 AccessKey 登录控制台。输出为规范化后排序的 CIDR。
+          maxItems: 64
+          items: { type: string, examples: [10.0.0.0/8, 203.0.113.7] }
+
+    AccessKeyFiltersOutput:
+      allOf:
+        - $ref: '#/components/schemas/AccessKeyFilters'
+        - type: object
+          required: [groups, protocols, models, allowed_cidrs]
+
+    CostLimitRuleInput:
+      type: object
+      additionalProperties: false
+      required: [kind, limit_usd]
+      description: |
+        `total`：累计总额，最多一条，不能带 `period_seconds`。
+        `periodic`：周期额度，`period_seconds` 取值 60–31536000，同一周期不可重复，最多 10 条。
+        `limit_usd` 必须大于 0。
+      properties:
+        id:
+          type: integer
+          minimum: 1
+          description: 仅更新接口可用，表示保留并修改该已有规则；`kind` 不可变。
+        kind: { type: string, enum: [total, periodic] }
+        limit_usd: { $ref: '#/components/schemas/USDAmount' }
+        period_seconds: { type: integer, minimum: 60, maximum: 31536000 }
+
+    CostLimitRule:
+      type: object
+      required: [id, kind, limit_usd]
+      properties:
+        id: { type: integer }
+        kind: { type: string, enum: [total, periodic] }
+        limit_usd: { $ref: '#/components/schemas/USDAmount' }
+        period_seconds:
+          type: integer
+          description: 仅 `periodic` 规则返回。
+
+    CostLimitRuleStatus:
+      allOf:
+        - $ref: '#/components/schemas/CostLimitRule'
+        - type: object
+          required: [used_usd, remaining_usd, status]
+          properties:
+            used_usd: { type: string }
+            remaining_usd: { type: string }
+            status: { type: string, enum: [available, inactive, exhausted] }
+            window_started_at_ms: { type: integer }
+            window_ends_at_ms: { type: integer }
+
+    CostLimitStatus:
+      type: object
+      required: [observed_at_ms, allowed, recoverable, next_available_at_ms, rules]
+      properties:
+        observed_at_ms: { type: integer }
+        allowed:
+          type: boolean
+          description: 当前是否允许发起新请求。
+        recoverable:
+          type: boolean
+          description: 被拦截时是否会随周期滚动自动恢复。
+        next_available_at_ms: { type: [integer, 'null'] }
+        rules:
+          type: array
+          items: { $ref: '#/components/schemas/CostLimitRuleStatus' }
+
+    AccessKeyCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { $ref: '#/components/schemas/AccessKeyName' }
+        key:
+          allOf:
+            - $ref: '#/components/schemas/AccessKeyPlaintext'
+          description: 自定义密钥；省略或空串则由服务端生成。
+        status:
+          allOf:
+            - $ref: '#/components/schemas/AccessKeyStatus'
+          default: active
+        price_multiplier:
+          allOf:
+            - $ref: '#/components/schemas/PriceMultiplier'
+          default: '1'
+          description: 不可为 `null`。
+        filters: { $ref: '#/components/schemas/AccessKeyFilters' }
+        rpm_limit:
+          type: integer
+          minimum: 0
+          default: 0
+          description: 每分钟请求上限，0 表示不限；不可为 `null`。
+        cost_limit_rules:
+          type: array
+          description: 不可带 `id`；不可为 `null`。
+          items: { $ref: '#/components/schemas/CostLimitRuleInput' }
+        expires_at_ms:
+          type: [integer, 'null']
+          description: 过期时间，必须晚于当前时间；省略或 `null` 表示永不过期。
+
+    AccessKeyUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { $ref: '#/components/schemas/AccessKeyName' }
+        key:
+          allOf:
+            - $ref: '#/components/schemas/AccessKeyPlaintext'
+          description: 替换为自定义密钥；需要 `Idempotency-Key`。
+        status: { $ref: '#/components/schemas/AccessKeyStatus' }
+        price_multiplier: { $ref: '#/components/schemas/PriceMultiplier' }
+        filters: { $ref: '#/components/schemas/AccessKeyFilters' }
+        rpm_limit: { type: integer, minimum: 0 }
+        cost_limit_rules:
+          type: array
+          items: { $ref: '#/components/schemas/CostLimitRuleInput' }
+        expires_at_ms:
+          type: [integer, 'null']
+          description: 新的过期时间，必须晚于当前时间；`null` 表示改为永不过期。
+
+    AccessKeyMetadata:
+      type: object
+      required:
+        - id
+        - name
+        - masked_key
+        - status
+        - price_multiplier
+        - filters
+        - rpm_limit
+        - cost_limit_rules
+        - expires_at_ms
+        - created_at_ms
+        - updated_at_ms
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        masked_key:
+          type: string
+          description: 掩码密钥，形如 `sk-gl-****ab12`；短密钥只显示 `****` 或末 4 位。
+          examples: [sk-gl-****ab12]
+        status: { $ref: '#/components/schemas/AccessKeyStatus' }
+        price_multiplier: { $ref: '#/components/schemas/PriceMultiplier' }
+        filters: { $ref: '#/components/schemas/AccessKeyFiltersOutput' }
+        rpm_limit: { type: integer }
+        cost_limit_rules:
+          type: array
+          items: { $ref: '#/components/schemas/CostLimitRule' }
+        cost_limit_status:
+          allOf:
+            - $ref: '#/components/schemas/CostLimitStatus'
+          description: 仅列表接口和按 ID 获取接口在存在费用规则时返回。
+        expires_at_ms: { type: [integer, 'null'] }
+        created_at_ms: { type: integer }
+        updated_at_ms: { type: integer }
+
+    AccessKeySecretResult:
+      description: 创建或轮换结果。
+      allOf:
+        - $ref: '#/components/schemas/AccessKeyMetadata'
+        - type: object
+          required: [replayed]
+          properties:
+            key:
+              type: string
+              description: 密钥明文，仅首次成功响应返回；幂等重放时省略。
+            replayed:
+              type: boolean
+              description: 是否为同一 Idempotency-Key 的重放结果。
+
+    AccessKeyRevealResult:
+      type: object
+      required: [id, key, revealed_at_ms]
+      properties:
+        id: { type: integer }
+        key: { type: string }
+        revealed_at_ms: { type: integer }
+
+    AccessKeyOption:
+      type: object
+      required: [id, name, status, key_suffix]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        status: { $ref: '#/components/schemas/AccessKeyStatus' }
+        key_suffix:
+          type: string
+          description: 密钥末 4 位；密钥长度不超过 8 时为 `****`。
+
+    UsageAggregate:
+      type: object
+      required: [request_count, total_tokens, estimated_cost_nano_usd]
+      properties:
+        request_count: { type: integer }
+        total_tokens: { type: integer }
+        estimated_cost_nano_usd:
+          type: string
+          description: 估算费用，单位 1e-9 美元。
+
+    AccessKeyCollectionItem:
+      allOf:
+        - $ref: '#/components/schemas/AccessKeyMetadata'
+        - type: object
+          required: [usage, last_request_at_ms, expired]
+          properties:
+            usage:
+              allOf:
+                - $ref: '#/components/schemas/UsageAggregate'
+              description: '`usage_window` 区间内的用量。'
+            last_request_at_ms:
+              type: [integer, 'null']
+              description: 最近一次请求完成时间；从未使用时为 `null`。
+            expired:
+              type: boolean
+
+    AccessKeyCollection:
+      type: object
+      required: [usage_window, summary, items, pagination]
+      properties:
+        usage_window:
+          type: object
+          required: [observed_at_ms, range, from_ms, to_ms]
+          properties:
+            observed_at_ms: { type: integer }
+            range: { type: string, const: 7d }
+            from_ms: { type: integer }
+            to_ms: { type: integer }
+        summary:
+          type: object
+          description: 全量统计，不受筛选条件影响。
+          required: [total, active, disabled]
+          properties:
+            total: { type: integer }
+            active: { type: integer }
+            disabled: { type: integer }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AccessKeyCollectionItem' }
+        pagination:
+          type: object
+          required: [page, page_size, total_items, total_pages]
+          properties:
+            page: { type: integer }
+            page_size: { type: integer }
+            total_items:
+              type: integer
+              description: 筛选后的条目总数。
+            total_pages: { type: integer }
