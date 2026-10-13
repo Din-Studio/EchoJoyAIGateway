@@ -478,6 +478,12 @@ func (s *Server) HTTPModule() httproute.Module {
 				s.handleListAccessKeyCollection,
 			),
 			controlRoute(
+				"control.access-keys.get",
+				http.MethodGet,
+				"/access-keys/:id",
+				s.handleGetAccessKey,
+			),
+			controlRoute(
 				"control.access-keys.update",
 				http.MethodPut,
 				"/access-keys/:id",
