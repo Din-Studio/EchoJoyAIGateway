@@ -36,6 +36,7 @@ const (
 	Volcengine       ID = "volcengine"
 	OpenRouter       ID = "openrouter"
 	Groq             ID = "groq"
+	Vercel           ID = "vercel"
 	XAI              ID = "xai"
 )
 

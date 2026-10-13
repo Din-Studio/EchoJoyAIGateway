@@ -30,6 +30,7 @@ func TestFinalRegistryContainsOnlyApprovedChannels(t *testing.T) {
 		Volcengine,
 		OpenRouter,
 		Groq,
+		Vercel,
 		XAI,
 		GPTLoad,
 		NewAPI,
