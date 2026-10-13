@@ -24,7 +24,6 @@ type systemSecretResponse struct {
 type systemInfoResponse struct {
 	Version    string                   `json:"version"`
 	Deployment systemDeploymentResponse `json:"deployment"`
-	AuthKey    systemSecretResponse     `json:"auth_key"`
 	Encryption systemSecretResponse     `json:"encryption"`
 }
 
@@ -32,7 +31,6 @@ func newSystemInfoResponse() systemInfoResponse {
 	return systemInfoResponse{
 		Version:    version.Version,
 		Deployment: systemDeploymentResponse{Database: systemDatabasePostgreSQL},
-		AuthKey:    systemSecretResponse{Source: systemSecretSourceEnvironment},
 		Encryption: systemSecretResponse{Source: systemSecretSourceEnvironment},
 	}
 }

@@ -13,7 +13,6 @@ import { usePageRefresh } from '@modern/app/page-refresh'
 import { AppButton, AppCollectionState, AppNotice } from '@modern/components/ui'
 import RouteInspector from '@modern/features/inspector/RouteInspector.vue'
 import { compareHealthIssues, healthIssues } from '@modern/features/health/health-display'
-import HomeAccessKey from './HomeAccessKey.vue'
 import HomeAccounts from './HomeAccounts.vue'
 import HomeAttention from './HomeAttention.vue'
 import HomeRouteTool from './HomeRouteTool.vue'
@@ -28,7 +27,7 @@ const session = useAuthSession()
 const route = useRoute()
 const inspector = ref<InstanceType<typeof RouteInspector>>()
 const inspectorSection = ref<HTMLElement>()
-const admin = computed(() => session.state.principalType === 'admin')
+const admin = computed(() => session.state.platform)
 const baseQuery = useQuery({
   queryKey: ['modern', 'home', 'base'],
   queryFn: ({ signal }) => getHome(client, signal),
@@ -217,7 +216,6 @@ watch(
               @retry="refreshHealth"
             />
           </div>
-          <HomeAccessKey v-if="!admin && base.currentKey" :row="base.currentKey" />
         </div>
       </div>
     </template>

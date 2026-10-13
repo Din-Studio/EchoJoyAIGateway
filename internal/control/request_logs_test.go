@@ -94,11 +94,12 @@ func TestListRequestLogsSuppressesOnlyCanceledHTTPRequestErrors(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newServiceFixture(t)
 			fixture.service.requestLogs = &recordingRequestLogReader{err: test.readerErr}
-			server := newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service)
+			server := newTestServer(t, &config.Config{}, fixture.service)
 			recorder := httptest.NewRecorder()
 			ginContext, _ := gin.CreateTestContext(recorder)
 			ginContext.Request = httptest.NewRequest(http.MethodGet, "/api/logs", nil).
 				WithContext(test.requestCtx())
+			ginContext.Set(controlPrincipalContextKey, testPlatformPrincipal)
 
 			var logs bytes.Buffer
 			logger := logrus.StandardLogger()
@@ -243,9 +244,9 @@ func TestRequestLogEndpointAcceptsCanonicalNumericBoundaries(t *testing.T) {
 		t.Fatalf("response = %d %s, want 200", recorder.Code, recorder.Body.String())
 	}
 	if len(reader.queries) != 1 || reader.queries[0].GroupID == nil ||
-		reader.queries[0].AccessKeyID == nil ||
+		len(reader.queries[0].ScopeAccessKeyIDs) != 1 ||
 		uint64(*reader.queries[0].GroupID) != uint64(maxSafeInteger) ||
-		uint64(*reader.queries[0].AccessKeyID) != uint64(maxSafeInteger) ||
+		uint64(reader.queries[0].ScopeAccessKeyIDs[0]) != uint64(maxSafeInteger) ||
 		reader.queries[0].Limit != maxRequestLogLimit {
 		t.Fatalf("List() queries = %#v", reader.queries)
 	}
@@ -483,7 +484,7 @@ func TestRequestLogEndpointReturnsOpaqueCursorAndSafeDTO(t *testing.T) {
 		*gotQuery.FromMS != 1784890800000 ||
 		*gotQuery.ToMS != 1784898000000 ||
 		gotQuery.GroupID == nil || *gotQuery.GroupID != 12 ||
-		gotQuery.AccessKeyID == nil || *gotQuery.AccessKeyID != 41 ||
+		len(gotQuery.ScopeAccessKeyIDs) != 1 || gotQuery.ScopeAccessKeyIDs[0] != 41 ||
 		gotQuery.ClientModel != "client-model" ||
 		gotQuery.UpstreamModel != "upstream-model" ||
 		gotQuery.Status != telemetry.RequestStatusSuccess ||
@@ -646,7 +647,7 @@ func TestRequestLogDetailEndpointReturnsAttemptsAndFrozenPricingReceipt(t *testi
 	}}
 	engine := newRequestLogTestEngine(t, reader)
 	request := httptest.NewRequest(http.MethodGet, "/api/logs/"+requestID, nil)
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -1117,7 +1118,7 @@ func TestRequestLogEndpointRequiresManagementAuthentication(t *testing.T) {
 	}
 }
 
-func TestRequestLogEndpointsBindAccessKeyScopeAndRedactRoutingInternals(t *testing.T) {
+func TestRequestLogEndpointsBindMemberScopeAndRedactRoutingInternals(t *testing.T) {
 	t.Parallel()
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
@@ -1174,15 +1175,16 @@ func TestRequestLogEndpointsBindAccessKeyScopeAndRedactRoutingInternals(t *testi
 		{Items: []requestlog.Record{}},
 	}}
 	fixture.service.requestLogs = reader
+	assignTestTeamKey(t, fixture, current.ID, "team-a", testMemberPrincipal.UserID)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
-	list := performRequestLogRequest(engine, current.Key, "client_model=client-model")
+	list := performRequestLogRequest(engine, testMemberSession, "client_model=client-model")
 	if list.Code != http.StatusOK {
 		t.Fatalf("AccessKey logs = %d %s, want 200", list.Code, list.Body.String())
 	}
-	if len(reader.queries) != 1 || reader.queries[0].AccessKeyID == nil ||
-		*reader.queries[0].AccessKeyID != current.ID {
+	if len(reader.queries) != 1 || len(reader.queries[0].ScopeAccessKeyIDs) != 1 ||
+		reader.queries[0].ScopeAccessKeyIDs[0] != current.ID {
 		t.Fatalf("AccessKey list query = %#v", reader.queries)
 	}
 	assertAccessKeyLogRedaction(t, list.Body.Bytes(), false)
@@ -1190,8 +1192,11 @@ func TestRequestLogEndpointsBindAccessKeyScopeAndRedactRoutingInternals(t *testi
 		t.Fatalf("AccessKey logs expose another key: %s", list.Body.String())
 	}
 
+	otherKey := performRequestLogRequest(engine, testMemberSession, "access_key_id="+strconv.FormatUint(uint64(other.ID), 10))
+	if otherKey.Code != http.StatusNotFound || len(reader.queries) != 1 {
+		t.Fatalf("member filter by another key = %d %s, calls=%d", otherKey.Code, otherKey.Body.String(), len(reader.queries))
+	}
 	for _, query := range []string{
-		"access_key_id=" + strconv.FormatUint(uint64(other.ID), 10),
 		"group_id=99",
 		"channel_id=openai",
 		"credential_id=101",
@@ -1199,21 +1204,21 @@ func TestRequestLogEndpointsBindAccessKeyScopeAndRedactRoutingInternals(t *testi
 		"model_consistency=mismatch",
 		"retry_state=retried",
 	} {
-		recorder := performRequestLogRequest(engine, current.Key, query)
+		recorder := performRequestLogRequest(engine, testMemberSession, query)
 		if recorder.Code != http.StatusBadRequest || len(reader.queries) != 1 {
 			t.Fatalf("AccessKey log filter %q = %d %s, calls=%d", query, recorder.Code, recorder.Body.String(), len(reader.queries))
 		}
 	}
 
 	detailRequest := httptest.NewRequest(http.MethodGet, "/api/logs/"+requestID, nil)
-	detailRequest.Header.Set("Authorization", "Bearer "+current.Key)
+	setTestSession(detailRequest, testMemberSession)
 	detail := httptest.NewRecorder()
 	engine.ServeHTTP(detail, detailRequest)
 	if detail.Code != http.StatusOK {
 		t.Fatalf("AccessKey log detail = %d %s, want 200", detail.Code, detail.Body.String())
 	}
 	if len(reader.queries) != 2 || reader.queries[1].RequestID != requestID ||
-		reader.queries[1].AccessKeyID == nil || *reader.queries[1].AccessKeyID != current.ID ||
+		len(reader.queries[1].ScopeAccessKeyIDs) != 1 || reader.queries[1].ScopeAccessKeyIDs[0] != current.ID ||
 		len(reader.getRequests) != 0 {
 		t.Fatalf("AccessKey detail lookup = queries %#v, gets %#v", reader.queries, reader.getRequests)
 	}
@@ -1224,7 +1229,7 @@ func TestRequestLogEndpointsBindAccessKeyScopeAndRedactRoutingInternals(t *testi
 		"/api/logs/00000000-0000-4000-8000-000000000702",
 		nil,
 	)
-	missingRequest.Header.Set("Authorization", "Bearer "+current.Key)
+	setTestSession(missingRequest, testMemberSession)
 	missing := httptest.NewRecorder()
 	engine.ServeHTTP(missing, missingRequest)
 	if missing.Code != http.StatusNotFound || len(reader.queries) != 3 ||
@@ -1329,7 +1334,7 @@ func newRequestLogTestEngine(t *testing.T, reader RequestLogReader) *gin.Engine 
 	fixture := newServiceFixture(t)
 	fixture.service.requestLogs = reader
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	return engine
 }
 
@@ -1340,7 +1345,7 @@ func performRequestLogRequest(engine *gin.Engine, authKey, query string) *httpte
 	}
 	request := httptest.NewRequest(http.MethodGet, target, nil)
 	if authKey != "" {
-		request.Header.Set("Authorization", "Bearer "+authKey)
+		setTestSession(request, authKey)
 	}
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)

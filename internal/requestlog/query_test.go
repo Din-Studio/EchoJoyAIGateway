@@ -457,14 +457,14 @@ func TestServiceListAppliesAllFiltersAndGroupJSON(t *testing.T) {
 	fromMS := from.UnixMilli()
 	toMS := to.UnixMilli()
 	page, err := service.List(context.Background(), ListQuery{
-		FromMS:        &fromMS,
-		ToMS:          &toMS,
-		GroupID:       &groupID,
-		ClientModel:   "client-model",
-		UpstreamModel: "different-upstream-model",
-		AccessKeyID:   &accessKeyID,
-		Status:        telemetry.RequestStatusError,
-		Limit:         50,
+		FromMS:            &fromMS,
+		ToMS:              &toMS,
+		GroupID:           &groupID,
+		ClientModel:       "client-model",
+		UpstreamModel:     "different-upstream-model",
+		ScopeAccessKeyIDs: []uint{accessKeyID},
+		Status:            telemetry.RequestStatusError,
+		Limit:             50,
 	})
 	if err != nil {
 		t.Fatalf("filtered List() error = %v", err)
@@ -486,9 +486,9 @@ func TestServiceListAppliesAllFiltersAndGroupJSON(t *testing.T) {
 
 	conflictingAccessKeyID := uint(72)
 	conflictingPage, err := service.List(context.Background(), ListQuery{
-		RequestID:   targetID,
-		AccessKeyID: &conflictingAccessKeyID,
-		Limit:       50,
+		RequestID:         targetID,
+		ScopeAccessKeyIDs: []uint{conflictingAccessKeyID},
+		Limit:             50,
 	})
 	if err != nil {
 		t.Fatalf("conflicting request ID List() error = %v", err)

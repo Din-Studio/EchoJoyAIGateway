@@ -298,14 +298,14 @@ func TestGroupCollectionHTTPReturnsExactCollectionAndOptionsContracts(t *testing
 
 	engine := gin.New()
 	newTestServer(t,
-		&config.Config{AuthKey: authTestKey},
+		&config.Config{},
 		fixture.service,
 	).RegisterRoutes(engine)
 
 	collection := performGroupCollectionRequest(
 		engine,
 		"/api/groups?sort=name&page=1&page_size=1",
-		"Bearer "+authTestKey,
+		testPlatformSession,
 	)
 	if collection.Code != http.StatusOK {
 		t.Fatalf("collection response = %d %s, want 200", collection.Code, collection.Body.String())
@@ -336,7 +336,7 @@ func TestGroupCollectionHTTPReturnsExactCollectionAndOptionsContracts(t *testing
 	options := performGroupCollectionRequest(
 		engine,
 		"/api/groups/options",
-		"Bearer "+authTestKey,
+		testPlatformSession,
 	)
 	if options.Code != http.StatusOK {
 		t.Fatalf("options response = %d %s, want 200", options.Code, options.Body.String())
@@ -380,13 +380,13 @@ func TestGroupCollectionHTTPAllowsAvailableKeysInAnUnavailableStatus(t *testing.
 
 	engine := gin.New()
 	newTestServer(t,
-		&config.Config{AuthKey: authTestKey},
+		&config.Config{},
 		fixture.service,
 	).RegisterRoutes(engine)
 	recorder := performGroupCollectionRequest(
 		engine,
 		"/api/groups",
-		"Bearer "+authTestKey,
+		testPlatformSession,
 	)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("collection response = %d %s, want 200", recorder.Code, recorder.Body.String())
@@ -405,7 +405,7 @@ func TestGroupOptionsHTTPRejectsAnyQueryIncludingBareQuestionMark(t *testing.T) 
 	t.Parallel()
 	initControlI18n(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, nil).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, nil).RegisterRoutes(engine)
 
 	for _, target := range []string{
 		"/api/groups/options?q=alpha",
@@ -416,7 +416,7 @@ func TestGroupOptionsHTTPRejectsAnyQueryIncludingBareQuestionMark(t *testing.T) 
 			recorder := performGroupCollectionRequest(
 				engine,
 				target,
-				"Bearer "+authTestKey,
+				testPlatformSession,
 			)
 			assertGroupCollectionHTTPError(
 				t,
@@ -434,7 +434,7 @@ func TestGroupCollectionHTTPRejectsInvalidQueryBeforeServiceAccess(t *testing.T)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
 	newTestServer(t,
-		&config.Config{AuthKey: authTestKey},
+		&config.Config{},
 		fixture.service,
 	).RegisterRoutes(engine)
 
@@ -447,7 +447,7 @@ func TestGroupCollectionHTTPRejectsInvalidQueryBeforeServiceAccess(t *testing.T)
 			recorder := performGroupCollectionRequest(
 				engine,
 				target,
-				"Bearer "+authTestKey,
+				testPlatformSession,
 			)
 			assertGroupCollectionHTTPError(
 				t,
@@ -474,14 +474,14 @@ func TestGroupCollectionHTTPMapsServiceErrorsThroughStandardEnvelope(t *testing.
 			}
 			engine := gin.New()
 			newTestServer(t,
-				&config.Config{AuthKey: authTestKey},
+				&config.Config{},
 				fixture.service,
 			).RegisterRoutes(engine)
 
 			recorder := performGroupCollectionRequest(
 				engine,
 				target,
-				"Bearer "+authTestKey,
+				testPlatformSession,
 			)
 			assertGroupCollectionHTTPError(
 				t,
@@ -501,7 +501,7 @@ func performGroupCollectionRequest(
 	request := httptest.NewRequest(http.MethodGet, target, nil)
 	request.Header.Set("Accept-Language", "en-US")
 	if authorization != "" {
-		request.Header.Set("Authorization", authorization)
+		setTestSession(request, authorization)
 	}
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)

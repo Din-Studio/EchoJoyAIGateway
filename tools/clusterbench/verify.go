@@ -115,7 +115,7 @@ func judgePropagation(latencies []time.Duration, budget time.Duration) check {
 type verifyConfig struct {
 	instances   []string
 	lb          string
-	authKey     string
+	session     session
 	upstreamURL string
 }
 
@@ -127,9 +127,13 @@ func runVerify(ctx context.Context, args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	cfg := verifyConfig{instances: splitList(*instances), lb: strings.TrimRight(*lb, "/"), authKey: os.Getenv("AUTH_KEY"), upstreamURL: *upstream}
-	if len(cfg.instances) < 3 || cfg.authKey == "" {
-		return errors.New("verify needs at least 3 -instances and AUTH_KEY")
+	current, err := sessionFromEnv()
+	if err != nil {
+		return err
+	}
+	cfg := verifyConfig{instances: splitList(*instances), lb: strings.TrimRight(*lb, "/"), session: current, upstreamURL: *upstream}
+	if len(cfg.instances) < 3 {
+		return errors.New("verify needs at least 3 -instances")
 	}
 	checks, err := verifyCluster(ctx, cfg)
 	printChecks(os.Stdout, checks)
@@ -143,7 +147,7 @@ func runVerify(ctx context.Context, args []string) error {
 }
 
 func verifyCluster(ctx context.Context, cfg verifyConfig) ([]check, error) {
-	admin := adminClient{baseURL: cfg.instances[0], authKey: cfg.authKey, http: &http.Client{Timeout: 30 * time.Second}}
+	admin := adminClient{baseURL: cfg.instances[0], session: cfg.session, http: &http.Client{Timeout: 30 * time.Second}}
 	suffix := fmt.Sprintf("verify-%d", time.Now().UnixNano())
 	set, err := seed(ctx, admin, append([]string{cfg.lb}, cfg.instances...), cfg.upstreamURL, suffix)
 	if err != nil {

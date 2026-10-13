@@ -142,7 +142,6 @@ export const zhCN = {
   system: {
     version: '当前版本',
     database: '数据库',
-    authKeySource: '管理员密钥来源',
     encryptionSource: '加密密钥来源',
     encryption: '静态加密',
     encryptionEnabled: '已启用',
@@ -300,7 +299,6 @@ export const enUS = {
   system: {
     version: 'Current version',
     database: 'Database',
-    authKeySource: 'Admin key source',
     encryptionSource: 'Encryption key source',
     encryption: 'Encryption at rest',
     encryptionEnabled: 'Enabled',
@@ -458,7 +456,6 @@ export const jaJP = {
   system: {
     version: '現在のバージョン',
     database: 'データベース',
-    authKeySource: '管理者キーの取得元',
     encryptionSource: '暗号化キーの取得元',
     encryption: '保存時の暗号化',
     encryptionEnabled: '有効',

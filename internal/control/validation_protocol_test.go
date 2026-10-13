@@ -33,7 +33,7 @@ func TestCredentialProbeProtocolOverrideDoesNotChangeGroupDefault(t *testing.T) 
 	executor := &credentialProbeTestExecutor{result: successfulCredentialProbeResult()}
 	fixture.service.executor = executor
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "protocol-auth"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	path := fmt.Sprintf("/api/groups/%d/credentials/%d/test", groupID, credential.ID)
 	response := serveCredentialRequest(t, engine, http.MethodPost, path, `{"protocol":"openai-embeddings","model":" temporary-model "}`, "protocol-auth", "")
 	if response.Code != http.StatusOK {

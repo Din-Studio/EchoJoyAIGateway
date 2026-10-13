@@ -36,15 +36,19 @@ make test    # 运行 Go 单元测试 / run Go unit tests
 make check   # 完整验收门禁 / the full acceptance gate
 ```
 
-网关只以容器形式部署，运行时依赖 PostgreSQL 和 Redis。本地运行网关时可以复用 `make test-deps` 拉起的依赖，并在 `.env` 中设置 `DATABASE_DSN`、`REDIS_ADDRS`、`AUTH_KEY` 和 `ENCRYPTION_KEY`：
+网关只以容器形式部署，运行时依赖 PostgreSQL 和 Redis。本地运行网关时可以复用 `make test-deps` 拉起的依赖，并在 `.env` 中设置 `DATABASE_DSN`、`REDIS_ADDRS`、`ENCRYPTION_KEY`，以及控制台登录所需的 Casdoor 变量 `PUBLIC_URL`、`OIDC_ISSUER`、`OIDC_CLIENT_ID`、`OIDC_CLIENT_SECRET` 和 `CASDOOR_ORGANIZATION`（缺任何一项都会启动失败）。使用 Vite 开发服务器（`web` 下 `corepack pnpm dev`，会代理 `/api` 和 `/auth`）时设置 `PUBLIC_URL=http://localhost:5173`，并在 Casdoor 应用中登记对应的回调地址；Casdoor 配置见 README 的“登录与权限”：
 
-The gateway is deployed as a container only and depends on PostgreSQL and Redis at runtime. To run it locally, reuse the dependencies started by `make test-deps` and set `DATABASE_DSN`, `REDIS_ADDRS`, `AUTH_KEY`, and `ENCRYPTION_KEY` in `.env`:
+The gateway is deployed as a container only and depends on PostgreSQL and Redis at runtime. To run it locally, reuse the dependencies started by `make test-deps` and set `DATABASE_DSN`, `REDIS_ADDRS`, `ENCRYPTION_KEY`, and the Casdoor variables for console sign-in, `PUBLIC_URL`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, and `CASDOOR_ORGANIZATION`, in `.env` (startup fails if any is missing). With the Vite dev server (`corepack pnpm dev` in `web`, which proxies `/api` and `/auth`), set `PUBLIC_URL=http://localhost:5173` and register the matching redirect URIs in the Casdoor application; see "Sign-in and permissions" in the README for the Casdoor setup:
 
 ```text
 DATABASE_DSN=postgres://postgres:postgres@127.0.0.1:55432/gpt_load?sslmode=disable
 REDIS_ADDRS=127.0.0.1:56379
-AUTH_KEY=<openssl rand -hex 32>
 ENCRYPTION_KEY=<openssl rand -hex 32>
+PUBLIC_URL=http://localhost:5173
+OIDC_ISSUER=<Casdoor origin>
+OIDC_CLIENT_ID=<Casdoor application client ID>
+OIDC_CLIENT_SECRET=<Casdoor application client secret>
+CASDOOR_ORGANIZATION=<Casdoor organization>
 ```
 
 `make check` 覆盖 gofmt、`go mod tidy -diff`、`go vet`、前端 lint / format / build、Go 构建与全量单元测试。
@@ -128,10 +132,10 @@ feat(gateway): 支持 OpenAI Embeddings API
 ## 依赖与安全 / Dependencies and security
 
 - **新增依赖需要先在 issue 或 PR 中说明理由**，并注意其许可证是否兼容。
-- 提交、日志、测试数据和截图中不得包含 `AUTH_KEY`、`ENCRYPTION_KEY`、上游密钥或任何真实凭据。
+- 提交、日志、测试数据和截图中不得包含 `OIDC_CLIENT_SECRET`、`ENCRYPTION_KEY`、上游密钥或任何真实凭据。
 
 - **New dependencies need justification** in an issue or PR, along with license compatibility.
-- Never include `AUTH_KEY`, `ENCRYPTION_KEY`, upstream keys, or any real credential in commits, logs, fixtures, or screenshots.
+- Never include `OIDC_CLIENT_SECRET`, `ENCRYPTION_KEY`, upstream keys, or any real credential in commits, logs, fixtures, or screenshots.
 
 ## 行为准则 / Code of conduct
 

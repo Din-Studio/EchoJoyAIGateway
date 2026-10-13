@@ -1613,7 +1613,7 @@ func TestCommunityTemplatesCaptureVersionCompatibilityAndSecretSafety(t *testing
 		"数据库",
 		"客户端协议",
 		"实际结果及脱敏日志",
-		"AUTH_KEY",
+		"OIDC_CLIENT_SECRET",
 		"ENCRYPTION_KEY",
 		"AccessKey",
 	} {

@@ -51,8 +51,8 @@ func TestModernGroupUsageBatchesExactRollingWindow(t *testing.T) {
 		}
 	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
-	result := performGroupCollectionRequest(engine, "/api/modern/groups/usage?group_ids=1,2,3,4,5,6,7,9", "Bearer "+authTestKey)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
+	result := performGroupCollectionRequest(engine, "/api/modern/groups/usage?group_ids=1,2,3,4,5,6,7,9", testPlatformSession)
 	if result.Code != http.StatusOK {
 		t.Fatalf("batch usage status = %d: %s", result.Code, result.Body.String())
 	}
@@ -91,14 +91,10 @@ func TestModernGroupUsageRejectsInvalidBatchesAndReadOnlyKeys(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	fixture.service.usageStats = requestlog.NewService(fixture.db, nil, nil)
-	key, err := fixture.service.CreateAccessKey(t.Context(), AccessKeyCreateRequest{Name: "read only"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	for _, query := range []string{"", "group_ids=", "group_ids=0", "group_ids=1,1", "group_ids=01", "group_ids=-1", "group_ids=1&group_ids=2", "group_ids=1&from_ms=0", "group_ids=" + strings.Repeat("1,", 100) + "2"} {
-		result := performGroupCollectionRequest(engine, "/api/modern/groups/usage?"+query, "Bearer "+authTestKey)
+		result := performGroupCollectionRequest(engine, "/api/modern/groups/usage?"+query, testPlatformSession)
 		if result.Code != http.StatusBadRequest {
 			t.Fatalf("query %q status = %d", query, result.Code)
 		}
@@ -106,7 +102,7 @@ func TestModernGroupUsageRejectsInvalidBatchesAndReadOnlyKeys(t *testing.T) {
 	for _, item := range []struct {
 		auth   string
 		status int
-	}{{"", http.StatusUnauthorized}, {"Bearer " + key.Key, http.StatusForbidden}} {
+	}{{"", http.StatusUnauthorized}, {testMemberSession, http.StatusForbidden}} {
 		result := performGroupCollectionRequest(engine, "/api/modern/groups/usage?group_ids=1", item.auth)
 		if result.Code != item.status {
 			t.Fatalf("scope status = %d, want %d", result.Code, item.status)

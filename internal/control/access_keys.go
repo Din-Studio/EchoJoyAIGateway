@@ -137,6 +137,9 @@ func (value *OptionalRPMLimit) UnmarshalJSON(data []byte) error {
 }
 
 type AccessKeyCreateRequest struct {
+	// TeamID and OwnerUserID make a team key; both empty make a platform key.
+	TeamID          string                          `json:"team_id"`
+	OwnerUserID     string                          `json:"owner_user_id"`
 	Key             string                          `json:"key"`
 	PriceMultiplier optionalField[string]           `json:"price_multiplier"`
 	Name            string                          `json:"name"`
@@ -147,6 +150,8 @@ type AccessKeyCreateRequest struct {
 	ExpiresAtMS     *int64                          `json:"expires_at_ms"`
 }
 
+// AccessKeyUpdateRequest has no team or owner: both are fixed at creation and
+// bindStrictJSON rejects them as unknown fields.
 type AccessKeyUpdateRequest struct {
 	Key             string                          `json:"key"`
 	PriceMultiplier optionalField[string]           `json:"price_multiplier"`
@@ -164,6 +169,9 @@ type AccessKeyCostLimitResetRequest struct {
 
 type AccessKeyMetadata struct {
 	PriceMultiplier string                    `json:"price_multiplier"`
+	TeamID          *string                   `json:"team_id"`
+	OwnerUserID     *string                   `json:"owner_user_id"`
+	OwnerName       *string                   `json:"owner_name"`
 	ID              uint                      `json:"id"`
 	Name            string                    `json:"name"`
 	MaskedKey       string                    `json:"masked_key"`
@@ -197,6 +205,9 @@ type AccessKeyRevealResult struct {
 }
 
 type accessKeyMetadataRow struct {
+	TeamID                *string
+	OwnerUserID           *string
+	OwnerName             *string
 	KeyPrefix             string
 	PriceMultiplierMicros *int64
 	ID                    uint
@@ -341,6 +352,7 @@ func (s *Service) CreateAccessKey(
 			return err
 		}
 		metadata, err := mapAccessKeyMetadataRow(accessKeyMetadataRow{
+			TeamID: row.TeamID, OwnerUserID: row.OwnerUserID, OwnerName: row.OwnerName,
 			ID: row.ID, Name: row.Name, KeyPrefix: *row.KeyPrefix, KeySuffix: row.KeySuffix,
 			PriceMultiplierMicros: row.PriceMultiplierMicros,
 			Status:                row.Status, Filters: row.Filters, RPMLimit: row.RPMLimit,
@@ -456,7 +468,7 @@ func (s *Service) accessKeyUpdateMutation(
 		if err := tx.Model(&models.AccessKey{}).
 			Select(
 				"id", "name", "key_prefix", "key_suffix", "status", "filters", "rpm_limit", "expires_at_ms", "price_multiplier_micros",
-				"created_at_ms", "updated_at_ms",
+				"team_id", "owner_user_id", "owner_name", "created_at_ms", "updated_at_ms",
 			).
 			Where("id = ?", id).
 			Take(&row).Error; err != nil {
@@ -473,7 +485,11 @@ func (s *Service) accessKeyUpdateMutation(
 		if err != nil {
 			return result, fmt.Errorf("decode access key %d filters: %w", row.ID, err)
 		}
-		if filters != nil {
+		if filters != nil && row.TeamID != nil {
+			if err := validateTeamKeyGroups(tx, *row.TeamID, filters.Groups); err != nil {
+				return result, err
+			}
+		} else if filters != nil {
 			if err := validateAccessKeyGroupUpdate(
 				tx,
 				currentFilters.Groups,
@@ -541,7 +557,7 @@ func (s *Service) accessKeyUpdateMutation(
 		if err := tx.Model(&models.AccessKey{}).
 			Select(
 				"id", "name", "key_prefix", "key_suffix", "status", "filters", "rpm_limit", "expires_at_ms", "price_multiplier_micros",
-				"created_at_ms", "updated_at_ms",
+				"team_id", "owner_user_id", "owner_name", "created_at_ms", "updated_at_ms",
 			).
 			Where("id = ?", row.ID).
 			Take(&row).Error; err != nil {
@@ -555,13 +571,14 @@ func (s *Service) accessKeyUpdateMutation(
 	}, nil
 }
 
-func (s *Service) ListAccessKeyOptions(ctx context.Context) ([]AccessKeyOption, error) {
-	var rows []AccessKeyOption
-	if err := s.db.WithContext(ctx).
-		Model(&models.AccessKey{}).
-		Select("id", "name", "status", "key_suffix").
-		Order("id ASC").
-		Scan(&rows).Error; err != nil {
+// ListAccessKeyOptions lists the scoped keys; nil scope lists every key.
+func (s *Service) ListAccessKeyOptions(ctx context.Context, scope []uint) ([]AccessKeyOption, error) {
+	rows := []AccessKeyOption{}
+	query := s.db.WithContext(ctx).Model(&models.AccessKey{}).Select("id", "name", "status", "key_suffix")
+	if scope != nil {
+		query = query.Where("id IN ?", scope)
+	}
+	if err := query.Order("id ASC").Scan(&rows).Error; err != nil {
 		return nil, app_errors.ParseDBError(err)
 	}
 	for _, row := range rows {
@@ -661,6 +678,9 @@ func mapAccessKeyMetadataRow(row accessKeyMetadataRow) (AccessKeyMetadata, error
 	}
 	return AccessKeyMetadata{
 		PriceMultiplier: priceMultiplierResponse(row.PriceMultiplierMicros),
+		TeamID:          cloneOptionalString(row.TeamID),
+		OwnerUserID:     cloneOptionalString(row.OwnerUserID),
+		OwnerName:       cloneOptionalString(row.OwnerName),
 		ID:              row.ID, Name: row.Name,
 		MaskedKey: maskedAccessKey(row.KeyPrefix, row.KeySuffix),
 		Status:    status, Filters: filters, RPMLimit: row.RPMLimit,
@@ -815,6 +835,53 @@ func validateFutureExpiresAtMS(value *int64, operationStartedAt time.Time) error
 		return app_errors.ErrValidation
 	}
 	return nil
+}
+
+func cloneOptionalString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+// accessKeyTeamOwner fixes a key to a team and a member; nil means a platform
+// key. OwnerName is the member's Casdoor name, resolved by the server.
+type accessKeyTeamOwner struct {
+	TeamID      string
+	OwnerUserID string
+	OwnerName   string
+}
+
+// requestedAccessKeyOwner reads the team and owner of a create request; the
+// name is filled in once the owner is confirmed to be a team member.
+func requestedAccessKeyOwner(request AccessKeyCreateRequest) (*accessKeyTeamOwner, error) {
+	team := strings.TrimSpace(request.TeamID)
+	owner := strings.TrimSpace(request.OwnerUserID)
+	if team == "" && owner == "" {
+		return nil, nil
+	}
+	if team == "" || owner == "" {
+		return nil, app_errors.ErrValidation
+	}
+	return &accessKeyTeamOwner{TeamID: team, OwnerUserID: owner}, nil
+}
+
+func (owner *accessKeyTeamOwner) apply(row *models.AccessKey) {
+	if owner == nil {
+		return
+	}
+	team, user, name := owner.TeamID, owner.OwnerUserID, owner.OwnerName
+	row.TeamID, row.OwnerUserID, row.OwnerName = &team, &user, &name
+}
+
+// validateAccessKeyGroups checks filter groups exist; a team key's groups
+// must also be granted to its team, which must have at least one grant.
+func validateAccessKeyGroups(tx *gorm.DB, owner *accessKeyTeamOwner, groups []uint) error {
+	if owner != nil {
+		return validateTeamKeyGroups(tx, owner.TeamID, groups)
+	}
+	return validateFilterGroupReferences(tx, groups)
 }
 
 func cloneOptionalInt64(value *int64) *int64 {

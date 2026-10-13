@@ -81,12 +81,13 @@ git clone --depth 1 https://github.com/tbphp/gpt-load.git
 cd gpt-load
 
 cp .env.example .env
-# .env に AUTH_KEY、ENCRYPTION_KEY、POSTGRES_PASSWORD を設定する。
-# 各値は openssl rand -hex 32 で生成できる
+# .env に ENCRYPTION_KEY と POSTGRES_PASSWORD（各値は openssl rand -hex 32 で
+# 生成できる）、Casdoor ログイン用の PUBLIC_URL、OIDC_ISSUER、OIDC_CLIENT_ID、
+# OIDC_CLIENT_SECRET、CASDOOR_ORGANIZATION を設定する（「ログインと権限」を参照）
 docker compose up -d
 ```
 
-3 つのいずれかが空の場合、Compose は不足している変数名を示して起動を拒否します。起動を確認します：
+必須変数のいずれかが空の場合、Compose は不足している変数名を示して起動を拒否します。起動を確認します：
 
 ```bash
 curl --fail http://127.0.0.1:3001/health
@@ -94,7 +95,7 @@ curl --fail http://127.0.0.1:3001/health
 
 GPT-Load が PostgreSQL と Redis に接続できると、レスポンスに `"checks": {"database": "ok", "redis": "ok"}` が含まれます。どちらかが利用できない間は理由とともに 503 を返します。
 
-<http://127.0.0.1:3001> を開き、`AUTH_KEY` でコンソールにログインします。
+`PUBLIC_URL`（例：<http://127.0.0.1:3001>）を開き、Casdoor アカウントでコンソールにログインします。Casdoor 側の設定は[ログインと権限](#ログインと権限)を参照してください。
 
 > 既定ではローカルアドレスのみを待ち受け、インターネットには直接公開されません。
 
@@ -193,7 +194,11 @@ Compose は `.env` をコンテナに渡し、Compose ファイルで設定し�
 | `DATABASE_DSN` | 必須 | PostgreSQL の URL。既定の Compose は同梱の `postgres` サービスを指します。 |
 | `DATABASE_MAX_OPEN_CONNECTIONS` | `10` | レプリカごとの PostgreSQL 最大オープン接続数。正の整数である必要があります。 |
 | `DATABASE_MAX_IDLE_CONNECTIONS` | `5` | レプリカごとの PostgreSQL 最大アイドル接続数。正の整数かつ `DATABASE_MAX_OPEN_CONNECTIONS` 以下である必要があります。 |
-| `AUTH_KEY` | 必須 | 管理画面と `/api` 管理 API の Bearer キー。データプレーンの AccessKey とは異なります。すべてのレプリカで同じ値にしてください。 |
+| `PUBLIC_URL` | 必須 | ブラウザがゲートウェイにアクセスするアドレス。デプロイ先の URL、または開発時に Vite 経由でアクセスする場合は `http://localhost:5173` です。Casdoor は `<PUBLIC_URL>/auth/callback` にリダイレクトして戻ります。コンソールへの GET 以外のリクエストは、このオリジンと同じ `Origin` を持つ必要があります。https の場合、セッション Cookie に `Secure` が付きます。すべてのレプリカで同じ値にしてください。 |
+| `OIDC_ISSUER` | 必須 | Casdoor のオリジン（例：`http://192.168.48.64:8000`）。Casdoor で設定した `origin` と一致させる必要があり、Casdoor API のベース URL としても使用します。すべてのレプリカで同じ値にしてください。 |
+| `OIDC_CLIENT_ID` | 必須 | Casdoor アプリケーションの Client ID。すべてのレプリカで同じ値にしてください。 |
+| `OIDC_CLIENT_SECRET` | 必須 | Casdoor アプリケーションの Client Secret。すべてのレプリカで同じ値にしてください。 |
+| `CASDOOR_ORGANIZATION` | 必須 | Casdoor の組織名（例：`echojoy`）。この組織の Group がゲートウェイのチームになります。すべてのレプリカで同じ値にしてください。 |
 | `ENCRYPTION_KEY` | 必須 | チャネル認証情報を暗号化します。変更または紛失すると既存の認証情報を復号できないため、PostgreSQL と一緒にバックアップしてください。すべてのレプリカで同じ値にしてください。 |
 | `HTTP_PROXY` | 空 | HTTP アップストリームリクエストの環境プロキシ。 |
 | `HTTPS_PROXY` | 空 | HTTPS アップストリームリクエストの環境プロキシ。 |
@@ -212,6 +217,46 @@ Compose は `.env` をコンテナに渡し、Compose ファイルで設定し�
 
 </details>
 
+### ログインと権限
+
+コンソールには [Casdoor](https://casdoor.org) を使って OpenID Connect でログインします。ゲートウェイのバックエンドが Authorization Code + PKCE フローを実行してセッションを Redis に保存し、ブラウザは httpOnly Cookie `gl_session`（ログイン中は短期の `gl_login` も）だけを保持します。共有の管理キーはなく、AccessKey でコンソールにログインすることもできません。
+
+| ロール | 付与方法 | できること |
+| --- | --- | --- |
+| プラットフォーム管理者 | Casdoor Permission `gateway_platform`（domain `*`、action `platform:manage`） | チャネル、グループ、認証情報、設定、すべての AccessKey を管理し、チームに利用可能なグループを付与します。 |
+| チーム管理者 | チームごとの Casdoor Permission `gateway_<team>`（domain `<team>`、action `team:manage`） | チームメンバーの AccessKey を作成・編集し、コスト上限ルールと RPM を設定します。選べるグループはプラットフォーム管理者がチームに付与したものに限られます。チームのキー、ログ、使用量を閲覧できます。 |
+| メンバー | チームの Casdoor Group の直接のメンバー | 自分の AccessKey（平文表示を含む）、ログ、使用量だけを閲覧できます。 |
+
+権限は最長 5 分ごとに Casdoor から再取得されるため、Casdoor での変更は 5 分以内に反映されます。
+
+Casdoor 側の設定：
+
+1. Application を作成します。`tokenFormat` は JWT、グラントタイプは `authorization_code`、リダイレクト URI は `<PUBLIC_URL>/auth/callback` と `<PUBLIC_URL>/login` です。Client ID と Client Secret を `OIDC_CLIENT_ID` と `OIDC_CLIENT_SECRET` に設定します。
+2. 一度だけ：Adapter `gateway_rbac_tenant`（`useSameDb`、テーブル `gateway_permission_rule`）、Model `gateway_rbac_tenant`（下記の RBAC with tenants モデル）、プラットフォーム管理者を users に指定した Permission `gateway_platform`（domain `*`、resource `gateway`、action `platform:manage`）を作成します。ゲートウェイの Permission はすべてこの Model と Adapter を使用します。
+3. チームごと：Group `<team>` を 1 つ作成してメンバーを追加し、チーム管理者を users に指定した Permission `gateway_<team>`（domain `<team>`、resource `gateway`、action `team:manage`）を 1 つ作成します。複数チームの Permission で 1 つの Role を共有しないでください。Casdoor は Role の各保持者を、その Role を使うすべての Permission の各 domain と組み合わせるため、チームをまたいだ権限昇格が起こります。
+
+```ini
+[request_definition]
+r = sub, dom, obj, act
+
+[policy_definition]
+p = sub, dom, obj, act
+
+[role_definition]
+g = _, _, _
+
+[policy_effect]
+e = some(where (p.eft == allow))
+
+[matchers]
+m = g(r.sub, p.sub, r.dom) && r.dom == p.dom && r.obj == p.obj && r.act == p.act
+```
+
+既知の制限：
+
+- AccessKey は物理削除されます。削除後もログと使用量は残りますが、閲覧できるのはプラットフォーム管理者だけです。
+- Casdoor でメンバーを Group から外しても、既存の AccessKey は無効になりません。チーム管理者が無効化または削除する必要があります。
+
 ## マルチレプリカデプロイ（実験的）
 
 複数の GPT-Load レプリカが同じ PostgreSQL と Redis を共有し、ロードバランサーの背後で水平スケールできます。既定の `docker-compose.yml` は、同じ構成をレプリカ 1 台で動かすものです。
@@ -221,7 +266,7 @@ Compose は `.env` をコンテナに渡し、Compose ファイルで設定し�
 - PostgreSQL（18 で検証済み）。
 - Redis 7.0 以降（7.4 で検証済み）。単一ノードと Redis Cluster のどちらでも使えます。Redis Cluster では `REDIS_ADDRS` にすべてのプライマリを列挙してください。アドレスが 1 つだけの場合は単一ノードとして扱われ、他のノードにあるデータへのアクセスが失敗します。
 - Redis には `maxmemory-policy noeviction` を設定し、AOF 永続化を有効にすることを推奨します。
-- すべてのインスタンスで同じ `AUTH_KEY` と `ENCRYPTION_KEY` を明示的に設定してください。`INSTANCE_ID` はインスタンスごとに一意で、既定値は `<ホスト名>-<ランダム文字列>` です。
+- すべてのインスタンスで同じ `ENCRYPTION_KEY`、`PUBLIC_URL`、`OIDC_ISSUER`、`OIDC_CLIENT_ID`、`OIDC_CLIENT_SECRET`、`CASDOOR_ORGANIZATION` を明示的に設定してください。`INSTANCE_ID` はインスタンスごとに一意で、既定値は `<ホスト名>-<ランダム文字列>` です。
 - 各インスタンスの時刻は NTP で同期してください。
 
 ### Compose サンプルで起動する
@@ -230,7 +275,7 @@ Compose は `.env` をコンテナに渡し、Compose ファイルで設定し�
 
 ```bash
 cp .env.example .env
-# .env に AUTH_KEY、ENCRYPTION_KEY、POSTGRES_PASSWORD を設定する
+# .env に ENCRYPTION_KEY、POSTGRES_PASSWORD、PUBLIC_URL、OIDC_*/CASDOOR_* 変数を設定する
 docker compose -f docker-compose.cluster.yml up -d
 curl --fail http://127.0.0.1:3001/health
 ```
@@ -259,7 +304,7 @@ Codex、Claude、Antigravity の OAuth クライアントは固定ポートの `
 - 設定変更、AccessKey の RPM 制限・コスト上限、認証情報のヘルス（クールダウン、ブラックリスト、失敗回数、モデルクールダウン）、サブスクリプションの認可状態、Responses の所有情報（`previous_response_id` による継続）、ソフトアフィニティをインスタンス間で共有するため、ロードバランサーにスティッキーセッションは不要です。設定変更は通常 1 秒以内に他のインスタンスへ反映され、届かなかった通知は 30 秒ごとのポーリングで補われます。同じサブスクリプションアカウントのリフレッシュは、クラスター内で同時に 1 インスタンスだけが実行します。
 - 認証情報の同時実行数の上限（新しい UI の認証情報詳細で設定、0 は無制限）は全インスタンス合計で数えます。その認証情報へ同時に送られるアップストリームリクエストは合計で上限を超えず、ストリーミングリクエストはストリームが終わるまで枠を占有します。認証情報が上限に達している場合、リクエストはリトライ回数を消費せずに空きのある別の認証情報へ回ります。候補がすべて上限に達している場合は、ゲートウェイ内で待たせずに 429 `credential_concurrency_limited` と `Retry-After: 1` をすぐに返します。クラッシュしたインスタンスが占有していた枠は約 30 秒以内に解放されます。WebSocket セッションは枠に数えません。
 - 保持期間のクリーンアップ、操作結果の圧縮、検証プローブ、Models.dev の自動同期は周期ごとに 1 インスタンスだけが実行し、手動同期とグループや設定の変更による同期は変更を受けたインスタンスで実行されます。Models.dev カタログは Redis で共有され（カタログ本体とほぼ同じサイズ、最大 32 MiB）、初回起動時は各インスタンスが 1 回ずつ取得します。
-- 管理認証の失敗によるロックアウトは全インスタンスに適用され、TCP 接続元アドレスごとに数えます。ロードバランサーの背後ではロードバランサーのアドレスになり、すべての管理者が同じカウンターを共有するため、管理画面へのアクセス元はネットワーク層で制限してください。Redis が利用できない間は各インスタンスが個別に数えます。
+- コンソールのセッションと進行中のログイン状態は Redis に保存されるため、どのインスタンスでも Casdoor ログインを完了し、ログイン済みのコンソールを提供できます。Redis が利用できない間はログインもコンソールの利用もできません。
 - `affinity_capacity` は効果がなく、設定変更でもソフトアフィニティはクリアされません。`affinity_ttl` を短くした場合は既存のエントリにも即座に適用されます。
 - ローリングアップグレード中に旧バージョンのインスタンスで作成された Responses は、それを保持していないインスタンスでは継続できません。
 - Redis が利用できない場合、RPM 制限またはコスト上限を設定した AccessKey のリクエストと、同時実行数の上限を設定した認証情報を選んだリクエストはアップストリームへ転送されず、503 `cluster_state_unavailable` を返します。継続リクエストと `store` の Responses も 503 を返します（どのインスタンスでも継続できない ID を渡さないようレスポンスは返されません）。ソフトアフィニティは通常のスケジューリングに戻ります。認証情報のヘルスの変更はまずそのインスタンスで適用され、Redis の復旧後は Redis の状態が優先されます。
@@ -280,7 +325,7 @@ Codex、Claude、Antigravity の OAuth クライアントは固定ポートの `
 ## 本番運用の注意事項
 
 - 既定では `127.0.0.1` のみを待ち受けます。リモートアクセスが必要な場合は、管理されたネットワークまたは TLS 対応のリバースプロキシ経由で公開し、ACL とファイアウォールを設定してください。
-- `AUTH_KEY` と `ENCRYPTION_KEY` は厳重に管理し、実際のキーをリポジトリ、ログ、スクリーンショット、公開 Issue に含めないでください。
+- `OIDC_CLIENT_SECRET` と `ENCRYPTION_KEY` は厳重に管理し、実際のキーをリポジトリ、ログ、スクリーンショット、公開 Issue に含めないでください。
 - 既定の Compose は**レプリカ 1 台**で動作します。複数レプリカでの運用は[マルチレプリカデプロイ（実験的）](#マルチレプリカデプロイ実験的)を参照してください。
 - 使用量とコストはアップストリームの応答に基づく**概算**です。運用分析やリソース評価には使えますが、プロバイダーの請求書や会計上の照合結果とは一致しません。
 - サブスクリプションチャネルはアップストリームの OAuth と互換プロトコルに依存し、アップストリームの変更に伴って調整が必要になる場合があります。利用権限のあるアカウントのみを接続し、各プロバイダーの規約に従ってください。

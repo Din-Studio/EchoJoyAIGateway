@@ -21,7 +21,7 @@ func TestSettingsHTTPRouteStrategyRejectsInvalidValuesWithoutMutation(t *testing
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	updated := serveLocalizedSettingsRequest(t, engine, http.MethodPut, "test-auth-key", "en-US",
 		`{"settings":{"route_strategy":"weighted_mix"}}`)
@@ -62,7 +62,7 @@ func TestSettingsHTTPLastWriteWinsWithoutPrecondition(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	for _, body := range []string{
 		`{"settings":{"request_timeout":700}}`,
@@ -105,7 +105,7 @@ func TestSettingsHTTPUsesLocalizedNoStoreResponse(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	for _, test := range []struct {
 		language string
@@ -135,7 +135,7 @@ func TestSettingsHTTPPublicationFailureReloadsCommittedDatabaseTruth(t *testing.
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	before := fixture.manager.Current()
 	fixture.service.publishSnapshot = func(state.CompileInput) (*state.ConfigSnapshot, error) {
@@ -199,7 +199,7 @@ func serveLocalizedSettingsRequest(
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(method, "/api/settings", strings.NewReader(body))
 	if authKey != "" {
-		request.Header.Set("Authorization", "Bearer "+authKey)
+		setTestSession(request, authKey)
 	}
 	if language != "" {
 		request.Header.Set("Accept-Language", language)

@@ -191,9 +191,9 @@ func TestQueryHomeStatisticsScopesAccessKeyAndOnlyReturnsModelRankings(t *testin
 	report, err := newRequestLogTestService(db).QueryHomeStatistics(
 		context.Background(),
 		HomeStatisticsQuery{
-			Range:        HomeStatistics24H,
-			ObservedAtMS: 1_784_896_496_789,
-			AccessKeyID:  &accessKeyID,
+			Range:             HomeStatistics24H,
+			ObservedAtMS:      1_784_896_496_789,
+			ScopeAccessKeyIDs: []uint{accessKeyID},
 		},
 	)
 	if err != nil {
@@ -202,7 +202,8 @@ func TestQueryHomeStatisticsScopesAccessKeyAndOnlyReturnsModelRankings(t *testin
 	if report.Summary.RequestCount != 5 || len(report.TopModels) != 1 ||
 		report.TopModels[0].Model != "shared-model" ||
 		report.TopModels[0].RequestCount != 5 ||
-		len(report.TopGroups) != 0 || len(report.TopAccessKeys) != 0 {
+		len(report.TopGroups) != 0 || len(report.TopAccessKeys) != 1 ||
+		report.TopAccessKeys[0].AccessKey.ID != accessKeyID {
 		t.Fatalf("scoped home statistics = %#v", report)
 	}
 }
@@ -334,11 +335,9 @@ func TestQueryHomeStatisticsRejectsUnsafeOrCorruptAggregates(t *testing.T) {
 
 func TestQueryHomeStatisticsRejectsInvalidQuery(t *testing.T) {
 	service := newRequestLogTestService(openRequestLogQueryDB(t))
-	zero := uint(0)
 	for _, query := range []HomeStatisticsQuery{
 		{Range: HomeStatisticsRange("1h"), ObservedAtMS: 1},
 		{Range: HomeStatistics24H, ObservedAtMS: -1},
-		{Range: HomeStatistics24H, ObservedAtMS: 1, AccessKeyID: &zero},
 	} {
 		if _, err := service.QueryHomeStatistics(context.Background(), query); err == nil {
 			t.Fatalf("QueryHomeStatistics(%#v) error = nil", query)

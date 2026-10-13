@@ -49,7 +49,7 @@ func TestAccessKeyDistributionCollectionMatchesUsageAndSortsBeforePagination(t *
 		}
 	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	for _, tc := range []struct {
 		query  string
 		want   uint
@@ -64,7 +64,7 @@ func TestAccessKeyDistributionCollectionMatchesUsageAndSortsBeforePagination(t *
 	} {
 		t.Run(tc.query, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/access-keys?"+tc.query, nil)
-			req.Header.Set("Authorization", "Bearer "+authTestKey)
+			setTestPlatformSession(req)
 			w := httptest.NewRecorder()
 			engine.ServeHTTP(w, req)
 			if w.Code != 200 {
@@ -111,7 +111,7 @@ func TestRemovedContactSettingIsNotExposed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	home, err := fixture.service.ReadAccessKeyHomeBase(t.Context(), fixture.service.now().UnixMilli(), key.ID)
+	home, err := fixture.service.ReadScopedHomeBase(t.Context(), fixture.service.now().UnixMilli(), []uint{key.ID})
 	if err != nil {
 		t.Fatal(err)
 	}

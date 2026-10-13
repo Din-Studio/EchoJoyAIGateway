@@ -227,11 +227,11 @@ func TestAccessScopedUsageDistributionCollapsesHiddenRoutesByModel(t *testing.T)
 
 	accessKeyID := uint(41)
 	report, err := newRequestLogTestService(db).QueryUsage(t.Context(), UsageQuery{
-		FromMS:      start.UnixMilli(),
-		ToMS:        start.Add(7 * time.Hour).UnixMilli(),
-		Granularity: UsageGranularityHour,
-		AccessKeyID: &accessKeyID,
-		SelfScoped:  true,
+		FromMS:            start.UnixMilli(),
+		ToMS:              start.Add(7 * time.Hour).UnixMilli(),
+		Granularity:       UsageGranularityHour,
+		ScopeAccessKeyIDs: []uint{accessKeyID},
+		SelfScoped:        true,
 	})
 	if err != nil {
 		t.Fatalf("QueryUsage() error = %v", err)
@@ -258,11 +258,11 @@ func TestAccessScopedUsageReturnsOnlyModelDistributions(t *testing.T) {
 
 	accessKeyID := uint(41)
 	report, err := newRequestLogTestService(db).QueryUsage(t.Context(), UsageQuery{
-		FromMS:      start.UnixMilli(),
-		ToMS:        start.Add(7 * time.Hour).UnixMilli(),
-		Granularity: UsageGranularityHour,
-		AccessKeyID: &accessKeyID,
-		SelfScoped:  true,
+		FromMS:            start.UnixMilli(),
+		ToMS:              start.Add(7 * time.Hour).UnixMilli(),
+		Granularity:       UsageGranularityHour,
+		ScopeAccessKeyIDs: []uint{accessKeyID},
+		SelfScoped:        true,
 	})
 	if err != nil {
 		t.Fatalf("QueryUsage() error = %v", err)

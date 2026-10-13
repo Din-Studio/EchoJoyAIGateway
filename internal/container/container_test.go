@@ -987,6 +987,7 @@ func TestContainerHealthEndpointReadsSharedStatsStore(t *testing.T) {
 		stats *health.StatsStore,
 		keyService encryption.Service,
 		db *gorm.DB,
+		client *cluster.Client,
 	) {
 		t.Cleanup(func() {
 			sqlDB, dbErr := db.DB()
@@ -1015,7 +1016,7 @@ func TestContainerHealthEndpointReadsSharedStatsStore(t *testing.T) {
 		stats.RecordFailure(1, health.FailureCategoryAmbiguous, 0, time.Now())
 
 		request := httptest.NewRequest(http.MethodGet, "/api/health", nil)
-		request.Header.Set("Authorization", "Bearer test-auth-key")
+		setSession(request, createPlatformSession(t, client))
 		recorder := httptest.NewRecorder()
 		engine.ServeHTTP(recorder, request)
 		if recorder.Code != http.StatusOK {
@@ -1058,6 +1059,7 @@ func TestBuildContainerRegistersWebUIControlAndGatewayRoutes(t *testing.T) {
 		db *gorm.DB,
 		startupBootstrap app.StartupBootstrap,
 		runtimeState app.RuntimeStateLoader,
+		client *cluster.Client,
 	) {
 		if err := storage.AutoMigrate(db); err != nil {
 			t.Fatalf("AutoMigrate() error = %v", err)
@@ -1108,7 +1110,8 @@ func TestBuildContainerRegistersWebUIControlAndGatewayRoutes(t *testing.T) {
 
 		groupsRecorder := httptest.NewRecorder()
 		groupsRequest := httptest.NewRequest(http.MethodGet, "/api/groups", nil)
-		groupsRequest.Header.Set("Authorization", "Bearer test-auth-key")
+		cookie := createPlatformSession(t, client)
+		setSession(groupsRequest, cookie)
 		engine.ServeHTTP(groupsRecorder, groupsRequest)
 		if groupsRecorder.Code != http.StatusOK {
 			t.Fatalf("groups status = %d, want 200; body=%s", groupsRecorder.Code, groupsRecorder.Body.String())
@@ -1116,7 +1119,7 @@ func TestBuildContainerRegistersWebUIControlAndGatewayRoutes(t *testing.T) {
 
 		sessionRecorder := httptest.NewRecorder()
 		sessionRequest := httptest.NewRequest(http.MethodGet, "/api/auth/session", nil)
-		sessionRequest.Header.Set("Authorization", "Bearer test-auth-key")
+		setSession(sessionRequest, cookie)
 		engine.ServeHTTP(sessionRecorder, sessionRequest)
 		if sessionRecorder.Code != http.StatusOK {
 			t.Fatalf("session status = %d, want 200; body=%s", sessionRecorder.Code, sessionRecorder.Body.String())
@@ -1124,14 +1127,14 @@ func TestBuildContainerRegistersWebUIControlAndGatewayRoutes(t *testing.T) {
 		var sessionEnvelope struct {
 			Code int `json:"code"`
 			Data struct {
-				Authenticated bool `json:"authenticated"`
+				Platform bool `json:"platform"`
 			} `json:"data"`
 		}
 		if err := json.Unmarshal(sessionRecorder.Body.Bytes(), &sessionEnvelope); err != nil {
 			t.Fatalf("decode session response: %v", err)
 		}
-		if sessionEnvelope.Code != 0 || !sessionEnvelope.Data.Authenticated {
-			t.Fatalf("session envelope = %#v, want authenticated", sessionEnvelope)
+		if sessionEnvelope.Code != 0 || !sessionEnvelope.Data.Platform {
+			t.Fatalf("session envelope = %#v, want platform session", sessionEnvelope)
 		}
 
 		const untrustedPeer = "192.0.2.200:1234"

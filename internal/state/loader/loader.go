@@ -68,6 +68,7 @@ type compileRows struct {
 	credentials    []models.Credential
 	accessKeys     []models.AccessKey
 	costLimitRules []models.AccessKeyCostLimitRule
+	teamGrants     []models.TeamGroupGrant
 }
 
 type modelDTO struct {
@@ -228,7 +229,7 @@ func queryCompileRows(ctx context.Context, db *gorm.DB) (compileRows, error) {
 		return compileRows{}, fmt.Errorf("query credential metadata: %w", err)
 	}
 	if err := db.
-		Select("id", "name", "key_hash", "key_prefix", "key_suffix", "status", "filters", "rpm_limit", "expires_at_ms", "price_multiplier_micros").
+		Select("id", "name", "key_hash", "key_prefix", "key_suffix", "status", "filters", "rpm_limit", "expires_at_ms", "price_multiplier_micros", "team_id").
 		Order("id ASC").
 		Find(&rows.accessKeys).Error; err != nil {
 		return compileRows{}, fmt.Errorf("query access keys: %w", err)
@@ -238,6 +239,9 @@ func queryCompileRows(ctx context.Context, db *gorm.DB) (compileRows, error) {
 		Order("access_key_id ASC, id ASC").
 		Find(&rows.costLimitRules).Error; err != nil {
 		return compileRows{}, fmt.Errorf("query access key cost limit rules: %w", err)
+	}
+	if err := db.Order("team_id ASC, group_id ASC").Find(&rows.teamGrants).Error; err != nil {
+		return compileRows{}, fmt.Errorf("query team group grants: %w", err)
 	}
 	return rows, nil
 }
@@ -266,7 +270,7 @@ func BuildCompileInput(
 	}
 	input.ChannelRegistry = selectChannelRegistry(registries)
 	input.Credentials = mapCredentialConfigs(rows.credentials, rows.groups)
-	input.AccessKeys, err = mapAccessKeys(rows.accessKeys, rows.costLimitRules)
+	input.AccessKeys, err = mapAccessKeys(rows.accessKeys, rows.costLimitRules, rows.teamGrants)
 	if err != nil {
 		return state.CompileInput{}, err
 	}
@@ -291,7 +295,7 @@ func BuildCompileInputWithProxy(
 	}
 	input.ChannelRegistry = selectChannelRegistry(registries)
 	input.Credentials = mapCredentialConfigs(rows.credentials, rows.groups)
-	input.AccessKeys, err = mapAccessKeys(rows.accessKeys, rows.costLimitRules)
+	input.AccessKeys, err = mapAccessKeys(rows.accessKeys, rows.costLimitRules, rows.teamGrants)
 	if err != nil {
 		return state.CompileInput{}, err
 	}
@@ -428,7 +432,7 @@ func (l *Loader) read(
 	}
 	input.ChannelRegistry = l.channelRegistry
 	input.Credentials = mapCredentialConfigs(rows.credentials, rows.groups)
-	input.AccessKeys, err = mapAccessKeys(rows.accessKeys, rows.costLimitRules)
+	input.AccessKeys, err = mapAccessKeys(rows.accessKeys, rows.costLimitRules, rows.teamGrants)
 	if err != nil {
 		return state.CompileInput{}, nil, err
 	}
@@ -670,7 +674,12 @@ func decodePersistedProxy(
 func mapAccessKeys(
 	rows []models.AccessKey,
 	costLimitRows []models.AccessKeyCostLimitRule,
+	teamGrants []models.TeamGroupGrant,
 ) ([]state.AccessKeyConfig, error) {
+	grantsByTeam := make(map[string][]uint)
+	for _, grant := range teamGrants {
+		grantsByTeam[grant.TeamID] = append(grantsByTeam[grant.TeamID], grant.GroupID)
+	}
 	rulesByAccessKey := make(map[uint][]accessquota.Rule)
 	for _, row := range costLimitRows {
 		rulesByAccessKey[row.AccessKeyID] = append(rulesByAccessKey[row.AccessKeyID], accessquota.Rule{
@@ -695,15 +704,47 @@ func mapAccessKeys(
 		if row.KeyPrefix == nil {
 			return nil, fmt.Errorf("access key %d is missing mask prefix metadata", row.ID)
 		}
+		status := state.AccessKeyStatus(row.Status)
+		if row.TeamID != nil {
+			filters.Groups = TeamKeyGroups(filters.Groups, grantsByTeam[*row.TeamID])
+			// 空交集不能落到 FilterSet 的"空即不限"，必须编译为 disabled。
+			if len(filters.Groups) == 0 && status == state.AccessKeyStatusActive {
+				status = state.AccessKeyStatusDisabled
+				logrus.WithFields(logrus.Fields{
+					"event":         "config.team_key_blocked",
+					"access_key_id": row.ID,
+					"team_id":       *row.TeamID,
+				}).Warn("team key has no granted group it can route through; compiled as disabled")
+			}
+		}
 		result = append(result, state.AccessKeyConfig{
 			PriceMultiplier: &multiplier,
 			ID:              row.ID, Name: row.Name, KeyHash: row.KeyHash, KeyPrefix: *row.KeyPrefix, KeySuffix: row.KeySuffix,
-			Status: state.AccessKeyStatus(row.Status), Filters: filters.toState(), RPMLimit: row.RPMLimit,
+			Status: status, Filters: filters.toState(), RPMLimit: row.RPMLimit,
 			ExpiresAtMS: cloneInt64Pointer(row.ExpiresAtMS), AllowedPeerCIDRs: allowedPeerCIDRs,
 			CostLimitRules: append([]accessquota.Rule(nil), rulesByAccessKey[row.ID]...),
 		})
 	}
 	return result, nil
+}
+
+// TeamKeyGroups returns the groups a team key may route through: its own
+// groups narrowed to the team's grants, or every grant when it names none.
+func TeamKeyGroups(keyGroups []uint, grants []uint) []uint {
+	if len(keyGroups) == 0 {
+		return append([]uint(nil), grants...)
+	}
+	granted := make(map[uint]struct{}, len(grants))
+	for _, id := range grants {
+		granted[id] = struct{}{}
+	}
+	result := make([]uint, 0, len(keyGroups))
+	for _, id := range keyGroups {
+		if _, ok := granted[id]; ok {
+			result = append(result, id)
+		}
+	}
+	return result
 }
 
 func cloneInt64Pointer(value *int64) *int64 {

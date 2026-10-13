@@ -2,6 +2,7 @@ import { protocolMessages as protocols } from '../protocols'
 import { jaJP as inspector } from './inspector'
 import { jaJP as home } from './home'
 import { jaJP as accessKeys } from './access-keys'
+import { jaJP as teams } from './teams'
 import { jaJP as logs } from './logs'
 import { jaJP as usage } from './usage'
 import { jaJP as health } from './health'
@@ -26,6 +27,7 @@ export default {
   usage,
   health,
   accessKeys,
+  teams,
   groupWorkflows,
   parameterRules,
   credentialCards,
@@ -61,38 +63,25 @@ export default {
   },
   auth: {
     title: 'GPT-Load にログイン',
-    description: '管理者キーまたはアクセスキーを入力すると、サーバーが権限を判定します。',
-    keyLabel: 'ログインキー',
-    keyPlaceholder: 'AUTH_KEY またはアクセスキーを入力',
-    reveal: 'ログインキーを表示',
-    conceal: 'ログインキーを隠す',
-    submit: 'ログイン',
-    submitting: '確認中…',
-    required: 'ログインキーを入力してください',
-    invalidFormat: 'ログインキーに空白文字は使用できません',
-    invalid: 'ログインキーが無効です。確認して再試行してください。',
-    locked: '認証試行回数が多すぎます。{seconds} 秒後に再試行してください。',
-    lockEnded: 'セッションを再確認できます。',
+    description: 'EchoJoy アカウントでログインします。権限は所属チームとロールで決まります。',
+    submit: 'EchoJoy アカウントでログイン',
+    submitting: 'リダイレクト中…',
+    noAccess:
+      'このアカウントにはゲートウェイへのアクセス権がありません。管理者にチームへの追加またはプラットフォーム権限の付与を依頼してください。',
+    loginFailed: 'ログインに失敗しました。再試行してください。',
     network: '管理 API に接続できません。サービスを確認して再試行してください。',
     invalidResponse: '管理 API から認識できない応答が返されました。後でもう一度お試しください。',
     restoreTitle: 'ログイン状態を確認',
     checking: '現在のセッションを確認中…',
     retry: '再確認',
-    changeKey: '別のキーを使用',
-    signedIn: 'ログインしました。ページを開いています…',
-    continue: '続ける',
-    remember: 'ログイン状態を保持',
+    signIn: '再ログイン',
     logout: 'ログアウト',
-    readOnly: 'アクセスキー · 閲覧専用',
-    readOnlyDescription:
-      'このキーの概要、モデル、使用量、リクエスト履歴のみ閲覧でき、システム設定は変更できません。',
-    help: {
-      title: 'どのキーを使えますか？',
-      accessKeyTitle: 'アクセスキー',
-      accessKey: '配布されたアクセスキーで、そのキーのデータを閲覧できます。設定は変更できません。',
-      adminTitle: '管理者キー',
-      admin: 'AUTH_KEY が設定されている場合は、デプロイ環境にある値を使用します。',
-    },
+    logoutFailed: 'ログアウトに失敗しました。再試行してください。',
+    platformAdmin: 'プラットフォーム管理者',
+    teamAdmin: 'チーム管理者',
+    member: 'メンバー',
+    teams: '所属チーム',
+    noTeams: 'チーム未所属',
   },
   pages: {
     home: { title: '概要' },
@@ -100,6 +89,7 @@ export default {
     groupDetail: { title: 'グループの詳細' },
     models: { title: 'モデル' },
     accessKeys: { title: 'アクセスキー' },
+    teams: { title: 'チーム' },
     usage: { title: '使用量' },
     logs: { title: 'リクエストログ' },
     health: { title: '稼働状況' },

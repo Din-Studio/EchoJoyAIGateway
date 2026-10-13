@@ -15,6 +15,10 @@ type AccessKey struct {
 	DailyCostLimitNanoUSD   int64   `gorm:"column:daily_cost_limit_nano_usd;not null;default:0;check:chk_access_key_daily_cost_limit_nano,daily_cost_limit_nano_usd >= 0"`
 	MonthlyCostLimitNanoUSD int64   `gorm:"column:monthly_cost_limit_nano_usd;not null;default:0;check:chk_access_key_monthly_cost_limit_nano,monthly_cost_limit_nano_usd >= 0"`
 	ExpiresAtMS             *int64  `gorm:"column:expires_at_ms"`
-	CreatedAtMS             int64   `gorm:"column:created_at_ms;not null;autoCreateTime:milli;check:chk_access_key_created_at,created_at_ms >= 0"`
-	UpdatedAtMS             int64   `gorm:"column:updated_at_ms;not null;autoUpdateTime:milli;check:chk_access_key_updated_at,updated_at_ms >= 0"`
+	// TeamID is the Casdoor team that owns the key; nil marks a platform key.
+	TeamID      *string `gorm:"type:varchar(255);index:idx_access_keys_team_id"`
+	OwnerUserID *string `gorm:"type:varchar(64);index:idx_access_keys_owner_user_id"`
+	OwnerName   *string `gorm:"type:varchar(255)"`
+	CreatedAtMS int64   `gorm:"column:created_at_ms;not null;autoCreateTime:milli;check:chk_access_key_created_at,created_at_ms >= 0"`
+	UpdatedAtMS int64   `gorm:"column:updated_at_ms;not null;autoUpdateTime:milli;check:chk_access_key_updated_at,updated_at_ms >= 0"`
 }

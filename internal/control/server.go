@@ -2,8 +2,6 @@ package control
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,7 +15,6 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"gpt-load/internal/channel"
-	"gpt-load/internal/cluster"
 	"gpt-load/internal/outboundproxy"
 	"gpt-load/internal/platform/config"
 	app_errors "gpt-load/internal/platform/errors"
@@ -35,20 +32,15 @@ type ReleaseUpdateChecker interface {
 }
 
 type Server struct {
-	authDigest   [sha256.Size]byte
-	service      *Service
-	systemInfo   systemInfoResponse
-	authFailures *authFailureLimiter
-	// sharedAuthFailures makes admin lockout cluster-wide; authFailures is
-	// the fallback while Redis is unavailable.
-	sharedAuthFailures *cluster.AuthFailures
-	sharedAuthErrors   *utils.RateLimitedEventCounter
-	compareDigest      func([]byte, []byte) int
-	logger             *logrus.Logger
-	authFailureEvents  *utils.RateLimitedEventCounter
-	startedAt          time.Time
-	now                func() time.Time
-	releaseChecker     ReleaseUpdateChecker
+	identity Identity
+	// publicOrigin is the only Origin accepted on unsafe console requests.
+	publicOrigin   string
+	service        *Service
+	systemInfo     systemInfoResponse
+	logger         *logrus.Logger
+	startedAt      time.Time
+	now            func() time.Time
+	releaseChecker ReleaseUpdateChecker
 }
 
 const maxControlJSONBodyBytes int64 = 32 << 20
@@ -57,28 +49,20 @@ const (
 	maxCredentialStageGroupIDBytes   int64 = 32
 )
 
-// NewServer builds the control-plane server. sharedAuthFailures holds the
-// admin lockout every instance shares.
-func NewServer(cfg *config.Config, service *Service, sharedAuthFailures *cluster.AuthFailures) *Server {
+// NewServer builds the control-plane server; identity resolves session cookies.
+func NewServer(cfg *config.Config, service *Service, identity Identity) *Server {
 	now := time.Now
 	if service != nil && service.oauthCallback != nil {
 		service.oauthCallback.configureForServerHost(cfg.Server.Host)
 	}
 	return &Server{
-		authDigest:         sha256.Sum256([]byte(cfg.AuthKey)),
-		service:            service,
-		systemInfo:         newSystemInfoResponse(),
-		authFailures:       newAuthFailureLimiter(),
-		sharedAuthFailures: sharedAuthFailures,
-		sharedAuthErrors:   utils.NewRateLimitedEventCounter(time.Minute, time.Now),
-		compareDigest:      subtle.ConstantTimeCompare,
-		logger:             logrus.StandardLogger(),
-		startedAt:          now().UTC(),
-		now:                now,
-		authFailureEvents: utils.NewRateLimitedEventCounter(
-			time.Minute,
-			time.Now,
-		),
+		identity:     identity,
+		publicOrigin: cfg.OIDC.PublicOrigin(),
+		service:      service,
+		systemInfo:   newSystemInfoResponse(),
+		logger:       logrus.StandardLogger(),
+		startedAt:    now().UTC(),
+		now:          now,
 	}
 }
 
@@ -87,9 +71,9 @@ func NewServerWithReleaseUpdateChecker(
 	cfg *config.Config,
 	service *Service,
 	releaseChecker ReleaseUpdateChecker,
-	sharedAuthFailures *cluster.AuthFailures,
+	identity Identity,
 ) *Server {
-	server := NewServer(cfg, service, sharedAuthFailures)
+	server := NewServer(cfg, service, identity)
 	server.releaseChecker = releaseChecker
 	return server
 }
@@ -897,17 +881,16 @@ func (s *Server) handleCreateAccessKey(c *gin.Context) {
 		writeServiceError(c, "create_access_key", mapControlJSONError(err))
 		return
 	}
-	if request.Key != "" {
-		digest := sha256.Sum256([]byte(request.Key))
-		if s.compareDigest(digest[:], s.authDigest[:]) == 1 {
-			writeServiceError(c, "create_access_key", app_errors.ErrAccessKeyAdminConflict)
-			return
-		}
+	owner, err := s.authorizeAccessKeyCreate(c, request)
+	if err != nil {
+		writeServiceError(c, "create_access_key", err)
+		return
 	}
 	result, err := s.service.CreateAccessKeyIdempotent(
 		c.Request.Context(),
 		idempotencyKey,
 		request,
+		owner,
 	)
 	if err != nil {
 		writeServiceError(c, "create_access_key", err)
@@ -922,7 +905,13 @@ func (s *Server) handleCreateAccessKey(c *gin.Context) {
 }
 
 func (s *Server) handleListAccessKeyOptions(c *gin.Context) {
-	result, err := s.service.ListAccessKeyOptions(c.Request.Context())
+	principal, _ := currentPrincipal(c)
+	scope, err := s.service.scopedAccessKeyIDs(c.Request.Context(), principal)
+	if err != nil {
+		writeServiceError(c, "list_access_key_options", err)
+		return
+	}
+	result, err := s.service.ListAccessKeyOptions(c.Request.Context(), scope)
 	if err != nil {
 		writeServiceError(c, "list_access_key_options", err)
 		return
@@ -933,6 +922,11 @@ func (s *Server) handleListAccessKeyOptions(c *gin.Context) {
 func (s *Server) handleRevealAccessKey(c *gin.Context) {
 	id, ok := accessKeyID(c)
 	if !ok {
+		return
+	}
+	principal, _ := currentPrincipal(c)
+	if err := s.service.authorizeAccessKeyRead(c.Request.Context(), id, principal); err != nil {
+		writeServiceError(c, "reveal_access_key", err)
 		return
 	}
 	result, err := s.service.RevealAccessKey(c.Request.Context(), id)
@@ -947,6 +941,9 @@ func (s *Server) handleRevealAccessKey(c *gin.Context) {
 func (s *Server) handleRotateAccessKey(c *gin.Context) {
 	id, ok := accessKeyID(c)
 	if !ok {
+		return
+	}
+	if !s.requireAccessKeyWrite(c, "rotate_access_key", id) {
 		return
 	}
 	idempotencyKey, ok := requiredIdempotencyKey(c, "rotate_access_key")
@@ -981,16 +978,18 @@ func (s *Server) handleUpdateAccessKey(c *gin.Context) {
 		writeServiceError(c, "update_access_key", mapControlJSONError(err))
 		return
 	}
+	if !s.requireAccessKeyWrite(c, "update_access_key", id) {
+		return
+	}
+	if principal, _ := currentPrincipal(c); request.PriceMultiplier.Set && !principal.Platform {
+		writeServiceError(c, "update_access_key", app_errors.ErrForbidden)
+		return
+	}
 	var result AccessKeyMetadata
 	var err error
 	if request.Key != "" {
 		idempotencyKey, ok := requiredIdempotencyKey(c, "update_access_key")
 		if !ok {
-			return
-		}
-		digest := sha256.Sum256([]byte(request.Key))
-		if s.compareDigest(digest[:], s.authDigest[:]) == 1 {
-			writeServiceError(c, "update_access_key", app_errors.ErrAccessKeyAdminConflict)
 			return
 		}
 		result, err = s.service.UpdateAccessKeyIdempotent(c.Request.Context(), idempotencyKey, id, request)
@@ -1014,6 +1013,9 @@ func (s *Server) handleResetAccessKeyCostLimits(c *gin.Context) {
 		writeServiceError(c, "reset_access_key_cost_limits", mapControlJSONError(err))
 		return
 	}
+	if !s.requireAccessKeyWrite(c, "reset_access_key_cost_limits", id) {
+		return
+	}
 	if err := s.service.ResetAccessKeyCostLimitRules(
 		c.Request.Context(),
 		id,
@@ -1028,6 +1030,9 @@ func (s *Server) handleResetAccessKeyCostLimits(c *gin.Context) {
 func (s *Server) handleDeleteAccessKey(c *gin.Context) {
 	id, ok := accessKeyID(c)
 	if !ok {
+		return
+	}
+	if !s.requireAccessKeyWrite(c, "delete_access_key", id) {
 		return
 	}
 	if err := s.service.DeleteAccessKey(c.Request.Context(), id); err != nil {
@@ -1229,6 +1234,11 @@ func serviceErrorMessageID(
 		switch operation {
 		case "update_model_price", "reset_model_price", "delete_model_price":
 			return "model_price.not_found"
+		case "reveal_access_key", "rotate_access_key", "update_access_key", "delete_access_key",
+			"reset_access_key_cost_limits", "usage", "list_request_logs":
+			return "access_key.not_found"
+		case "get_team", "update_team_groups":
+			return "team.not_found"
 		}
 		var resourceErr *controlResourceNotFoundError
 		if errors.As(err, &resourceErr) {
@@ -1250,8 +1260,10 @@ func serviceErrorMessageID(
 		return "group.no_active_credential"
 	case app_errors.ErrInvalidCustomAccessKey.Code:
 		return "access_key.custom_invalid"
-	case app_errors.ErrAccessKeyAdminConflict.Code:
-		return "access_key.admin_conflict"
+	case app_errors.ErrTeamNoGrantedGroups.Code:
+		return "team.no_granted_groups"
+	case app_errors.ErrForbidden.Code:
+		return "auth.forbidden"
 	case app_errors.ErrDuplicateResource.Code:
 		if operation == "create_access_key" || operation == "update_access_key" {
 			return "access_key.exists"

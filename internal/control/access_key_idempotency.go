@@ -24,6 +24,8 @@ type accessKeyFilterDigestBody struct {
 }
 
 type accessKeyCreateDigestBody struct {
+	TeamID          string                          `json:"team_id,omitempty"`
+	OwnerUserID     string                          `json:"owner_user_id,omitempty"`
 	KeyHash         string                          `json:"key_hash,omitempty"`
 	PriceMultiplier string                          `json:"price_multiplier,omitempty"`
 	Name            string                          `json:"name"`
@@ -34,10 +36,13 @@ type accessKeyCreateDigestBody struct {
 	ExpiresAtMS     *int64                          `json:"expires_at_ms,omitempty"`
 }
 
+// CreateAccessKeyIdempotent creates a key; owner, resolved and authorized by
+// the handler, makes it a team key, and nil makes it a platform key.
 func (s *Service) CreateAccessKeyIdempotent(
 	ctx context.Context,
 	idempotencyKey string,
 	request AccessKeyCreateRequest,
+	owner *accessKeyTeamOwner,
 ) (AccessKeyCreateResult, error) {
 	keyHash := ""
 	if request.Key != "" {
@@ -77,12 +82,18 @@ func (s *Service) CreateAccessKeyIdempotent(
 	if err != nil {
 		return AccessKeyCreateResult{}, err
 	}
+	var digestOwner accessKeyTeamOwner
+	if owner != nil {
+		digestOwner = *owner
+	}
 	var digestStatus *state.AccessKeyStatus
 	if status != state.AccessKeyStatusActive {
 		digestStatus = &status
 	}
 	digestFilters := canonicalAccessKeyFilterSet(filters)
 	canonicalBody, err := canonicalIdempotencyBody(accessKeyCreateDigestBody{
+		TeamID:          digestOwner.TeamID,
+		OwnerUserID:     digestOwner.OwnerUserID,
 		KeyHash:         keyHash,
 		PriceMultiplier: priceMultiplierDigest(priceMultiplier),
 		Name:            name, Status: digestStatus, Filters: digestFilters, RPMLimit: rpmLimit,
@@ -118,13 +129,14 @@ func (s *Service) CreateAccessKeyIdempotent(
 			if err := validateFutureExpiresAtMS(request.ExpiresAtMS, operationStartedAt); err != nil {
 				return idempotentMutationResult{}, err
 			}
-			if err := validateFilterGroupReferences(tx, filters.Groups); err != nil {
+			if err := validateAccessKeyGroups(tx, owner, filters.Groups); err != nil {
 				return idempotentMutationResult{}, err
 			}
 			row, plaintext, err := s.newAccessKeyRow(name, filters, rpmLimit, request.Key)
 			if err != nil {
 				return idempotentMutationResult{}, err
 			}
+			owner.apply(&row)
 			row.PriceMultiplierMicros = priceMultiplierStorage(priceMultiplier)
 			row.Status = string(status)
 			row.ExpiresAtMS = cloneOptionalInt64(request.ExpiresAtMS)
@@ -136,6 +148,7 @@ func (s *Service) CreateAccessKeyIdempotent(
 				return idempotentMutationResult{}, err
 			}
 			metadata, err := mapAccessKeyMetadataRow(accessKeyMetadataRow{
+				TeamID: row.TeamID, OwnerUserID: row.OwnerUserID, OwnerName: row.OwnerName,
 				ID: row.ID, Name: row.Name, KeyPrefix: *row.KeyPrefix, KeySuffix: row.KeySuffix,
 				PriceMultiplierMicros: row.PriceMultiplierMicros,
 				Status:                row.Status, Filters: row.Filters, RPMLimit: row.RPMLimit,

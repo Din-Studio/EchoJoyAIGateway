@@ -7,6 +7,7 @@ import {
   Layers2,
   ScrollText,
   Settings2,
+  Users,
 } from '@lucide/vue'
 
 import pageRoutes from '../../../../../internal/webui/page_routes.json'
@@ -48,7 +49,7 @@ export const navigationItems = [
     path: pagePath('access-keys'),
     section: 'workspace',
     icon: KeyRound,
-    adminOnly: true,
+    adminOnly: false,
   },
   {
     id: 'logs',
@@ -72,6 +73,14 @@ export const navigationItems = [
     path: pagePath('monitor-health'),
     section: 'observe',
     icon: Activity,
+    adminOnly: true,
+  },
+  {
+    id: 'teams',
+    name: 'modern-teams',
+    path: pagePath('teams'),
+    section: 'system',
+    icon: Users,
     adminOnly: true,
   },
   {

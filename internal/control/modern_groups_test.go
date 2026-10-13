@@ -63,8 +63,8 @@ func TestModernGroupsWorkspaceIncludesEveryGroupAndActionableContext(t *testing.
 	const hour = int64(1_700_000_000_000)
 	createGroupCollectionUsageStat(t, fixture, ready.ID, hour, 9, "modern")
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
-	result := performGroupCollectionRequest(engine, "/api/modern/groups", "Bearer "+authTestKey)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
+	result := performGroupCollectionRequest(engine, "/api/modern/groups", testPlatformSession)
 	if result.Code != http.StatusOK {
 		t.Fatalf("workspace status = %d, want 200: %s", result.Code, result.Body.String())
 	}
@@ -99,7 +99,7 @@ func TestModernGroupsWorkspaceIncludesEveryGroupAndActionableContext(t *testing.
 			}
 		}
 	}
-	legacy := performGroupCollectionRequest(engine, "/api/groups", "Bearer "+authTestKey)
+	legacy := performGroupCollectionRequest(engine, "/api/groups", testPlatformSession)
 	if legacy.Code != http.StatusOK || len(decodeGroupCollectionSuccess(t, legacy).Items) != 20 {
 		t.Fatal("legacy pagination changed")
 	}

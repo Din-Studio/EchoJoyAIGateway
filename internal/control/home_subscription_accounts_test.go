@@ -185,12 +185,8 @@ func TestHomeSubscriptionAccountsRouteIsAdminOnly(t *testing.T) {
 	t.Parallel()
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
-	accessKey, err := fixture.service.CreateAccessKey(t.Context(), AccessKeyCreateRequest{Name: "home readonly"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	admin := performHomeRequest(engine, "/api/home/subscription-accounts", authTestKey)
 	if admin.Code != http.StatusOK {
@@ -204,9 +200,9 @@ func TestHomeSubscriptionAccountsRouteIsAdminOnly(t *testing.T) {
 	if unknownQuery.Code != http.StatusBadRequest {
 		t.Fatalf("unknown query response = %d %s", unknownQuery.Code, unknownQuery.Body.String())
 	}
-	access := performHomeRequest(engine, "/api/home/subscription-accounts", accessKey.Key)
-	if access.Code != http.StatusForbidden {
-		t.Fatalf("AccessKey response = %d %s, want 403", access.Code, access.Body.String())
+	member := performHomeRequest(engine, "/api/home/subscription-accounts", testMemberSession)
+	if member.Code != http.StatusForbidden {
+		t.Fatalf("member response = %d %s, want 403", member.Code, member.Body.String())
 	}
 }
 

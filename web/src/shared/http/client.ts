@@ -11,13 +11,11 @@ export type ApiPath = `/api/${string}`
 
 export interface ApiClientDependencies {
   fetch: typeof fetch
-  getAuthKey(): string
   getLocale(): AppLocale
   onUnauthorized(): void
 }
 
 export interface ApiRequestOptions extends Omit<RequestInit, 'body' | 'headers'> {
-  authKey?: string
   headers?: HeadersInit
   json?: unknown
   body?: BodyInit | null
@@ -179,24 +177,6 @@ async function parseEnvelope(response: Response): Promise<Envelope> {
   throw new InvalidResponseError()
 }
 
-function readRetryAfter(data: unknown, headers: Headers): number | undefined {
-  if (
-    isRecord(data) &&
-    typeof data.retry_after_seconds === 'number' &&
-    Number.isFinite(data.retry_after_seconds) &&
-    data.retry_after_seconds > 0
-  ) {
-    return Math.ceil(data.retry_after_seconds)
-  }
-
-  const retryAfter = headers.get('Retry-After')
-  if (retryAfter !== null && /^[1-9]\d*$/.test(retryAfter)) {
-    return Number.parseInt(retryAfter, 10)
-  }
-
-  return undefined
-}
-
 export function createApiClient(deps: ApiClientDependencies): ApiClientWithResponse {
   let unauthorizedHandled = false
   let generation = 0
@@ -230,7 +210,6 @@ export function createApiClient(deps: ApiClientDependencies): ApiClientWithRespo
 
     const requestGeneration = generation
     const {
-      authKey = deps.getAuthKey(),
       headers: callerHeaders,
       json,
       body,
@@ -241,11 +220,6 @@ export function createApiClient(deps: ApiClientDependencies): ApiClientWithRespo
       throw new TypeError('REQUEST_BODY_CONFLICT')
     }
     const headers = new Headers(callerHeaders)
-    if (authKey) {
-      headers.set('Authorization', `Bearer ${authKey}`)
-    } else {
-      headers.delete('Authorization')
-    }
     headers.set('Accept-Language', deps.getLocale())
     if (json !== undefined) {
       headers.set('Content-Type', 'application/json')
@@ -253,8 +227,10 @@ export function createApiClient(deps: ApiClientDependencies): ApiClientWithRespo
 
     let result: Response
     try {
+      // 会话 cookie 是 httpOnly 的，同源请求由浏览器自动携带。
       result = await deps.fetch(path, {
         ...requestInit,
+        credentials: 'same-origin',
         headers,
         body: json === undefined ? body : JSON.stringify(json),
       })
@@ -286,15 +262,7 @@ export function createApiClient(deps: ApiClientDependencies): ApiClientWithRespo
       throw new InvalidResponseError()
     }
 
-    const retryAfterSeconds =
-      result.status === 429 ? readRetryAfter(envelope.data, result.headers) : undefined
-    throw new ApiError(
-      result.status,
-      envelope.code,
-      envelope.message,
-      envelope.data,
-      retryAfterSeconds,
-    )
+    throw new ApiError(result.status, envelope.code, envelope.message, envelope.data)
   }
 
   return {

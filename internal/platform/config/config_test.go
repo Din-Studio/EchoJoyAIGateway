@@ -38,6 +38,12 @@ func TestLoadUsesDefaultConfiguration(t *testing.T) {
 	if cfg.DatabasePool.MaxOpenConnections != 10 || cfg.DatabasePool.MaxIdleConnections != 5 {
 		t.Fatalf("DatabasePool = %#v, want max open/idle 10/5", cfg.DatabasePool)
 	}
+	if cfg.OIDC != (OIDCConfig{
+		PublicURL: "https://gateway.example.com", Issuer: "http://casdoor.example.com:8000",
+		ClientID: "client-id", ClientSecret: "client-secret", Organization: "echojoy",
+	}) {
+		t.Fatalf("OIDC = %#v", cfg.OIDC)
+	}
 	if cfg.Log.Level != "info" || cfg.Log.Format != "text" {
 		t.Fatalf("Log = %#v, want info/text", cfg.Log)
 	}
@@ -204,19 +210,18 @@ func TestLoadRejectsInvalidRequiredAndNumericValues(t *testing.T) {
 		name string
 		env  map[string]string
 	}{
-		{name: "whitespace-only auth key", env: map[string]string{"AUTH_KEY": "   "}},
-		{name: "auth key with internal space", env: map[string]string{"AUTH_KEY": "admin key"}},
-		{name: "auth key with tab", env: map[string]string{"AUTH_KEY": "admin\tkey"}},
-		{name: "auth key with unicode whitespace", env: map[string]string{"AUTH_KEY": "admin\u00a0key"}},
-		{name: "invalid port", env: map[string]string{"AUTH_KEY": "x", "PORT": "nope"}},
-		{name: "port out of range", env: map[string]string{"AUTH_KEY": "x", "PORT": "70000"}},
-		{name: "invalid shutdown timeout", env: map[string]string{"AUTH_KEY": "x", "GRACEFUL_SHUTDOWN_TIMEOUT": "0"}},
-		{name: "invalid read timeout", env: map[string]string{"AUTH_KEY": "x", "READ_TIMEOUT": "0"}},
-		{name: "invalid idle timeout", env: map[string]string{"AUTH_KEY": "x", "IDLE_TIMEOUT": "nope"}},
-		{name: "invalid database max open connections", env: map[string]string{"AUTH_KEY": "x", "DATABASE_MAX_OPEN_CONNECTIONS": "0"}},
-		{name: "invalid database max idle connections", env: map[string]string{"AUTH_KEY": "x", "DATABASE_MAX_IDLE_CONNECTIONS": "nope"}},
+		{name: "whitespace-only client id", env: map[string]string{"OIDC_CLIENT_ID": "   "}},
+		{name: "client secret with internal space", env: map[string]string{"OIDC_CLIENT_SECRET": "client secret"}},
+		{name: "issuer with query", env: map[string]string{"OIDC_ISSUER": "http://casdoor.example.com?x=1"}},
+		{name: "invalid port", env: map[string]string{"PORT": "nope"}},
+		{name: "port out of range", env: map[string]string{"PORT": "70000"}},
+		{name: "invalid shutdown timeout", env: map[string]string{"GRACEFUL_SHUTDOWN_TIMEOUT": "0"}},
+		{name: "invalid read timeout", env: map[string]string{"READ_TIMEOUT": "0"}},
+		{name: "invalid idle timeout", env: map[string]string{"IDLE_TIMEOUT": "nope"}},
+		{name: "invalid database max open connections", env: map[string]string{"DATABASE_MAX_OPEN_CONNECTIONS": "0"}},
+		{name: "invalid database max idle connections", env: map[string]string{"DATABASE_MAX_IDLE_CONNECTIONS": "nope"}},
 		{name: "database max idle connections exceed max open", env: map[string]string{
-			"AUTH_KEY": "x", "DATABASE_MAX_OPEN_CONNECTIONS": "4", "DATABASE_MAX_IDLE_CONNECTIONS": "5",
+			"DATABASE_MAX_OPEN_CONNECTIONS": "4", "DATABASE_MAX_IDLE_CONNECTIONS": "5",
 		}},
 	}
 
@@ -237,7 +242,8 @@ func clearEnvironment(t *testing.T) {
 	t.Helper()
 	t.Chdir(t.TempDir())
 	for _, key := range []string{
-		"HOST", "PORT", "DATABASE_DSN", "ENCRYPTION_KEY", "AUTH_KEY",
+		"HOST", "PORT", "DATABASE_DSN", "ENCRYPTION_KEY",
+		"PUBLIC_URL", "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "CASDOOR_ORGANIZATION",
 		"LOG_LEVEL", "LOG_FORMAT", "GRACEFUL_SHUTDOWN_TIMEOUT",
 		"READ_TIMEOUT", "IDLE_TIMEOUT", "MODELS_DEV_AUTO_SYNC_ENABLED",
 		"DATABASE_MAX_OPEN_CONNECTIONS", "DATABASE_MAX_IDLE_CONNECTIONS",

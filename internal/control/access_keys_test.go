@@ -261,10 +261,10 @@ func TestListAccessKeyCollectionReturnsMaskedMetadataWithoutDecrypting(t *testin
 	}
 
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/access-keys", nil)
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	engine.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("GET access keys = %d %s", recorder.Code, recorder.Body.String())
@@ -650,13 +650,13 @@ func TestAccessKeyEndpointsDistinguishRPMLimit(t *testing.T) {
 		}
 		fixture.service.random = bytes.NewReader(randomBytes)
 		engine := gin.New()
-		newTestServer(t, &config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
+		newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 		return fixture, engine
 	}
 	serve := func(engine *gin.Engine, method, path, payload string) *httptest.ResponseRecorder {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(method, path, strings.NewReader(payload))
-		request.Header.Set("Authorization", "Bearer "+authKey)
+		setTestPlatformSession(request)
 		request.Header.Set("Content-Type", "application/json")
 		if method == http.MethodPost && path == "/api/access-keys" {
 			setRequiredTestIdempotencyHeader(request)

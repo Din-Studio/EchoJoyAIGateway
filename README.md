@@ -81,12 +81,14 @@ git clone --depth 1 https://github.com/tbphp/gpt-load.git
 cd gpt-load
 
 cp .env.example .env
-# Fill in AUTH_KEY, ENCRYPTION_KEY, and POSTGRES_PASSWORD in .env;
-# generate each value with: openssl rand -hex 32
+# Fill in ENCRYPTION_KEY and POSTGRES_PASSWORD in .env
+# (generate each value with: openssl rand -hex 32), then the Casdoor sign-in
+# variables PUBLIC_URL, OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET,
+# and CASDOOR_ORGANIZATION (see Sign-in and permissions)
 docker compose up -d
 ```
 
-Compose refuses to start and names the missing variable if any of the three is empty. Confirm the service is up:
+Compose refuses to start and names the missing variable if any required variable is empty. Confirm the service is up:
 
 ```bash
 curl --fail http://127.0.0.1:3001/health
@@ -94,7 +96,7 @@ curl --fail http://127.0.0.1:3001/health
 
 The response reports `"checks": {"database": "ok", "redis": "ok"}` once GPT-Load reaches PostgreSQL and Redis; it returns 503 with the reason while either is unavailable.
 
-Open <http://127.0.0.1:3001> and sign in to the console with your `AUTH_KEY`.
+Open `PUBLIC_URL` (for example <http://127.0.0.1:3001>) and sign in to the console with your Casdoor account. See [Sign-in and permissions](#sign-in-and-permissions) for the Casdoor setup.
 
 > By default the service listens on the loopback address only and is not exposed to the internet.
 
@@ -193,7 +195,11 @@ Compose passes `.env` to the container, and the values set in the Compose file t
 | `DATABASE_DSN` | Required | PostgreSQL URL. The default Compose file points it at the bundled `postgres` service. |
 | `DATABASE_MAX_OPEN_CONNECTIONS` | `10` | Maximum open PostgreSQL connections per replica, positive integer. |
 | `DATABASE_MAX_IDLE_CONNECTIONS` | `5` | Maximum idle PostgreSQL connections per replica, positive integer and no greater than `DATABASE_MAX_OPEN_CONNECTIONS`. |
-| `AUTH_KEY` | Required | Bearer key for the management UI and `/api` management API, not a data-plane AccessKey. Every replica must share it. |
+| `PUBLIC_URL` | Required | Address browsers use to reach the gateway, such as the deployed URL, or `http://localhost:5173` in development through Vite. Casdoor redirects back to `<PUBLIC_URL>/auth/callback`; non-GET console requests must carry an `Origin` equal to this origin; the session cookie is `Secure` when it uses https. Every replica must share it. |
+| `OIDC_ISSUER` | Required | Casdoor origin, such as `http://192.168.48.64:8000`. Must equal Casdoor's configured `origin`; also used as the base URL of the Casdoor API. Every replica must share it. |
+| `OIDC_CLIENT_ID` | Required | Client ID of the Casdoor application. Every replica must share it. |
+| `OIDC_CLIENT_SECRET` | Required | Client secret of the Casdoor application. Every replica must share it. |
+| `CASDOOR_ORGANIZATION` | Required | Casdoor organization whose Groups are the gateway's teams, such as `echojoy`. Every replica must share it. |
 | `ENCRYPTION_KEY` | Required | Encrypts channel credentials; changing or losing it makes existing credentials undecryptable, so back it up with PostgreSQL. Every replica must share it. |
 | `HTTP_PROXY` | Empty | Environment proxy for HTTP upstream requests. |
 | `HTTPS_PROXY` | Empty | Environment proxy for HTTPS upstream requests. |
@@ -212,6 +218,46 @@ Environment proxies apply only when no proxy is specified on the credential, gro
 
 </details>
 
+### Sign-in and permissions
+
+The console signs in through [Casdoor](https://casdoor.org) with OpenID Connect. The gateway backend runs the Authorization Code + PKCE flow and keeps the session in Redis; the browser holds only the httpOnly cookie `gl_session` (plus a short-lived `gl_login` cookie while signing in). There is no shared admin key, and AccessKeys cannot sign in to the console.
+
+| Role | Granted by | Can do |
+| --- | --- | --- |
+| Platform admin | Casdoor Permission `gateway_platform` (domain `*`, action `platform:manage`) | Manage everything: channels, groups, credentials, settings, and every AccessKey; grant groups to teams. |
+| Team admin | Per-team Casdoor Permission `gateway_<team>` (domain `<team>`, action `team:manage`) | Create and edit AccessKeys for members of the team, set cost-limit rules and RPM, limited to the groups the platform admin granted to the team; see the team's keys, logs, and usage. |
+| Member | Direct member of the team's Casdoor Group | See only their own AccessKeys (including revealing them), logs, and usage. |
+
+Permissions are refreshed from Casdoor at most every 5 minutes, so changes made in Casdoor take effect within 5 minutes.
+
+Casdoor setup:
+
+1. Create an Application with `tokenFormat` JWT, grant type `authorization_code`, and redirect URIs `<PUBLIC_URL>/auth/callback` and `<PUBLIC_URL>/login`. Put its client ID and secret in `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET`.
+2. Once: create the Adapter `gateway_rbac_tenant` (`useSameDb`, table `gateway_permission_rule`), the Model `gateway_rbac_tenant` (the RBAC-with-tenants model below), and the Permission `gateway_platform` listing the platform admins (domain `*`, resource `gateway`, action `platform:manage`). Every gateway Permission uses this model and adapter.
+3. Per team: create one Group `<team>` with its members, and one Permission `gateway_<team>` listing the team admins (domain `<team>`, resource `gateway`, action `team:manage`). Never share one Role across team Permissions: Casdoor combines every Role holder with every domain of every Permission that uses it, which grants admin rights across teams.
+
+```ini
+[request_definition]
+r = sub, dom, obj, act
+
+[policy_definition]
+p = sub, dom, obj, act
+
+[role_definition]
+g = _, _, _
+
+[policy_effect]
+e = some(where (p.eft == allow))
+
+[matchers]
+m = g(r.sub, p.sub, r.dom) && r.dom == p.dom && r.obj == p.obj && r.act == p.act
+```
+
+Known limitations:
+
+- AccessKeys are hard-deleted. Their logs and usage remain, but afterwards only platform admins can see them.
+- Removing a member from a Casdoor Group does not disable their existing AccessKeys; a team admin must disable or delete them.
+
 ## Multi-replica deployment (experimental)
 
 Several GPT-Load replicas can share one PostgreSQL database and one Redis, so you can scale out behind a load balancer. The default `docker-compose.yml` is the same topology with one replica.
@@ -221,7 +267,7 @@ Several GPT-Load replicas can share one PostgreSQL database and one Redis, so yo
 - PostgreSQL, verified on 18.
 - Redis 7.0 or later, verified on 7.4, either a single node or a Redis Cluster. For a Redis Cluster, `REDIS_ADDRS` must list every primary; a single address is treated as a single node and fails when data lives on another node.
 - Configure Redis with `maxmemory-policy noeviction`; AOF persistence is recommended.
-- Every instance must set the same `AUTH_KEY` and `ENCRYPTION_KEY` explicitly. `INSTANCE_ID` must be unique per instance and defaults to `<hostname>-<random>`.
+- Every instance must set the same `ENCRYPTION_KEY`, `PUBLIC_URL`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, and `CASDOOR_ORGANIZATION` explicitly. `INSTANCE_ID` must be unique per instance and defaults to `<hostname>-<random>`.
 - Keep instance clocks synchronized with NTP.
 
 ### Start the Compose sample
@@ -230,7 +276,7 @@ Several GPT-Load replicas can share one PostgreSQL database and one Redis, so yo
 
 ```bash
 cp .env.example .env
-# Set AUTH_KEY, ENCRYPTION_KEY, and POSTGRES_PASSWORD in .env
+# Set ENCRYPTION_KEY, POSTGRES_PASSWORD, PUBLIC_URL, and the OIDC_*/CASDOOR_* variables in .env
 docker compose -f docker-compose.cluster.yml up -d
 curl --fail http://127.0.0.1:3001/health
 ```
@@ -259,7 +305,7 @@ The Codex, Claude, and Antigravity OAuth clients call back to `localhost` on a f
 - Instances share configuration changes, AccessKey RPM limits and cost limits, credential health (cooldown, blacklist, failure counts, model cooldown), subscription auth state, Responses ownership (`previous_response_id` continuation), and soft affinity, so the load balancer needs no sticky sessions. Configuration changes usually reach other instances within 1 s, and a 30 s poll catches any missed notification. Each subscription account is refreshed on only one instance at a time.
 - A credential's concurrency limit (set in the modern UI credential detail; 0 means unlimited) is counted across all instances: the upstream requests in flight to that credential never exceed the limit in total, and a streaming request holds its slot until the stream ends. When a credential is full, the request moves to another candidate credential with a free slot without spending a retry; when every candidate is full, the gateway returns 429 `credential_concurrency_limited` with `Retry-After: 1` immediately instead of queueing. Slots held by a crashed instance are freed within about 30 s. WebSocket sessions do not count against the limit.
 - Retention cleanup, operation result compaction, validation probes, and automatic Models.dev syncs run on only one instance per period; manual syncs and syncs triggered by group or setting changes run on the instance that received the change. The Models.dev catalog is shared through Redis (about the size of the raw catalog, at most 32 MiB); on the first start each instance fetches it once.
-- Admin authentication lockout applies to every instance and is keyed by the TCP peer address. Behind a load balancer that is the load balancer's address, so all administrators share one counter; restrict where the admin UI can be reached at the network layer. While Redis is unavailable each instance counts failures on its own.
+- Console sessions and pending sign-ins live in Redis, so any instance can complete a Casdoor sign-in or serve a signed-in console. While Redis is unavailable, nobody can sign in or use the console.
 - `affinity_capacity` has no effect and configuration changes do not clear soft affinity; a shorter `affinity_ttl` still applies to existing entries immediately.
 - Responses created while a rolling upgrade still runs older instances cannot be continued on instances that do not hold them.
 - When Redis is unavailable, requests from AccessKeys with an RPM or cost limit, and requests that select a credential with a concurrency limit, fail with 503 `cluster_state_unavailable` instead of being forwarded. Continuation requests and `store` Responses also fail with 503 (the response is withheld rather than delivered with an ID no instance can continue). Soft affinity falls back to normal scheduling. Credential health changes apply locally first and are replaced by the Redis state once Redis is reachable again.
@@ -280,7 +326,7 @@ These commands run on the same sample and need Docker and Compose v2.24 or later
 ## Production considerations
 
 - The service listens on `127.0.0.1` only by default. For remote access, expose it through a controlled network or a TLS reverse proxy, and configure ACLs and firewall rules.
-- Manage `AUTH_KEY` and `ENCRYPTION_KEY` carefully. Never commit real keys to a repository, log, screenshot, or public issue.
+- Manage `OIDC_CLIENT_SECRET` and `ENCRYPTION_KEY` carefully. Never commit real keys to a repository, log, screenshot, or public issue.
 - The default Compose file runs **one replica**; for several replicas, see [Multi-replica deployment (experimental)](#multi-replica-deployment-experimental).
 - Usage and cost are **estimates** derived from upstream responses. They support operational analysis and capacity planning, and do not equal a provider invoice or a financial reconciliation.
 - Subscription channels depend on upstream OAuth and compatibility protocols and may change as upstreams change. Only connect accounts you are entitled to use, and follow each provider's terms.

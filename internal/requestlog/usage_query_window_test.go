@@ -245,7 +245,7 @@ func TestQueryUsageMixedSourcesApplyAllFilters(t *testing.T) {
 	groupID, credentialID, accessKeyID := uint(7), uint(11), uint(41)
 	report, err := newRequestLogTestService(db).QueryUsage(context.Background(), UsageQuery{
 		FromMS: start.Add(-30 * time.Minute).UnixMilli(), ToMS: start.Add(7*time.Hour + 30*time.Minute).UnixMilli(),
-		GroupID: &groupID, CredentialID: &credentialID, AccessKeyID: &accessKeyID, ChannelID: channel.OpenAI, UpstreamModel: "model",
+		GroupID: &groupID, CredentialID: &credentialID, ScopeAccessKeyIDs: []uint{accessKeyID}, ChannelID: channel.OpenAI, UpstreamModel: "model",
 	})
 	if err != nil || report.Summary.RequestCount != 3 {
 		t.Fatalf("filtered count/error = %d/%v, want three requests across all sources", report.Summary.RequestCount, err)
@@ -289,7 +289,7 @@ func TestQueryUsageExactAccessKeyFilterKeepsAdministratorDistributions(t *testin
 						t.Fatal(err)
 					}
 					report, err := newRequestLogTestService(db).QueryUsage(t.Context(), UsageQuery{
-						FromMS: from.UnixMilli(), ToMS: to.UnixMilli(), AccessKeyID: &keyID, SelfScoped: selfScoped,
+						FromMS: from.UnixMilli(), ToMS: to.UnixMilli(), ScopeAccessKeyIDs: []uint{keyID}, SelfScoped: selfScoped,
 					})
 					if err != nil || report.Summary.RequestCount != 3 {
 						t.Fatalf("filtered request count/error = %d/%v, want three requests", report.Summary.RequestCount, err)

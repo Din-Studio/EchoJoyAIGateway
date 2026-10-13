@@ -31,8 +31,7 @@
 
 Relax the format for explanations, destructive-action confirmations, stalled debugging that needs explicit assumptions, ambiguous requests, or when it hinders the task.
 
-## 测试环境
+## 依赖服务信息
 
-服务器：xlqy
-访问方式：ssh免密登录
-部署位置：~/projects/EchoJoyAIGateway
+用户和认证：.env_auth
+测试环境: .env_deploy

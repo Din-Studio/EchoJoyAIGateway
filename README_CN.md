@@ -81,12 +81,13 @@ git clone --depth 1 https://github.com/tbphp/gpt-load.git
 cd gpt-load
 
 cp .env.example .env
-# 在 .env 中填写 AUTH_KEY、ENCRYPTION_KEY 与 POSTGRES_PASSWORD，
-# 每个值都可以用 openssl rand -hex 32 生成
+# 在 .env 中填写 ENCRYPTION_KEY 与 POSTGRES_PASSWORD（每个值都可以用
+# openssl rand -hex 32 生成），以及 Casdoor 登录变量 PUBLIC_URL、OIDC_ISSUER、
+# OIDC_CLIENT_ID、OIDC_CLIENT_SECRET 与 CASDOOR_ORGANIZATION（见“登录与权限”）
 docker compose up -d
 ```
 
-三项中任一为空时，Compose 会拒绝启动并指出缺少的变量。确认服务已启动：
+任一必填变量为空时，Compose 会拒绝启动并指出缺少的变量。确认服务已启动：
 
 ```bash
 curl --fail http://127.0.0.1:3001/health
@@ -94,7 +95,7 @@ curl --fail http://127.0.0.1:3001/health
 
 GPT-Load 连上 PostgreSQL 与 Redis 后，响应中会包含 `"checks": {"database": "ok", "redis": "ok"}`；任一依赖不可用时返回 503 并给出原因。
 
-打开 <http://127.0.0.1:3001>，用 `AUTH_KEY` 登录控制台。
+打开 `PUBLIC_URL`（例如 <http://127.0.0.1:3001>），用 Casdoor 账号登录控制台。Casdoor 侧的配置见[登录与权限](#登录与权限)。
 
 > 默认只监听本机地址，不会直接暴露到公网。
 
@@ -193,7 +194,11 @@ Compose 会把 `.env` 传入容器，Compose 文件中设置的值优先。除�
 | `DATABASE_DSN`                  | 必填                                        | PostgreSQL URL。默认 Compose 指向内置的 `postgres` 服务。 |
 | `DATABASE_MAX_OPEN_CONNECTIONS` | `10`                                        | 每个副本的 PostgreSQL 最大打开连接数，必须为正整数。 |
 | `DATABASE_MAX_IDLE_CONNECTIONS` | `5`                                         | 每个副本的 PostgreSQL 最大空闲连接数，必须为正整数且不大于 `DATABASE_MAX_OPEN_CONNECTIONS`。 |
-| `AUTH_KEY`                      | 必填                                        | 管理界面和 `/api` 管理接口的 Bearer 密钥，不是数据面 AccessKey。所有副本必须相同。 |
+| `PUBLIC_URL`                    | 必填                                        | 浏览器访问网关的地址，例如部署后的 URL；开发时经 Vite 访问则为 `http://localhost:5173`。Casdoor 登录后回跳 `<PUBLIC_URL>/auth/callback`；控制台的非 GET 请求必须带上与它同源的 `Origin`；为 https 时会话 cookie 带 `Secure`。所有副本必须相同。 |
+| `OIDC_ISSUER`                   | 必填                                        | Casdoor 的 origin，例如 `http://192.168.48.64:8000`。必须等于 Casdoor 配置的 `origin`，同时作为 Casdoor API 的基址。所有副本必须相同。 |
+| `OIDC_CLIENT_ID`                | 必填                                        | Casdoor 应用的 Client ID。所有副本必须相同。 |
+| `OIDC_CLIENT_SECRET`            | 必填                                        | Casdoor 应用的 Client Secret。所有副本必须相同。 |
+| `CASDOOR_ORGANIZATION`          | 必填                                        | Casdoor 组织名，该组织下的 Group 即网关的团队，例如 `echojoy`。所有副本必须相同。 |
 | `ENCRYPTION_KEY`                | 必填                                        | 用于加密渠道凭据；更换或丢失后无法解密已有凭据，必须与 PostgreSQL 一起备份。所有副本必须相同。 |
 | `HTTP_PROXY`                    | 空                                          | HTTP 上游请求的环境代理。                                                                                                                                |
 | `HTTPS_PROXY`                   | 空                                          | HTTPS 上游请求的环境代理。                                                                                                                               |
@@ -212,6 +217,46 @@ Compose 会把 `.env` 传入容器，Compose 文件中设置的值优先。除�
 
 </details>
 
+### 登录与权限
+
+控制台通过 [Casdoor](https://casdoor.org) 以 OpenID Connect 登录。网关后端完成 Authorization Code + PKCE 流程，会话保存在 Redis 中，浏览器只持有 httpOnly cookie `gl_session`（登录过程中另有短期 cookie `gl_login`）。没有共享的管理密钥，AccessKey 也不能登录控制台。
+
+| 角色 | 授权方式 | 能力 |
+| --- | --- | --- |
+| 平台管理员 | Casdoor Permission `gateway_platform`（domain `*`，action `platform:manage`） | 管理一切：渠道、分组、凭据、设置和全部 AccessKey；为团队授权可用分组。 |
+| 团队管理员 | 每个团队一条 Casdoor Permission `gateway_<team>`（domain `<team>`，action `team:manage`） | 为本团队成员创建和编辑 AccessKey，设置费用额度规则和 RPM，可选分组限于平台管理员授权给本团队的分组；查看团队的 key、日志和用量。 |
+| 成员 | 团队对应 Casdoor Group 的直接成员 | 只能查看自己的 AccessKey（可查看明文）、日志和用量。 |
+
+权限最多每 5 分钟从 Casdoor 刷新一次，在 Casdoor 中的修改最迟 5 分钟后生效。
+
+Casdoor 侧配置：
+
+1. 新建 Application：`tokenFormat` 为 JWT，授权类型为 `authorization_code`，回调地址填 `<PUBLIC_URL>/auth/callback` 和 `<PUBLIC_URL>/login`。把它的 Client ID 与 Client Secret 填入 `OIDC_CLIENT_ID` 和 `OIDC_CLIENT_SECRET`。
+2. 只做一次：新建 Adapter `gateway_rbac_tenant`（`useSameDb`，表 `gateway_permission_rule`）、Model `gateway_rbac_tenant`（填入下方的 RBAC with tenants 模型）和 Permission `gateway_platform`，users 选平台管理员（domain `*`，resource `gateway`，action `platform:manage`）。网关的所有 Permission 都使用这个 Model 和 Adapter。
+3. 每个团队：新建一个 Group `<team>` 并加入成员，再新建一条 Permission `gateway_<team>`，users 选团队管理员（domain `<team>`，resource `gateway`，action `team:manage`）。不要让多个团队的 Permission 共用一个 Role：Casdoor 会把 Role 的每个持有人与每条 Permission 的每个 domain 组合，造成跨团队越权。
+
+```ini
+[request_definition]
+r = sub, dom, obj, act
+
+[policy_definition]
+p = sub, dom, obj, act
+
+[role_definition]
+g = _, _, _
+
+[policy_effect]
+e = some(where (p.eft == allow))
+
+[matchers]
+m = g(r.sub, p.sub, r.dom) && r.dom == p.dom && r.obj == p.obj && r.act == p.act
+```
+
+已知限制：
+
+- AccessKey 是硬删除。删除后其日志和用量仍然保留，但只有平台管理员能看到。
+- 在 Casdoor 中把成员移出 Group，不会禁用他已有的 AccessKey，需要团队管理员手动禁用或删除。
+
 ## 多副本部署（实验性）
 
 多个 GPT-Load 副本可以共享同一个 PostgreSQL 与 Redis，放在负载均衡后面水平扩容。默认的 `docker-compose.yml` 就是只有 1 个副本的同一拓扑。
@@ -221,7 +266,7 @@ Compose 会把 `.env` 传入容器，Compose 文件中设置的值优先。除�
 - PostgreSQL，已在 18 上验证。
 - Redis 7.0 及以上，已在 7.4 上验证；单节点或 Redis Cluster 均可。使用 Redis Cluster 时，`REDIS_ADDRS` 必须列出全部主节点；只写一个地址会被当作单节点，访问其他节点上的数据时失败。
 - Redis 必须设置 `maxmemory-policy noeviction`，建议开启 AOF 持久化。
-- 所有实例必须显式设置相同的 `AUTH_KEY` 与 `ENCRYPTION_KEY`；`INSTANCE_ID` 每个实例唯一，默认 `<主机名>-<随机串>`。
+- 所有实例必须显式设置相同的 `ENCRYPTION_KEY`、`PUBLIC_URL`、`OIDC_ISSUER`、`OIDC_CLIENT_ID`、`OIDC_CLIENT_SECRET` 与 `CASDOOR_ORGANIZATION`；`INSTANCE_ID` 每个实例唯一，默认 `<主机名>-<随机串>`。
 - 各实例通过 NTP 校时。
 
 ### 用 Compose 启动样例
@@ -230,7 +275,7 @@ Compose 会把 `.env` 传入容器，Compose 文件中设置的值优先。除�
 
 ```bash
 cp .env.example .env
-# 在 .env 中设置 AUTH_KEY、ENCRYPTION_KEY 与 POSTGRES_PASSWORD
+# 在 .env 中设置 ENCRYPTION_KEY、POSTGRES_PASSWORD、PUBLIC_URL 与 OIDC_*/CASDOOR_* 变量
 docker compose -f docker-compose.cluster.yml up -d
 curl --fail http://127.0.0.1:3001/health
 ```
@@ -259,7 +304,7 @@ Codex、Claude、Antigravity 的 OAuth 自动回调发往固定端口的 `localh
 - 实例间共享配置变更、AccessKey 的 RPM 限流和成本额度、凭据健康（冷却、黑名单、失败计数、模型冷却）、订阅授权状态、响应归属（`previous_response_id` 续接）与软亲和，负载均衡无需粘性会话。配置变更通常在 1 秒内对其他实例生效，漏掉的通知由 30 秒一次的轮询补上。同一订阅账号的刷新在集群内同一时刻只由一个实例执行。
 - 凭证的并发上限（新版界面凭证详情中设置，0 表示不限）在所有实例间统一计数：同一时刻发往该凭证的上游请求合计不超过上限，流式请求在数据传完前一直占用名额。凭证已满时请求改用其他有空位的候选凭证，不消耗重试次数；候选全部已满时立即返回 429 `credential_concurrency_limited` 和 `Retry-After: 1`，不在网关内排队。实例崩溃后，它占用的名额最迟约 30 秒释放。WebSocket 会话不计入名额。
 - 保留清理、操作结果压缩、验证探测与 Models.dev 自动同步每个周期只由一个实例执行；手动同步以及组或设置变更触发的同步在接收变更的实例上执行。Models.dev 目录通过 Redis 共享（约为目录原始大小，上限 32 MiB）；首次启动时每个实例各拉取一次。
-- 管理鉴权失败锁定在所有实例上生效，按 TCP 对端地址计算；实例位于负载均衡之后时，这就是负载均衡的地址，所有管理员共用同一个计数，建议在网络层限制管理入口的来源。Redis 不可用时各实例单独计数。
+- 控制台会话和进行中的登录状态保存在 Redis 中，任一实例都能完成 Casdoor 登录并服务已登录的控制台。Redis 不可用时无法登录或使用控制台。
 - `affinity_capacity` 不生效，配置变更也不会清空软亲和；缩短 `affinity_ttl` 仍会立即作用于已有条目。
 - 滚动升级期间由旧版本实例创建的响应，无法在未持有它们的实例上续接。
 - Redis 不可用时：设置了 RPM 或成本额度的 AccessKey 请求，以及选中设置了并发上限的凭证的请求，返回 503 `cluster_state_unavailable`，不会转发上游；续接请求与 `store` 响应同样返回 503（响应不下发，避免交出任何实例都无法续接的 ID）；软亲和退回普通调度；凭据健康变更先在本实例生效，Redis 恢复后以 Redis 中的状态为准。
@@ -280,7 +325,7 @@ Codex、Claude、Antigravity 的 OAuth 自动回调发往固定端口的 `localh
 ## 生产使用注意事项
 
 - 默认只监听 `127.0.0.1`。需要远程访问时，应通过受控网络或带 TLS 的反向代理暴露，并配置 ACL 与防火墙。
-- 妥善管理 `AUTH_KEY` 与 `ENCRYPTION_KEY`，不要把真实密钥提交到仓库、日志、截图或公开 Issue。
+- 妥善管理 `OIDC_CLIENT_SECRET` 与 `ENCRYPTION_KEY`，不要把真实密钥提交到仓库、日志、截图或公开 Issue。
 - 默认 Compose 运行**1 个副本**；多副本部署见[多副本部署（实验性）](#多副本部署实验性)。
 - 用量与成本是基于上游返回数据的**估算**，用于运行分析和资源评估，不等同于服务商账单或财务对账结果。
 - 订阅渠道依赖上游 OAuth 与兼容协议，可能随上游变化调整。请只接入自己有权使用的账号，并遵守对应服务商条款。

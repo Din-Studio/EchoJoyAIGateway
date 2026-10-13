@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -56,13 +55,6 @@ func TestCustomAccessKeyCreationAndReplay(t *testing.T) {
 			}
 			if _, ok := fixture.manager.Current().AccessKeysByHash[row.KeyHash]; !ok {
 				t.Fatal("custom key not published")
-			}
-			request := httptest.NewRequest(http.MethodGet, "/api/auth/session", nil)
-			request.Header.Set("Authorization", "Bearer "+key)
-			login := httptest.NewRecorder()
-			engine.ServeHTTP(login, request)
-			if login.Code != http.StatusOK {
-				t.Fatalf("custom key login status = %d", login.Code)
 			}
 			replay := serveAccessKeyLifecycleRequest(t, engine, http.MethodPost, "/api/access-keys", string(body), operation)
 			if replay.Code != http.StatusOK {
@@ -138,7 +130,7 @@ func TestCustomAccessKeyRejectsUnusableValues(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := newAccessKeyLifecycleEngine(t, fixture)
-	for index, key := range []string{" ", "leading ", "two words", "line\nbreak", "tab\tkey", "nul\x00key", "中文", strings.Repeat("x", 257), authTestKey} {
+	for index, key := range []string{" ", "leading ", "two words", "line\nbreak", "tab\tkey", "nul\x00key", "中文", strings.Repeat("x", 257)} {
 		body, err := json.Marshal(map[string]string{"name": "invalid", "key": key})
 		if err != nil {
 			t.Fatal(err)
@@ -153,11 +145,7 @@ func TestCustomAccessKeyRejectsUnusableValues(t *testing.T) {
 		if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
 			t.Fatal(err)
 		}
-		wantCode := "INVALID_CUSTOM_ACCESS_KEY"
-		if key == authTestKey {
-			wantCode = "ACCESS_KEY_ADMIN_CONFLICT"
-		}
-		if envelope.Code != wantCode {
+		if envelope.Code != "INVALID_CUSTOM_ACCESS_KEY" {
 			t.Fatalf("case %d error code = %s", index, envelope.Code)
 		}
 	}

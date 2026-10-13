@@ -641,7 +641,7 @@ func TestUpdateSettingsRejectsSDKOwnedCredentialHeaders(t *testing.T) {
 	)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	beforeSnapshot := fixture.manager.Current()
 	for _, value := range []string{"Bearer ${API_KEY}", "Bearer " + providerToken} {

@@ -153,6 +153,7 @@ func loadAccessKeyMetadataRow(tx *gorm.DB, id uint) (accessKeyMetadataRow, error
 		Select(
 			"id", "name", "key_prefix", "key_suffix", "status", "filters", "rpm_limit",
 			"expires_at_ms", "created_at_ms", "updated_at_ms", "price_multiplier_micros",
+			"team_id", "owner_user_id", "owner_name",
 		).
 		Where("id = ?", id).
 		Take(&row).Error; err != nil {

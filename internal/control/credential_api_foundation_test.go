@@ -41,7 +41,7 @@ func TestRestoreGroupCredentialLogsRuntimeRecovery(t *testing.T) {
 	}
 
 	var logs bytes.Buffer
-	server := newTestServer(t, &config.Config{AuthKey: "restore-log-auth"}, fixture.service)
+	server := newTestServer(t, &config.Config{}, fixture.service)
 	server.logger = newControlJSONLogger(&logs)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
@@ -77,7 +77,7 @@ func TestRestoreGroupCredentialLogsRuntimeRecovery(t *testing.T) {
 func TestCredentialRoutesReplaceLegacyGroupKeyRoutes(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
-	module := newTestServer(t, &config.Config{AuthKey: "credential-auth"}, fixture.service).HTTPModule()
+	module := newTestServer(t, &config.Config{}, fixture.service).HTTPModule()
 	want := map[string]string{
 		"control.group-credentials.list":         "/groups/:group_id/credentials",
 		"control.group-credentials.download-all": "/groups/:group_id/credentials/download-all",
@@ -394,7 +394,7 @@ func TestCredentialHTTPUsesCanonicalWireAndRejectsLegacyFields(t *testing.T) {
 	}
 	engine := gin.New()
 	const auth = "credential-http-auth"
-	newTestServer(t, &config.Config{AuthKey: auth}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	legacy := serveCredentialRequest(t, engine, http.MethodGet,
 		fmt.Sprintf("/api/groups/%d/keys", created.GroupID), "", auth, "")
@@ -512,7 +512,7 @@ func serveCredentialRequest(
 ) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(method, path, bytes.NewBufferString(body))
-	request.Header.Set("Authorization", "Bearer "+auth)
+	setTestSession(request, auth)
 	if body != "" {
 		request.Header.Set("Content-Type", "application/json")
 	}

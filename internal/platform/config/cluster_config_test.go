@@ -15,8 +15,12 @@ func setRequiredEnv(t *testing.T) {
 	clearEnvironment(t)
 	t.Setenv("REDIS_ADDRS", "127.0.0.1:6379")
 	t.Setenv("DATABASE_DSN", testPostgresDSN)
-	t.Setenv("AUTH_KEY", "test-auth-key")
 	t.Setenv("ENCRYPTION_KEY", "test-master-key-long")
+	t.Setenv("PUBLIC_URL", "https://gateway.example.com/")
+	t.Setenv("OIDC_ISSUER", "http://casdoor.example.com:8000")
+	t.Setenv("OIDC_CLIENT_ID", "client-id")
+	t.Setenv("OIDC_CLIENT_SECRET", "client-secret")
+	t.Setenv("CASDOOR_ORGANIZATION", "echojoy")
 }
 
 func TestLoadRequiresEachStartupVariable(t *testing.T) {
@@ -42,12 +46,16 @@ func TestLoadRequiresEachStartupVariable(t *testing.T) {
 			prepare: func(t *testing.T) { t.Setenv("DATABASE_DSN", "mysql://root:root@127.0.0.1:3306/gpt_load") },
 			wantErr: "DATABASE_DSN is required and must be a PostgreSQL DSN",
 		},
-		{name: "missing auth key", prepare: func(t *testing.T) { t.Setenv("AUTH_KEY", "") }, wantErr: "AUTH_KEY is required"},
+		{name: "missing public url", prepare: func(t *testing.T) { t.Setenv("PUBLIC_URL", "") }, wantErr: "PUBLIC_URL is required"},
 		{
-			name:    "auth key with whitespace",
-			prepare: func(t *testing.T) { t.Setenv("AUTH_KEY", "admin key") },
-			wantErr: "AUTH_KEY must not contain whitespace",
+			name:    "relative public url",
+			prepare: func(t *testing.T) { t.Setenv("PUBLIC_URL", "/gateway") },
+			wantErr: "PUBLIC_URL must be an http(s) URL",
 		},
+		{name: "missing issuer", prepare: func(t *testing.T) { t.Setenv("OIDC_ISSUER", "") }, wantErr: "OIDC_ISSUER is required"},
+		{name: "missing client id", prepare: func(t *testing.T) { t.Setenv("OIDC_CLIENT_ID", "") }, wantErr: "OIDC_CLIENT_ID is required"},
+		{name: "missing client secret", prepare: func(t *testing.T) { t.Setenv("OIDC_CLIENT_SECRET", "") }, wantErr: "OIDC_CLIENT_SECRET is required"},
+		{name: "missing organization", prepare: func(t *testing.T) { t.Setenv("CASDOOR_ORGANIZATION", "") }, wantErr: "CASDOOR_ORGANIZATION is required"},
 		{
 			name:    "missing encryption key",
 			prepare: func(t *testing.T) { t.Setenv("ENCRYPTION_KEY", "") },

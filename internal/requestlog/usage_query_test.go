@@ -131,11 +131,11 @@ func TestQueryUsageScopesAccessKeyAndDistributesByModel(t *testing.T) {
 
 	accessKeyID := uint(41)
 	report, err := service.QueryUsage(context.Background(), UsageQuery{
-		FromMS:      start.UnixMilli(),
-		ToMS:        start.Add(7 * time.Hour).UnixMilli(),
-		Granularity: UsageGranularityHour,
-		AccessKeyID: &accessKeyID,
-		SelfScoped:  true,
+		FromMS:            start.UnixMilli(),
+		ToMS:              start.Add(7 * time.Hour).UnixMilli(),
+		Granularity:       UsageGranularityHour,
+		ScopeAccessKeyIDs: []uint{accessKeyID},
+		SelfScoped:        true,
 	})
 	if err != nil {
 		t.Fatalf("QueryUsage() error = %v", err)
@@ -156,20 +156,23 @@ func TestQueryUsageScopesAccessKeyAndDistributesByModel(t *testing.T) {
 	}
 }
 
-func TestQueryUsageRejectsZeroAccessKeyScope(t *testing.T) {
+func TestQueryUsageEmptyAccessKeyScopeMatchesNothing(t *testing.T) {
 	db := openRequestLogQueryDB(t)
 	service := newRequestLogTestService(db)
 	start := time.Date(2026, time.August, 8, 16, 0, 0, 0, time.UTC)
-	zero := uint(0)
+	createUsageStats(t, db, usageStat(start, 1, "model", 3))
 
-	_, err := service.QueryUsage(context.Background(), UsageQuery{
-		FromMS:      start.UnixMilli(),
-		ToMS:        start.Add(7 * time.Hour).UnixMilli(),
-		Granularity: UsageGranularityHour,
-		AccessKeyID: &zero,
+	report, err := service.QueryUsage(context.Background(), UsageQuery{
+		FromMS:            start.UnixMilli(),
+		ToMS:              start.Add(7 * time.Hour).UnixMilli(),
+		Granularity:       UsageGranularityHour,
+		ScopeAccessKeyIDs: []uint{},
 	})
-	if err == nil {
-		t.Fatal("QueryUsage() error = nil, want zero AccessKey scope rejection")
+	if err != nil {
+		t.Fatalf("QueryUsage() error = %v", err)
+	}
+	if report.Summary.RequestCount != 0 {
+		t.Fatalf("empty scope summary = %#v, want no usage", report.Summary)
 	}
 }
 

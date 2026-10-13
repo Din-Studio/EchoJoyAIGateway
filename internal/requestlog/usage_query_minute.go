@@ -26,8 +26,8 @@ func usageRequestLogScope(db *gorm.DB, input UsageQuery, groupIDs ...uint) *gorm
 	if input.CredentialID != nil {
 		logs = logs.Where("credential_id = ?", *input.CredentialID)
 	}
-	if input.AccessKeyID != nil {
-		logs = logs.Where("access_key_id = ?", *input.AccessKeyID)
+	if input.ScopeAccessKeyIDs != nil {
+		logs = logs.Where("access_key_id IN ?", input.ScopeAccessKeyIDs)
 	}
 	if input.UpstreamModel != "" {
 		logs = logs.Where("upstream_model = ?", input.UpstreamModel)

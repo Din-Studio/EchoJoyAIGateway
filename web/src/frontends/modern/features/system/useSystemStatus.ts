@@ -20,7 +20,7 @@ function createSystemStatus() {
   const session = useAuthSession()
   const client = useApiClient()
   const canCheckUpdate = computed(
-    () => session.state.phase === 'validated' && session.state.principalType === 'admin',
+    () => session.state.phase === 'validated' && session.state.platform,
   )
   const version = ref<string | null>(null)
   const versionLoading = ref(false)

@@ -21,6 +21,8 @@ type AccessKeyCollectionQuery struct {
 	GroupID  uint
 	Page     int64
 	PageSize int64
+	// ScopeAccessKeyIDs limits the collection to these keys; nil lists every key.
+	ScopeAccessKeyIDs []uint
 }
 
 func queryAccessKeyCollectionRecords(

@@ -181,14 +181,13 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 		return nil
 	})
 	protocolOverrides := map[uint][]protocol.Protocol(nil)
-	if err == nil && query.AccessKeyID != nil {
-		if s.manager == nil {
+	if err == nil && query.ScopeAccessKeyIDs != nil {
+		if s.manager == nil || s.manager.Current() == nil {
 			err = app_errors.ErrInternalServer
 		} else {
 			groups, protocolOverrides, err = scopeProjectModelGroups(
 				groups,
-				s.manager.Current(),
-				*query.AccessKeyID,
+				activeScopedKeys(s.manager.Current(), query.ScopeAccessKeyIDs),
 				s.channelRegistry,
 			)
 		}
@@ -209,7 +208,7 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 		groups,
 		s.channelRegistry,
 		protocolOverrides,
-		query.AccessKeyID == nil,
+		query.ScopeAccessKeyIDs == nil,
 	)
 	if err != nil {
 		return ProjectModelListResponse{}, err
@@ -220,7 +219,7 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 		if err != nil {
 			return ProjectModelListResponse{}, fmt.Errorf("validate persisted price identity: %w", app_errors.ErrInternalServer)
 		}
-		if query.AccessKeyID != nil {
+		if query.ScopeAccessKeyIDs != nil {
 			if _, referenced := references.references[identity]; !referenced {
 				continue
 			}
@@ -306,7 +305,7 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 			// 模型页判定为无效响应，比不发这条数据本身还糟。
 			routeGroups := []ProjectModelGroupDTO{}
 			affectedGroups := []ProjectModelGroupDTO{}
-			if query.AccessKeyID == nil {
+			if query.ScopeAccessKeyIDs == nil {
 				routeGroups = append(routeGroups, upstream.routeGroups...)
 				affectedGroups = append(affectedGroups, upstream.affectedGroups...)
 			}
@@ -358,45 +357,22 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 	}, nil
 }
 
+// scopeProjectModelGroups keeps the enabled groups, protocols and models that
+// at least one of keys can route; with no keys nothing remains.
 func scopeProjectModelGroups(
 	groups []models.Group,
-	snapshot *state.ConfigSnapshot,
-	accessKeyID uint,
+	keys []state.AccessKeyView,
 	registry *channel.Registry,
 ) ([]models.Group, map[uint][]protocol.Protocol, error) {
-	if snapshot == nil || accessKeyID == 0 {
-		return nil, nil, app_errors.ErrUnauthorized
-	}
-	accessKey, exists := snapshot.AccessKeysByID[accessKeyID]
-	if !exists || accessKey.Status != state.AccessKeyStatusActive {
-		return nil, nil, app_errors.ErrUnauthorized
-	}
 	result := make([]models.Group, 0, len(groups))
 	protocolsByGroup := make(map[uint][]protocol.Protocol, len(groups))
 	for _, group := range groups {
-		if !group.Enabled {
+		if !group.Enabled || len(keys) == 0 {
 			continue
-		}
-		if len(accessKey.Filters.Groups) > 0 {
-			if _, allowed := accessKey.Filters.Groups[group.ID]; !allowed {
-				continue
-			}
 		}
 		protocols, err := projectModelGroupProtocols(registry, group)
 		if err != nil {
 			return nil, nil, err
-		}
-		filteredProtocols := make([]protocol.Protocol, 0, len(protocols))
-		for _, value := range protocols {
-			if len(accessKey.Filters.Protocols) > 0 {
-				if _, allowed := accessKey.Filters.Protocols[value]; !allowed {
-					continue
-				}
-			}
-			filteredProtocols = append(filteredProtocols, value)
-		}
-		if len(filteredProtocols) == 0 {
-			continue
 		}
 		var groupModels []GroupModel
 		if err := decodeGroupDiscoveryJSON(group.Models, &groupModels); err != nil {
@@ -406,31 +382,81 @@ func scopeProjectModelGroups(
 				app_errors.ErrInternalServer,
 			)
 		}
-		filteredModels := make([]GroupModel, 0, len(groupModels))
-		for _, model := range groupModels {
-			clientModel := strings.TrimSpace(model.Alias)
-			if clientModel == "" {
-				clientModel = strings.TrimSpace(model.ID)
+		allowedProtocols := make(map[protocol.Protocol]struct{}, len(protocols))
+		allowedModels := make(map[int]struct{}, len(groupModels))
+		for _, key := range keys {
+			keyProtocols, keyModels := keyGroupRoutes(key, group.ID, protocols, groupModels)
+			if len(keyProtocols) == 0 || len(keyModels) == 0 {
+				continue
 			}
-			if len(accessKey.Filters.Models) > 0 {
-				if _, allowed := accessKey.Filters.Models[clientModel]; !allowed {
-					continue
-				}
+			for _, value := range keyProtocols {
+				allowedProtocols[value] = struct{}{}
 			}
-			filteredModels = append(filteredModels, model)
+			for _, index := range keyModels {
+				allowedModels[index] = struct{}{}
+			}
 		}
-		if len(filteredModels) == 0 {
+		if len(allowedProtocols) == 0 {
 			continue
+		}
+		filteredProtocols := make([]protocol.Protocol, 0, len(allowedProtocols))
+		for _, value := range protocols {
+			if _, allowed := allowedProtocols[value]; allowed {
+				filteredProtocols = append(filteredProtocols, value)
+			}
+		}
+		filteredModels := make([]GroupModel, 0, len(allowedModels))
+		for index, model := range groupModels {
+			if _, allowed := allowedModels[index]; allowed {
+				filteredModels = append(filteredModels, model)
+			}
 		}
 		modelJSON, err := json.Marshal(filteredModels)
 		if err != nil {
 			return nil, nil, fmt.Errorf("encode scoped group models: %w", err)
 		}
 		group.Models = models.JSON(modelJSON)
-		protocolsByGroup[group.ID] = append([]protocol.Protocol(nil), filteredProtocols...)
+		protocolsByGroup[group.ID] = filteredProtocols
 		result = append(result, group)
 	}
 	return result, protocolsByGroup, nil
+}
+
+// keyGroupRoutes returns the protocols and model indexes of one group that key's filters allow.
+func keyGroupRoutes(
+	key state.AccessKeyView,
+	groupID uint,
+	protocols []protocol.Protocol,
+	groupModels []GroupModel,
+) ([]protocol.Protocol, []int) {
+	if len(key.Filters.Groups) > 0 {
+		if _, allowed := key.Filters.Groups[groupID]; !allowed {
+			return nil, nil
+		}
+	}
+	var keyProtocols []protocol.Protocol
+	for _, value := range protocols {
+		if len(key.Filters.Protocols) > 0 {
+			if _, allowed := key.Filters.Protocols[value]; !allowed {
+				continue
+			}
+		}
+		keyProtocols = append(keyProtocols, value)
+	}
+	var keyModels []int
+	for index, model := range groupModels {
+		clientModel := strings.TrimSpace(model.Alias)
+		if clientModel == "" {
+			clientModel = strings.TrimSpace(model.ID)
+		}
+		if len(key.Filters.Models) > 0 {
+			if _, allowed := key.Filters.Models[clientModel]; !allowed {
+				continue
+			}
+		}
+		keyModels = append(keyModels, index)
+	}
+	return keyProtocols, keyModels
 }
 
 func (s *Service) GetUpstreamModelDetail(ctx context.Context, priceID uint) (UpstreamModelDetailDTO, error) {

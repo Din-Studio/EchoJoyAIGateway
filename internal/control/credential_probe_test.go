@@ -94,7 +94,7 @@ func TestGroupCredentialProbeHTTPRequiresAuthAndUsesOnlySpecifiedCredential(t *t
 
 	const auth = "credential-probe-auth"
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: auth}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	path := fmt.Sprintf("/api/groups/%d/credentials/%d/test", groupID, credentials[1].ID)
 	unauthorized := serveCredentialRequest(t, engine, http.MethodPost, path, "{}", "", "")
 	if unauthorized.Code != http.StatusUnauthorized {
@@ -226,7 +226,7 @@ func TestGroupCredentialProbeHTTPReturnsCompletedUpstreamFailureAsData(t *testin
 	fixture.service.executor = &credentialProbeTestExecutor{result: result}
 	const auth = "credential-probe-failure-auth"
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: auth}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	response := serveCredentialRequest(
 		t,
@@ -631,7 +631,7 @@ func TestGroupCredentialProbeRejectsSubscriptionGroup(t *testing.T) {
 	initControlI18n(t)
 	const auth = "subscription-probe-auth"
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: auth}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	response := serveCredentialRequest(
 		t,
 		engine,
@@ -760,7 +760,7 @@ func credentialProbeReasonPointer(reason CredentialProbeReason) *CredentialProbe
 func TestGroupCredentialProbeRouteContract(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
-	module := newTestServer(t, &config.Config{AuthKey: "credential-probe-route-auth"}, fixture.service).HTTPModule()
+	module := newTestServer(t, &config.Config{}, fixture.service).HTTPModule()
 	for _, route := range module.Routes {
 		if route.Name != "control.group-credentials.test" {
 			continue
@@ -804,7 +804,7 @@ func TestGroupCredentialProbeHTTPAllowsDisabledGroupWithoutChangingRuntime(t *te
 	executor := &credentialProbeTestExecutor{result: successfulCredentialProbeResult()}
 	fixture.service.executor = executor
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "disabled-group-auth"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	path := fmt.Sprintf("/api/groups/%d/credentials/%d/test", groupID, credential.ID)
 	response := serveCredentialRequest(t, engine, http.MethodPost, path, `{"protocol":"openai-completions","model":"temporary-model"}`, "disabled-group-auth", "")
 	if response.Code != http.StatusOK {

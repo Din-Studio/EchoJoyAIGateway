@@ -91,10 +91,10 @@ func TestChannelsHTTPIsAuthenticatedAndStrict(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "channel-auth"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/channels?q=deep%20seek", nil)
-	request.Header.Set("Authorization", "Bearer channel-auth")
+	setTestPlatformSession(request)
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
 	body := recorder.Body.String()
@@ -115,7 +115,7 @@ func TestChannelsHTTPIsAuthenticatedAndStrict(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, path, nil)
 			if name != "unauthenticated" {
-				request.Header.Set("Authorization", "Bearer channel-auth")
+				setTestPlatformSession(request)
 			}
 			engine.ServeHTTP(recorder, request)
 			if name == "unauthenticated" && recorder.Code != http.StatusUnauthorized {
@@ -133,7 +133,7 @@ func TestChannelsHTTPIsAuthenticatedAndStrict(t *testing.T) {
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, path, nil)
-		request.Header.Set("Authorization", "Bearer channel-auth")
+		setTestPlatformSession(request)
 		engine.ServeHTTP(recorder, request)
 		if recorder.Code != http.StatusNotFound {
 			t.Fatalf("retired provider catalog route %q = %d %s, want 404", path, recorder.Code, recorder.Body.String())

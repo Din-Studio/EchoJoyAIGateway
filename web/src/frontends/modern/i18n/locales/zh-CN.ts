@@ -2,6 +2,7 @@ import { protocolMessages as protocols } from '../protocols'
 import { zhCN as inspector } from './inspector'
 import { zhCN as home } from './home'
 import { zhCN as accessKeys } from './access-keys'
+import { zhCN as teams } from './teams'
 import { zhCN as logs } from './logs'
 import { zhCN as usage } from './usage'
 import { zhCN as health } from './health'
@@ -26,6 +27,7 @@ export default {
   usage,
   health,
   accessKeys,
+  teams,
   groupWorkflows,
   parameterRules,
   credentialCards,
@@ -60,37 +62,24 @@ export default {
   },
   auth: {
     title: '登录 GPT-Load',
-    description: '输入管理员密钥或访问密钥，系统会识别对应权限。',
-    keyLabel: '登录密钥',
-    keyPlaceholder: '输入 AUTH_KEY 或访问密钥',
-    reveal: '显示登录密钥',
-    conceal: '隐藏登录密钥',
-    submit: '登录',
-    submitting: '正在验证…',
-    required: '请输入登录密钥',
-    invalidFormat: '登录密钥不能包含空白字符',
-    invalid: '登录密钥无效，请检查后重试。',
-    locked: '认证尝试过多，请在 {seconds} 秒后重试。',
-    lockEnded: '可以重新验证会话了。',
+    description: '使用 EchoJoy 账号登录，权限由所在团队和角色决定。',
+    submit: '使用 EchoJoy 账号登录',
+    submitting: '正在跳转…',
+    noAccess: '该账号没有网关访问权限。请联系管理员把你加入团队或授予平台权限。',
+    loginFailed: '登录失败，请重试。',
     network: '无法连接到管理 API，请检查服务后重试。',
     invalidResponse: '管理 API 返回了无法识别的响应，请稍后重试。',
     restoreTitle: '验证登录状态',
     checking: '正在验证当前会话…',
     retry: '重新验证',
-    changeKey: '更换密钥',
-    signedIn: '登录成功，正在打开页面…',
-    continue: '继续进入',
-    remember: '记住登录',
+    signIn: '重新登录',
     logout: '退出登录',
-    readOnly: '访问密钥 · 只读',
-    readOnlyDescription: '仅能查看此密钥的总览、模型、用量和请求记录，不能修改系统配置。',
-    help: {
-      title: '可以使用哪种密钥？',
-      accessKeyTitle: '访问密钥',
-      accessKey: '使用已分发的访问密钥，查看该密钥范围内的数据；不能修改配置。',
-      adminTitle: '管理员密钥',
-      admin: '如果实例设置了 AUTH_KEY，使用部署系统中的对应值。',
-    },
+    logoutFailed: '退出登录失败，请重试。',
+    platformAdmin: '平台管理员',
+    teamAdmin: '团队管理员',
+    member: '成员',
+    teams: '所属团队',
+    noTeams: '未加入团队',
   },
   pages: {
     home: { title: '总览' },
@@ -98,6 +87,7 @@ export default {
     groupDetail: { title: '分组详情' },
     models: { title: '模型' },
     accessKeys: { title: '访问密钥' },
+    teams: { title: '团队' },
     usage: { title: '用量统计' },
     logs: { title: '请求日志' },
     health: { title: '运行健康' },

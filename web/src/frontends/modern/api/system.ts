@@ -9,7 +9,6 @@ export interface SecretSourceInfo {
 export interface SystemInfo {
   version: string
   database: 'postgres'
-  authKey: SecretSourceInfo
   encryption: SecretSourceInfo
 }
 function readSecretSource(value: unknown): SecretSourceInfo {
@@ -20,7 +19,6 @@ export async function getSystemInfo(client: ApiClient, signal: AbortSignal): Pro
   return {
     version: text(row.version),
     database: oneOf(record(row.deployment).database, ['postgres'] as const),
-    authKey: readSecretSource(row.auth_key),
     encryption: readSecretSource(row.encryption),
   }
 }

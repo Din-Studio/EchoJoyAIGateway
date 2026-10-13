@@ -27,8 +27,8 @@ var (
 	ErrInvalidJSON                            = &APIError{HTTPStatus: http.StatusBadRequest, Code: "INVALID_JSON", Message: "Invalid JSON format"}
 	ErrRequestTooLarge                        = &APIError{HTTPStatus: http.StatusRequestEntityTooLarge, Code: "REQUEST_TOO_LARGE", Message: "Request body is too large"}
 	ErrValidation                             = &APIError{HTTPStatus: http.StatusBadRequest, Code: "VALIDATION_FAILED", Message: "Input validation failed"}
+	ErrTeamNoGrantedGroups                    = &APIError{HTTPStatus: http.StatusBadRequest, Code: "TEAM_NO_GRANTED_GROUPS", Message: "The team has no granted groups"}
 	ErrInvalidCustomAccessKey                 = &APIError{HTTPStatus: http.StatusBadRequest, Code: "INVALID_CUSTOM_ACCESS_KEY", Message: "Custom access key contains unsupported characters or exceeds 256 bytes"}
-	ErrAccessKeyAdminConflict                 = &APIError{HTTPStatus: http.StatusBadRequest, Code: "ACCESS_KEY_ADMIN_CONFLICT", Message: "Access key must differ from the administrator key"}
 	ErrDuplicateResource                      = &APIError{HTTPStatus: http.StatusConflict, Code: "DUPLICATE_RESOURCE", Message: "Resource already exists"}
 	ErrResourceNotFound                       = &APIError{HTTPStatus: http.StatusNotFound, Code: "NOT_FOUND", Message: "Resource not found"}
 	ErrGroupInUse                             = &APIError{HTTPStatus: http.StatusConflict, Code: "GROUP_IN_USE", Message: "Group is referenced by access keys"}
@@ -37,7 +37,6 @@ var (
 	ErrDatabase                               = &APIError{HTTPStatus: http.StatusInternalServerError, Code: "DATABASE_ERROR", Message: "Database operation failed"}
 	ErrUnauthorized                           = &APIError{HTTPStatus: http.StatusUnauthorized, Code: "UNAUTHORIZED", Message: "Authentication failed"}
 	ErrForbidden                              = &APIError{HTTPStatus: http.StatusForbidden, Code: "FORBIDDEN", Message: "Access is forbidden"}
-	ErrAuthLocked                             = &APIError{HTTPStatus: http.StatusTooManyRequests, Code: "AUTH_LOCKED", Message: "Authentication is temporarily locked"}
 	ErrChannelTargetConflict                  = &APIError{HTTPStatus: http.StatusConflict, Code: "CHANNEL_TARGET_CONFLICT", Message: "Channel target conflicts with an existing group"}
 	ErrModelNameConflict                      = &APIError{HTTPStatus: http.StatusConflict, Code: "MODEL_NAME_CONFLICT", Message: "Client model names conflict within the group"}
 	ErrNoActiveCredential                     = &APIError{HTTPStatus: http.StatusConflict, Code: "NO_ACTIVE_CREDENTIAL", Message: "No active credential is available for this group"}

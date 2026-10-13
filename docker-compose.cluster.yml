@@ -1,6 +1,6 @@
 # 集群模式样例：nginx + 3 个 GPT-Load 副本 + 3 主节点 Redis Cluster + PostgreSQL。
 #
-#   cp .env.example .env    # 设置 AUTH_KEY、ENCRYPTION_KEY、POSTGRES_PASSWORD
+#   cp .env.example .env    # 设置 ENCRYPTION_KEY、POSTGRES_PASSWORD 与 Casdoor（OIDC_*、PUBLIC_URL）
 #   docker compose -f docker-compose.cluster.yml up -d
 #
 # 扩容：复制一个 gpt-load-N 服务并修改 INSTANCE_ID，再在
@@ -17,7 +17,11 @@ x-gpt-load: &gpt-load
     PORT: "3001"
     DATABASE_DSN: postgres://gpt_load:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/gpt_load?sslmode=disable
     REDIS_ADDRS: redis-1:6379,redis-2:6379,redis-3:6379
-    AUTH_KEY: ${AUTH_KEY:?set AUTH_KEY in .env; every instance must share it}
+    PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL in .env}
+    OIDC_ISSUER: ${OIDC_ISSUER:?set OIDC_ISSUER in .env}
+    OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?set OIDC_CLIENT_ID in .env}
+    OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?set OIDC_CLIENT_SECRET in .env}
+    CASDOOR_ORGANIZATION: ${CASDOOR_ORGANIZATION:?set CASDOOR_ORGANIZATION in .env}
     ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY in .env; every instance must share it}
   restart: always
   stop_grace_period: ${CONTAINER_STOP_GRACE_PERIOD:-15s}

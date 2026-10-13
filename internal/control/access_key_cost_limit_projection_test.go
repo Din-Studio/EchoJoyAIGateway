@@ -40,16 +40,6 @@ func TestAccessKeyCostLimitRuntimeProjectionIsSharedByCollectionHomeAndHealth(t 
 		t.Fatalf("collection cost limit projection = %#v", collection.Items)
 	}
 
-	home, err := fixture.service.ReadAccessKeyHomeBase(t.Context(), now.UnixMilli(), created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if home.CurrentAccessKey == nil || home.CurrentAccessKey.CostLimitStatus == nil ||
-		home.CurrentAccessKey.CostLimitStatus.Allowed ||
-		home.CurrentAccessKey.Status != "active" {
-		t.Fatalf("current access key projection = %#v", home.CurrentAccessKey)
-	}
-
 	health, err := fixture.service.RuntimeHealth()
 	if err != nil {
 		t.Fatal(err)
@@ -97,14 +87,6 @@ func TestAccessKeyCostLimitProjectionReadsSharedClusterState(t *testing.T) {
 		collection.Items[0].CostLimitStatus.Allowed {
 		t.Fatalf("collection cost limit projection = %#v", collection.Items)
 	}
-	home, err := fixture.service.ReadAccessKeyHomeBase(t.Context(), now.UnixMilli(), created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if home.CurrentAccessKey == nil || home.CurrentAccessKey.CostLimitStatus == nil ||
-		home.CurrentAccessKey.CostLimitStatus.Allowed || len(home.CurrentAccessKey.CostLimitRules) != 1 {
-		t.Fatalf("current access key projection = %#v", home.CurrentAccessKey)
-	}
 	health, err := fixture.service.RuntimeHealth()
 	if err != nil {
 		t.Fatal(err)
@@ -116,9 +98,6 @@ func TestAccessKeyCostLimitProjectionReadsSharedClusterState(t *testing.T) {
 	fixture.redis.Close()
 	if _, err := fixture.service.ListAccessKeyCollection(t.Context(), AccessKeyCollectionQuery{Page: 1, PageSize: 20}); err == nil {
 		t.Fatal("ListAccessKeyCollection() with Redis down error = nil")
-	}
-	if _, err := fixture.service.ReadAccessKeyHomeBase(t.Context(), now.UnixMilli(), created.ID); err == nil {
-		t.Fatal("ReadAccessKeyHomeBase() with Redis down error = nil")
 	}
 	if _, err := fixture.service.RuntimeHealth(); err == nil {
 		t.Fatal("RuntimeHealth() with Redis down error = nil")

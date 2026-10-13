@@ -33,7 +33,7 @@ func TestGroupDetailLedgerRoutesReplaceLegacyContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	legacy := serveGroupDetailLedgerRoute(
 		t,
@@ -41,7 +41,7 @@ func TestGroupDetailLedgerRoutesReplaceLegacyContracts(t *testing.T) {
 		http.MethodPut,
 		fmt.Sprintf("/api/groups/%d", groupID),
 		`{"name":"retired"}`,
-		"Bearer test-auth-key",
+		testPlatformSession,
 	)
 	assertGroupDetailLedgerEnvelope(t, legacy, http.StatusNotFound, "ROUTE_NOT_FOUND")
 
@@ -73,7 +73,7 @@ func TestGroupDetailLedgerRoutesReplaceLegacyContracts(t *testing.T) {
 				route.method,
 				route.path,
 				route.body,
-				"Bearer test-auth-key",
+				testPlatformSession,
 			)
 			if recorder.Code < http.StatusOK || recorder.Code >= http.StatusInternalServerError {
 				t.Fatalf("response = %d %s, want standard non-5xx envelope", recorder.Code, recorder.Body.String())
@@ -88,7 +88,7 @@ func TestGroupDetailLedgerRoutesReplaceLegacyContracts(t *testing.T) {
 		http.MethodPut,
 		fmt.Sprintf("/api/groups/%d/credentials/%d", groupID, credential.ID),
 		`{"weight_manual":25}`,
-		"Bearer test-auth-key",
+		testPlatformSession,
 	)
 	assertGroupDetailLedgerEnvelope(t, updated, http.StatusOK, "")
 	var envelope struct {
@@ -120,7 +120,7 @@ func TestGroupDetailLedgerRoutesReplaceLegacyContracts(t *testing.T) {
 		http.MethodPut,
 		fmt.Sprintf("/api/groups/%d/credentials/%d", groupID, credential.ID),
 		`{"weight_manual":0}`,
-		"Bearer test-auth-key",
+		testPlatformSession,
 	)
 	assertGroupDetailLedgerEnvelope(t, zeroWeight, http.StatusBadRequest, "VALIDATION_FAILED")
 }
@@ -137,7 +137,7 @@ func serveGroupDetailLedgerRoute(
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	if auth != "" {
-		request.Header.Set("Authorization", auth)
+		setTestSession(request, auth)
 	}
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)

@@ -72,14 +72,16 @@ type Cursor struct {
 }
 
 type ListQuery struct {
-	FromMS              *int64
-	ToMS                *int64
-	GroupID             *uint
-	ChannelID           channel.ID
-	ClientModel         string
-	UpstreamModel       string
-	ModelConsistency    telemetry.ModelConsistency
-	AccessKeyID         *uint
+	FromMS           *int64
+	ToMS             *int64
+	GroupID          *uint
+	ChannelID        channel.ID
+	ClientModel      string
+	UpstreamModel    string
+	ModelConsistency telemetry.ModelConsistency
+	// ScopeAccessKeyIDs limits rows to these keys; nil means every key and
+	// an empty slice means none.
+	ScopeAccessKeyIDs   []uint
 	Status              telemetry.RequestStatus
 	RequestID           string
 	Protocol            protocol.Protocol
@@ -208,11 +210,13 @@ type UsageQuery struct {
 	// 供管理 API 描述时间桶；QueryUsage 始终从 FromMS/ToMS 推导，不接受覆盖。
 	Granularity   UsageGranularity
 	BucketWidthMS int64
-	AccessKeyID   *uint
-	GroupID       *uint
-	ChannelID     channel.ID
-	CredentialID  *uint
-	UpstreamModel string
+	// ScopeAccessKeyIDs limits usage to these keys; nil means every key and
+	// an empty slice means none.
+	ScopeAccessKeyIDs []uint
+	GroupID           *uint
+	ChannelID         channel.ID
+	CredentialID      *uint
+	UpstreamModel     string
 }
 
 type UsageAggregate struct {

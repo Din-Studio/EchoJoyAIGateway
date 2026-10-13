@@ -257,18 +257,17 @@ func (service *Service) GetRequestLog(ctx context.Context, requestID string) (re
 	return record, nil
 }
 
-func (service *Service) GetAccessKeyRequestLog(
+// GetScopedRequestLog returns one log of a scoped key, redacted for
+// non-platform readers; a log outside the scope is ErrResourceNotFound.
+func (service *Service) GetScopedRequestLog(
 	ctx context.Context,
 	requestID string,
-	accessKeyID uint,
+	scope []uint,
 ) (requestlog.Record, error) {
-	if accessKeyID == 0 {
-		return requestlog.Record{}, app_errors.ErrUnauthorized
-	}
 	page, err := service.ListRequestLogs(ctx, requestlog.ListQuery{
-		AccessKeyID: &accessKeyID,
-		RequestID:   requestID,
-		Limit:       1,
+		ScopeAccessKeyIDs: scope,
+		RequestID:         requestID,
+		Limit:             1,
 	})
 	if err != nil {
 		return requestlog.Record{}, err
@@ -280,8 +279,9 @@ func (service *Service) GetAccessKeyRequestLog(
 }
 
 func (s *Server) handleListRequestLogs(c *gin.Context) {
-	accessKeyID, accessKeyScoped := currentAccessKeyID(c)
-	if accessKeyScoped && requestLogQueryUsesInternalFields(c.Request.URL.RawQuery) {
+	principal, _ := currentPrincipal(c)
+	scoped := !principal.Platform
+	if scoped && requestLogQueryUsesInternalFields(c.Request.URL.RawQuery) {
 		writeServiceError(c, "list_request_logs", app_errors.ErrBadRequest)
 		return
 	}
@@ -290,15 +290,18 @@ func (s *Server) handleListRequestLogs(c *gin.Context) {
 		writeServiceError(c, "list_request_logs", apiErr)
 		return
 	}
-	if accessKeyScoped {
-		query.AccessKeyID = &accessKeyID
+	scope, err := s.service.scopeAccessKeyFilter(c.Request.Context(), principal, query.ScopeAccessKeyIDs)
+	if err != nil {
+		writeServiceError(c, "list_request_logs", err)
+		return
 	}
+	query.ScopeAccessKeyIDs = scope
 	page, err := s.service.ListRequestLogs(c.Request.Context(), query)
 	if err != nil {
 		writeServiceError(c, "list_request_logs", err)
 		return
 	}
-	if accessKeyScoped {
+	if scoped {
 		for index := range page.Items {
 			page.Items[index] = sanitizeAccessKeyRequestLog(page.Items[index])
 		}
@@ -320,14 +323,15 @@ func (s *Server) handleGetRequestLog(c *gin.Context) {
 		writeServiceError(c, "get_request_log", app_errors.ErrBadRequest)
 		return
 	}
+	principal, _ := currentPrincipal(c)
+	scope, err := s.service.scopedAccessKeyIDs(c.Request.Context(), principal)
+	if err != nil {
+		writeServiceError(c, "get_request_log", err)
+		return
+	}
 	var record requestlog.Record
-	var err error
-	if accessKeyID, scoped := currentAccessKeyID(c); scoped {
-		record, err = s.service.GetAccessKeyRequestLog(
-			c.Request.Context(),
-			requestID,
-			accessKeyID,
-		)
+	if scope != nil {
+		record, err = s.service.GetScopedRequestLog(c.Request.Context(), requestID, scope)
 	} else {
 		record, err = s.service.GetRequestLog(c.Request.Context(), requestID)
 	}
@@ -357,7 +361,6 @@ func requestLogQueryUsesInternalFields(rawQuery string) bool {
 		"credential_id",
 		"upstream_model",
 		"model_consistency",
-		"access_key_id",
 		"attempt_status_code",
 		"failure_category",
 		"error_code",
@@ -481,7 +484,7 @@ func parseRequestLogQuery(rawQuery string) (requestlog.ListQuery, *app_errors.AP
 		if apiErr != nil {
 			return requestlog.ListQuery{}, apiErr
 		}
-		query.AccessKeyID = &parsed
+		query.ScopeAccessKeyIDs = []uint{parsed}
 	}
 	if value, ok := singleQueryValue(values, "protocol"); ok {
 		parsed := protocol.Protocol(value)

@@ -7,9 +7,7 @@ export function useNavigation() {
   const session = useAuthSession()
   return computed(() =>
     navigationItems.filter(
-      (item) =>
-        session.state.phase === 'validated' &&
-        (!item.adminOnly || session.state.principalType === 'admin'),
+      (item) => session.state.phase === 'validated' && (!item.adminOnly || session.state.platform),
     ),
   )
 }

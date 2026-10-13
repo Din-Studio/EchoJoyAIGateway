@@ -35,7 +35,7 @@ func TestUpdateCredentialConcurrencyLimitPersistsAndPublishes(t *testing.T) {
 	}
 
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	classicDetail := fmt.Sprintf("/api/groups/%d/credentials/%d", groupID, credential.ID)
 	modernDetail := fmt.Sprintf("/api/modern/groups/%d/credentials/%d", groupID, credential.ID)
 	for _, test := range []struct {
@@ -49,7 +49,7 @@ func TestUpdateCredentialConcurrencyLimitPersistsAndPublishes(t *testing.T) {
 		{name: "clear", patch: `{"concurrency_limit":null}`, want: 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			recorder := serveGroupDetailLedgerRoute(t, engine, http.MethodPut, classicDetail, test.patch, "Bearer test-auth-key")
+			recorder := serveGroupDetailLedgerRoute(t, engine, http.MethodPut, classicDetail, test.patch, testPlatformSession)
 			assertGroupDetailLedgerEnvelope(t, recorder, http.StatusOK, "")
 			var classic struct {
 				Data map[string]json.RawMessage `json:"data"`
@@ -70,7 +70,7 @@ func TestUpdateCredentialConcurrencyLimitPersistsAndPublishes(t *testing.T) {
 				t.Fatalf("concurrency_limit db=%d registry=%d (%v), want %d", stored.ConcurrencyLimit, ref.ConcurrencyLimit, ok, test.want)
 			}
 
-			recorder = serveGroupDetailLedgerRoute(t, engine, http.MethodGet, modernDetail, "", "Bearer test-auth-key")
+			recorder = serveGroupDetailLedgerRoute(t, engine, http.MethodGet, modernDetail, "", testPlatformSession)
 			assertGroupDetailLedgerEnvelope(t, recorder, http.StatusOK, "")
 			var modern struct {
 				Data struct {

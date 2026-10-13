@@ -33,7 +33,7 @@ func TestServerHomeAndSystemUpdateRoutesUseExactManagementContracts(t *testing.T
 	t.Parallel()
 	fixture := newServiceFixture(t)
 	module := newTestServer(t,
-		&config.Config{AuthKey: "test-auth-key"},
+		&config.Config{},
 		fixture.service,
 	).HTTPModule()
 	type routeContract struct {
@@ -82,7 +82,7 @@ func TestGroupCollectionHTTPRoutesDeclareStaticOptionsBeforeDynamicDetail(t *tes
 	t.Parallel()
 	fixture := newServiceFixture(t)
 	module := newTestServer(t,
-		&config.Config{AuthKey: authTestKey},
+		&config.Config{},
 		fixture.service,
 	).HTTPModule()
 
@@ -118,15 +118,15 @@ func TestSystemInfoHTTPContract(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	cfg := &config.Config{
-		AuthKey:       "distinctive-system-info-auth-secret",
 		EncryptionKey: "distinctive-system-info-encryption-secret",
 		DatabaseDSN:   "file:distinctive-system-info-secret-dsn",
+		OIDC:          config.OIDCConfig{ClientSecret: "distinctive-system-info-auth-secret"},
 	}
 	engine := gin.New()
 	newTestServer(t, cfg, fixture.service).RegisterRoutes(engine)
 
 	cfg.DatabaseDSN = "file:mutated-secret-dsn"
-	cfg.AuthKey = "mutated-auth-secret"
+	cfg.OIDC.ClientSecret = "mutated-auth-secret"
 	cfg.EncryptionKey = "mutated-encryption-secret"
 
 	var logs bytes.Buffer
@@ -141,16 +141,16 @@ func TestSystemInfoHTTPContract(t *testing.T) {
 		auth       string
 		wantStatus int
 	}{
-		{name: "get", method: http.MethodGet, auth: "Bearer distinctive-system-info-auth-secret", wantStatus: http.StatusOK},
+		{name: "get", method: http.MethodGet, auth: authTestKey, wantStatus: http.StatusOK},
 		{name: "unauthorized", method: http.MethodGet, wantStatus: http.StatusUnauthorized},
-		{name: "put method not allowed", method: http.MethodPut, auth: "Bearer distinctive-system-info-auth-secret", wantStatus: http.StatusMethodNotAllowed},
+		{name: "put method not allowed", method: http.MethodPut, auth: authTestKey, wantStatus: http.StatusMethodNotAllowed},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(test.method, "/api/system/info", nil)
 			request.Header.Set("Accept-Language", "en-US")
 			if test.auth != "" {
-				request.Header.Set("Authorization", test.auth)
+				setTestSession(request, test.auth)
 			}
 			engine.ServeHTTP(recorder, request)
 			responses.Write(recorder.Body.Bytes())
@@ -175,9 +175,12 @@ func TestSystemInfoHTTPContract(t *testing.T) {
 			if err := json.Unmarshal(envelope["data"], &data); err != nil {
 				t.Fatalf("decode data: %v", err)
 			}
-			authKey, ok := data["auth_key"].(map[string]any)
-			if !ok || authKey["source"] != "environment" || authKey["path"] != nil {
-				t.Fatalf("auth_key = %#v, want environment source without path", data["auth_key"])
+			if _, exposed := data["auth_key"]; exposed {
+				t.Fatalf("system info still reports auth_key: %#v", data)
+			}
+			encryption, ok := data["encryption"].(map[string]any)
+			if !ok || encryption["source"] != "environment" || encryption["path"] != nil {
+				t.Fatalf("encryption = %#v, want environment source without path", data["encryption"])
 			}
 		})
 	}
@@ -290,13 +293,13 @@ func TestControlMutationRejectsDuplicateJSONWithoutSideEffects(t *testing.T) {
 		t.Run(endpoint.name, func(t *testing.T) {
 			fixture := newServiceFixture(t)
 			engine := gin.New()
-			newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).
+			newTestServer(t, &config.Config{}, fixture.service).
 				RegisterRoutes(engine)
 			before := captureDuplicateJSONControlState(t, fixture)
 
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(endpoint.method, endpoint.path, strings.NewReader(endpoint.body))
-			request.Header.Set("Authorization", "Bearer test-auth-key")
+			setTestPlatformSession(request)
 			request.Header.Set("Content-Type", "application/json")
 			if endpoint.path == "/api/groups" || endpoint.path == "/api/access-keys" {
 				setRequiredTestIdempotencyHeader(request)
@@ -562,13 +565,13 @@ func TestControlJSONBodyLimitAppliesToEveryJSONEndpoint(t *testing.T) {
 				},
 			})
 			engine := gin.New()
-			newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+			newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 			before := captureControlJSONBodyLimitState(t, fixture, groupID, accessKey.ID)
 
 			path := endpoint.path(groupID, before.credential.ID, accessKey.ID)
 			request := httptest.NewRequest(endpoint.method, path, oversizedControlJSONBody(endpoint.jsonPrefix))
 			request.ContentLength = -1
-			request.Header.Set("Authorization", "Bearer test-auth-key")
+			setTestPlatformSession(request)
 			request.Header.Set("Content-Type", "application/json")
 			setRequiredTestIdempotencyHeader(request)
 			recorder := httptest.NewRecorder()
@@ -606,7 +609,7 @@ func TestControlJSONBodyLimitContentLengthFastPathPreservesAuthenticationPriorit
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	for _, auth := range []struct {
 		name       string
@@ -614,7 +617,7 @@ func TestControlJSONBodyLimitContentLengthFastPathPreservesAuthenticationPriorit
 		wantStatus int
 		wantCode   string
 	}{
-		{name: "valid", header: "Bearer test-auth-key", wantStatus: http.StatusRequestEntityTooLarge, wantCode: "REQUEST_TOO_LARGE"},
+		{name: "valid", header: testPlatformSession, wantStatus: http.StatusRequestEntityTooLarge, wantCode: "REQUEST_TOO_LARGE"},
 		{name: "missing", wantStatus: http.StatusUnauthorized, wantCode: "UNAUTHORIZED"},
 		{name: "invalid", header: "Bearer wrong-auth-key", wantStatus: http.StatusUnauthorized, wantCode: "UNAUTHORIZED"},
 	} {
@@ -622,7 +625,7 @@ func TestControlJSONBodyLimitContentLengthFastPathPreservesAuthenticationPriorit
 			request := httptest.NewRequest(http.MethodPost, "/api/groups", strings.NewReader("{}"))
 			request.ContentLength = maxControlJSONBodyBytes + 1
 			if auth.header != "" {
-				request.Header.Set("Authorization", auth.header)
+				setTestSession(request, auth.header)
 			}
 			setRequiredTestIdempotencyHeader(request)
 			recorder := httptest.NewRecorder()
@@ -650,7 +653,7 @@ func TestControlJSONBodyLimitLocalizes413(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	for _, test := range []struct {
 		language string
@@ -665,7 +668,7 @@ func TestControlJSONBodyLimitLocalizes413(t *testing.T) {
 				`"protocols":["openai-completions"],"models":[],"keys":"sk-localized-limit"}`
 			request := httptest.NewRequest(http.MethodPost, "/api/groups", oversizedControlJSONBody(prefix))
 			request.ContentLength = -1
-			request.Header.Set("Authorization", "Bearer test-auth-key")
+			setTestPlatformSession(request)
 			request.Header.Set("Accept-Language", test.language)
 			setRequiredTestIdempotencyHeader(request)
 			recorder := httptest.NewRecorder()
@@ -689,62 +692,19 @@ func TestControlJSONBodyLimitLocalizes413(t *testing.T) {
 	}
 }
 
-func TestManagementAuthRequiresConstantShapeBearerToken(t *testing.T) {
-	t.Parallel()
-	initControlI18n(t)
-	fixture := newServiceFixture(t)
-	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
-
-	tests := []struct {
-		name       string
-		header     string
-		wantStatus int
-	}{
-		{name: "missing", wantStatus: http.StatusUnauthorized},
-		{name: "empty bearer", header: "Bearer", wantStatus: http.StatusUnauthorized},
-		{name: "wrong different length", header: "Bearer x", wantStatus: http.StatusUnauthorized},
-		{name: "extra field", header: "Bearer test-auth-key extra", wantStatus: http.StatusUnauthorized},
-		{name: "wrong scheme", header: "Basic test-auth-key", wantStatus: http.StatusUnauthorized},
-		{name: "case insensitive", header: "bEaReR test-auth-key", wantStatus: http.StatusOK},
-	}
-	for index, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			recorder := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodGet, "/api/groups", nil)
-			request.RemoteAddr = "192.0.2." + strconv.Itoa(index+1) + ":1234"
-			if test.header != "" {
-				request.Header.Set("Authorization", test.header)
-			}
-			engine.ServeHTTP(recorder, request)
-			if recorder.Code != test.wantStatus {
-				t.Fatalf("status = %d, want %d; body=%s", recorder.Code, test.wantStatus, recorder.Body.String())
-			}
-			if test.wantStatus == http.StatusUnauthorized {
-				var body struct {
-					Code string `json:"code"`
-				}
-				if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || body.Code != "UNAUTHORIZED" {
-					t.Fatalf("unauthorized body = %s, error=%v", recorder.Body.String(), err)
-				}
-			}
-		})
-	}
-}
-
 func TestManagementAuthLocalizesUnauthorized(t *testing.T) {
 	t.Parallel()
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	for _, test := range []struct {
 		language string
 		message  string
 	}{
-		{language: "en-US", message: "Invalid authorization key"},
-		{language: "zh-CN", message: "无效的授权密钥"},
+		{language: "en-US", message: "Sign in to continue"},
+		{language: "zh-CN", message: "请先登录"},
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/api/groups", nil)
@@ -762,7 +722,7 @@ func TestManagementAuthDoesNotLogSecretOrDigest(t *testing.T) {
 	const authKey = "distinctive-control-auth-key"
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	var logs bytes.Buffer
 	previousOutput := logrus.StandardLogger().Out
@@ -771,7 +731,7 @@ func TestManagementAuthDoesNotLogSecretOrDigest(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/groups", nil)
-	request.Header.Set("Authorization", "Bearer "+authKey+"-wrong")
+	setTestSession(request, "wrong-session")
 	engine.ServeHTTP(recorder, request)
 
 	digest := sha256.Sum256([]byte(authKey))
@@ -787,12 +747,12 @@ func TestGroupCreateHTTPReturnsNarrowSuccessAndConflictEnvelopes(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/groups", strings.NewReader(
 		`{"name":"primary","channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com/v1/"},"models":[{"id":"gpt-4o","alias":"public-gpt","alias_enabled":true}],"credentials":[{"fields":{"api_key":"sk-first"}}]}`,
 	))
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	setRequiredTestIdempotencyHeader(request)
 	recorder := httptest.NewRecorder()
@@ -832,7 +792,7 @@ func TestGroupCreateHTTPReturnsNarrowSuccessAndConflictEnvelopes(t *testing.T) {
 	request = httptest.NewRequest(http.MethodPost, "/api/groups", strings.NewReader(
 		`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":" HTTPS://API.example.com/v1 "},"models":[],"credentials":[{"fields":{"api_key":"sk-second"}}]}`,
 	))
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	setRequiredTestIdempotencyHeader(request)
 	recorder = httptest.NewRecorder()
@@ -900,10 +860,10 @@ func TestGroupCreateHTTPRejectsLegacyMissingAndMalformedContractsWithoutMutation
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newServiceFixture(t)
 			engine := gin.New()
-			newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+			newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 			before := countCreateImportRows(t, fixture)
 			request := httptest.NewRequest(http.MethodPost, "/api/groups", strings.NewReader(test.body))
-			request.Header.Set("Authorization", "Bearer test-auth-key")
+			setTestPlatformSession(request)
 			request.Header.Set("Content-Type", "application/json")
 			setRequiredTestIdempotencyHeader(request)
 			recorder := httptest.NewRecorder()
@@ -929,13 +889,13 @@ func TestImportGroupCredentialsEndpointReturnsSuccessEnvelope(t *testing.T) {
 	groupID := createGroupForCredentialImport(t, fixture, "sk-existing")
 	beforeSnapshot := fixture.manager.Current()
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/groups/"+strconv.FormatUint(uint64(groupID), 10)+"/credentials/import", strings.NewReader(
 		`{"credentials":[{"fields":{"api_key":"sk-existing"}},{"fields":{"api_key":"sk-new"}},{"fields":{"api_key":"sk-new"}}]}`,
 	))
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	setRequiredTestIdempotencyHeader(request)
 	engine.ServeHTTP(recorder, request)
@@ -980,7 +940,7 @@ func TestImportGroupCredentialsEndpointRejectsUnknownFieldsAndInvalidGroupID(t *
 	fixture := newServiceFixture(t)
 	groupID := createGroupForCredentialImport(t, fixture, "sk-existing")
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	tests := []struct {
 		name    string
@@ -998,7 +958,7 @@ func TestImportGroupCredentialsEndpointRejectsUnknownFieldsAndInvalidGroupID(t *
 			beforeSnapshot := fixture.manager.Current()
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "/api/groups/"+test.groupID+"/credentials/import", strings.NewReader(test.body))
-			request.Header.Set("Authorization", "Bearer test-auth-key")
+			setTestPlatformSession(request)
 			request.Header.Set("Content-Type", "application/json")
 			setRequiredTestIdempotencyHeader(request)
 			engine.ServeHTTP(recorder, request)
@@ -1019,11 +979,11 @@ func TestImportGroupCredentialsEndpointReturnsGroupNotFound(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/groups/999/credentials/import", strings.NewReader(`{"credentials":[{"fields":{"api_key":"sk-new"}}]}`))
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept-Language", "zh-CN")
 	setRequiredTestIdempotencyHeader(request)
@@ -1077,7 +1037,7 @@ func TestLegacyImportRouteIsNotRegistered(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	for _, route := range engine.Routes() {
 		if route.Method == http.MethodPost && route.Path == "/api/import" {
@@ -1093,14 +1053,14 @@ func TestManagementWritesRejectUnknownFieldsAndMultipleJSONValues(t *testing.T) 
 	t.Run("group create rejects unknown top-level field", func(t *testing.T) {
 		fixture := newServiceFixture(t)
 		engine := gin.New()
-		newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+		newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 		beforeRevision := fixture.manager.Current().Revision
 
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/api/groups", strings.NewReader(
 			`{"upstream_url":"https://api.example.com","protocols":["openai-completions"],"keys":"sk-test","unexpected":true}`,
 		))
-		request.Header.Set("Authorization", "Bearer test-auth-key")
+		setTestPlatformSession(request)
 		request.Header.Set("Content-Type", "application/json")
 		setRequiredTestIdempotencyHeader(request)
 		engine.ServeHTTP(recorder, request)
@@ -1117,14 +1077,14 @@ func TestManagementWritesRejectUnknownFieldsAndMultipleJSONValues(t *testing.T) 
 	t.Run("access key rejects unknown nested filter field", func(t *testing.T) {
 		fixture := newServiceFixture(t)
 		engine := gin.New()
-		newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+		newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 		beforeRevision := fixture.manager.Current().Revision
 
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/api/access-keys", strings.NewReader(
 			`{"name":"client","filters":{"gropus":[1]}}`,
 		))
-		request.Header.Set("Authorization", "Bearer test-auth-key")
+		setTestPlatformSession(request)
 		request.Header.Set("Content-Type", "application/json")
 		setRequiredTestIdempotencyHeader(request)
 		engine.ServeHTTP(recorder, request)
@@ -1152,7 +1112,7 @@ func TestManagementWritesRejectUnknownFieldsAndMultipleJSONValues(t *testing.T) 
 			t.Fatalf("CreateAccessKey() error = %v", err)
 		}
 		engine := gin.New()
-		newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+		newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 		beforeRevision := fixture.manager.Current().Revision
 
 		recorder := httptest.NewRecorder()
@@ -1161,7 +1121,7 @@ func TestManagementWritesRejectUnknownFieldsAndMultipleJSONValues(t *testing.T) 
 			"/api/access-keys/"+strconv.FormatUint(uint64(created.ID), 10),
 			strings.NewReader(`{"name":"changed"}{"status":"disabled"}`),
 		)
-		request.Header.Set("Authorization", "Bearer test-auth-key")
+		setTestPlatformSession(request)
 		request.Header.Set("Content-Type", "application/json")
 		engine.ServeHTTP(recorder, request)
 
@@ -1184,7 +1144,7 @@ func TestUpdateGroupSettingsEndpointRejectsStrictInvalidBodies(t *testing.T) {
 	fixture := newServiceFixture(t)
 	groupID := createGroupForCredentialImport(t, fixture, "sk-update-http")
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	for _, test := range []struct {
 		name string
@@ -1214,7 +1174,7 @@ func TestUpdateGroupSettingsEndpointRejectsStrictInvalidBodies(t *testing.T) {
 				"/api/groups/"+strconv.FormatUint(uint64(groupID), 10)+"/settings",
 				strings.NewReader(test.body),
 			)
-			request.Header.Set("Authorization", "Bearer test-auth-key")
+			setTestPlatformSession(request)
 			request.Header.Set("Content-Type", "application/json")
 			engine.ServeHTTP(recorder, request)
 
@@ -1243,7 +1203,7 @@ func TestUpdateGroupSettingsEndpointRejectsTopLevelNullWithoutMutation(t *testin
 	fixture := newServiceFixture(t)
 	groupID := createGroupForCredentialImport(t, fixture, "sk-update-null")
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	var beforeGroup models.Group
 	if err := fixture.db.First(&beforeGroup, groupID).Error; err != nil {
@@ -1262,7 +1222,7 @@ func TestUpdateGroupSettingsEndpointRejectsTopLevelNullWithoutMutation(t *testin
 		"/api/groups/"+strconv.FormatUint(uint64(groupID), 10)+"/settings",
 		strings.NewReader(`null`),
 	)
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	engine.ServeHTTP(recorder, request)
 	assertUpdateGroupErrorResponse(t, recorder, http.StatusBadRequest, app_errors.ErrInvalidJSON.Code, "请求错误")
@@ -1311,13 +1271,13 @@ func TestUpdateGroupSettingsEndpointAllowsURLReuseAndPreservesI18nAndAuth(t *tes
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	path := "/api/groups/" + strconv.FormatUint(uint64(firstID), 10) + "/settings"
 
 	request := httptest.NewRequest(http.MethodPut, path, strings.NewReader(
 		`{"params":{"base_url":"https://unique.example.com/v1"}}`,
 	))
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept-Language", "ja-JP")
 	recorder := httptest.NewRecorder()
@@ -1329,7 +1289,7 @@ func TestUpdateGroupSettingsEndpointAllowsURLReuseAndPreservesI18nAndAuth(t *tes
 	request = httptest.NewRequest(http.MethodPut, path, strings.NewReader(
 		`{"params":{"base_url":"https://conflict.example.com/v1/"}}`,
 	))
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	recorder = httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
@@ -1351,7 +1311,7 @@ func TestUpdateGroupSettingsEndpointAllowsURLReuseAndPreservesI18nAndAuth(t *tes
 	request = httptest.NewRequest(http.MethodPut, path, strings.NewReader(
 		`{"name":"other-group"}`,
 	))
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	recorder = httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
@@ -1360,7 +1320,7 @@ func TestUpdateGroupSettingsEndpointAllowsURLReuseAndPreservesI18nAndAuth(t *tes
 	request = httptest.NewRequest(http.MethodPut, path, strings.NewReader(
 		`{"params":{"base_url":" HTTPS://UNIQUE.example.com/v1/ "},"enabled":false}`,
 	))
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept-Language", "ja-JP")
 	recorder = httptest.NewRecorder()
@@ -1397,7 +1357,7 @@ func TestUpdateGroupSettingsEndpointRejectsOversizedJSON(t *testing.T) {
 	fixture := newServiceFixture(t)
 	groupID := createGroupForCredentialImport(t, fixture, "sk-update-limit")
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	before := fixture.manager.Current().Revision
 
 	recorder := httptest.NewRecorder()
@@ -1406,7 +1366,7 @@ func TestUpdateGroupSettingsEndpointRejectsOversizedJSON(t *testing.T) {
 		"/api/groups/"+strconv.FormatUint(uint64(groupID), 10)+"/settings",
 		oversizedControlJSONBody(`{"name":"changed"}`),
 	)
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	request.ContentLength = -1
 	engine.ServeHTTP(recorder, request)
@@ -1433,7 +1393,7 @@ func TestUpdateGroupModelsEndpointRejectsStrictInvalidBodiesWithoutMutation(t *t
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	for _, test := range []struct {
 		name string
@@ -1485,7 +1445,7 @@ func TestGroupModelsHTTPReturnsStructuredConflictWithoutMutation(t *testing.T) {
 	fixture := newServiceFixture(t)
 	groupID := createGroupForCredentialImport(t, fixture, "sk-model-conflict-http")
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	beforeRevision := fixture.manager.Current().Revision
 	beforeModels := loadCreatedGroupModels(t, fixture, groupID)
 
@@ -1524,7 +1484,7 @@ func TestGroupModelsHTTPRejectsMissingAliasEnabledWithoutMutation(t *testing.T) 
 	mustEnsureInitialPrices(t, fixture)
 	groupID := createGroupForCredentialImport(t, fixture, "sk-model-alias-default")
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	beforeRevision := fixture.manager.Current().Revision
 	beforeModels := loadCreatedGroupModels(t, fixture, groupID)
 
@@ -1566,7 +1526,7 @@ func TestUpdateGroupModelsEndpointIDsAuthNotFoundAndSuccessDTO(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	body := `{"models":[{"id":"provider-new","alias":"new-public","alias_enabled":true}]}`
 
 	for _, rawID := range []string{"0", "-1", "not-a-number", "18446744073709551616"} {
@@ -1666,7 +1626,7 @@ func serveRawGroupModelsUpdateRequest(
 		strings.NewReader(body),
 	)
 	if authKey != "" {
-		request.Header.Set("Authorization", "Bearer "+authKey)
+		setTestSession(request, authKey)
 	}
 	request.Header.Set("Accept-Language", language)
 	request.Header.Set("Content-Type", "application/json")
@@ -1704,10 +1664,10 @@ func TestUpdateAccessKeyRoutesParseIDsAndPreservePointerSemantics(t *testing.T) 
 		t.Fatalf("CreateAccessKey() error = %v", err)
 	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	request := httptest.NewRequest(http.MethodPut, "/api/access-keys/"+strconv.FormatUint(uint64(created.ID), 10), strings.NewReader(`{"status":"disabled"}`))
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
@@ -1728,7 +1688,7 @@ func TestUpdateAccessKeyRoutesParseIDsAndPreservePointerSemantics(t *testing.T) 
 		"/api/access-keys/18446744073709551616",
 	} {
 		request = httptest.NewRequest(http.MethodPut, path, strings.NewReader(`{"name":"ignored"}`))
-		request.Header.Set("Authorization", "Bearer test-auth-key")
+		setTestPlatformSession(request)
 		request.Header.Set("Content-Type", "application/json")
 		recorder = httptest.NewRecorder()
 		engine.ServeHTTP(recorder, request)
@@ -1738,7 +1698,7 @@ func TestUpdateAccessKeyRoutesParseIDsAndPreservePointerSemantics(t *testing.T) 
 	}
 
 	request = httptest.NewRequest(http.MethodPut, "/api/access-keys/"+strconv.FormatUint(uint64(created.ID), 10), strings.NewReader(`{}`))
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	recorder = httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
@@ -1747,7 +1707,7 @@ func TestUpdateAccessKeyRoutesParseIDsAndPreservePointerSemantics(t *testing.T) 
 	}
 
 	request = httptest.NewRequest(http.MethodDelete, "/api/access-keys/"+strconv.FormatUint(uint64(created.ID), 10), nil)
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	recorder = httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -1755,7 +1715,7 @@ func TestUpdateAccessKeyRoutesParseIDsAndPreservePointerSemantics(t *testing.T) 
 	}
 
 	request = httptest.NewRequest(http.MethodDelete, "/api/access-keys/"+strconv.FormatUint(uint64(created.ID), 10), nil)
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	recorder = httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNotFound {
@@ -1777,7 +1737,7 @@ func TestModelDiscoveryHTTPContract(t *testing.T) {
 			fixture.service.executor = newRecordingDiscoveryExecutor(value)
 		}
 		engine := gin.New()
-		newTestServer(t, &config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
+		newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 		return fixture.service, engine
 	}
 
@@ -1967,7 +1927,7 @@ func TestModelDiscoveryHTTPContract(t *testing.T) {
 			}
 		}}
 		engine := gin.New()
-		newTestServer(t, &config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
+		newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 		recorder := serveDiscoveryRequest(t, engine, authKey,
 			`{"channel_id":"openai_compatible","connection_type":"api_key","params":{"base_url":"https://api.example.com"},`+
 				`"credentials":[{"fields":{"api_key":"sk-upstream"}}]}`,
@@ -1997,7 +1957,7 @@ func TestServerDraftModelDiscoveryLogsOnlyMetadata(t *testing.T) {
 		},
 	})
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authSecret}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	var logs bytes.Buffer
 	previousOutput := logrus.StandardLogger().Out
@@ -2058,7 +2018,7 @@ func TestServerGroupModelDiscoveryBodyContract(t *testing.T) {
 			},
 		})
 		engine := gin.New()
-		newTestServer(t, &config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
+		newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 		return fixture, engine, created.GroupID
 	}
 
@@ -2189,7 +2149,7 @@ func serveRawGroupDiscoveryRequest(
 		)
 	}
 	recorder := httptest.NewRecorder()
-	request.Header.Set("Authorization", "Bearer "+authKey)
+	setTestSession(request, authKey)
 	request.Header.Set("Accept-Language", language)
 	request.Header.Set("Content-Type", "application/json")
 	engine.ServeHTTP(recorder, request)
@@ -2210,7 +2170,7 @@ func serveDiscoveryRequestWithLanguage(
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/models/discover", strings.NewReader(payload))
 	if authKey != "" {
-		request.Header.Set("Authorization", "Bearer "+authKey)
+		setTestSession(request, authKey)
 	}
 	request.Header.Set("Accept-Language", language)
 	request.Header.Set("Content-Type", "application/json")
@@ -2223,7 +2183,7 @@ func TestSettingsHTTPContract(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	tests := []struct {
 		name       string
@@ -2233,28 +2193,28 @@ func TestSettingsHTTPContract(t *testing.T) {
 		wantStatus int
 		wantCode   string
 	}{
-		{name: "get", method: http.MethodGet, auth: "Bearer test-auth-key", wantStatus: http.StatusOK},
+		{name: "get", method: http.MethodGet, auth: testPlatformSession, wantStatus: http.StatusOK},
 		{name: "unauthorized get", method: http.MethodGet, wantStatus: http.StatusUnauthorized, wantCode: "UNAUTHORIZED"},
 		{name: "unauthorized update", method: http.MethodPut, body: `{"settings":{"request_timeout":900}}`, wantStatus: http.StatusUnauthorized, wantCode: "UNAUTHORIZED"},
-		{name: "update", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{"settings":{"request_timeout":900}}`, wantStatus: http.StatusOK},
-		{name: "unknown top level", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{"other":{}}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
-		{name: "missing settings", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
-		{name: "duplicate top level", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{"settings":{"request_timeout":900},"settings":{"request_timeout":800}}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
-		{name: "duplicate nested", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{"settings":{"request_timeout":900,"request_timeout":800}}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
-		{name: "duplicate header rules field", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{"settings":{"header_rules":{"set":{},"set":{}}}}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
-		{name: "duplicate header member", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{"settings":{"header_rules":{"set":{"X-Test":"one","X-Test":"two"}}}}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
-		{name: "duplicate future object in array", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{"settings":{"header_rules":{"remove":[{"x":1,"x":2}]}}}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
-		{name: "null settings", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{"settings":null}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
-		{name: "array settings", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{"settings":[]}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
-		{name: "top level null", method: http.MethodPut, auth: "Bearer test-auth-key", body: `null`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
-		{name: "multiple JSON values", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{"settings":{}} {}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
-		{name: "malformed", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{"settings":{"request_timeout":900}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
-		{name: "empty", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{"settings":{}}`, wantStatus: http.StatusBadRequest, wantCode: "BAD_REQUEST"},
-		{name: "unknown setting", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{"settings":{"unknown":true}}`, wantStatus: http.StatusBadRequest, wantCode: "VALIDATION_FAILED"},
-		{name: "internal setting", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{"settings":{"_internal.marker":true}}`, wantStatus: http.StatusBadRequest, wantCode: "VALIDATION_FAILED"},
-		{name: "fractional timeout", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{"settings":{"request_timeout":1.5}}`, wantStatus: http.StatusBadRequest, wantCode: "VALIDATION_FAILED"},
-		{name: "invalid retention", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{"settings":{"request_log_retention_days":366}}`, wantStatus: http.StatusBadRequest, wantCode: "VALIDATION_FAILED"},
-		{name: "invalid header rules", method: http.MethodPut, auth: "Bearer test-auth-key", body: `{"settings":{"header_rules":{"append":{}}}}`, wantStatus: http.StatusBadRequest, wantCode: "VALIDATION_FAILED"},
+		{name: "update", method: http.MethodPut, auth: testPlatformSession, body: `{"settings":{"request_timeout":900}}`, wantStatus: http.StatusOK},
+		{name: "unknown top level", method: http.MethodPut, auth: testPlatformSession, body: `{"other":{}}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
+		{name: "missing settings", method: http.MethodPut, auth: testPlatformSession, body: `{}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
+		{name: "duplicate top level", method: http.MethodPut, auth: testPlatformSession, body: `{"settings":{"request_timeout":900},"settings":{"request_timeout":800}}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
+		{name: "duplicate nested", method: http.MethodPut, auth: testPlatformSession, body: `{"settings":{"request_timeout":900,"request_timeout":800}}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
+		{name: "duplicate header rules field", method: http.MethodPut, auth: testPlatformSession, body: `{"settings":{"header_rules":{"set":{},"set":{}}}}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
+		{name: "duplicate header member", method: http.MethodPut, auth: testPlatformSession, body: `{"settings":{"header_rules":{"set":{"X-Test":"one","X-Test":"two"}}}}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
+		{name: "duplicate future object in array", method: http.MethodPut, auth: testPlatformSession, body: `{"settings":{"header_rules":{"remove":[{"x":1,"x":2}]}}}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
+		{name: "null settings", method: http.MethodPut, auth: testPlatformSession, body: `{"settings":null}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
+		{name: "array settings", method: http.MethodPut, auth: testPlatformSession, body: `{"settings":[]}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
+		{name: "top level null", method: http.MethodPut, auth: testPlatformSession, body: `null`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
+		{name: "multiple JSON values", method: http.MethodPut, auth: testPlatformSession, body: `{"settings":{}} {}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
+		{name: "malformed", method: http.MethodPut, auth: testPlatformSession, body: `{"settings":{"request_timeout":900}`, wantStatus: http.StatusBadRequest, wantCode: "INVALID_JSON"},
+		{name: "empty", method: http.MethodPut, auth: testPlatformSession, body: `{"settings":{}}`, wantStatus: http.StatusBadRequest, wantCode: "BAD_REQUEST"},
+		{name: "unknown setting", method: http.MethodPut, auth: testPlatformSession, body: `{"settings":{"unknown":true}}`, wantStatus: http.StatusBadRequest, wantCode: "VALIDATION_FAILED"},
+		{name: "internal setting", method: http.MethodPut, auth: testPlatformSession, body: `{"settings":{"_internal.marker":true}}`, wantStatus: http.StatusBadRequest, wantCode: "VALIDATION_FAILED"},
+		{name: "fractional timeout", method: http.MethodPut, auth: testPlatformSession, body: `{"settings":{"request_timeout":1.5}}`, wantStatus: http.StatusBadRequest, wantCode: "VALIDATION_FAILED"},
+		{name: "invalid retention", method: http.MethodPut, auth: testPlatformSession, body: `{"settings":{"request_log_retention_days":366}}`, wantStatus: http.StatusBadRequest, wantCode: "VALIDATION_FAILED"},
+		{name: "invalid header rules", method: http.MethodPut, auth: testPlatformSession, body: `{"settings":{"header_rules":{"append":{}}}}`, wantStatus: http.StatusBadRequest, wantCode: "VALIDATION_FAILED"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -2262,7 +2222,7 @@ func TestSettingsHTTPContract(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(test.method, "/api/settings", strings.NewReader(test.body))
 			if test.auth != "" {
-				request.Header.Set("Authorization", test.auth)
+				setTestSession(request, test.auth)
 			}
 			request.Header.Set("Accept-Language", "en-US")
 			request.Header.Set("Content-Type", "application/json")
@@ -2297,7 +2257,7 @@ func TestSettingsHTTPSuccessEnvelopeUpdateAndReset(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	assertResponse := func(recorder *httptest.ResponseRecorder, timeout int64, overrides []string) {
 		t.Helper()
@@ -2338,7 +2298,7 @@ func TestSettingsHTTPBodyLimitRejectsBeforeMutation(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	before := fixture.manager.Current()
 
 	recorder := httptest.NewRecorder()
@@ -2348,7 +2308,7 @@ func TestSettingsHTTPBodyLimitRejectsBeforeMutation(t *testing.T) {
 		oversizedControlJSONBody(`{"settings":{"request_timeout":900}}`),
 	)
 	request.ContentLength = -1
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Accept-Language", "en-US")
 	request.Header.Set("Content-Type", "application/json")
 	engine.ServeHTTP(recorder, request)
@@ -2378,7 +2338,7 @@ func TestSettingsHTTPFiltersPrivateRowsAndDoesNotLogValues(t *testing.T) {
 	)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	update := serveSettingsRequest(
 		t,
@@ -2448,7 +2408,7 @@ func TestSettingsHTTPFiltersPrivateRowsAndDoesNotLogValues(t *testing.T) {
 		nil,
 	)
 	brokenEngine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authKey}, brokenService).RegisterRoutes(brokenEngine)
+	newTestServer(t, &config.Config{}, brokenService).RegisterRoutes(brokenEngine)
 	failure := serveSettingsRequest(t, brokenEngine, http.MethodGet, authKey, "")
 	if failure.Code != http.StatusInternalServerError {
 		t.Fatalf("failure response = %d %s", failure.Code, failure.Body.String())
@@ -2483,7 +2443,7 @@ func serveSettingsRequest(
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(method, "/api/settings", strings.NewReader(body))
 	if authKey != "" {
-		request.Header.Set("Authorization", "Bearer "+authKey)
+		setTestSession(request, authKey)
 	}
 	request.Header.Set("Accept-Language", "en-US")
 	request.Header.Set("Content-Type", "application/json")

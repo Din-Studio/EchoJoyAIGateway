@@ -75,9 +75,6 @@ func validateUsageQuery(input UsageQuery) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if input.AccessKeyID != nil && *input.AccessKeyID == 0 {
-		return 0, fmt.Errorf("query usage: invalid access key scope")
-	}
 	if input.ChannelID != "" && !validChannelID(string(input.ChannelID)) {
 		return 0, fmt.Errorf("query usage: invalid channel scope")
 	}
@@ -147,8 +144,8 @@ func usageStatScope(db *gorm.DB, input UsageQuery, groupIDs ...uint) *gorm.DB {
 	if input.CredentialID != nil {
 		scope = scope.Where("credential_id = ?", *input.CredentialID)
 	}
-	if input.AccessKeyID != nil {
-		scope = scope.Where("access_key_id = ?", *input.AccessKeyID)
+	if input.ScopeAccessKeyIDs != nil {
+		scope = scope.Where("access_key_id IN ?", input.ScopeAccessKeyIDs)
 	}
 	if input.UpstreamModel != "" {
 		scope = scope.Where("model = ?", input.UpstreamModel)

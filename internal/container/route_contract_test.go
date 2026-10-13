@@ -13,6 +13,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/platform/httproute"
 	"gpt-load/internal/platform/i18n"
 )
@@ -163,6 +164,54 @@ func TestBuildContainerExposesUnifiedRouteCatalog(t *testing.T) {
 			Path: "/v1/responses/*resource_path",
 		},
 		{
+			ModuleName: "control",
+			RouteName:  "control.teams.list",
+			Owner:      httproute.OwnerControl,
+			Auth:       httproute.AuthControl,
+			Methods:    []string{http.MethodGet},
+			Path:       "/api/teams",
+		},
+		{
+			ModuleName: "control",
+			RouteName:  "control.teams.groups.update",
+			Owner:      httproute.OwnerControl,
+			Auth:       httproute.AuthControl,
+			Methods:    []string{http.MethodPut},
+			Path:       "/api/teams/:team/groups",
+		},
+		{
+			ModuleName: "control",
+			RouteName:  "control.teams.get",
+			Owner:      httproute.OwnerControl,
+			Auth:       httproute.AuthControl,
+			Methods:    []string{http.MethodGet},
+			Path:       "/api/teams/:team",
+		},
+		{
+			ModuleName: "auth",
+			RouteName:  "auth.login",
+			Owner:      httproute.OwnerSystem,
+			Auth:       httproute.AuthNone,
+			Methods:    []string{http.MethodGet},
+			Path:       "/auth/login",
+		},
+		{
+			ModuleName: "auth",
+			RouteName:  "auth.callback",
+			Owner:      httproute.OwnerSystem,
+			Auth:       httproute.AuthNone,
+			Methods:    []string{http.MethodGet},
+			Path:       "/auth/callback",
+		},
+		{
+			ModuleName: "auth",
+			RouteName:  "auth.logout",
+			Owner:      httproute.OwnerSystem,
+			Auth:       httproute.AuthNone,
+			Methods:    []string{http.MethodPost},
+			Path:       "/auth/logout",
+		},
+		{
 			ModuleName: "web",
 			RouteName:  "web.asset.favicon",
 			Owner:      httproute.OwnerWeb,
@@ -176,10 +225,10 @@ func TestBuildContainerExposesUnifiedRouteCatalog(t *testing.T) {
 }
 
 func TestHTTPRouteGroupOptionsOwnsStaticPathBeforeGroupID(t *testing.T) {
-	engine := newRouteContractEngine(t)
+	engine, cookie := newRouteContractEngineWithSession(t)
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/groups/options", nil)
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setSession(request, cookie)
 	request.Header.Set("Accept-Language", "en-US")
 
 	engine.ServeHTTP(recorder, request)
@@ -553,6 +602,13 @@ func assertRouteInfo(
 
 func newRouteContractEngine(t *testing.T) *gin.Engine {
 	t.Helper()
+	engine, _ := newRouteContractEngineWithSession(t)
+	return engine
+}
+
+// newRouteContractEngineWithSession also returns a platform session cookie.
+func newRouteContractEngineWithSession(t *testing.T) (*gin.Engine, string) {
+	t.Helper()
 	setStartupEnv(t)
 	if err := i18n.Init(); err != nil {
 		t.Fatalf("i18n.Init() error = %v", err)
@@ -563,8 +619,10 @@ func newRouteContractEngine(t *testing.T) *gin.Engine {
 		t.Fatalf("BuildContainer() error = %v", err)
 	}
 	var engine *gin.Engine
-	if err := dependencyContainer.Invoke(func(resolved *gin.Engine, db *gorm.DB) {
+	var cookie string
+	if err := dependencyContainer.Invoke(func(resolved *gin.Engine, db *gorm.DB, client *cluster.Client) {
 		engine = resolved
+		cookie = createPlatformSession(t, client)
 		sqlDB, dbErr := db.DB()
 		if dbErr == nil {
 			t.Cleanup(func() { _ = sqlDB.Close() })
@@ -572,7 +630,7 @@ func newRouteContractEngine(t *testing.T) *gin.Engine {
 	}); err != nil {
 		t.Fatalf("resolve route contract engine: %v", err)
 	}
-	return engine
+	return engine, cookie
 }
 
 func allowMethods(value string) []string {

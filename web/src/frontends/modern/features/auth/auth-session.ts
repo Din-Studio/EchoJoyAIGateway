@@ -1,55 +1,25 @@
 import type { QueryClient } from '@tanstack/vue-query'
 import { inject, reactive, readonly, type InjectionKey } from 'vue'
 
-import { getAuthSession } from '@modern/api/auth'
+import { getAuthSession, logout as requestLogout } from '@modern/api/auth'
 import type { ApiClient } from '@shared/http/client'
 import { RequestCancelledError } from '@shared/http/errors'
-import type { AuthPrincipalType } from '@shared/http/types'
-import { authFailure, authRetrySeconds } from './auth-errors'
+import type { AuthSessionUser } from '@shared/http/types'
+import { authFailure } from './auth-errors'
 
+// 会话由 httpOnly cookie 承载，前端只能通过 /api/auth/session 得知是否已登录。
 type AuthPhase =
-  | 'anonymous'
-  | 'unvalidated'
-  | 'validating'
-  | 'validated'
-  | 'locked'
-  | 'network-error'
-  | 'invalid-response'
+  'anonymous' | 'unvalidated' | 'validating' | 'validated' | 'network-error' | 'invalid-response'
 
-const authStorageKey = 'gpt-load.auth-key'
-
-function readCredential(storage?: Storage): string {
-  try {
-    return storage?.getItem(authStorageKey) ?? ''
-  } catch {
-    // 一种存储不可用时，仍可读取另一种存储。
-    return ''
-  }
-}
-
-function storeCredential(storage: Storage | undefined, value: string): void {
-  try {
-    if (value) storage?.setItem(authStorageKey, value)
-    else storage?.removeItem(authStorageKey)
-  } catch {
-    // 内存会话始终生效；存储不可用不能阻止登录或退出。
-  }
-}
-
-export function createAuthSession(deps: {
-  client: ApiClient
-  queryClient: QueryClient
-  localStorage?: Storage
-  sessionStorage?: Storage
-}) {
-  let credential = readCredential(deps.sessionStorage) || readCredential(deps.localStorage)
+export function createAuthSession(deps: { client: ApiClient; queryClient: QueryClient }) {
   let revision = 0
-  let loginController: AbortController | undefined
   let validation: { controller: AbortController; promise: Promise<void> } | undefined
   const state = reactive({
-    phase: (credential ? 'unvalidated' : 'anonymous') as AuthPhase,
-    principalType: null as AuthPrincipalType | null,
-    retryAfterSeconds: 0,
+    phase: 'unvalidated' as AuthPhase,
+    user: null as AuthSessionUser | null,
+    teams: [] as string[],
+    platform: false,
+    adminTeams: [] as string[],
   })
 
   function cancelValidation(): void {
@@ -57,35 +27,36 @@ export function createAuthSession(deps: {
     validation = undefined
   }
 
+  function resetIdentity(): void {
+    state.user = null
+    state.teams = []
+    state.platform = false
+    state.adminTeams = []
+  }
+
   function clear(): void {
     revision += 1
     cancelValidation()
-    loginController?.abort()
-    loginController = undefined
-    credential = ''
-    storeCredential(deps.localStorage, '')
-    storeCredential(deps.sessionStorage, '')
     state.phase = 'anonymous'
-    state.principalType = null
-    state.retryAfterSeconds = 0
+    resetIdentity()
     // 取消查询，并清空当前身份的查询和 mutation 缓存。
     deps.queryClient.clear()
   }
 
   function ensureValidated(): Promise<void> {
-    if (!credential || state.phase === 'validated') return Promise.resolve()
+    if (state.phase === 'validated' || state.phase === 'anonymous') return Promise.resolve()
     if (validation) return validation.promise
     const currentRevision = revision
-    const candidate = credential
     const controller = new AbortController()
     state.phase = 'validating'
-    state.principalType = null
-    state.retryAfterSeconds = 0
 
-    const promise = getAuthSession(deps.client, candidate, controller.signal, true)
+    const promise = getAuthSession(deps.client, controller.signal)
       .then((session) => {
         if (currentRevision !== revision || controller.signal.aborted) return
-        state.principalType = session.principal_type
+        state.user = session.user
+        state.teams = session.teams
+        state.platform = session.platform
+        state.adminTeams = session.admin_teams
         state.phase = 'validated'
       })
       .catch((error: unknown) => {
@@ -95,14 +66,8 @@ export function createAuthSession(deps: {
           return
         }
         const failure = authFailure(error)
-        if (failure === 'invalid') {
-          clear()
-        } else if (failure === 'locked') {
-          state.phase = 'locked'
-          state.retryAfterSeconds = authRetrySeconds(error)
-        } else {
-          state.phase = failure === 'network' ? 'network-error' : 'invalid-response'
-        }
+        if (failure === 'invalid') clear()
+        else state.phase = failure === 'network' ? 'network-error' : 'invalid-response'
       })
       .finally(() => {
         if (validation?.controller === controller) validation = undefined
@@ -111,45 +76,21 @@ export function createAuthSession(deps: {
     return promise
   }
 
-  async function login(candidate: string, remember: boolean, signal: AbortSignal): Promise<void> {
-    cancelValidation()
-    if (state.phase === 'validating') state.phase = 'unvalidated'
-    loginController?.abort()
-    const controller = new AbortController()
-    loginController = controller
-    const currentRevision = revision
-    const cancel = () => controller.abort()
-    signal.addEventListener('abort', cancel, { once: true })
-    if (signal.aborted) controller.abort()
-    try {
-      const session = await getAuthSession(deps.client, candidate, controller.signal)
-      if (currentRevision !== revision || controller.signal.aborted) {
-        throw new RequestCancelledError()
-      }
-      revision += 1
-      cancelValidation()
-      deps.queryClient.clear()
-      credential = candidate
-      // 仅在认证成功后切换存储；不记住时绝不回退到持久存储。
-      storeCredential(remember ? deps.sessionStorage : deps.localStorage, '')
-      storeCredential(remember ? deps.localStorage : deps.sessionStorage, candidate)
-      state.principalType = session.principal_type
-      state.retryAfterSeconds = 0
-      state.phase = 'validated'
-    } finally {
-      signal.removeEventListener('abort', cancel)
-      if (loginController === controller) loginController = undefined
-    }
+  /** 结束网关会话，返回 Casdoor 登出地址，由调用方跳转以结束单点登录会话。 */
+  async function logout(): Promise<string> {
+    const redirectURL = await requestLogout()
+    clear()
+    return redirectURL
   }
 
   return {
     state: readonly(state),
-    getAuthKey: () => credential,
     getRevision: () => revision,
-    hasCredential: () => credential.length > 0,
-    getPrincipalType: () => state.principalType,
+    isAnonymous: () => state.phase === 'anonymous',
+    isValidated: () => state.phase === 'validated',
+    isPlatformAdmin: () => state.platform,
     ensureValidated,
-    login,
+    logout,
     clear,
   }
 }

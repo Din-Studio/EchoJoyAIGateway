@@ -232,19 +232,18 @@ func TestReadAccessKeyHomeBaseScopesInventoryToRoutableModels(t *testing.T) {
 		t.Fatalf("CreateAccessKey() error = %v", err)
 	}
 
-	result, err := fixture.service.ReadAccessKeyHomeBase(
+	result, err := fixture.service.ReadScopedHomeBase(
 		t.Context(),
 		time.Date(2026, time.August, 8, 20, 0, 0, 0, time.UTC).UnixMilli(),
-		created.ID,
+		[]uint{created.ID},
 	)
 	if err != nil {
-		t.Fatalf("ReadAccessKeyHomeBase() error = %v", err)
+		t.Fatalf("ReadScopedHomeBase() error = %v", err)
 	}
 	if result.Inventory != (HomeInventory{GroupCount: 1, ModelCount: 1}) ||
 		len(result.AccessKeys) != 1 || result.AccessKeys[0].ID != created.ID ||
-		!reflect.DeepEqual(result.AccessKeys[0].Models, []string{"client-allowed"}) ||
-		result.CurrentAccessKey == nil || result.CurrentAccessKey.ID != created.ID {
-		t.Fatalf("ReadAccessKeyHomeBase() = %#v", result)
+		!reflect.DeepEqual(result.AccessKeys[0].Models, []string{"client-allowed"}) {
+		t.Fatalf("ReadScopedHomeBase() = %#v", result)
 	}
 }
 

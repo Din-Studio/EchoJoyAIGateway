@@ -9,26 +9,18 @@ import PublicLayout from '@modern/layouts/PublicLayout.vue'
 import { loginLocation } from '@modern/app/redirect'
 import AuthCard from './AuthCard.vue'
 import { useAuthSession } from './auth-session'
-import { useCountdown } from './use-countdown'
 
 const session = useAuthSession()
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
-const countdown = useCountdown()
 const actions = ref<HTMLElement>()
 const navigationFailed = ref(false)
 const canRender = computed(
-  () =>
-    session.state.phase === 'validated' &&
-    (!route.meta.adminOnly || session.state.principalType === 'admin'),
+  () => session.state.phase === 'validated' && (!route.meta.adminOnly || session.state.platform),
 )
 const message = computed(() => {
   if (navigationFailed.value) return t('shell.navigationFailed')
-  if (session.state.phase === 'locked')
-    return countdown.active.value
-      ? t('auth.locked', { seconds: countdown.seconds.value })
-      : t('auth.lockEnded')
   if (session.state.phase === 'network-error') return t('auth.network')
   if (session.state.phase === 'invalid-response') return t('auth.invalidResponse')
   return ''
@@ -46,20 +38,13 @@ async function navigate(
 }
 
 watch(
-  [() => session.state.phase, () => session.state.principalType, () => route.fullPath],
-  ([phase, principal]) => {
+  [() => session.state.phase, () => session.state.platform, () => route.fullPath],
+  ([phase, platform]) => {
     if (phase === 'unvalidated') void session.ensureValidated()
     if (phase === 'anonymous') void navigate(loginLocation(route.fullPath))
-    if (phase === 'validated' && principal === 'access_key' && route.meta.adminOnly) {
+    if (phase === 'validated' && !platform && route.meta.adminOnly) {
       void navigate({ name: 'modern-home' })
     }
-  },
-  { immediate: true },
-)
-watch(
-  [() => session.state.phase, () => session.state.retryAfterSeconds],
-  ([phase, seconds]) => {
-    if (phase === 'locked') countdown.start(seconds)
   },
   { immediate: true },
 )
@@ -73,7 +58,6 @@ watch(
 )
 
 function retry(): void {
-  if (countdown.active.value && session.state.phase === 'locked') return
   void session.ensureValidated()
 }
 function reload(): void {
@@ -86,18 +70,11 @@ function reload(): void {
   <PublicLayout v-else restoring-session>
     <AuthCard :title="t('auth.restoreTitle')">
       <template v-if="message">
-        <AppNotice :tone="session.state.phase === 'locked' ? 'warning' : 'danger'">{{
-          message
-        }}</AppNotice>
+        <AppNotice tone="danger">{{ message }}</AppNotice>
         <div ref="actions" class="modern-auth-gate-actions">
           <AppButton v-if="navigationFailed" @click="reload">{{ t('shell.reload') }}</AppButton>
-          <AppButton
-            v-else
-            :disabled="session.state.phase === 'locked' && countdown.active.value"
-            @click="retry"
-            >{{ t('auth.retry') }}</AppButton
-          >
-          <AppButton variant="ghost" @click="session.clear()">{{ t('auth.changeKey') }}</AppButton>
+          <AppButton v-else @click="retry">{{ t('auth.retry') }}</AppButton>
+          <AppButton variant="ghost" @click="session.clear()">{{ t('auth.signIn') }}</AppButton>
         </div>
       </template>
       <div v-else class="modern-auth-checking" role="status">

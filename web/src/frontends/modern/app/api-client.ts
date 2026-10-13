@@ -14,10 +14,8 @@ export function createSessionApiClient(deps: {
   function forRequest(options?: ApiRequestOptions) {
     const session = deps.getSession()
     const revision = session?.getRevision()
-    const credential = session?.getAuthKey() ?? ''
     return createApiClient({
       fetch: deps.fetch,
-      getAuthKey: () => credential,
       getLocale: deps.getLocale,
       onUnauthorized: () => {
         // 已退出或更换身份后，旧请求的 401 不得清除新会话。

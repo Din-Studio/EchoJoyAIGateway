@@ -5,10 +5,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -21,11 +23,27 @@ const (
 	requestCostUSD     = 0.005
 )
 
-// adminClient talks to one instance's /api control plane.
+// adminClient talks to one instance's /api control plane as the platform
+// session run.sh seeded into Redis.
 type adminClient struct {
 	baseURL string
-	authKey string
+	session session
 	http    *http.Client
+}
+
+// session is a console session cookie and the origin unsafe requests must carry.
+type session struct {
+	cookie string
+	origin string
+}
+
+// sessionFromEnv reads the session run.sh seeded.
+func sessionFromEnv() (session, error) {
+	current := session{cookie: os.Getenv("GATEWAY_SESSION"), origin: os.Getenv("PUBLIC_URL")}
+	if current.cookie == "" || current.origin == "" {
+		return session{}, errors.New("GATEWAY_SESSION and PUBLIC_URL are required")
+	}
+	return current, nil
 }
 
 type envelope struct {
@@ -47,7 +65,8 @@ func (c adminClient) do(ctx context.Context, method, path string, body, out any)
 	if err != nil {
 		return err
 	}
-	request.Header.Set("Authorization", "Bearer "+c.authKey)
+	request.AddCookie(&http.Cookie{Name: "gl_session", Value: c.session.cookie})
+	request.Header.Set("Origin", c.session.origin)
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}

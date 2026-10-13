@@ -17,6 +17,8 @@ import {
   type AccessKey,
 } from '@modern/api/access-keys'
 import { getGroupWorkspace, groupQueryKey } from '@modern/api/groups'
+import { getTeam, getTeams, teamDetailKey, teamsKey } from '@modern/api/teams'
+import { useAuthSession } from '@modern/features/auth/auth-session'
 import { useMessageSource } from '@modern/app/messages'
 import {
   AppProtocolTag,
@@ -32,7 +34,9 @@ import {
   AppFormSection,
   AppIconButton,
   AppMultiSelect,
+  AppSearchSelect,
   AppSegmentedControl,
+  AppSelect,
   AppSwitch,
   AppTextArea,
   AppTextField,
@@ -65,15 +69,24 @@ const props = defineProps<{
 const emit = defineEmits<{ close: []; saved: [row: AccessKey, created: boolean]; deleted: [] }>()
 const { t, n, locale } = useI18n()
 const client = useApiClient()
+const session = useAuthSession()
+const platform = computed(() => session.state.platform)
 const controller = new AbortController()
 const query = useQuery({
   queryKey: accessDetailKey(props.id ?? 0),
   queryFn: ({ signal }) => getAccessKey(client, props.id!, signal, props.hint),
   enabled: Boolean(props.id),
 })
+// 分组目录只对平台管理员开放；团队密钥的可选分组来自团队授权。
 const groups = useQuery({
   queryKey: groupQueryKey,
   queryFn: ({ signal }) => getGroupWorkspace(client, signal),
+  enabled: platform,
+})
+const teams = useQuery({
+  queryKey: teamsKey,
+  queryFn: ({ signal }) => getTeams(client, signal),
+  enabled: computed(() => platform.value && props.mode !== 'detail'),
 })
 const base = ref<AccessKey>()
 const usageRow = computed(() => (props.mode === 'detail' ? query.data.value : undefined))
@@ -97,6 +110,54 @@ const dirty = computed(
     initialized.value &&
     !completed.value &&
     (props.mode === 'copy' || JSON.stringify(draft.value) !== initial.value),
+)
+const teamDetail = useQuery(
+  computed(() => ({
+    queryKey: teamDetailKey(draft.value.team),
+    queryFn: ({ signal }: { signal: AbortSignal }) => getTeam(client, draft.value.team, signal),
+    enabled:
+      Boolean(draft.value.team) &&
+      (platform.value || session.state.adminTeams.includes(draft.value.team)),
+  })),
+)
+// 平台管理员可写全部密钥；团队管理员只写本团队的密钥；成员只读。
+const writable = computed(() => {
+  if (platform.value) return true
+  const team = base.value ? base.value.team_id : draft.value.team
+  return Boolean(team) && session.state.adminTeams.includes(team!)
+})
+const locked = computed(() => pending.value || !writable.value)
+const teamOptions = computed(() =>
+  platform.value
+    ? [
+        { value: '', label: t('accessKeys.platformKey') },
+        ...(teams.data.value ?? []).map((team) => ({
+          value: team.name,
+          label: team.displayName || team.name,
+        })),
+      ]
+    : session.state.adminTeams.map((team) => ({ value: team, label: team })),
+)
+const ownerOptions = computed(() =>
+  (teamDetail.data.value?.members ?? []).map((member) => ({
+    value: member.id,
+    label: member.displayName || member.name,
+    description: member.name,
+  })),
+)
+const selectedTeam = computed({
+  get: () => draft.value.team,
+  set: (value: string) => {
+    // 换团队后负责人和分组都不再有效。
+    draft.value.team = value
+    draft.value.owner = ''
+    draft.value.scope.groups = []
+  },
+})
+const ownership = computed(() =>
+  base.value?.team_id
+    ? `${base.value.team_id} · ${base.value.owner_name ?? base.value.owner_user_id ?? ''}`
+    : t('accessKeys.platformKey'),
 )
 const errors = computed(() => draftErrors(draft.value, base.value))
 const fieldError = (key: string) =>
@@ -129,14 +190,26 @@ const expiryMode = computed({
 const groupMap = computed(
   () => new Map(groups.data.value?.items.map((group) => [String(group.id), group])),
 )
+const catalogGroups = computed(() =>
+  draft.value.team
+    ? (teamDetail.data.value?.groups ?? []).map((group) => ({
+        value: String(group.id),
+        label: group.name,
+        keywords: [] as string[],
+      }))
+    : (groups.data.value?.items ?? []).map((group) => ({
+        value: String(group.id),
+        label: group.name,
+        keywords: [group.channelName, group.channelID],
+      })),
+)
+const catalogReady = computed(() =>
+  draft.value.team ? teamDetail.isSuccess.value : groups.isSuccess.value,
+)
 const groupOptions = computed(() => [
-  ...(groups.data.value?.items ?? []).map((group) => ({
-    value: String(group.id),
-    label: group.name,
-    keywords: [group.channelName, group.channelID],
-  })),
+  ...catalogGroups.value,
   ...draft.value.scope.groups
-    .filter((id) => !groupMap.value.has(String(id)))
+    .filter((id) => !catalogGroups.value.some((option) => option.value === String(id)))
     .map((id) => ({ value: String(id), label: t('accessKeys.missingGroup') })),
 ])
 const selectedGroups = computed({
@@ -175,9 +248,11 @@ const modelMismatch = computed(
     ),
 )
 const strength = computed(() => keyStrength(draft.value.key))
-const scopeLocked = computed(() => pending.value || groups.isPending.value || groups.isError.value)
+const scopeLocked = computed(() => locked.value || !catalogReady.value)
 function restore(value?: AccessKey): void {
   draft.value = draftFor(value, props.mode === 'copy')
+  // 团队管理员新建的默认是自己管理的第一个团队的密钥。
+  if (!value && !platform.value) draft.value.team = session.state.adminTeams[0] ?? ''
   if (props.mode === 'copy' && value)
     draft.value.name = t('accessKeys.copyName', { name: value.name })
   initial.value = JSON.stringify(draft.value)
@@ -244,9 +319,9 @@ async function requestSave(): Promise<void> {
     form.value?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus()
     return
   }
-  const input = inputFor(draft.value)
+  const input = inputFor(draft.value, platform.value)
   if (
-    (groups.isPending.value || groups.isError.value) &&
+    !catalogReady.value &&
     (!base.value || JSON.stringify(input.filters) !== JSON.stringify(base.value.filters))
   ) {
     error.value = t('accessKeys.catalogFailed')
@@ -254,7 +329,9 @@ async function requestSave(): Promise<void> {
   }
   if (
     input.filters.groups.some(
-      (id) => !groupMap.value.has(String(id)) && !base.value?.filters.groups.includes(id),
+      (id) =>
+        !catalogGroups.value.some((option) => option.value === String(id)) &&
+        !base.value?.filters.groups.includes(id),
     )
   ) {
     error.value = t('accessKeys.catalogFailed')
@@ -291,11 +368,13 @@ async function requestSave(): Promise<void> {
     error.value = t(
       code === 'DUPLICATE_RESOURCE'
         ? 'accessKeys.duplicate'
-        : code === 'ACCESS_KEY_ADMIN_CONFLICT'
-          ? 'accessKeys.adminConflict'
-          : code === 'INVALID_CUSTOM_ACCESS_KEY'
-            ? 'accessKeys.invalidKey'
-            : 'accessKeys.failed',
+        : code === 'TEAM_NO_GRANTED_GROUPS'
+          ? 'accessKeys.teamNoGrants'
+          : code === 'FORBIDDEN'
+            ? 'accessKeys.forbidden'
+            : code === 'INVALID_CUSTOM_ACCESS_KEY'
+              ? 'accessKeys.invalidKey'
+              : 'accessKeys.failed',
     )
   } finally {
     pending.value = false
@@ -360,11 +439,14 @@ useMessageSource(() =>
     : undefined,
 )
 useMessageSource(() =>
-  groups.isError.value
+  groups.isError.value || teamDetail.isError.value
     ? {
         text: t('accessKeys.catalogFailed'),
         tone: 'warning',
-        action: { label: t('ui.retry'), run: () => groups.refetch() },
+        action: {
+          label: t('ui.retry'),
+          run: () => (groups.isError.value ? groups.refetch() : teamDetail.refetch()),
+        },
       }
     : undefined,
 )
@@ -457,14 +539,36 @@ onScopeDispose(() => {
                 :model-value="draft.enabled"
                 :label="t('accessKeys.active')"
                 size="sm"
-                :disabled="pending"
+                :disabled="locked"
                 @update:model-value="draft.enabled = $event"
             /></template>
+            <p v-if="base" class="modern-access-note">
+              {{ t('accessKeys.ownership') }} · {{ ownership }}
+            </p>
+            <template v-else>
+              <AppSelect
+                v-model="selectedTeam"
+                :label="t('accessKeys.team')"
+                :options="teamOptions"
+                size="sm"
+                :disabled="pending || teamOptions.length < 2"
+              />
+              <AppSearchSelect
+                v-if="draft.team"
+                v-model="draft.owner"
+                :label="t('accessKeys.owner')"
+                :placeholder="t('accessKeys.selectOwner')"
+                :options="ownerOptions"
+                size="sm"
+                :disabled="pending"
+                :error="fieldError('owner')"
+              />
+            </template>
             <AppTextField
               v-model="draft.name"
               :label="t('accessKeys.name')"
               size="sm"
-              :disabled="pending"
+              :disabled="locked"
               :error="fieldError('name')"
               autocomplete="off"
             />
@@ -489,7 +593,7 @@ onScopeDispose(() => {
                 :icon="RefreshCw"
                 variant="ghost"
                 size="xs"
-                :disabled="pending"
+                :disabled="locked"
                 @click="generate"
                 >{{ t('accessKeys.generate') }}</AppButton
               >
@@ -503,7 +607,7 @@ onScopeDispose(() => {
                 t(base ? 'accessKeys.replacementPlaceholder' : 'accessKeys.keyPlaceholder')
               "
               size="sm"
-              :disabled="pending"
+              :disabled="locked"
               :error="fieldError('key')"
               autocomplete="new-password"
               spellcheck="false"
@@ -532,7 +636,7 @@ onScopeDispose(() => {
                 :options="expirationOptions"
                 appearance="field"
                 size="sm"
-                :disabled="pending"
+                :disabled="locked"
               />
             </div>
             <AppDateTimePicker
@@ -543,7 +647,7 @@ onScopeDispose(() => {
               :shortcuts="expiryShortcuts"
               :min="formatLocalDateTime(Date.now())"
               size="sm"
-              :disabled="pending"
+              :disabled="locked"
               :error="fieldError('expires')"
             />
           </AppFormSection>
@@ -644,7 +748,7 @@ onScopeDispose(() => {
           <AccessKeyQuotaEditor
             v-model="draft.rules"
             :runtime="base?.cost_limit_status"
-            :disabled="pending"
+            :disabled="locked"
             :reset-disabled="dirty"
             :error="fieldError('rules')"
             @reset="openReset"
@@ -657,14 +761,15 @@ onScopeDispose(() => {
                 :description="t('accessKeys.rpmHelp')"
                 inputmode="numeric"
                 size="sm"
-                :disabled="pending"
+                :disabled="locked"
                 :error="fieldError('rpm')"
               /><AppTextField
+                v-if="platform"
                 v-model="draft.price"
                 :label="t('accessKeys.multiplier')"
                 inputmode="decimal"
                 size="sm"
-                :disabled="pending"
+                :disabled="locked"
                 :error="fieldError('price')"
               />
             </div>
@@ -679,7 +784,7 @@ onScopeDispose(() => {
                 ]"
                 appearance="field"
                 size="sm"
-                :disabled="pending"
+                :disabled="locked"
               />
             </div>
             <AppTextArea
@@ -688,7 +793,7 @@ onScopeDispose(() => {
               :label="t('accessKeys.cidrs')"
               :description="t('accessKeys.cidrHelp')"
               :rows="3"
-              :disabled="pending"
+              :disabled="locked"
               :error="fieldError('cidrs')"
               placeholder="192.0.2.0/24"
               spellcheck="false"
@@ -705,7 +810,7 @@ onScopeDispose(() => {
             </div>
           </dl>
         </div>
-        <footer class="modern-access-editor-footer">
+        <footer v-if="writable" class="modern-access-editor-footer">
           <AppIconButton
             v-if="base"
             :icon="Trash2"

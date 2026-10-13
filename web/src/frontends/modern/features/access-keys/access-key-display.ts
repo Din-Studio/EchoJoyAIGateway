@@ -2,11 +2,14 @@ import { dateFormatter } from '@modern/components/ui/intl-formatters'
 import type { AccessKey } from '@modern/api/access-keys'
 import { formatNanoUSD } from '@modern/components/ui/format'
 import type { SemanticTone } from '@modern/components/ui'
-export function accessState(row: AccessKey & { expired?: boolean }): {
+export function accessState(
+  row: AccessKey & { expired?: boolean; blocked_by_team_grants?: boolean },
+): {
   key: string
   tone: SemanticTone
 } {
   if (row.status === 'disabled') return { key: 'disabled', tone: 'neutral' }
+  if (row.blocked_by_team_grants) return { key: 'blocked', tone: 'danger' }
   if (row.expired ?? (row.expires_at_ms !== null && row.expires_at_ms <= Date.now()))
     return { key: 'expired', tone: 'warning' }
   if (row.cost_limit_status?.allowed === false) return { key: 'exhausted', tone: 'danger' }

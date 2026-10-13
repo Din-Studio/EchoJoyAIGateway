@@ -8,7 +8,7 @@ import (
 	"gpt-load/internal/platform/version"
 )
 
-// The exact-map comparison also proves no DSN, AUTH_KEY, or encryption key
+// The exact-map comparison also proves no DSN, OIDC client secret, or encryption key
 // value is part of the response.
 func TestSystemInfoResponseReportsOnlyDeploymentFacts(t *testing.T) {
 	t.Parallel()
@@ -24,7 +24,6 @@ func TestSystemInfoResponseReportsOnlyDeploymentFacts(t *testing.T) {
 	want := map[string]any{
 		"version":    version.Version,
 		"deployment": map[string]any{"database": "postgres"},
-		"auth_key":   map[string]any{"source": "environment"},
 		"encryption": map[string]any{"source": "environment"},
 	}
 	if !reflect.DeepEqual(got, want) {

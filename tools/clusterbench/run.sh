@@ -24,8 +24,14 @@ if [ -z "${GPT_LOAD_IMAGE:-}" ]; then
   export GPT_LOAD_IMAGE="gpt-load:${COMPOSE_PROJECT_NAME}"
 fi
 export CLUSTERBENCH_IMAGE="gpt-load-clusterbench:${COMPOSE_PROJECT_NAME}"
-export AUTH_KEY="${AUTH_KEY:-bench-$(random_hex)}"
 export ENCRYPTION_KEY="${ENCRYPTION_KEY:-$(random_hex)}"
+# 验收不连 Casdoor：平台会话直接写入每个 Redis（见下方 session_key）。
+export PUBLIC_URL="http://gateway.bench"
+export OIDC_ISSUER="http://casdoor.invalid"
+export OIDC_CLIENT_ID="clusterbench"
+export OIDC_CLIENT_SECRET="${OIDC_CLIENT_SECRET:-$(random_hex)}"
+export CASDOOR_ORGANIZATION="clusterbench"
+export GATEWAY_SESSION="${GATEWAY_SESSION:-$(random_hex)}"
 export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(random_hex)}"
 
 compose=(docker compose -f docker-compose.cluster.yml -f tools/clusterbench/compose.yml)
@@ -49,6 +55,12 @@ if [ "${build_gateway}" = true ]; then
 fi
 docker build -f tools/clusterbench/Dockerfile -t "${CLUSTERBENCH_IMAGE}" .
 "${compose[@]}" up -d --wait --wait-timeout 300
+
+# 平台管理员会话：键是 cookie 的 SHA-256，检查时间取远未来，避免触发 Casdoor 刷新。
+session_key="gl:sess:$(printf '%s' "${GATEWAY_SESSION}" | openssl dgst -sha256 | awk '{print $NF}')"
+session_value='{"principal":{"user_id":"clusterbench","name":"clusterbench","platform":true,"teams":[],"admin_teams":[]},"checked_at_ms":4102444800000}'
+"${compose[@]}" exec -T redis-1 redis-cli -c SET "${session_key}" "${session_value}" EX 43200 >/dev/null
+"${compose[@]}" exec -T redis-single redis-cli SET "${session_key}" "${session_value}" EX 43200 >/dev/null
 
 case "${mode}" in
   e2e)

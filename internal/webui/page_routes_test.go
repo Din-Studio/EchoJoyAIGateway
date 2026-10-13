@@ -120,6 +120,7 @@ func TestEmbeddedPageRouteManifestContainsCurrentPages(t *testing.T) {
 		"monitor-inspector": "/monitor/inspector",
 		"models":            "/models",
 		"settings":          "/settings",
+		"teams":             "/teams",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("embedded routes = %#v, want %#v", got, want)

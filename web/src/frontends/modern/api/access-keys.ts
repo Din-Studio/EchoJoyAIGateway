@@ -28,6 +28,10 @@ export interface CostWindow extends CostRule {
 export interface AccessKey {
   id: number
   name: string
+  /** 所属团队；平台密钥为 null。 */
+  team_id: string | null
+  owner_user_id: string | null
+  owner_name: string | null
   masked_key: string
   status: 'active' | 'disabled'
   filters: AccessScope
@@ -47,6 +51,8 @@ export interface AccessKey {
 }
 export interface AccessKeyRow extends AccessKey {
   expired: boolean
+  /** 团队 key 的分组都未授权给团队，网关会拒绝它。 */
+  blocked_by_team_grants: boolean
   last_request_at_ms: number | null
   usage?: { request_count: number; total_tokens: number; estimated_cost_nano_usd: string }
 }
@@ -67,17 +73,22 @@ export interface AccessCollection {
 }
 export interface AccessInput {
   key?: string
+  /** 仅创建时发送；团队与负责人创建后不可修改。 */
+  team_id?: string
+  owner_user_id?: string
   name: string
   status: AccessKey['status']
   filters: AccessScope
   expires_at_ms: number | null
   rpm_limit: number
-  price_multiplier: string
+  /** 只有平台管理员能设置倍率。 */
+  price_multiplier?: string
   cost_limit_rules: CostRule[]
 }
 export const accessKeysKey = ['modern', 'access-keys'] as const
 export const accessDetailKey = (id: number) => ['modern', 'access-key-detail', id] as const
 const timestamp = (value: unknown) => (value == null ? null : integer(value))
+const optionalText = (value: unknown) => (value == null ? null : text(value))
 const decimal = (value: unknown) => {
   const result = text(value)
   if (!/^(0|[1-9]\d*)(\.\d{1,9})?$/.test(result)) throw new InvalidResponseError()
@@ -112,6 +123,9 @@ function readAccessKey(value: unknown): AccessKey {
   return {
     id: integer(row.id, 1),
     name: text(row.name),
+    team_id: optionalText(row.team_id),
+    owner_user_id: optionalText(row.owner_user_id),
+    owner_name: optionalText(row.owner_name),
     masked_key: text(row.masked_key),
     status: oneOf(row.status, ['active', 'disabled'] as const),
     filters: {
@@ -137,7 +151,7 @@ function readAccessKey(value: unknown): AccessKey {
     updated_at_ms: integer(row.updated_at_ms),
   }
 }
-export function readAccessKeyRow(value: unknown): AccessKeyRow {
+function readAccessKeyRow(value: unknown): AccessKeyRow {
   const row = record(value)
   const usage = row.usage == null ? undefined : record(row.usage)
   const cost = usage ? text(usage.estimated_cost_nano_usd) : undefined
@@ -145,6 +159,7 @@ export function readAccessKeyRow(value: unknown): AccessKeyRow {
   return {
     ...readAccessKey(row),
     expired: boolean(row.expired),
+    blocked_by_team_grants: boolean(row.blocked_by_team_grants),
     last_request_at_ms: timestamp(row.last_request_at_ms),
     ...(usage
       ? {

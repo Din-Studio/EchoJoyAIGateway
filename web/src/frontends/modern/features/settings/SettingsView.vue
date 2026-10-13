@@ -158,7 +158,7 @@ const visibleSections = computed(() =>
   sectionIDs.filter((id) => {
     const extra =
       id === 'system'
-        ? ['version', 'database', 'authKeySource', 'encryptionSource', 'encryption'].map((key) =>
+        ? ['version', 'database', 'encryptionSource', 'encryption'].map((key) =>
             t('settingsForm.system.' + key),
           )
         : []

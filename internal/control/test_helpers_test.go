@@ -263,12 +263,15 @@ func newServiceFixtureWithDatabase(t *testing.T, db *gorm.DB) serviceFixture {
 	}
 }
 
-// newTestServer builds a control server with the admin lockout on its own
-// in-process Redis.
+// newTestServer builds a control server whose sessions come from a stub
+// identity; see setTestPlatformSession.
 func newTestServer(t testing.TB, cfg *config.Config, service *Service) *Server {
 	t.Helper()
-	_, client := clustertest.NewClient(t)
-	return NewServer(cfg, service, cluster.NewAuthFailures(client))
+	withPublicURL := *cfg
+	if withPublicURL.OIDC.PublicURL == "" {
+		withPublicURL.OIDC.PublicURL = testPublicURL
+	}
+	return NewServer(&withPublicURL, service, newStubIdentity())
 }
 
 // newTestGatewaySharedState builds the gateway's Redis-backed request state on

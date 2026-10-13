@@ -227,7 +227,7 @@ func TestAuditMutationRecordsExactlyOneOutcome(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var logs bytes.Buffer
-			server := newTestServer(t, &config.Config{AuthKey: authTestKey}, nil)
+			server := newTestServer(t, &config.Config{}, nil)
 			server.logger = newControlJSONLogger(&logs)
 			engine := gin.New()
 			engine.POST(
@@ -286,7 +286,7 @@ func TestAuditMutationRecordsExactlyOneOutcome(t *testing.T) {
 func TestAuditMutationUsesSuccessfulLocatorOverride(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
-	server := newTestServer(t, &config.Config{AuthKey: authTestKey}, nil)
+	server := newTestServer(t, &config.Config{}, nil)
 	server.logger = newControlJSONLogger(&logs)
 	engine := gin.New()
 	engine.POST(
@@ -324,7 +324,7 @@ func TestAuditMutationLogsPanicThenRethrowsToRecovery(t *testing.T) {
 	t.Parallel()
 	const panicSecret = "sk-panic-audit-secret"
 	var logs bytes.Buffer
-	server := newTestServer(t, &config.Config{AuthKey: authTestKey}, nil)
+	server := newTestServer(t, &config.Config{}, nil)
 	server.logger = newControlJSONLogger(&logs)
 	engine := gin.New()
 	engine.Use(func(c *gin.Context) {
@@ -384,7 +384,7 @@ func TestAuditMutationLogsPanicThenRethrowsToRecovery(t *testing.T) {
 
 func TestAuditMutationLoggerPanicDoesNotChangeResponse(t *testing.T) {
 	t.Parallel()
-	server := newTestServer(t, &config.Config{AuthKey: authTestKey}, nil)
+	server := newTestServer(t, &config.Config{}, nil)
 	server.logger = logrus.New()
 	server.logger.AddHook(controlPanicLogHook{})
 	engine := gin.New()
@@ -420,7 +420,7 @@ func TestMutationAuditExcludesReadAndDiscoveryRoutes(t *testing.T) {
 	fixture := newServiceFixture(t)
 	var logs bytes.Buffer
 	server := newTestServer(t,
-		&config.Config{AuthKey: authTestKey},
+		&config.Config{},
 		fixture.service,
 	)
 	server.logger = newControlJSONLogger(&logs)
@@ -463,10 +463,7 @@ func TestMutationAuditExcludesReadAndDiscoveryRoutes(t *testing.T) {
 		)
 		request.Header.Set("Content-Type", "application/json")
 		if test.auth {
-			request.Header.Set(
-				"Authorization",
-				"Bearer "+authTestKey,
-			)
+			setTestPlatformSession(request)
 		}
 		engine.ServeHTTP(recorder, request)
 		if !test.auth && recorder.Code != http.StatusUnauthorized {
@@ -519,7 +516,38 @@ func assertMutationEvent(
 			t.Errorf("%s = %#v, want %#v; event=%#v", field, got, wantValue, event)
 		}
 	}
+	// The actor is whoever the session names; requests that reach the
+	// handler without a session log empty strings.
+	for _, field := range []string{"actor_user_id", "actor_name"} {
+		if _, ok := event[field].(string); !ok {
+			t.Errorf("%s = %#v, want a string; event=%#v", field, event[field], event)
+		}
+		want[field] = event[field]
+	}
 	if len(event) != len(want) {
 		t.Errorf("event field count = %d, want %d: %#v", len(event), len(want), event)
+	}
+}
+
+func TestAuditMutationRecordsTheSignedInActor(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	server := newTestServer(t, &config.Config{}, nil)
+	server.logger = newControlJSONLogger(&logs)
+	engine := gin.New()
+	engine.POST(
+		"/probe",
+		func(c *gin.Context) {
+			c.Set(controlPeerContextKey, "192.0.2.74")
+			c.Set(controlPrincipalContextKey, testTeamAdminPrincipal)
+		},
+		server.auditMutation(newMutationDescriptor("probe_create", "probe", staticMutationLocator("new"))),
+		func(c *gin.Context) { c.Status(http.StatusOK) },
+	)
+	engine.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/probe", nil))
+
+	events := controlEventsNamed(decodeControlJSONLogs(t, logs.Bytes()), "mutation")
+	if len(events) != 1 || events[0]["actor_user_id"] != "uid-alice" || events[0]["actor_name"] != "alice" {
+		t.Fatalf("mutation events = %#v, want actor alice", events)
 	}
 }

@@ -28,6 +28,13 @@ func (s *Server) handleListAccessKeyCollection(c *gin.Context) {
 		writeServiceError(c, "list_access_keys", apiErr)
 		return
 	}
+	principal, _ := currentPrincipal(c)
+	scope, err := s.service.scopedAccessKeyIDs(c.Request.Context(), principal)
+	if err != nil {
+		writeServiceError(c, "list_access_keys", err)
+		return
+	}
+	query.ScopeAccessKeyIDs = scope
 	result, err := s.service.ListAccessKeyCollection(c.Request.Context(), query)
 	if err != nil {
 		writeServiceError(c, "list_access_keys", err)

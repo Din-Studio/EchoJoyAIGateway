@@ -47,11 +47,11 @@ const state = useURLState(
   ['client', 'access_key_id'],
   (query) => ({
     client: gatewayClients.find((client) => client.id === query.client)?.id ?? 'codex',
-    id: props.admin ? positivePage(query.access_key_id, 0) : 0,
+    id: positivePage(query.access_key_id, 0),
   }),
   (value) => ({
     client: value.client === 'codex' ? undefined : value.client,
-    access_key_id: props.admin && value.id ? String(value.id) : undefined,
+    access_key_id: value.id ? String(value.id) : undefined,
   }),
 )
 // 链接中明确指定的选择优先；普通返回首页时恢复浏览器记忆。
@@ -105,7 +105,7 @@ watch(
   ([client, id, target, model]) =>
     rememberGatewayPreferences(props.admin, {
       client,
-      accessKeyID: props.admin ? (id ?? state.value.id) : 0,
+      accessKeyID: id ?? state.value.id,
       target,
       model,
     }),
@@ -128,9 +128,7 @@ async function resolveKey(): Promise<string> {
   controller = request
   const current = signature.value
   const revision = session.getRevision()
-  const secret = props.admin
-    ? await revealAccessKey(client, key.value.id, request.signal)
-    : session.getAuthKey()
+  const secret = await revealAccessKey(client, key.value.id, request.signal)
   if (request.signal.aborted || current !== signature.value || revision !== session.getRevision())
     throw new RequestCancelledError()
   return secret
@@ -196,11 +194,11 @@ async function importClient(): Promise<void> {
         />
         <div class="modern-connect-main">
           <div
-            v-if="admin || selectedClient.id === 'cc-switch' || needsModel || quickImport"
+            v-if="keys.length > 0 || selectedClient.id === 'cc-switch' || needsModel || quickImport"
             class="modern-connect-controls"
           >
             <AppSearchSelect
-              v-if="admin"
+              v-if="keys.length > 0"
               v-model="selectedKey"
               :label="t('home.accessKey')"
               :options="keyOptions"

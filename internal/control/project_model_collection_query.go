@@ -36,7 +36,9 @@ type ProjectModelListQuery struct {
 	Search        string
 	Page          int64
 	PageSize      int64
-	AccessKeyID   *uint
+	// ScopeAccessKeyIDs narrows the collection to what these keys can route;
+	// nil means the whole project.
+	ScopeAccessKeyIDs []uint
 }
 
 func parseProjectModelListQuery(rawQuery string, forceQuery bool) (ProjectModelListQuery, *errors.APIError) {
@@ -118,8 +120,7 @@ func validateProjectModelListQuery(query ProjectModelListQuery) error {
 		utf8.RuneCountInString(query.Search) > maxProjectModelSearchRunes {
 		return errors.ErrValidation
 	}
-	if query.AccessKeyID != nil &&
-		(*query.AccessKeyID == 0 || query.GroupStatus != ProjectModelGroupStatusEnabled) {
+	if query.ScopeAccessKeyIDs != nil && query.GroupStatus != ProjectModelGroupStatusEnabled {
 		return errors.ErrValidation
 	}
 	return nil

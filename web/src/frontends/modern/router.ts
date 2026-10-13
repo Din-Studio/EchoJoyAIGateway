@@ -6,7 +6,7 @@ import { loginLocation } from './app/redirect'
 import type { AuthSession } from './features/auth/auth-session'
 
 export function createModernRouter(
-  session: Pick<AuthSession, 'hasCredential' | 'getPrincipalType'>,
+  session: Pick<AuthSession, 'isAnonymous' | 'isValidated' | 'isPlatformAdmin'>,
   history: RouterHistory = createWebHistory(),
 ) {
   const router = createRouter({
@@ -32,7 +32,9 @@ export function createModernRouter(
                       ? () => import('./features/usage/UsageView.vue')
                       : item.id === 'health'
                         ? () => import('./features/health/HealthView.vue')
-                        : () => import('./features/models/ModelsView.vue'),
+                        : item.id === 'teams'
+                          ? () => import('./features/teams/TeamsView.vue')
+                          : () => import('./features/models/ModelsView.vue'),
         meta: { requiresAuth: true, adminOnly: item.adminOnly },
       })),
       {
@@ -97,8 +99,8 @@ export function createModernRouter(
   })
   router.beforeEach((to) => {
     if (!to.meta.requiresAuth) return true
-    if (!session.hasCredential()) return loginLocation(to.fullPath)
-    if (to.meta.adminOnly && session.getPrincipalType() === 'access_key') {
+    if (session.isAnonymous()) return loginLocation(to.fullPath)
+    if (to.meta.adminOnly && session.isValidated() && !session.isPlatformAdmin()) {
       return { name: 'modern-home' }
     }
     if (

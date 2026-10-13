@@ -47,8 +47,12 @@ services:
       HOST: 0.0.0.0
       PORT: "3001"
       DATABASE_DSN: postgres://gpt_load:${POSTGRES_PASSWORD}@postgres-single:5432/gpt_load?sslmode=disable
-      AUTH_KEY: ${AUTH_KEY}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      PUBLIC_URL: ${PUBLIC_URL}
+      OIDC_ISSUER: ${OIDC_ISSUER}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      CASDOOR_ORGANIZATION: ${CASDOOR_ORGANIZATION}
       REDIS_ADDRS: redis-single:6379
     depends_on:
       postgres-single:
@@ -89,7 +93,8 @@ services:
     <<: *clusterbench
     profiles: [tools]
     environment:
-      AUTH_KEY: ${AUTH_KEY}
+      GATEWAY_SESSION: ${GATEWAY_SESSION}
+      PUBLIC_URL: ${PUBLIC_URL}
       GATEWAY_CPUS: ${GATEWAY_CPUS:-1}
 
   # 在真实 Redis Cluster 上运行现有的 TestExternal* 合同测试。宿主机无法解析

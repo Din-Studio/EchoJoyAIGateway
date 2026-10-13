@@ -345,7 +345,7 @@ func TestModelPriceHTTPUpdateIgnoresIfMatch(t *testing.T) {
 		fmt.Sprintf("/api/model-prices/%d", row.ID),
 		bytes.NewBufferString(modelPriceHTTPUpdateBody(`"1"`, "false")),
 	)
-	request.Header.Set("Authorization", "Bearer "+authTestKey)
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("If-Match", `"1"`)
 	engine.ServeHTTP(recorder, request)
@@ -562,7 +562,7 @@ func newModelPriceHTTPFixture(
 		}
 	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	return fixture, engine, row
 }
 
@@ -588,7 +588,7 @@ func serveModelPriceHTTPRequestWithLanguage(
 	request := httptest.NewRequest(method, path, bytes.NewBufferString(body))
 	request.Header.Set("Content-Type", "application/json")
 	if authKey != "" {
-		request.Header.Set("Authorization", "Bearer "+authKey)
+		setTestSession(request, authKey)
 	}
 	if language != "" {
 		request.Header.Set("Accept-Language", language)

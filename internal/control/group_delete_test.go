@@ -334,7 +334,7 @@ func TestDeleteGroupEndpointAuthenticationValidationNotFoundConflictAndSuccess(t
 	fixture := newServiceFixture(t)
 	groupID := createGroupWithCredentials(t, fixture, "sk-delete-http")
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	path := "/api/groups/" + strconv.FormatUint(uint64(groupID), 10)
 
 	unauthorized := httptest.NewRecorder()
@@ -346,7 +346,7 @@ func TestDeleteGroupEndpointAuthenticationValidationNotFoundConflictAndSuccess(t
 	for _, rawID := range []string{"0", "not-a-number", "18446744073709551616"} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodDelete, "/api/groups/"+rawID, nil)
-		request.Header.Set("Authorization", "Bearer test-auth-key")
+		setTestPlatformSession(request)
 		engine.ServeHTTP(recorder, request)
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("bad ID %q response = %d, want 400", rawID, recorder.Code)
@@ -355,7 +355,7 @@ func TestDeleteGroupEndpointAuthenticationValidationNotFoundConflictAndSuccess(t
 
 	notFound := httptest.NewRecorder()
 	notFoundRequest := httptest.NewRequest(http.MethodDelete, "/api/groups/999", nil)
-	notFoundRequest.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(notFoundRequest)
 	notFoundRequest.Header.Set("Accept-Language", "ja-JP")
 	engine.ServeHTTP(notFound, notFoundRequest)
 	assertDeleteGroupEnvelope(t, notFound, http.StatusNotFound, "NOT_FOUND", "グループが存在しません")
@@ -381,7 +381,7 @@ func TestDeleteGroupEndpointAuthenticationValidationNotFoundConflictAndSuccess(t
 		}
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodDelete, path, nil)
-		request.Header.Set("Authorization", "Bearer test-auth-key")
+		setTestPlatformSession(request)
 		request.Header.Set("Accept-Language", test.language)
 		engine.ServeHTTP(recorder, request)
 		assertDeleteGroupEnvelope(t, recorder, http.StatusConflict, "GROUP_IN_USE", test.message)
@@ -396,7 +396,7 @@ func TestDeleteGroupEndpointAuthenticationValidationNotFoundConflictAndSuccess(t
 
 	success := httptest.NewRecorder()
 	successRequest := httptest.NewRequest(http.MethodDelete, path, nil)
-	successRequest.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(successRequest)
 	engine.ServeHTTP(success, successRequest)
 	if success.Code != http.StatusOK {
 		t.Fatalf("success response = %d: %s", success.Code, success.Body.String())

@@ -210,7 +210,7 @@ func TestQueryUsageMinuteFiltersFinalAttributionAndAccessKey(t *testing.T) {
 	groupID, credentialID, accessKeyID := uint(7), uint(11), uint(41)
 	query := minuteUsageQuery(start)
 	query.GroupID, query.ChannelID, query.CredentialID = &groupID, channel.OpenAI, &credentialID
-	query.AccessKeyID, query.UpstreamModel = &accessKeyID, "final-model"
+	query.ScopeAccessKeyIDs, query.UpstreamModel = []uint{accessKeyID}, "final-model"
 	query.SelfScoped = true
 	for _, span := range []time.Duration{time.Hour, 3 * time.Hour, 6 * time.Hour} {
 		t.Run(span.String(), func(t *testing.T) {

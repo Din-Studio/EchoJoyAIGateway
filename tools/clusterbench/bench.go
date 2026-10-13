@@ -51,10 +51,13 @@ func runBench(ctx context.Context, args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	authKey := os.Getenv("AUTH_KEY")
+	current, sessionErr := sessionFromEnv()
 	cluster := splitList(*instances)
-	if authKey == "" || len(cluster) == 0 {
-		return errors.New("bench needs AUTH_KEY and -instances")
+	if sessionErr != nil {
+		return sessionErr
+	}
+	if len(cluster) == 0 {
+		return errors.New("bench needs -instances")
 	}
 	singleURL, lbURL := strings.TrimRight(*single, "/"), strings.TrimRight(*lb, "/")
 
@@ -66,11 +69,11 @@ func runBench(ctx context.Context, args []string) error {
 
 	suffix := fmt.Sprintf("bench-%d", time.Now().UnixNano())
 	adminHTTP := &http.Client{Timeout: 30 * time.Second}
-	singleSet, err := seed(ctx, adminClient{baseURL: singleURL, authKey: authKey, http: adminHTTP}, []string{singleURL}, *upstream, suffix)
+	singleSet, err := seed(ctx, adminClient{baseURL: singleURL, session: current, http: adminHTTP}, []string{singleURL}, *upstream, suffix)
 	if err != nil {
 		return fmt.Errorf("seed single instance: %w", err)
 	}
-	clusterSet, err := seed(ctx, adminClient{baseURL: cluster[0], authKey: authKey, http: adminHTTP}, append([]string{lbURL}, cluster...), *upstream, suffix)
+	clusterSet, err := seed(ctx, adminClient{baseURL: cluster[0], session: current, http: adminHTTP}, append([]string{lbURL}, cluster...), *upstream, suffix)
 	if err != nil {
 		return fmt.Errorf("seed cluster: %w", err)
 	}

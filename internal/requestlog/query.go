@@ -44,8 +44,8 @@ func (service *Service) List(ctx context.Context, input ListQuery) (Page, error)
 	if input.ModelConsistency != "" {
 		query = query.Where("model_consistency = ?", input.ModelConsistency)
 	}
-	if input.AccessKeyID != nil {
-		query = query.Where("access_key_id = ?", *input.AccessKeyID)
+	if input.ScopeAccessKeyIDs != nil {
+		query = query.Where("access_key_id IN ?", input.ScopeAccessKeyIDs)
 	}
 	if input.Status != "" {
 		query = query.Where("status = ?", input.Status)

@@ -18,6 +18,9 @@ type AccessKeyCollectionItem struct {
 	Usage           *usageDistributionAggregateResponse `json:"usage,omitempty"`
 	LastRequestAtMS *int64                              `json:"last_request_at_ms"`
 	Expired         bool                                `json:"expired"`
+	// BlockedByTeamGrants marks an active team key that cannot route because
+	// none of its groups is granted to its team; the data plane rejects it.
+	BlockedByTeamGrants bool `json:"blocked_by_team_grants"`
 }
 
 type AccessKeyCollectionSummary struct {
@@ -53,6 +56,9 @@ type accessKeyCollectionRecord struct {
 }
 
 type accessKeyCollectionRow struct {
+	TeamID                *string
+	OwnerUserID           *string
+	OwnerName             *string
 	KeyPrefix             string
 	PriceMultiplierMicros *int64
 	ID                    uint
@@ -89,7 +95,7 @@ func (s *Service) ListAccessKeyCollection(
 		FromMS: fromMS, ToMS: toMS,
 		Granularity: requestlog.UsageGranularityHour, BucketWidthMS: 6 * epochms.MillisecondsPerHour,
 	}
-	records, err := s.captureAccessKeyCollectionRecords(ctx, usageQuery, observedAt)
+	records, err := s.captureAccessKeyCollectionRecords(ctx, usageQuery, query.ScopeAccessKeyIDs, observedAt)
 	if err != nil {
 		return AccessKeyCollectionResponse{}, err
 	}
@@ -102,6 +108,7 @@ func (s *Service) ListAccessKeyCollection(
 		if status := mapAccessKeyCostLimitStatus(view); len(status.Rules) > 0 {
 			records[index].CostLimitStatus = &status
 		}
+		records[index].BlockedByTeamGrants = teamKeyBlocked(snapshot, records[index].AccessKeyMetadata)
 	}
 	result := queryAccessKeyCollectionRecords(records, query)
 	result.UsageWindow = &AccessKeyUsageWindow{ObservedAtMS: observedAtMS, Range: "7d", FromMS: usageQuery.FromMS, ToMS: usageQuery.ToMS}
@@ -110,7 +117,7 @@ func (s *Service) ListAccessKeyCollection(
 
 func (s *Service) captureAccessKeyCollectionRecords(
 	ctx context.Context,
-	usageQuery requestlog.UsageQuery, observedAt time.Time,
+	usageQuery requestlog.UsageQuery, scope []uint, observedAt time.Time,
 ) ([]accessKeyCollectionRecord, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -131,11 +138,16 @@ func (s *Service) captureAccessKeyCollectionRecords(
 	var costLimitRows []models.AccessKeyCostLimitRule
 	var usageByKey map[uint]requestlog.UsageAggregate
 	if err := s.withReadSnapshot(ctx, func(tx *gorm.DB) error {
-		if err := tx.Model(&models.AccessKey{}).
+		keys := tx.Model(&models.AccessKey{})
+		if scope != nil {
+			keys = keys.Where("access_keys.id IN ?", scope)
+		}
+		if err := keys.
 			Select(
 				"access_keys.id", "access_keys.name", "access_keys.key_prefix", "access_keys.key_suffix",
 				"access_keys.status", "access_keys.filters", "access_keys.rpm_limit",
 				"access_keys.expires_at_ms", "access_keys.price_multiplier_micros",
+				"access_keys.team_id", "access_keys.owner_user_id", "access_keys.owner_name",
 				"access_keys.created_at_ms", "access_keys.updated_at_ms",
 				"(SELECT MAX(request_logs.completed_at_ms) FROM request_logs WHERE request_logs.access_key_id = access_keys.id) AS last_request_at_ms",
 			).
@@ -168,6 +180,9 @@ func (s *Service) captureAccessKeyCollectionRecords(
 	}
 	for _, row := range rows {
 		metadata, err := mapAccessKeyMetadataRow(accessKeyMetadataRow{
+			TeamID:                row.TeamID,
+			OwnerUserID:           row.OwnerUserID,
+			OwnerName:             row.OwnerName,
 			PriceMultiplierMicros: row.PriceMultiplierMicros,
 			ID:                    row.ID,
 			Name:                  row.Name,

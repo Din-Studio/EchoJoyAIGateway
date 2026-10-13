@@ -3,6 +3,7 @@ import { dateFormatter } from '@modern/components/ui/intl-formatters'
 import {
   ChartNoAxesCombined,
   CopyPlus,
+  Eye,
   KeyRound,
   Pencil,
   Plus,
@@ -12,7 +13,7 @@ import {
   Share2,
   Trash2,
 } from '@lucide/vue'
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/vue-query'
+import { keepPreviousData, useQueries, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { computed, onScopeDispose, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -29,6 +30,8 @@ import {
   type AccessKeyRow,
 } from '@modern/api/access-keys'
 import { getGroupWorkspace, groupQueryKey } from '@modern/api/groups'
+import { getTeam, teamDetailKey } from '@modern/api/teams'
+import { useAuthSession } from '@modern/features/auth/auth-session'
 import { useMessages, useMessageSource } from '@modern/app/messages'
 import { usePageRefresh } from '@modern/app/page-refresh'
 import { positivePage, useURLState } from '@modern/app/url-state'
@@ -66,6 +69,12 @@ const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const client = useApiClient()
+const session = useAuthSession()
+const platform = computed(() => session.state.platform)
+// 平台管理员与团队管理员可以创建密钥；成员只能查看自己的密钥。
+const canCreate = computed(() => platform.value || session.state.adminTeams.length > 0)
+const writable = (row: AccessKey) =>
+  platform.value || (row.team_id !== null && session.state.adminTeams.includes(row.team_id))
 const cache = useQueryClient()
 const messages = useMessages()
 const controller = new AbortController()
@@ -112,9 +121,30 @@ const query = useQuery(
 const groups = useQuery({
   queryKey: groupQueryKey,
   queryFn: ({ signal }) => getGroupWorkspace(client, signal),
+  enabled: platform,
 })
 const groupMap = computed(
   () => new Map(groups.data.value?.items.map((row) => [String(row.id), row])),
+)
+// 非平台用户看不到分组目录，分组名称取自所管理团队的授权。
+const teamDetails = useQueries({
+  queries: computed(() =>
+    platform.value
+      ? []
+      : session.state.adminTeams.map((team) => ({
+          queryKey: teamDetailKey(team),
+          queryFn: ({ signal }: { signal: AbortSignal }) => getTeam(client, team, signal),
+        })),
+  ),
+})
+const restrictionGroups = computed<ReadonlyMap<string, { name: string }>>(() =>
+  platform.value
+    ? groupMap.value
+    : new Map(
+        teamDetails.value.flatMap((result) =>
+          (result.data?.groups ?? []).map((group) => [String(group.id), group] as const),
+        ),
+      ),
 )
 const groupOptions = computed(() => [
   { value: '', label: t('accessKeys.allGroups') },
@@ -232,10 +262,14 @@ function openCreate(): void {
   void setPanel('create')
 }
 function menus(row: AccessKeyRow) {
-  return [
+  const reads = [
     { id: 'logs', label: t('accessKeys.viewLogs'), icon: ScrollText },
     { id: 'usage', label: t('accessKeys.viewUsage'), icon: ChartNoAxesCombined },
     { id: 'share', label: t('accessKeys.handoff'), icon: Share2 },
+  ]
+  if (!writable(row)) return reads
+  return [
+    ...reads,
     { id: 'copy', label: t('accessKeys.copyConfig'), icon: CopyPlus },
     {
       id: 'reset',
@@ -395,6 +429,7 @@ onScopeDispose(() => {
         @compositionend="compositionEnd"
       />
       <AppSearchSelect
+        v-if="platform"
         class="modern-access-filter"
         :model-value="filters.group"
         :label="t('accessKeys.groupFilter')"
@@ -428,9 +463,14 @@ onScopeDispose(() => {
           :options="sorts"
           :disabled="busy"
           @update:model-value="change({ sort: $event as AccessFilters['sort'] })"
-        /><AppButton :icon="Plus" variant="primary" :disabled="busy" @click="openCreate">{{
-          t('accessKeys.create')
-        }}</AppButton>
+        /><AppButton
+          v-if="canCreate"
+          :icon="Plus"
+          variant="primary"
+          :disabled="busy"
+          @click="openCreate"
+          >{{ t('accessKeys.create') }}</AppButton
+        >
       </div>
     </form>
     <div class="modern-access-filterbar">
@@ -469,7 +509,7 @@ onScopeDispose(() => {
         :description="summary.length ? undefined : t('accessKeys.emptyHelp')"
         :icon="KeyRound"
         ><AppButton v-if="summary.length" @click="reset()">{{ t('collection.reset') }}</AppButton
-        ><AppButton v-else :icon="Plus" variant="brand" @click="openCreate">{{
+        ><AppButton v-else-if="canCreate" :icon="Plus" variant="brand" @click="openCreate">{{
           t('accessKeys.create')
         }}</AppButton></AppCollectionState
       >
@@ -484,6 +524,9 @@ onScopeDispose(() => {
           <AppButton variant="text" @click="setPanel('detail', row.id)"
             ><AppOverflowText :text="row.name"
           /></AppButton>
+          <span v-if="row.team_id" class="modern-access-ownership"
+            >{{ row.team_id }} · {{ row.owner_name ?? row.owner_user_id }}</span
+          >
         </div>
         <div class="modern-access-key">
           <AppCopyValue
@@ -493,7 +536,7 @@ onScopeDispose(() => {
             :label="t('accessKeys.copy')"
           />
         </div>
-        <AccessKeyRestrictions :row="row" :groups="groupMap" />
+        <AccessKeyRestrictions :row="row" :groups="restrictionGroups" />
         <div>
           <AppBadge :tone="accessState(row).tone" variant="plain" size="xs" dot>{{
             t('accessKeys.' + accessState(row).key)
@@ -524,8 +567,8 @@ onScopeDispose(() => {
         </div>
         <div class="modern-access-row-actions">
           <AppIconButton
-            :icon="Pencil"
-            :label="t('accessKeys.edit')"
+            :icon="writable(row) ? Pencil : Eye"
+            :label="t(writable(row) ? 'accessKeys.edit' : 'accessKeys.view')"
             size="xs"
             :disabled="mutating.has(row.id)"
             @click="setPanel('detail', row.id)"
@@ -540,7 +583,7 @@ onScopeDispose(() => {
             :model-value="row.status === 'active'"
             :label="t('accessKeys.active')"
             :loading="mutating.has(row.id)"
-            :disabled="mutating.has(row.id)"
+            :disabled="mutating.has(row.id) || !writable(row)"
             @update:model-value="toggle(row, $event)"
           />
         </div>
@@ -668,6 +711,14 @@ onScopeDispose(() => {
 .modern-access-name :deep(.modern-button) {
   max-width: 100%;
   font-weight: var(--modern-weight-medium);
+}
+.modern-access-ownership {
+  display: block;
+  overflow: hidden;
+  color: var(--modern-muted);
+  font-size: var(--modern-font-size-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .modern-access-key {
   font-family: var(--modern-font-mono);

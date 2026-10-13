@@ -22,6 +22,7 @@ import (
 	"gpt-load/internal/gateway"
 	"gpt-load/internal/health"
 	"gpt-load/internal/httplifecycle"
+	"gpt-load/internal/identity"
 	"gpt-load/internal/outboundproxy"
 	"gpt-load/internal/platform/config"
 	"gpt-load/internal/platform/encryption"
@@ -72,7 +73,8 @@ func BuildContainer() (*dig.Container, error) {
 		cluster.NewRefreshLease,
 		cluster.NewJobLease,
 		cluster.NewCatalogStore,
-		cluster.NewAuthFailures,
+		identity.NewService,
+		func(service *identity.Service) control.Identity { return service },
 		func(shared *cluster.CredentialHealth) state.SharedCredentialHealthStore { return shared },
 		func(lease *cluster.RefreshLease) subscription.RefreshLease { return lease },
 		func(client *cluster.Client, db *gorm.DB) *cluster.AccessQuota {
@@ -198,9 +200,9 @@ func BuildContainer() (*dig.Container, error) {
 			cfg *config.Config,
 			service *control.Service,
 			checker *releasecheck.Checker,
-			sharedAuthFailures *cluster.AuthFailures,
+			identityService control.Identity,
 		) *control.Server {
-			return control.NewServerWithReleaseUpdateChecker(cfg, service, checker, sharedAuthFailures)
+			return control.NewServerWithReleaseUpdateChecker(cfg, service, checker, identityService)
 		},
 		newHTTPRegistry,
 		func(
@@ -340,11 +342,13 @@ func (reconciler runtimeSnapshotReconciler) ReconcileConfigSnapshot(snapshot *st
 func newHTTPRegistry(
 	gatewayHandler *gateway.Handler,
 	controlServer *control.Server,
+	identityService *identity.Service,
 	webUIServer *webui.Server,
 	probe app.ReadinessProbe,
 ) (*httproute.Registry, error) {
 	return httproute.NewRegistry(
 		app.HTTPModule(probe),
+		identityService.HTTPModule(),
 		controlServer.HTTPModule(),
 		gatewayHandler.HTTPModule(),
 		webUIServer.HTTPModule(),

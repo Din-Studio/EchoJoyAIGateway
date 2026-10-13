@@ -11,8 +11,12 @@ import (
 
 // composeRequiredDotEnv 提供默认 compose 用 ${VAR:?} 声明的必填值，否则 compose config 直接失败。
 const composeRequiredDotEnv = "POSTGRES_PASSWORD=compose-test-postgres\n" +
-	"AUTH_KEY=compose-test-auth\n" +
-	"ENCRYPTION_KEY=compose-test-encryption\n"
+	"ENCRYPTION_KEY=compose-test-encryption\n" +
+	"PUBLIC_URL=http://gateway.test\n" +
+	"OIDC_ISSUER=http://casdoor.test\n" +
+	"OIDC_CLIENT_ID=compose-test-client\n" +
+	"OIDC_CLIENT_SECRET=compose-test-secret\n" +
+	"CASDOOR_ORGANIZATION=echojoy\n"
 
 func TestComposeShellPortOverridesDotEnvEverywhere(t *testing.T) {
 	t.Setenv("HOST", "")
@@ -564,7 +568,7 @@ func TestComposeRunsStatelessGatewayOnPostgresAndRedisWithMajorChannelImage(t *t
 	if got := service.Environment["REDIS_ADDRS"]; got != "redis:6379" {
 		t.Fatalf("resolved REDIS_ADDRS = %q, want redis:6379", got)
 	}
-	if service.Environment["AUTH_KEY"] != "compose-test-auth" ||
+	if service.Environment["OIDC_CLIENT_SECRET"] != "compose-test-secret" ||
 		service.Environment["ENCRYPTION_KEY"] != "compose-test-encryption" {
 		t.Fatalf("resolved secrets do not come from .env: %#v", service.Environment)
 	}
@@ -611,7 +615,7 @@ func TestComposeRunsStatelessGatewayOnPostgresAndRedisWithMajorChannelImage(t *t
 }
 
 func TestComposeRejectsMissingRequiredSecrets(t *testing.T) {
-	for _, missing := range []string{"POSTGRES_PASSWORD", "AUTH_KEY", "ENCRYPTION_KEY"} {
+	for _, missing := range []string{"POSTGRES_PASSWORD", "ENCRYPTION_KEY", "PUBLIC_URL", "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "CASDOOR_ORGANIZATION"} {
 		t.Run(missing, func(t *testing.T) {
 			projectDir := t.TempDir()
 			if err := os.WriteFile(

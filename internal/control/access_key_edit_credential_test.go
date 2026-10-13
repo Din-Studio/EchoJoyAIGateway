@@ -245,7 +245,7 @@ func TestEditAccessKeyEmptyPreservesCredentialAndInvalidInputRollsBack(t *testin
 	for index, test := range []struct {
 		key    string
 		status int
-	}{{"duplicate-key-value", 409}, {"two words", 400}, {authTestKey, 400}} {
+	}{{"duplicate-key-value", 409}, {"two words", 400}} {
 		body, err := json.Marshal(map[string]string{"name": "must-rollback", "key": test.key})
 		if err != nil {
 			t.Fatal(err)

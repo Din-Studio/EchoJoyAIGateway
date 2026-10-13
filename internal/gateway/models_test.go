@@ -55,6 +55,7 @@ func TestVisibleModelIDs(t *testing.T) {
 		{name: "disabled group model absent", snapshot: snapshot, value: protocol.Gemini, want: []string{"alpha", "beta", "first-alias", "second-alias", "zeta"}},
 		{name: "responses uses channel capabilities", snapshot: snapshot, value: protocol.OpenAIResponses, want: []string{"alpha", "beta", "first-alias", "second-alias", "zeta"}},
 		{name: "nil snapshot", snapshot: nil, value: protocol.OpenAICompletions, want: []string{}},
+		{name: "disabled key sees nothing", snapshot: snapshot, accessKey: state.AccessKeyView{Status: state.AccessKeyStatusDisabled}, value: protocol.OpenAICompletions, want: []string{}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

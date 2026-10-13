@@ -12,15 +12,18 @@ export interface ErrorEnvelope<T = unknown> {
   data?: T
 }
 
-export type AuthPrincipalType = 'admin' | 'access_key'
-
-export interface AuthSessionPayload {
-  authenticated: boolean
-  principal_type: AuthPrincipalType
+export interface AuthSessionUser {
+  id: string
+  name: string
+  display_name: string
+  email: string
 }
 
-export interface AuthLockedPayload {
-  retry_after_seconds: number
+export interface AuthSessionPayload {
+  user: AuthSessionUser
+  teams: string[]
+  platform: boolean
+  admin_teams: string[]
 }
 
 export type { AppLocale }

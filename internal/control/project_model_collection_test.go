@@ -95,7 +95,7 @@ func TestProjectModelsSeparateSameUpstreamModelByChannelAndDetail(t *testing.T) 
 	}
 }
 
-func TestProjectModelsHTTPScopesAccessKeyFiltersAndRelationships(t *testing.T) {
+func TestProjectModelsHTTPScopesMemberKeyFiltersAndRelationships(t *testing.T) {
 	t.Parallel()
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
@@ -150,16 +150,11 @@ func TestProjectModelsHTTPScopesAccessKeyFiltersAndRelationships(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAccessKey() error = %v", err)
 	}
+	assignTestTeamKey(t, fixture, created.ID, "team-a", testMemberPrincipal.UserID)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
-	recorder := serveAuthRequest(
-		engine,
-		"/api/models?group_status=all&page_size=100",
-		"192.0.2.90:1234",
-		"Bearer "+created.Key,
-		nil,
-	)
+	recorder := serveSessionRequest(engine, http.MethodGet, "/api/models?group_status=all&page_size=100", testMemberSession)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("AccessKey models = %d %s, want 200", recorder.Code, recorder.Body.String())
 	}

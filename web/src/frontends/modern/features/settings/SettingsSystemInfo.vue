@@ -81,14 +81,12 @@ const updateMessage = computed(() => {
           }}</AppBadge>
         </dd>
       </div>
-      <div
-        v-for="key in ['authKey', 'encryption'] as const"
-        :key="key"
-        class="modern-settings-system-wide"
-      >
-        <dt>{{ t('settingsForm.system.' + key + 'Source') }}</dt>
+      <div class="modern-settings-system-wide">
+        <dt>{{ t('settingsForm.system.encryptionSource') }}</dt>
         <dd>
-          <AppBadge size="xs">{{ t('settingsForm.system.sources.' + data[key].source) }}</AppBadge>
+          <AppBadge size="xs">{{
+            t('settingsForm.system.sources.' + data.encryption.source)
+          }}</AppBadge>
         </dd>
       </div>
     </dl>

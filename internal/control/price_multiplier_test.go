@@ -85,11 +85,6 @@ func TestPriceMultiplierGroupAndAccessKeyConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertPriceMultiplierJSON(t, preservedGroup, "1000")
-	home, err := fixture.service.ReadAccessKeyHomeBase(t.Context(), fixture.service.now().UnixMilli(), key.ID)
-	if err != nil || home.CurrentAccessKey == nil {
-		t.Fatalf("access key home = %#v, %v", home, err)
-	}
-	assertPriceMultiplierJSON(t, home.CurrentAccessKey, "1.25")
 	rotated, err := fixture.service.RotateAccessKeyIdempotent(t.Context(), "218f47a2-9c35-4d6e-8b1a-123456789011", key.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +103,7 @@ func TestPriceMultiplierLegacyAccessKeyResultsReplayOriginalDefault(t *testing.T
 			const idempotencyKey = "218f47a2-9c35-4d6e-8b1a-123456789012"
 			var id uint
 			if operation == "create" {
-				created, err := fixture.service.CreateAccessKeyIdempotent(t.Context(), idempotencyKey, request)
+				created, err := fixture.service.CreateAccessKeyIdempotent(t.Context(), idempotencyKey, request, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -146,7 +141,7 @@ func TestPriceMultiplierLegacyAccessKeyResultsReplayOriginalDefault(t *testing.T
 			}
 			if operation == "create" {
 				request.PriceMultiplier = optionalField[string]{Set: true, Value: "1.000000"}
-				replayed, err := fixture.service.CreateAccessKeyIdempotent(t.Context(), idempotencyKey, request)
+				replayed, err := fixture.service.CreateAccessKeyIdempotent(t.Context(), idempotencyKey, request, nil)
 				if err != nil || !replayed.Replayed || replayed.Key != "" {
 					t.Fatalf("legacy create replay = %#v, %v", replayed, err)
 				}
@@ -224,21 +219,21 @@ func TestPriceMultiplierCreationAndIdempotency(t *testing.T) {
 	assertAPIErrorCode(t, err, app_errors.ErrIdempotencyKeyReused.Code)
 	keyRequest := AccessKeyCreateRequest{Name: "idempotent multiplier"}
 	const key = "218f47a2-9c35-4d6e-8b1a-123456789009"
-	first, err := fixture.service.CreateAccessKeyIdempotent(t.Context(), key, keyRequest)
+	first, err := fixture.service.CreateAccessKeyIdempotent(t.Context(), key, keyRequest, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertPriceMultiplierJSON(t, first, "1")
 	keyRequest.PriceMultiplier = optionalField[string]{Set: true, Value: "1.000000"}
-	replayed, err := fixture.service.CreateAccessKeyIdempotent(t.Context(), key, keyRequest)
+	replayed, err := fixture.service.CreateAccessKeyIdempotent(t.Context(), key, keyRequest, nil)
 	if err != nil || !replayed.Replayed {
 		t.Fatalf("default replay = %#v, %v", replayed, err)
 	}
 	keyRequest.PriceMultiplier.Value = "0.5"
-	_, err = fixture.service.CreateAccessKeyIdempotent(t.Context(), key, keyRequest)
+	_, err = fixture.service.CreateAccessKeyIdempotent(t.Context(), key, keyRequest, nil)
 	assertAPIErrorCode(t, err, app_errors.ErrIdempotencyKeyReused.Code)
 	keyRequest.PriceMultiplier.Value = "0"
-	zero, err := fixture.service.CreateAccessKeyIdempotent(t.Context(), "218f47a2-9c35-4d6e-8b1a-123456789010", keyRequest)
+	zero, err := fixture.service.CreateAccessKeyIdempotent(t.Context(), "218f47a2-9c35-4d6e-8b1a-123456789010", keyRequest, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

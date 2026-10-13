@@ -84,7 +84,8 @@ func collectVisibleModelIDs(
 	if limit < encodedLowerBound {
 		return nil, errModelListTooLarge
 	}
-	if snapshot == nil {
+	// disabled key 的 Filters.Groups 不可信（团队授权为空时为 nil，即"不限"）。
+	if snapshot == nil || accessKey.Status == state.AccessKeyStatusDisabled {
 		return []string{}, nil
 	}
 	visible := make(map[string]struct{})

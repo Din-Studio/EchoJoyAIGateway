@@ -2,6 +2,7 @@ import { protocolMessages as protocols } from '../protocols'
 import { enUS as inspector } from './inspector'
 import { enUS as home } from './home'
 import { enUS as accessKeys } from './access-keys'
+import { enUS as teams } from './teams'
 import { enUS as logs } from './logs'
 import { enUS as usage } from './usage'
 import { enUS as health } from './health'
@@ -26,6 +27,7 @@ export default {
   usage,
   health,
   accessKeys,
+  teams,
   groupWorkflows,
   parameterRules,
   credentialCards,
@@ -61,39 +63,25 @@ export default {
   },
   auth: {
     title: 'Sign in to GPT-Load',
-    description: 'Enter an admin key or access key. The server identifies your permissions.',
-    keyLabel: 'Sign-in key',
-    keyPlaceholder: 'Enter an AUTH_KEY or access key',
-    reveal: 'Show sign-in key',
-    conceal: 'Hide sign-in key',
-    submit: 'Sign in',
-    submitting: 'Verifying…',
-    required: 'Enter a sign-in key',
-    invalidFormat: 'The sign-in key cannot contain whitespace',
-    invalid: 'The sign-in key is invalid. Check it and try again.',
-    locked: 'Too many authentication attempts. Try again in {seconds} seconds.',
-    lockEnded: 'You can verify your session again.',
+    description: 'Sign in with your EchoJoy account. Your teams and roles decide what you can do.',
+    submit: 'Sign in with EchoJoy',
+    submitting: 'Redirecting…',
+    noAccess:
+      'This account cannot use the gateway. Ask an administrator to add you to a team or grant platform access.',
+    loginFailed: 'Sign-in failed. Try again.',
     network: 'Unable to reach the management API. Check the service and try again.',
     invalidResponse: 'The management API returned an unrecognized response. Try again later.',
     restoreTitle: 'Verify your session',
     checking: 'Verifying the current session…',
     retry: 'Verify again',
-    changeKey: 'Use another key',
-    signedIn: 'Signed in. Opening your page…',
-    continue: 'Continue',
-    remember: 'Remember me',
+    signIn: 'Sign in again',
     logout: 'Sign out',
-    readOnly: 'Access key · Read-only',
-    readOnlyDescription:
-      'View only this key’s overview, models, usage, and request history. System configuration cannot be changed.',
-    help: {
-      title: 'Which key can I use?',
-      accessKeyTitle: 'Access key',
-      accessKey:
-        'Use a distributed access key to view its own data. It cannot change configuration.',
-      adminTitle: 'Admin key',
-      admin: 'If AUTH_KEY is configured, use its value from your deployment system.',
-    },
+    logoutFailed: 'Sign-out failed. Try again.',
+    platformAdmin: 'Platform admin',
+    teamAdmin: 'Team admin',
+    member: 'Member',
+    teams: 'Teams',
+    noTeams: 'No team',
   },
   pages: {
     home: { title: 'Overview' },
@@ -101,6 +89,7 @@ export default {
     groupDetail: { title: 'Group details' },
     models: { title: 'Models' },
     accessKeys: { title: 'Access keys' },
+    teams: { title: 'Teams' },
     usage: { title: 'Usage' },
     logs: { title: 'Request logs' },
     health: { title: 'Runtime health' },

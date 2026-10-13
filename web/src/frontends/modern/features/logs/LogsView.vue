@@ -53,7 +53,7 @@ const client = useApiClient()
 const cache = useQueryClient()
 const session = useAuthSession()
 const { t, te, locale } = useI18n()
-const admin = computed(() => session.state.principalType === 'admin')
+const admin = computed(() => session.state.platform)
 const state = useURLState<LogRouteState>(
   logStateKeys,
   (query) => parseLogState(query, admin.value),

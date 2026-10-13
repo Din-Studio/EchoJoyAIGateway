@@ -183,15 +183,20 @@ smoke_stage="start-cluster-dependencies"
 # 网关容器不挂卷：状态全部在 PostgreSQL 与 Redis 中，密钥只经环境变量传入。
 # 用 `--env NAME` 从环境继承取值，避免密钥出现在 docker 命令行里。
 postgres_password="$(openssl rand -hex 24)"
-auth_key="$(openssl rand -hex 32)"
 encryption_key="$(openssl rand -hex 32)"
 export POSTGRES_USER=gpt_load
 export POSTGRES_DB=gpt_load
 export POSTGRES_PASSWORD="${postgres_password}"
 export DATABASE_DSN="postgres://gpt_load:${postgres_password}@postgres:5432/gpt_load?sslmode=disable"
 export REDIS_ADDRS="redis:6379"
-export AUTH_KEY="${auth_key}"
 export ENCRYPTION_KEY="${encryption_key}"
+# 冒烟不连 Casdoor：控制面会话直接写入 Redis（见 seed_platform_session）。
+export PUBLIC_URL="http://gateway.smoke"
+export OIDC_ISSUER="http://casdoor.invalid"
+export OIDC_CLIENT_ID="release-smoke"
+OIDC_CLIENT_SECRET="$(openssl rand -hex 32)"
+export OIDC_CLIENT_SECRET
+export CASDOOR_ORGANIZATION="release-smoke"
 docker network create "${network}" >/dev/null
 docker run -d \
   --name "${postgres_container}" \
@@ -244,8 +249,12 @@ start_container() {
     --publish "127.0.0.1:${app_port}:3001" \
     --env DATABASE_DSN \
     --env REDIS_ADDRS \
-    --env AUTH_KEY \
     --env ENCRYPTION_KEY \
+    --env PUBLIC_URL \
+    --env OIDC_ISSUER \
+    --env OIDC_CLIENT_ID \
+    --env OIDC_CLIENT_SECRET \
+    --env CASDOOR_ORGANIZATION \
     "${image}" >/dev/null
   # Docker 原子分配可用端口；重建容器后也重新查询，避免多个 Runner 抢占端口。
   local binding
@@ -264,10 +273,20 @@ wait_for_health() {
   return 1
 }
 
+# 平台管理员会话：键是 cookie 的 SHA-256，检查时间取远未来，避免触发 Casdoor 刷新。
+session_cookie="$(openssl rand -hex 32)"
+seed_platform_session() {
+  local digest
+  digest="$(printf '%s' "${session_cookie}" | openssl dgst -sha256 | awk '{print $NF}')"
+  docker exec "${redis_container}" redis-cli SET "gl:sess:${digest}" \
+    '{"principal":{"user_id":"release-smoke","name":"release-smoke","platform":true,"teams":[],"admin_teams":[]},"checked_at_ms":4102444800000}' \
+    EX 43200 >/dev/null
+}
+
 api_get() {
   local path="$1"
   curl -fsS \
-    -H "Authorization: Bearer ${auth_key}" \
+    -H "Cookie: gl_session=${session_cookie}" \
     "${base_url}${path}"
 }
 
@@ -288,7 +307,8 @@ api_write() {
   fi
   curl -fsS \
     -X "${method}" \
-    -H "Authorization: Bearer ${auth_key}" \
+    -H "Cookie: gl_session=${session_cookie}" \
+    -H "Origin: ${PUBLIC_URL}" \
     -H "Content-Type: application/json" \
     "${idempotency_header[@]}" \
     --data-binary "${body}" \
@@ -298,6 +318,7 @@ api_write() {
 smoke_stage="start-first-container"
 start_container
 wait_for_health
+seed_platform_session
 smoke_stage="verify-first-container"
 first_container_id="$(docker inspect -f '{{.Id}}' "${container}")"
 test "$(docker exec "${container}" id -u):$(docker exec "${container}" id -g)" = "10001:10001"
@@ -530,8 +551,8 @@ summary_file="${task_tmp}/summary.txt"
   printf 'graceful_stop_exit=0\n'
 } >"${summary_file}"
 
-secret_labels=(auth_key encryption_key postgres_password access_key credential_secret)
-secret_values=("${auth_key}" "${encryption_key}" "${postgres_password}" "${access_key}" "${credential_secret}")
+secret_labels=(session_cookie oidc_client_secret encryption_key postgres_password access_key credential_secret)
+secret_values=("${session_cookie}" "${OIDC_CLIENT_SECRET}" "${encryption_key}" "${postgres_password}" "${access_key}" "${credential_secret}")
 for index in "${!secret_labels[@]}"; do
   secret_label="${secret_labels[${index}]}"
   secret_value="${secret_values[${index}]}"

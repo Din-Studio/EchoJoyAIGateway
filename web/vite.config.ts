@@ -25,7 +25,7 @@ export default defineConfig({
       allow: devServerFileSystemAllow,
     },
     proxy: Object.fromEntries(
-      ['/api', '/health', '/v1', '/v1beta'].map((path) => [
+      ['/api', '/auth', '/health', '/v1', '/v1beta'].map((path) => [
         path,
         { target: proxyTarget, changeOrigin: true },
       ]),

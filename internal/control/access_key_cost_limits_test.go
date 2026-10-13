@@ -441,7 +441,7 @@ func newAccessKeyCostLimitHTTPFixture(t *testing.T) (serviceFixture, *gin.Engine
 	fixture := newServiceFixture(t)
 	fixture.service.random = bytes.NewReader(bytes.Repeat([]byte{0x11}, 64))
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	return fixture, engine
 }
 
@@ -453,7 +453,7 @@ func serveAccessKeyCostLimitRequest(
 	t.Helper()
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(method, path, bytes.NewBufferString(payload))
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	if idempotencyKey != "" {
 		request.Header.Set("Idempotency-Key", idempotencyKey)

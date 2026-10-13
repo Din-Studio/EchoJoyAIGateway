@@ -35,7 +35,7 @@ func TestModelPriceSyncRouteSanitizesFailure(t *testing.T) {
 	logrus.SetOutput(&serviceLogs)
 	t.Cleanup(func() { logrus.SetOutput(previousOutput) })
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	syncResponse := serveModelPriceSyncRequest(engine, authTestKey)
 	if syncResponse.Code != http.StatusBadGateway ||
@@ -61,7 +61,7 @@ func TestModelPriceSyncRouteSanitizesFailure(t *testing.T) {
 func serveModelPriceSyncRequest(engine *gin.Engine, authKey string) *httptest.ResponseRecorder {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/model-prices/sync", nil)
-	request.Header.Set("Authorization", "Bearer "+authKey)
+	setTestSession(request, authKey)
 	request.Header.Set("Accept-Language", "en-US")
 	engine.ServeHTTP(recorder, request)
 	return recorder

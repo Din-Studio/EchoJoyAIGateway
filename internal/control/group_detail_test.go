@@ -136,7 +136,7 @@ func TestGetGroupHTTPContractAndAuthentication(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	for _, test := range []struct {
 		name       string
@@ -145,16 +145,16 @@ func TestGetGroupHTTPContractAndAuthentication(t *testing.T) {
 		wantStatus int
 		wantCode   any
 	}{
-		{name: "success", path: fmt.Sprintf("/api/groups/%d", group.ID), auth: "Bearer test-auth-key", wantStatus: http.StatusOK, wantCode: float64(0)},
-		{name: "missing", path: "/api/groups/9999", auth: "Bearer test-auth-key", wantStatus: http.StatusNotFound, wantCode: "NOT_FOUND"},
-		{name: "zero id", path: "/api/groups/0", auth: "Bearer test-auth-key", wantStatus: http.StatusBadRequest, wantCode: "BAD_REQUEST"},
-		{name: "overflow id", path: "/api/groups/184467440737095516160", auth: "Bearer test-auth-key", wantStatus: http.StatusBadRequest, wantCode: "BAD_REQUEST"},
+		{name: "success", path: fmt.Sprintf("/api/groups/%d", group.ID), auth: testPlatformSession, wantStatus: http.StatusOK, wantCode: float64(0)},
+		{name: "missing", path: "/api/groups/9999", auth: testPlatformSession, wantStatus: http.StatusNotFound, wantCode: "NOT_FOUND"},
+		{name: "zero id", path: "/api/groups/0", auth: testPlatformSession, wantStatus: http.StatusBadRequest, wantCode: "BAD_REQUEST"},
+		{name: "overflow id", path: "/api/groups/184467440737095516160", auth: testPlatformSession, wantStatus: http.StatusBadRequest, wantCode: "BAD_REQUEST"},
 		{name: "unauthorized", path: fmt.Sprintf("/api/groups/%d", group.ID), wantStatus: http.StatusUnauthorized, wantCode: "UNAUTHORIZED"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, test.path, nil)
 			if test.auth != "" {
-				request.Header.Set("Authorization", test.auth)
+				setTestSession(request, test.auth)
 			}
 			recorder := httptest.NewRecorder()
 			engine.ServeHTTP(recorder, request)

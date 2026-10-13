@@ -51,12 +51,12 @@ func TestAccessKeyMasksPreserveDefaultFormatAndUseLengthBands(t *testing.T) {
 			if len(home.AccessKeys) != 1 || home.AccessKeys[0].MaskedKey != test.mask {
 				t.Fatal("home mask differs from creation")
 			}
-			scoped, err := fixture.service.ReadAccessKeyHomeBase(t.Context(), fixture.service.now().UnixMilli(), created.ID)
+			scoped, err := fixture.service.ReadScopedHomeBase(t.Context(), fixture.service.now().UnixMilli(), []uint{created.ID})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if scoped.CurrentAccessKey == nil || scoped.CurrentAccessKey.MaskedKey != test.mask {
-				t.Fatal("access key home mask differs from creation")
+			if len(scoped.AccessKeys) != 1 || scoped.AccessKeys[0].MaskedKey != test.mask {
+				t.Fatal("scoped home mask differs from creation")
 			}
 			if spy.decryptCalls != 0 {
 				t.Fatal("metadata read or update decrypted a key")

@@ -208,7 +208,7 @@ func TestModelPriceSyncStaticPathOwnsDynamicMutationMethodsBeforeAuthAndAudit(t 
 		},
 		{
 			method:        http.MethodDelete,
-			authorization: "Bearer " + authTestKey,
+			authorization: testPlatformSession,
 		},
 	} {
 		t.Run(test.method, func(t *testing.T) {
@@ -220,7 +220,7 @@ func TestModelPriceSyncStaticPathOwnsDynamicMutationMethodsBeforeAuthAndAudit(t 
 				"/api/model-prices/sync",
 				strings.NewReader(test.body),
 			)
-			request.Header.Set("Authorization", test.authorization)
+			setTestSession(request, test.authorization)
 			request.Header.Set("Content-Type", "application/json")
 			recorder := httptest.NewRecorder()
 			engine.ServeHTTP(recorder, request)

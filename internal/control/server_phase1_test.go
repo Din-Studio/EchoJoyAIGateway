@@ -31,7 +31,7 @@ func TestControlRoutesRequireAuthenticationForGroupCreateAndModelDiscovery(t *te
 		},
 	})
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	for _, endpoint := range []struct {
 		name string
@@ -52,12 +52,12 @@ func TestControlRoutesRequireAuthenticationForGroupCreateAndModelDiscovery(t *te
 		},
 	} {
 		t.Run(endpoint.name, func(t *testing.T) {
-			for _, authorization := range []string{"", "Bearer wrong-key"} {
+			for _, authorization := range []string{"", "wrong-session"} {
 				before := countCreateImportRows(t, fixture)
 				request := httptest.NewRequest(http.MethodPost, endpoint.path, strings.NewReader(endpoint.body))
 				request.Header.Set("Content-Type", "application/json")
 				if authorization != "" {
-					request.Header.Set("Authorization", authorization)
+					setTestSession(request, authorization)
 				}
 				if endpoint.path == "/api/groups" {
 					setRequiredTestIdempotencyHeader(request)
@@ -85,7 +85,7 @@ func TestCreateAndImportEndpointsRequireCanonicalIdempotencyKeyBeforeMutation(t 
 	fixture := newServiceFixture(t)
 	groupID := createGroupWithCredentials(t, fixture, "seed-idempotency-header")
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	tests := []struct {
 		name string
 		path string
@@ -127,7 +127,7 @@ func TestCreateAndImportEndpointsRequireCanonicalIdempotencyKeyBeforeMutation(t 
 					test.path,
 					strings.NewReader(test.body),
 				)
-				request.Header.Set("Authorization", "Bearer test-auth-key")
+				setTestPlatformSession(request)
 				if header.value != "" {
 					request.Header.Set("Idempotency-Key", header.value)
 				}
@@ -159,7 +159,7 @@ func TestAccessKeyCreateReplayOptionsAndRevealWireContracts(t *testing.T) {
 	fixture.service.random = bytes.NewReader(make([]byte, 16))
 	fixture.service.operationRandom = bytes.NewReader(bytes.Repeat([]byte{0x73}, 16))
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	const idempotencyKey = "318f47a2-9c35-4d6e-8b1a-1234567890ab"
 
 	create := func() *httptest.ResponseRecorder {
@@ -168,7 +168,7 @@ func TestAccessKeyCreateReplayOptionsAndRevealWireContracts(t *testing.T) {
 			"/api/access-keys",
 			strings.NewReader(`{"name":"wire-client"}`),
 		)
-		request.Header.Set("Authorization", "Bearer test-auth-key")
+		setTestPlatformSession(request)
 		request.Header.Set("Idempotency-Key", idempotencyKey)
 		recorder := httptest.NewRecorder()
 		engine.ServeHTTP(recorder, request)
@@ -207,7 +207,7 @@ func TestAccessKeyCreateReplayOptionsAndRevealWireContracts(t *testing.T) {
 	}
 
 	optionsRequest := httptest.NewRequest(http.MethodGet, "/api/access-keys/options", nil)
-	optionsRequest.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(optionsRequest)
 	options := httptest.NewRecorder()
 	engine.ServeHTTP(options, optionsRequest)
 	if options.Code != http.StatusOK ||
@@ -221,7 +221,7 @@ func TestAccessKeyCreateReplayOptionsAndRevealWireContracts(t *testing.T) {
 		fmt.Sprintf("/api/access-keys/%d/reveal", firstEnvelope.Data.ID),
 		nil,
 	)
-	revealRequest.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(revealRequest)
 	reveal := httptest.NewRecorder()
 	engine.ServeHTTP(reveal, revealRequest)
 	if reveal.Code != http.StatusOK ||

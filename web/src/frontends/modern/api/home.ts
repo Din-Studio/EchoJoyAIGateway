@@ -1,5 +1,4 @@
 import type { ApiClient } from '@shared/http/client'
-import { readAccessKeyRow, type AccessKeyRow } from './access-keys'
 import { readCredential, type CredentialRow } from './group-detail'
 import { readCredentialFilterKey } from './groups'
 import { integer, list, record, text } from './response'
@@ -18,7 +17,6 @@ export interface HomeBase {
   available: number
   models: number
   keys: HomeKey[]
-  currentKey: AccessKeyRow | null
 }
 export interface HomeAccount {
   key: string
@@ -50,7 +48,6 @@ export async function getHome(client: ApiClient, signal: AbortSignal): Promise<H
         mask: text(key.masked_key),
       }
     }),
-    currentKey: data.current_access_key == null ? null : readAccessKeyRow(data.current_access_key),
   }
 }
 export async function getHomeAccounts(client: ApiClient, signal: AbortSignal) {

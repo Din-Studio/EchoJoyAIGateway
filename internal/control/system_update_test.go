@@ -11,7 +11,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"gpt-load/internal/cluster"
 	"gpt-load/internal/platform/config"
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/releasecheck"
@@ -44,10 +43,10 @@ func TestSystemUpdateHTTPChecksOnDemandWithoutAffectingHome(t *testing.T) {
 		PublishedAtMS: time.Date(2026, time.August, 20, 0, 0, 0, 0, time.UTC).UnixMilli(),
 	}}
 	server := NewServerWithReleaseUpdateChecker(
-		&config.Config{AuthKey: "test-auth-key"},
+		&config.Config{},
 		fixture.service,
 		checker,
-		cluster.NewAuthFailures(fixture.cluster),
+		newStubIdentity(),
 	)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
@@ -102,10 +101,10 @@ func TestSystemUpdateHTTPReturnsNullForSuccessfulNoUpdate(t *testing.T) {
 	fixture := newServiceFixture(t)
 	checker := &recordingReleaseUpdateChecker{}
 	server := NewServerWithReleaseUpdateChecker(
-		&config.Config{AuthKey: "test-auth-key"},
+		&config.Config{},
 		fixture.service,
 		checker,
-		cluster.NewAuthFailures(fixture.cluster),
+		newStubIdentity(),
 	)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
@@ -131,10 +130,10 @@ func TestSystemUpdateHTTPHidesUpstreamFailureBehindBadGateway(t *testing.T) {
 	fixture := newServiceFixture(t)
 	checker := &recordingReleaseUpdateChecker{err: errors.New("private upstream detail")}
 	server := NewServerWithReleaseUpdateChecker(
-		&config.Config{AuthKey: "test-auth-key"},
+		&config.Config{},
 		fixture.service,
 		checker,
-		cluster.NewAuthFailures(fixture.cluster),
+		newStubIdentity(),
 	)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
@@ -147,26 +146,22 @@ func TestSystemUpdateHTTPHidesUpstreamFailureBehindBadGateway(t *testing.T) {
 	}
 }
 
-func TestSystemUpdateHTTPRejectsAccessKeyAndInvalidQueryBeforeCheck(t *testing.T) {
+func TestSystemUpdateHTTPRejectsMembersAndInvalidQueryBeforeCheck(t *testing.T) {
 	t.Parallel()
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
-	accessKey, err := fixture.service.CreateAccessKey(t.Context(), AccessKeyCreateRequest{Name: "read only"})
-	if err != nil {
-		t.Fatalf("CreateAccessKey() error = %v", err)
-	}
 	checker := &recordingReleaseUpdateChecker{}
 	server := NewServerWithReleaseUpdateChecker(
-		&config.Config{AuthKey: "test-auth-key"},
+		&config.Config{},
 		fixture.service,
 		checker,
-		cluster.NewAuthFailures(fixture.cluster),
+		newStubIdentity(),
 	)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
 
-	accessKeyResponse := performHomeRequest(engine, "/api/system/update", accessKey.Key)
-	assertHomeHTTPError(t, accessKeyResponse, http.StatusForbidden, app_errors.ErrForbidden.Code)
+	memberResponse := performHomeRequest(engine, "/api/system/update", testMemberSession)
+	assertHomeHTTPError(t, memberResponse, http.StatusForbidden, app_errors.ErrForbidden.Code)
 	for _, path := range []string{
 		"/api/system/update?refresh=1",
 		"/api/system/update?force=maybe",

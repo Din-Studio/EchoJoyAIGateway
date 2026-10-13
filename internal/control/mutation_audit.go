@@ -170,6 +170,7 @@ func (s *Server) logControlMutation(
 		resourceLocator = override
 	}
 	peer := mutationContextString(c, controlPeerContextKey)
+	actor, _ := currentPrincipal(c)
 	level := logrus.WarnLevel
 	if outcome == "succeeded" {
 		level = logrus.InfoLevel
@@ -181,6 +182,8 @@ func (s *Server) logControlMutation(
 		logrus.Fields{
 			"event":            "mutation",
 			"peer_ip":          peer,
+			"actor_user_id":    actor.UserID,
+			"actor_name":       actor.Name,
 			"operation":        descriptor.operation,
 			"resource_type":    descriptor.resourceType,
 			"resource_locator": resourceLocator,

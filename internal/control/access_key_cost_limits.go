@@ -421,17 +421,6 @@ func mapAccessKeyCostLimitStatus(view accessquota.View) AccessKeyCostLimitStatus
 	return result
 }
 
-func costLimitDefinitionsFromStatus(status AccessKeyCostLimitStatus) []AccessKeyCostLimitRule {
-	rules := make([]AccessKeyCostLimitRule, 0, len(status.Rules))
-	for _, rule := range status.Rules {
-		rules = append(rules, AccessKeyCostLimitRule{
-			ID: rule.ID, Kind: rule.Kind, LimitUSD: rule.LimitUSD,
-			PeriodSeconds: rule.PeriodSeconds,
-		})
-	}
-	return rules
-}
-
 func blockingCostLimitRuleStatuses(status AccessKeyCostLimitStatus) []AccessKeyCostLimitRuleStatus {
 	result := make([]AccessKeyCostLimitRuleStatus, 0)
 	for _, rule := range status.Rules {

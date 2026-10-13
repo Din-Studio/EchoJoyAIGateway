@@ -89,14 +89,14 @@ func TestCreateAccessKeyIdempotentReplaysMetadataWithoutPersistingSecret(t *test
 	request := AccessKeyCreateRequest{Name: "idempotent-client"}
 	const key = "118f47a2-9c35-4d6e-8b1a-1234567890ab"
 
-	first, err := fixture.service.CreateAccessKeyIdempotent(t.Context(), key, request)
+	first, err := fixture.service.CreateAccessKeyIdempotent(t.Context(), key, request, nil)
 	if err != nil {
 		t.Fatalf("first CreateAccessKeyIdempotent() error = %v", err)
 	}
 	if first.Key == "" || first.Replayed {
 		t.Fatalf("first result = %#v", first)
 	}
-	replayed, err := fixture.service.CreateAccessKeyIdempotent(t.Context(), key, request)
+	replayed, err := fixture.service.CreateAccessKeyIdempotent(t.Context(), key, request, nil)
 	if err != nil {
 		t.Fatalf("replay CreateAccessKeyIdempotent() error = %v", err)
 	}
@@ -116,6 +116,7 @@ func TestCreateAccessKeyIdempotentReplaysMetadataWithoutPersistingSecret(t *test
 		t.Context(),
 		key,
 		AccessKeyCreateRequest{Name: "different-client"},
+		nil,
 	)
 	var apiErr *app_errors.APIError
 	if !errors.As(err, &apiErr) ||
@@ -214,7 +215,7 @@ func TestListAccessKeyOptionsContainsOnlySelectorMetadata(t *testing.T) {
 		t.Fatalf("disable second option: %v", err)
 	}
 
-	options, err := fixture.service.ListAccessKeyOptions(t.Context())
+	options, err := fixture.service.ListAccessKeyOptions(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("ListAccessKeyOptions() error = %v", err)
 	}

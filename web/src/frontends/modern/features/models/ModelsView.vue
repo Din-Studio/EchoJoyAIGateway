@@ -35,7 +35,7 @@ const { t } = useI18n()
 const client = useApiClient()
 const cache = useQueryClient()
 const session = useAuthSession()
-const admin = computed(() => session.state.principalType === 'admin')
+const admin = computed(() => session.state.platform)
 const state = useURLState(modelStateKeys, parseModelsState, serializeModelsState)
 const filters = computed<ModelFilters>(() => ({
   q: state.value.q,

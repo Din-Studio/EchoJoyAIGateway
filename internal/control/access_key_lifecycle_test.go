@@ -347,45 +347,10 @@ func TestAccessKeyCollectionDerivesExpiredFromOneServerObservation(t *testing.T)
 	assertJSONRawEqual(t, envelope.Data.Items[0]["expires_at_ms"], strconv.FormatInt(expiresAtMS, 10))
 }
 
-func TestAccessKeyHomeCurrentAccessKeyIncludesLifecyclePolicy(t *testing.T) {
-	t.Parallel()
-	fixture := newServiceFixture(t)
-	fixture.service.random = bytes.NewReader(bytes.Repeat([]byte{0x56}, 16))
-	operationNow := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
-	fixture.service.now = func() time.Time { return operationNow }
-	expiresAtMS := operationNow.Add(time.Hour).UnixMilli()
-	created, err := fixture.service.CreateAccessKey(t.Context(), AccessKeyCreateRequest{
-		Name:        "home-lifecycle",
-		ExpiresAtMS: &expiresAtMS,
-		Filters: &AccessKeyFilters{
-			AllowedCIDRs: []string{"192.0.2.0/24"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("seed AccessKey: %v", err)
-	}
-
-	base, err := fixture.service.ReadAccessKeyHomeBase(
-		t.Context(),
-		operationNow.UnixMilli(),
-		created.ID,
-	)
-	if err != nil {
-		t.Fatalf("ReadAccessKeyHomeBase() error = %v", err)
-	}
-	current := base.CurrentAccessKey
-	if current == nil || current.ExpiresAtMS == nil || *current.ExpiresAtMS != expiresAtMS || current.Expired {
-		t.Fatalf("current AccessKey lifecycle = %#v", current)
-	}
-	if want := []string{"192.0.2.0/24"}; !reflect.DeepEqual(current.Filters.AllowedCIDRs, want) {
-		t.Fatalf("current allowed_cidrs = %#v, want %#v", current.Filters.AllowedCIDRs, want)
-	}
-}
-
 func newAccessKeyLifecycleEngine(t *testing.T, fixture serviceFixture) *gin.Engine {
 	t.Helper()
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	return engine
 }
 
@@ -400,7 +365,7 @@ func serveAccessKeyLifecycleRequest(
 	t.Helper()
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
-	request.Header.Set("Authorization", "Bearer "+authTestKey)
+	setTestPlatformSession(request)
 	request.Header.Set("Accept-Language", "en-US")
 	if body != "" {
 		request.Header.Set("Content-Type", "application/json")

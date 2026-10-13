@@ -4,19 +4,18 @@ import {
   ChevronLeft,
   ChevronRight,
   CirclePlus,
-  KeyRound,
   LogOut,
   Menu,
   RefreshCw,
+  UserRound,
   X,
 } from '@lucide/vue'
 import { DialogClose, DialogRoot, DialogTrigger } from 'reka-ui'
 import { useIsFetching } from '@tanstack/vue-query'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { isNavigationFailure, RouterLink, useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { desktopMediaQuery } from '@modern/app/breakpoints'
-import { pagePath } from '@modern/app/navigation'
 import { usePreferences } from '@modern/app/preferences'
 import { providePageRefresh } from '@modern/app/page-refresh'
 import { useMessageSource } from '@modern/app/messages'
@@ -32,7 +31,6 @@ import {
 } from '@modern/components/ui'
 import { useAuthSession } from '@modern/features/auth/auth-session'
 import { provideSystemStatus } from '@modern/features/system/useSystemStatus'
-import { loginLocation } from '@modern/app/redirect'
 import AppearanceMenu from './AppearanceMenu.vue'
 import { provideLoadingActivity, useLoadingFeedback } from '@modern/components/ui/loading'
 import SidebarContent from './SidebarContent.vue'
@@ -54,6 +52,28 @@ provideSystemStatus()
 const mobileOpen = ref(false)
 const failedNavigation = ref<string | null>(null)
 const loggingOut = ref(false)
+const logoutFailed = ref(false)
+const roleLabel = computed(() =>
+  t(
+    session.state.platform
+      ? 'auth.platformAdmin'
+      : session.state.adminTeams.length > 0
+        ? 'auth.teamAdmin'
+        : 'auth.member',
+  ),
+)
+const accountLabel = computed(() => {
+  const user = session.state.user
+  const name = user?.display_name || user?.name || ''
+  const teams = session.state.teams.length
+    ? session.state.teams
+        .map((team) =>
+          session.state.adminTeams.includes(team) ? `${team} (${t('auth.teamAdmin')})` : team,
+        )
+        .join(', ')
+    : t('auth.noTeams')
+  return `${name} · ${roleLabel.value} · ${t('auth.teams')}: ${teams}`
+})
 const { title: pageTitle } = usePageTitle()
 const pageRefresh = providePageRefresh()
 const fetching = useIsFetching()
@@ -134,13 +154,13 @@ function reloadFailedNavigation(): void {
 async function logout(): Promise<void> {
   if (loggingOut.value) return
   loggingOut.value = true
+  logoutFailed.value = false
+  // 先结束网关会话再离开：先跳转会卸载本布局，退出失败就没人显示错误，
+  // 而网关会话和 Casdoor 会话都还活着。成功后经 Casdoor 结束单点登录会话，再回到登录页。
   try {
-    const failure = await router.replace(loginLocation())
-    // 路由守卫阻止离开时仍保留会话，后续业务页可继续使用未保存修改保护。
-    if (!isNavigationFailure(failure)) session.clear()
+    window.location.assign(await session.logout())
   } catch {
-    failedNavigation.value = pagePath('login')
-  } finally {
+    logoutFailed.value = true
     loggingOut.value = false
   }
 }
@@ -164,6 +184,9 @@ useMessageSource(() =>
     : undefined,
 )
 useMessageSource(() =>
+  logoutFailed.value ? { text: t('auth.logoutFailed'), tone: 'danger' } : undefined,
+)
+useMessageSource(() =>
   persistenceFailed.value
     ? { text: t('appearance.persistenceFailed'), tone: 'warning' }
     : undefined,
@@ -171,10 +194,7 @@ useMessageSource(() =>
 </script>
 
 <template>
-  <ImportGuide
-    v-if="route.query.import === '1' && session.state.principalType === 'admin'"
-    @close="closeImport"
-  />
+  <ImportGuide v-if="route.query.import === '1' && session.state.platform" @close="closeImport" />
   <a class="modern-skip-link" href="#modern-content">{{ t('skipToContent') }}</a>
   <div class="modern-app" :class="{ 'is-sidebar-collapsed': sidebarCollapsed }">
     <aside id="modern-desktop-sidebar" class="modern-sidebar">
@@ -229,18 +249,12 @@ useMessageSource(() =>
               <SidebarContent @navigate="mobileOpen = false" />
             </AppDialogContent>
           </DialogRoot>
-          <AppTooltip
-            v-if="session.state.principalType === 'access_key'"
-            :label="t('auth.readOnlyDescription')"
-          >
-            <AppBadge class="modern-session-scope" :icon="KeyRound" tone="info">
-              {{ t('auth.readOnly') }}
+          <AppTooltip v-if="session.state.user" :label="accountLabel">
+            <AppBadge class="modern-session-scope" :icon="UserRound" tone="info">
+              {{ session.state.user.display_name || session.state.user.name }}
             </AppBadge>
           </AppTooltip>
-          <AppTooltip
-            v-if="session.state.principalType === 'admin'"
-            :label="t('shell.importCredentials')"
-          >
+          <AppTooltip v-if="session.state.platform" :label="t('shell.importCredentials')">
             <AppButton
               variant="brand"
               icon-only

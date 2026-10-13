@@ -262,7 +262,7 @@ func TestGroupMutationAuditExcludesInternalCalls(t *testing.T) {
 	)
 	var logs bytes.Buffer
 	server := newTestServer(t,
-		&config.Config{AuthKey: authTestKey},
+		&config.Config{},
 		fixture.service,
 	)
 	server.logger = newControlJSONLogger(&logs)
@@ -812,14 +812,14 @@ func TestControlSecurityEventFormatterSecretMatrix(t *testing.T) {
 					logger.AddHook(redact.NewHook(redact.New()))
 				}
 				server := newTestServer(t,
-					&config.Config{AuthKey: authKey},
+					&config.Config{},
 					fixture.service,
 				)
 				server.logger = logger
 				engine := gin.New()
 				server.RegisterRoutes(engine)
 
-				for range authFailureLimit {
+				for range 3 {
 					request := httptest.NewRequest(
 						http.MethodGet,
 						"/api/health",
@@ -869,10 +869,7 @@ func TestControlSecurityEventFormatterSecretMatrix(t *testing.T) {
 						geminiQuerySecret+"&extra=value",
 					strings.NewReader(modelPriceHTTPUpdateBody(`"1"`, "false")),
 				)
-				rawQuery.Header.Set(
-					"Authorization",
-					"Bearer "+authKey,
-				)
+				setTestPlatformSession(rawQuery)
 				rawQuery.Header.Set("Content-Type", "application/json")
 				engine.ServeHTTP(httptest.NewRecorder(), rawQuery)
 
@@ -884,10 +881,7 @@ func TestControlSecurityEventFormatterSecretMatrix(t *testing.T) {
 					),
 					nil,
 				)
-				reveal.Header.Set(
-					"Authorization",
-					"Bearer "+authKey,
-				)
+				setTestPlatformSession(reveal)
 				revealRecorder := httptest.NewRecorder()
 				engine.ServeHTTP(revealRecorder, reveal)
 				if revealRecorder.Code != http.StatusOK ||
@@ -940,8 +934,6 @@ func TestControlSecurityEventFormatterSecretMatrix(t *testing.T) {
 
 				logText := output.String()
 				for _, required := range []string{
-					"auth_failed",
-					"auth_locked",
 					"mutation",
 					"settings_update",
 					"settings:global",
@@ -1361,7 +1353,7 @@ func newMutationAuditRouteServer(
 	t.Helper()
 	initControlI18n(t)
 	server := newTestServer(t,
-		&config.Config{AuthKey: authTestKey},
+		&config.Config{},
 		fixture.service,
 	)
 	server.logger = newControlJSONLogger(logs)
@@ -1378,7 +1370,7 @@ func newMutationAuditHTTPRequest(
 		request.path,
 		bytes.NewBufferString(request.body),
 	)
-	httpRequest.Header.Set("Authorization", "Bearer "+authTestKey)
+	setTestPlatformSession(httpRequest)
 	httpRequest.Header.Set("Content-Type", "application/json")
 	if request.idempotencyKey != "" {
 		httpRequest.Header.Set(

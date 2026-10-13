@@ -60,7 +60,7 @@ const { t, locale } = useI18n()
 const router = useRouter()
 const client = useApiClient()
 const session = useAuthSession()
-const admin = computed(() => session.state.principalType === 'admin')
+const admin = computed(() => session.state.platform)
 const state = useURLState(
   usageStateKeys,
   (query) => parseUsageState(query, admin.value),

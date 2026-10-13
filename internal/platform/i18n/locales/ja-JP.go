@@ -3,8 +3,10 @@ package locales
 // MessagesJaJP contains Japanese control-plane translations.
 var MessagesJaJP = map[string]string{
 	"access_key.custom_invalid":                  "空白や制御文字を含まない、256 文字以内の表示可能な ASCII 文字を使用してください。",
-	"access_key.admin_conflict":                  "管理者キーをアクセスキーとして使用することはできません。",
 	"access_key.exists":                          "このアクセスキーは既に存在します。別のキーを使用してください。",
+	"team.no_granted_groups":                     "チームにはまだグループが許可されていません。キーを作成する前にプラットフォーム管理者に許可を依頼してください。",
+	"access_key.not_found":                       "アクセスキーが見つかりません",
+	"team.not_found":                             "チームが見つかりません",
 	"common.success":                             "成功",
 	"route.not_found":                            "ルートが見つかりません",
 	"route.method_not_allowed":                   "許可されていないHTTPメソッドです",
@@ -25,9 +27,8 @@ var MessagesJaJP = map[string]string{
 	"model_price.unpriced_confirmation_required": "モデル価格を未設定としてマークするには明示的な確認が必要です",
 	"model_price.referenced":                     "モデル価格はグループから参照されています",
 	"model_price.automatic_delete_forbidden":     "自動モデル価格は手動で削除できません",
-	"auth.invalid_key":                           "無効な認証キー",
-	"auth.forbidden":                             "現在のキーにはこの機能へのアクセス権がありません",
-	"auth.locked":                                "認証試行回数が多すぎます。しばらくしてから再試行してください",
+	"auth.session_required":                      "ログインしてください",
+	"auth.forbidden":                             "現在のアカウントにはこの機能へのアクセス権がありません",
 	"group.not_found":                            "グループが存在しません",
 	"group.name_exists":                          "グループ名が既に存在します",
 	"group.in_use":                               "グループはアクセスキーから参照されています",

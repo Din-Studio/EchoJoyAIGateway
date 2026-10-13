@@ -9,6 +9,9 @@ export interface RuleDraft extends CostRule {
   unit: string
 }
 export interface AccessDraft {
+  /** 空字符串表示平台密钥。 */
+  team: string
+  owner: string
   name: string
   key: string
   enabled: boolean
@@ -46,6 +49,8 @@ export function draftFor(row?: AccessKey, duplicate = false): AccessDraft {
       }
     : { groups: [], protocols: [], models: [], allowed_cidrs: [] }
   return {
+    team: row?.team_id ?? '',
+    owner: row?.owner_user_id ?? '',
     name: row?.name ?? '',
     key: '',
     enabled: row?.status !== 'disabled',
@@ -81,14 +86,16 @@ function periodSeconds(rule: RuleDraft): number {
   const rounded = Math.round(seconds)
   return Math.abs(seconds - rounded) < 0.0000001 ? rounded : seconds
 }
-export function inputFor(draft: AccessDraft): AccessInput {
+/** platform 为 false 时不发送倍率：只有平台管理员能设置。 */
+export function inputFor(draft: AccessDraft, platform = true): AccessInput {
   return {
+    ...(draft.team ? { team_id: draft.team, owner_user_id: draft.owner } : {}),
     name: draft.name.trim(),
     ...(draft.key ? { key: draft.key } : {}),
     status: draft.enabled ? 'active' : 'disabled',
     expires_at_ms: draft.never ? null : (parseLocalDateTime(draft.expires)?.getTime() ?? NaN),
     rpm_limit: Number(draft.rpm || 0),
-    price_multiplier: normalizeDecimal(draft.price),
+    ...(platform ? { price_multiplier: normalizeDecimal(draft.price) } : {}),
     filters: {
       groups: draft.modes.groups === 'all' ? [] : unique(draft.scope.groups),
       protocols: draft.modes.protocols === 'all' ? [] : clean(draft.scope.protocols),
@@ -126,7 +133,10 @@ export function patchFor(base: AccessKey, input: AccessInput): Partial<AccessInp
   if (base.status !== input.status) patch.status = input.status
   if (base.expires_at_ms !== input.expires_at_ms) patch.expires_at_ms = input.expires_at_ms
   if (base.rpm_limit !== input.rpm_limit) patch.rpm_limit = input.rpm_limit
-  if (normalizeDecimal(base.price_multiplier) !== input.price_multiplier)
+  if (
+    input.price_multiplier !== undefined &&
+    normalizeDecimal(base.price_multiplier) !== input.price_multiplier
+  )
     patch.price_multiplier = input.price_multiplier
   if (scopeJSON(base.filters) !== scopeJSON(input.filters)) patch.filters = input.filters
   if (ruleJSON(base.cost_limit_rules) !== ruleJSON(input.cost_limit_rules))
@@ -143,11 +153,13 @@ export function draftErrors(draft: AccessDraft, base?: AccessKey): Record<string
   )
     errors.name = 'required'
   if (draft.key && !/^[\x21-\x7e]{1,256}$/.test(draft.key)) errors.key = 'invalidKey'
+  if (draft.team && !draft.owner) errors.owner = 'ownerRequired'
   if (!/^\d*$/.test(draft.rpm) || !Number.isSafeInteger(input.rpm_limit))
     errors.rpm = 'invalidNumber'
   if (
-    !/^(?:0|[1-9]\d{0,3})(?:\.\d{1,6})?$/.test(input.price_multiplier) ||
-    Number(input.price_multiplier) > 1000
+    input.price_multiplier !== undefined &&
+    (!/^(?:0|[1-9]\d{0,3})(?:\.\d{1,6})?$/.test(input.price_multiplier) ||
+      Number(input.price_multiplier) > 1000)
   )
     errors.price = 'invalidNumber'
   if (

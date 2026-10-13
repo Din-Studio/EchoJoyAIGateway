@@ -25,8 +25,8 @@ func TestModernCredentialOptionsPreserveExactAccountMemberships(t *testing.T) {
 	otherGroup, _ := createHomeSubscriptionCredential(t, fixture, "other", "different", "same@example.com")
 	apiGroup := createGroupWithCredentials(t, fixture, "sk-credential-options-secret")
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
-	recorder := performGroupCollectionRequest(engine, "/api/modern/credentials/options", "Bearer "+authTestKey)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
+	recorder := performGroupCollectionRequest(engine, "/api/modern/credentials/options", testPlatformSession)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("options status = %d, want 200", recorder.Code)
 	}
@@ -74,18 +74,14 @@ func TestModernCredentialOptionsPreserveExactAccountMemberships(t *testing.T) {
 	if recorder.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("credential options must not be cached by the browser")
 	}
-	readOnly, err := fixture.service.CreateAccessKey(t.Context(), AccessKeyCreateRequest{Name: "options readonly"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, test := range []struct {
 		path   string
 		auth   string
 		status int
 	}{
 		{"/api/modern/credentials/options", "", http.StatusUnauthorized},
-		{"/api/modern/credentials/options", "Bearer " + readOnly.Key, http.StatusForbidden},
-		{"/api/modern/credentials/options?q=secret", "Bearer " + authTestKey, http.StatusBadRequest},
+		{"/api/modern/credentials/options", testMemberSession, http.StatusForbidden},
+		{"/api/modern/credentials/options?q=secret", testPlatformSession, http.StatusBadRequest},
 	} {
 		response := performGroupCollectionRequest(engine, test.path, test.auth)
 		if response.Code != test.status {
@@ -134,8 +130,8 @@ func TestCredentialFiltersAndHomeMergeCurrentIdentityDespiteStoredFingerprintDif
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
-	options := performGroupCollectionRequest(engine, "/api/modern/credentials/options", "Bearer "+authTestKey)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
+	options := performGroupCollectionRequest(engine, "/api/modern/credentials/options", testPlatformSession)
 	var optionEnvelope struct {
 		Data struct {
 			Items []struct {
@@ -165,7 +161,7 @@ func TestCredentialFiltersAndHomeMergeCurrentIdentityDespiteStoredFingerprintDif
 	}
 	for _, membership := range []struct{ groupID, credentialID uint }{{firstGroup, first.ID}, {secondGroup, second.ID}} {
 		response := performGroupCollectionRequest(engine,
-			fmt.Sprintf("/api/modern/groups/%d/credentials?credential_key=%s", membership.groupID, key), "Bearer "+authTestKey)
+			fmt.Sprintf("/api/modern/groups/%d/credentials?credential_key=%s", membership.groupID, key), testPlatformSession)
 		var envelope struct {
 			Data CredentialCollectionResponse `json:"data"`
 		}

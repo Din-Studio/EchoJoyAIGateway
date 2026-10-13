@@ -171,9 +171,9 @@ func TestAccessKeyCollectionHTTPReturnsAuthenticatedCollectionEnvelope(t *testin
 	}
 
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	request := httptest.NewRequest(http.MethodGet, "/api/access-keys?status=active&page=1&page_size=100", nil)
-	request.Header.Set("Authorization", "Bearer "+authTestKey)
+	setTestPlatformSession(request)
 	request.Header.Set("Accept-Language", "en-US")
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
@@ -234,9 +234,9 @@ func TestAccessKeyCollectionHTTPReturnsLatestRequestTimeAndOmitsCollectionScope(
 	}
 
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	request := httptest.NewRequest(http.MethodGet, "/api/access-keys?page=1&page_size=20", nil)
-	request.Header.Set("Authorization", "Bearer "+authTestKey)
+	setTestPlatformSession(request)
 	request.Header.Set("Accept-Language", "en-US")
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
@@ -275,7 +275,7 @@ func TestAccessKeyCollectionHTTPRejectsInvalidQueryBeforeServiceAccess(t *testin
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	for _, target := range []string{
 		"/api/access-keys?unknown=1",
@@ -285,7 +285,7 @@ func TestAccessKeyCollectionHTTPRejectsInvalidQueryBeforeServiceAccess(t *testin
 	} {
 		t.Run(target, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, target, nil)
-			request.Header.Set("Authorization", "Bearer "+authTestKey)
+			setTestPlatformSession(request)
 			request.Header.Set("Accept-Language", "en-US")
 			recorder := httptest.NewRecorder()
 			engine.ServeHTTP(recorder, request)

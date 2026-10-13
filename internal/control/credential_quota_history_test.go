@@ -38,9 +38,9 @@ func TestCredentialQuotaHistoryScopesCurrentAccountAndTime(t *testing.T) {
 		}
 	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	url := fmt.Sprintf("/api/groups/%d/credentials/%d/quota-history?from_ms=0&to_ms=120000", group.ID, credential.ID)
-	result := performGroupCollectionRequest(engine, url, "Bearer "+authTestKey)
+	result := performGroupCollectionRequest(engine, url, testPlatformSession)
 	if result.Code != http.StatusOK {
 		t.Fatalf("history status=%d body=%s", result.Code, result.Body.String())
 	}
@@ -63,7 +63,7 @@ func TestCredentialQuotaHistoryScopesCurrentAccountAndTime(t *testing.T) {
 		}
 	}
 	for _, query := range []string{"from_ms=0&to_ms=1&credential_id=1", "from_ms=0&to_ms=0", "from_ms=0&to_ms=4000000000"} {
-		got := performGroupCollectionRequest(engine, fmt.Sprintf("/api/groups/%d/credentials/%d/quota-history?%s", group.ID, credential.ID, query), "Bearer "+authTestKey)
+		got := performGroupCollectionRequest(engine, fmt.Sprintf("/api/groups/%d/credentials/%d/quota-history?%s", group.ID, credential.ID, query), testPlatformSession)
 		if got.Code != http.StatusBadRequest {
 			t.Fatalf("invalid query %s status=%d", query, got.Code)
 		}
@@ -71,7 +71,7 @@ func TestCredentialQuotaHistoryScopesCurrentAccountAndTime(t *testing.T) {
 	if err := fixture.db.Model(&group).Update("connection_type", models.ConnectionTypeAPIKey).Error; err != nil {
 		t.Fatal(err)
 	}
-	if got := performGroupCollectionRequest(engine, url, "Bearer "+authTestKey); got.Code != http.StatusBadRequest {
+	if got := performGroupCollectionRequest(engine, url, testPlatformSession); got.Code != http.StatusBadRequest {
 		t.Fatalf("API key history status=%d", got.Code)
 	}
 }
@@ -110,8 +110,8 @@ func TestCredentialQuotaHistoryReturnsAllStoredPointsWithoutResampling(t *testin
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
-	result := performGroupCollectionRequest(engine, fmt.Sprintf("/api/groups/%d/credentials/%d/quota-history?from_ms=%d&to_ms=%d", group.ID, credential.ID, from, from+7*24*3_600_000), "Bearer "+authTestKey)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
+	result := performGroupCollectionRequest(engine, fmt.Sprintf("/api/groups/%d/credentials/%d/quota-history?from_ms=%d&to_ms=%d", group.ID, credential.ID, from, from+7*24*3_600_000), testPlatformSession)
 	if result.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", result.Code, result.Body.String())
 	}
@@ -174,9 +174,9 @@ func TestCredentialQuotaHistoryFiltersStoredShortAndUnknownPeriods(t *testing.T)
 		}
 	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	url := fmt.Sprintf("/api/groups/%d/credentials/%d/quota-history?from_ms=0&to_ms=120000", group.ID, credential.ID)
-	result := performGroupCollectionRequest(engine, url, "Bearer "+authTestKey)
+	result := performGroupCollectionRequest(engine, url, testPlatformSession)
 	if result.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", result.Code, result.Body.String())
 	}

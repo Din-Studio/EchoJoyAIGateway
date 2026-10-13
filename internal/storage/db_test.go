@@ -277,6 +277,7 @@ func TestAutoMigrateCreatesSchemaAndMigrationLedger(t *testing.T) {
 		"0017_request_log_operation_index",
 		"0018_auto_model",
 		"0019_credential_concurrency_limit",
+		"0020_teams",
 	}
 	if !reflect.DeepEqual(migrationIDs, wantMigrationIDs) {
 		t.Fatalf("schema_migrations IDs = %v, want %v", migrationIDs, wantMigrationIDs)

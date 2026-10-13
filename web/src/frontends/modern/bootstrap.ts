@@ -11,15 +11,6 @@ import { createModernI18n } from './i18n'
 import { createModernRouter } from './router'
 import './styles/base.css'
 
-function getStorage(type: 'localStorage' | 'sessionStorage'): Storage | undefined {
-  try {
-    return window[type]
-  } catch {
-    // 存储不可用时，会话继续在内存中维护。
-    return undefined
-  }
-}
-
 export async function bootstrap(): Promise<void> {
   const i18n = createModernI18n()
   document.documentElement.lang = i18n.global.locale.value
@@ -32,12 +23,7 @@ export async function bootstrap(): Promise<void> {
     getSession: () => session,
     getLocale: () => i18n.global.locale.value,
   })
-  const session: AuthSession = createAuthSession({
-    client,
-    queryClient,
-    localStorage: getStorage('localStorage'),
-    sessionStorage: getStorage('sessionStorage'),
-  })
+  const session: AuthSession = createAuthSession({ client, queryClient })
   const router = createModernRouter(session)
   const app = createApp(App)
     .provide(preferencesKey, preferences)

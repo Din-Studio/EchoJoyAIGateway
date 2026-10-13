@@ -11,7 +11,7 @@ assignees: ""
 - [ ] 我已确认目前没有类似 issue (I have checked for similar issues)
 - [ ] 我已升级到当前主版本线的最新补丁版本 (I am using the latest patch release in my current major line)
 - [ ] 我已查看对应版本线的 README 和发布说明 (I have read the README and release notes for my release line)
-- [ ] 我已移除 `AUTH_KEY`、`ENCRYPTION_KEY`、AccessKey、上游密钥和令牌等敏感信息 (I have removed all credentials, keys, and tokens)
+- [ ] 我已移除 `OIDC_CLIENT_SECRET`、`ENCRYPTION_KEY`、会话 Cookie、AccessKey、上游密钥和令牌等敏感信息 (I have removed all credentials, keys, and tokens)
 - [ ] 我理解并愿意跟进此 issue，协助测试和提供反馈 (I am willing to follow up on this issue, assist with testing, and provide feedback)
 
 ---

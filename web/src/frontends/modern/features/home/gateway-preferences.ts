@@ -31,7 +31,6 @@ export function readGatewayPreferences(admin: boolean): GatewayPreferences {
     return {
       client: gatewayClients.find((client) => client.id === value.client)?.id ?? defaults.client,
       accessKeyID:
-        admin &&
         typeof value.accessKeyID === 'number' &&
         Number.isSafeInteger(value.accessKeyID) &&
         value.accessKeyID > 0

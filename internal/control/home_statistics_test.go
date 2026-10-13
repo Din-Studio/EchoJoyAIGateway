@@ -12,10 +12,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"gpt-load/internal/channel"
 	"gpt-load/internal/platform/config"
 	"gpt-load/internal/platform/epochms"
 	"gpt-load/internal/platform/version"
 	"gpt-load/internal/requestlog"
+	"gpt-load/internal/storage/models"
 )
 
 func TestHomeBaseHTTPUsesAuthenticationEnvelopeAndServerClock(t *testing.T) {
@@ -23,7 +25,7 @@ func TestHomeBaseHTTPUsesAuthenticationEnvelopeAndServerClock(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	server := newTestServer(t,
-		&config.Config{AuthKey: "test-auth-key"},
+		&config.Config{},
 		fixture.service,
 	)
 	now := time.Date(2026, time.July, 30, 12, 34, 56, 789, time.UTC)
@@ -54,12 +56,11 @@ func TestHomeBaseHTTPUsesAuthenticationEnvelopeAndServerClock(t *testing.T) {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 		Data    struct {
-			ServerNowMS      int64                    `json:"server_now_ms"`
-			StartedAtMS      int64                    `json:"started_at_ms"`
-			Version          string                   `json:"version"`
-			Inventory        HomeInventory            `json:"inventory"`
-			AccessKeys       []HomeAccessKey          `json:"access_keys"`
-			CurrentAccessKey *AccessKeyCollectionItem `json:"current_access_key"`
+			ServerNowMS int64           `json:"server_now_ms"`
+			StartedAtMS int64           `json:"started_at_ms"`
+			Version     string          `json:"version"`
+			Inventory   HomeInventory   `json:"inventory"`
+			AccessKeys  []HomeAccessKey `json:"access_keys"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
@@ -72,7 +73,7 @@ func TestHomeBaseHTTPUsesAuthenticationEnvelopeAndServerClock(t *testing.T) {
 		envelope.Data.Inventory != (HomeInventory{}) ||
 		envelope.Data.AccessKeys == nil ||
 		len(envelope.Data.AccessKeys) != 0 ||
-		envelope.Data.CurrentAccessKey != nil {
+		strings.Contains(recorder.Body.String(), "current_access_key") {
 		t.Fatalf("home response = %#v", envelope)
 	}
 	assertManagementWireObject(
@@ -84,12 +85,11 @@ func TestHomeBaseHTTPUsesAuthenticationEnvelopeAndServerClock(t *testing.T) {
 			"version",
 			"inventory",
 			"access_keys",
-			"current_access_key",
 		},
 	)
 }
 
-func TestHomeBaseHTTPScopesAccessKeyAndIncludesCurrentProfile(t *testing.T) {
+func TestHomeBaseHTTPScopesMembersToTheirKeys(t *testing.T) {
 	t.Parallel()
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
@@ -105,30 +105,33 @@ func TestHomeBaseHTTPScopesAccessKeyAndIncludesCurrentProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAccessKey(other) error = %v", err)
 	}
-	server := newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service)
+	createPriceTestGroup(t, fixture.db, models.Group{
+		Name: "member-home", ChannelID: string(channel.OpenAICompatible),
+		Params: models.JSON(`{"base_url":"https://openai.example/v1"}`),
+		Models: models.JSON(`[{"id":"member-model"}]`), Overrides: models.JSON(`{}`), Enabled: true,
+	})
+	assignTestTeamKey(t, fixture, current.ID, "team-a", testMemberPrincipal.UserID)
+	server := newTestServer(t, &config.Config{}, fixture.service)
 	engine := gin.New()
 	server.RegisterRoutes(engine)
 
-	recorder := performHomeRequest(engine, "/api/home", current.Key)
+	recorder := performHomeRequest(engine, "/api/home", testMemberSession)
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("AccessKey GET /api/home = %d %s, want 200", recorder.Code, recorder.Body.String())
+		t.Fatalf("member GET /api/home = %d %s, want 200", recorder.Code, recorder.Body.String())
 	}
 	if recorder.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("Cache-Control = %q, want no-store", recorder.Header().Get("Cache-Control"))
 	}
 	var envelope struct {
 		Data struct {
-			AccessKeys       []HomeAccessKey         `json:"access_keys"`
-			CurrentAccessKey AccessKeyCollectionItem `json:"current_access_key"`
+			AccessKeys []HomeAccessKey `json:"access_keys"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("decode AccessKey home response: %v", err)
+		t.Fatalf("decode member home response: %v", err)
 	}
 	if len(envelope.Data.AccessKeys) != 1 ||
 		envelope.Data.AccessKeys[0].ID != current.ID ||
-		envelope.Data.CurrentAccessKey.ID != current.ID ||
-		envelope.Data.CurrentAccessKey.Name != current.Name ||
 		strings.Contains(recorder.Body.String(), other.Name) ||
 		strings.Contains(recorder.Body.String(), current.Key) {
 		t.Fatalf("AccessKey home scope = %s", recorder.Body.String())
@@ -141,7 +144,7 @@ func TestHomeBaseHTTPRejectsEveryQueryBeforeReading(t *testing.T) {
 	fixture := newServiceFixture(t)
 	fixture.service.db = nil
 	server := newTestServer(t,
-		&config.Config{AuthKey: "test-auth-key"},
+		&config.Config{},
 		fixture.service,
 	)
 	engine := gin.New()
@@ -433,7 +436,7 @@ func TestHomeStatisticsHTTPDefaultsToDense24HoursAndMapsExactWire(t *testing.T) 
 	)
 }
 
-func TestHomeStatisticsHTTPBindsAccessKeyAndRemovesOtherRankingDimensions(t *testing.T) {
+func TestHomeStatisticsHTTPScopesMembersAndRemovesOtherRankingDimensions(t *testing.T) {
 	t.Parallel()
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
@@ -444,31 +447,29 @@ func TestHomeStatisticsHTTPBindsAccessKeyAndRemovesOtherRankingDimensions(t *tes
 		t.Fatalf("CreateAccessKey() error = %v", err)
 	}
 	now := time.Date(2026, time.August, 8, 18, 0, 0, 0, time.UTC)
-	privateName := "other private key"
+	// The requestlog layer scopes rankings itself; the handler only passes the scope.
 	reader := &recordingHomeStatisticsReader{
 		fn: func(query requestlog.HomeStatisticsQuery) requestlog.HomeStatisticsReport {
 			report := homeStatisticsReportForQuery(t, query)
 			report.TopModels = []requestlog.HomeModelRanking{{Model: "allowed-model"}}
-			report.TopGroups = []requestlog.HomeGroupRanking{{
-				Group: requestlog.HomeStatisticsRef{ID: 99, Deleted: true},
-			}}
 			report.TopAccessKeys = []requestlog.HomeAccessKeyRanking{{
-				AccessKey: requestlog.HomeStatisticsRef{ID: 100, Name: &privateName},
+				AccessKey: requestlog.HomeStatisticsRef{ID: query.ScopeAccessKeyIDs[0], Name: &created.Name},
 			}}
 			return report
 		},
 	}
 	fixture.service.now = func() time.Time { return now }
 	fixture.service.homeStatistics = reader
+	assignTestTeamKey(t, fixture, created.ID, "team-a", testMemberPrincipal.UserID)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
-	recorder := performHomeRequest(engine, "/api/home/statistics?range=30d", created.Key)
+	recorder := performHomeRequest(engine, "/api/home/statistics?range=30d", testMemberSession)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("AccessKey home statistics = %d %s, want 200", recorder.Code, recorder.Body.String())
 	}
-	if len(reader.queries) != 1 || reader.queries[0].AccessKeyID == nil ||
-		*reader.queries[0].AccessKeyID != created.ID {
+	if len(reader.queries) != 1 || len(reader.queries[0].ScopeAccessKeyIDs) != 1 ||
+		reader.queries[0].ScopeAccessKeyIDs[0] != created.ID {
 		t.Fatalf("HomeStatisticsQuery = %#v", reader.queries)
 	}
 	var envelope struct {
@@ -485,8 +486,8 @@ func TestHomeStatisticsHTTPBindsAccessKeyAndRemovesOtherRankingDimensions(t *tes
 	}
 	if len(envelope.Data.Rankings.Models) != 1 ||
 		len(envelope.Data.Rankings.Groups) != 0 ||
-		len(envelope.Data.Rankings.AccessKeys) != 0 ||
-		strings.Contains(recorder.Body.String(), privateName) {
+		len(envelope.Data.Rankings.AccessKeys) != 1 ||
+		!strings.Contains(recorder.Body.String(), created.Name) {
 		t.Fatalf("AccessKey rankings = %s", recorder.Body.String())
 	}
 }
@@ -705,7 +706,7 @@ func newHomeStatisticsTestEngine(
 	fixture := newServiceFixture(t)
 	fixture.service.homeStatistics = reader
 	server := newTestServer(t,
-		&config.Config{AuthKey: "test-auth-key"},
+		&config.Config{},
 		fixture.service,
 	)
 	server.now = func() time.Time { return now }
@@ -721,7 +722,7 @@ func performHomeRequest(
 ) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(http.MethodGet, target, nil)
 	if authKey != "" {
-		request.Header.Set("Authorization", "Bearer "+authKey)
+		setTestSession(request, authKey)
 	}
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)

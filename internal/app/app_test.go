@@ -1333,7 +1333,6 @@ func testConfig(t *testing.T) *config.Config {
 			IdleTimeout:             3,
 		},
 		EncryptionKey: "test-master-key",
-		AuthKey:       "test-auth-key",
 		Log: config.LogConfig{
 			Level:  "info",
 			Format: "text",

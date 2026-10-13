@@ -3,8 +3,10 @@ package locales
 // MessagesEnUS contains English (US) control-plane translations.
 var MessagesEnUS = map[string]string{
 	"access_key.custom_invalid":                  "Use up to 256 visible ASCII characters without spaces or control characters.",
-	"access_key.admin_conflict":                  "The administrator key cannot be used as an access key.",
 	"access_key.exists":                          "This access key already exists. Use a different key.",
+	"team.no_granted_groups":                     "The team has no granted groups yet. Ask a platform admin to grant groups before creating keys.",
+	"access_key.not_found":                       "Access key not found",
+	"team.not_found":                             "Team not found",
 	"common.success":                             "Success",
 	"route.not_found":                            "Route not found",
 	"route.method_not_allowed":                   "Method not allowed",
@@ -25,9 +27,8 @@ var MessagesEnUS = map[string]string{
 	"model_price.unpriced_confirmation_required": "Marking a model price as unpriced requires explicit confirmation",
 	"model_price.referenced":                     "The model price is still referenced by Groups",
 	"model_price.automatic_delete_forbidden":     "Automatic model prices cannot be deleted manually",
-	"auth.invalid_key":                           "Invalid authorization key",
-	"auth.forbidden":                             "The current key cannot access this feature",
-	"auth.locked":                                "Too many authentication attempts; try again later",
+	"auth.session_required":                      "Sign in to continue",
+	"auth.forbidden":                             "Your account cannot access this feature",
 	"group.not_found":                            "Group not found",
 	"group.name_exists":                          "Group name already exists",
 	"group.in_use":                               "The group is still referenced by access keys",

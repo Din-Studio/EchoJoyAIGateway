@@ -530,7 +530,7 @@ func TestGroupSettingsHTTPRejectsStrictJSONAndUnauthorizedWithoutMutation(t *tes
 	fixture := newServiceFixture(t)
 	groupID := createGroupForCredentialImport(t, fixture, "sk-settings-http")
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	path := "/api/groups/" + stringGroupID(groupID) + "/settings"
 	beforeRevision := fixture.manager.Current().Revision
 
@@ -563,7 +563,7 @@ func TestGroupSettingsHTTPNotFoundAndDatabaseFailureDoNotMutate(t *testing.T) {
 	fixture := newServiceFixture(t)
 	groupID := createGroupForCredentialImport(t, fixture, "sk-settings-errors")
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	beforeRevision := fixture.manager.Current().Revision
 
 	missing := serveGroupSettingsRequest(t, engine, http.MethodPut, "/api/groups/999/settings", "test-auth-key", `{"name":"missing"}`)
@@ -590,7 +590,7 @@ func serveGroupSettingsRequest(t *testing.T, engine *gin.Engine, method, path, a
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	if authKey != "" {
-		request.Header.Set("Authorization", "Bearer "+authKey)
+		setTestSession(request, authKey)
 	}
 	engine.ServeHTTP(recorder, request)
 	return recorder

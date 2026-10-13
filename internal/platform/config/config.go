@@ -70,13 +70,32 @@ type ClusterConfig struct {
 	ResponseBindingTTL time.Duration
 }
 
+// OIDCConfig points the control plane at Casdoor, its OpenID Connect provider.
+// Issuer is Casdoor's origin and also the base URL of its API.
+type OIDCConfig struct {
+	PublicURL    string
+	Issuer       string
+	ClientID     string
+	ClientSecret string
+	Organization string
+}
+
+// PublicOrigin is PublicURL reduced to the Origin header browsers send.
+func (c OIDCConfig) PublicOrigin() string {
+	parsed, err := url.Parse(c.PublicURL)
+	if err != nil || parsed.Host == "" {
+		return c.PublicURL
+	}
+	return parsed.Scheme + "://" + parsed.Host
+}
+
 // Config contains static environment configuration for the application process.
 type Config struct {
 	Server                    ServerConfig
 	DatabaseDSN               string
 	DatabasePool              DatabasePoolConfig
 	EncryptionKey             string
-	AuthKey                   string
+	OIDC                      OIDCConfig
 	Log                       LogConfig
 	ModelsDevAutoSyncOverride *bool
 	Cluster                   ClusterConfig
@@ -141,12 +160,9 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	authKey := os.Getenv("AUTH_KEY")
-	if authKey == "" {
-		return nil, fmt.Errorf("AUTH_KEY is required")
-	}
-	if strings.IndexFunc(authKey, unicode.IsSpace) >= 0 {
-		return nil, fmt.Errorf("AUTH_KEY must not contain whitespace")
+	oidc, err := parseOIDCConfig()
+	if err != nil {
+		return nil, err
 	}
 	encryptionKey := os.Getenv("ENCRYPTION_KEY")
 	if encryptionKey == "" {
@@ -176,7 +192,7 @@ func Load() (*Config, error) {
 			MaxIdleConnections: databaseMaxIdleConnections,
 		},
 		EncryptionKey: encryptionKey,
-		AuthKey:       authKey,
+		OIDC:          oidc,
 		Log: LogConfig{
 			Level:  valueOrDefault("LOG_LEVEL", "info"),
 			Format: logFormat,
@@ -248,6 +264,50 @@ func parseClusterConfig() (ClusterConfig, error) {
 		InstanceID:         instanceID,
 		ResponseBindingTTL: responseBindingTTL,
 	}, nil
+}
+
+// parseOIDCConfig reads the Casdoor variables; every one is required.
+func parseOIDCConfig() (OIDCConfig, error) {
+	cfg := OIDCConfig{
+		ClientID:     strings.TrimSpace(os.Getenv("OIDC_CLIENT_ID")),
+		ClientSecret: strings.TrimSpace(os.Getenv("OIDC_CLIENT_SECRET")),
+		Organization: strings.TrimSpace(os.Getenv("CASDOOR_ORGANIZATION")),
+	}
+	var err error
+	if cfg.PublicURL, err = parseOrigin("PUBLIC_URL"); err != nil {
+		return OIDCConfig{}, err
+	}
+	if cfg.Issuer, err = parseOrigin("OIDC_ISSUER"); err != nil {
+		return OIDCConfig{}, err
+	}
+	for key, value := range map[string]string{
+		"OIDC_CLIENT_ID":       cfg.ClientID,
+		"OIDC_CLIENT_SECRET":   cfg.ClientSecret,
+		"CASDOOR_ORGANIZATION": cfg.Organization,
+	} {
+		if value == "" {
+			return OIDCConfig{}, fmt.Errorf("%s is required", key)
+		}
+		if strings.IndexFunc(value, unicode.IsSpace) >= 0 {
+			return OIDCConfig{}, fmt.Errorf("%s must not contain whitespace", key)
+		}
+	}
+	return cfg, nil
+}
+
+// parseOrigin reads an http(s) URL without query or fragment and drops the
+// trailing slash, so callers can append paths.
+func parseOrigin(key string) (string, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return "", fmt.Errorf("%s is required", key)
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("%s must be an http(s) URL without query or fragment", key)
+	}
+	return strings.TrimRight(raw, "/"), nil
 }
 
 func defaultInstanceID() (string, error) {

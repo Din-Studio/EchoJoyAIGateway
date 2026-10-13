@@ -33,7 +33,7 @@ func TestCredentialStageRoutesRequireAuthAndNeverReturnSecrets(t *testing.T) {
 	useEphemeralOAuthCallbackListeners(fixture.service.oauthCallback)
 	t.Cleanup(func() { _ = fixture.service.oauthCallback.Stop(t.Context()) })
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	unauthorized := httptest.NewRequest(http.MethodPost, "/api/credential-stages/authorizations", strings.NewReader(`{"channel_id":"codex"}`))
 	unauthorized.Header.Set("Content-Type", "application/json")
@@ -44,7 +44,7 @@ func TestCredentialStageRoutesRequireAuthAndNeverReturnSecrets(t *testing.T) {
 	}
 
 	request := httptest.NewRequest(http.MethodPost, "/api/credential-stages/authorizations", strings.NewReader(`{"channel_id":"codex"}`))
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	engine.ServeHTTP(response, request)
@@ -65,7 +65,7 @@ func TestCredentialStageRoutesRequireAuthAndNeverReturnSecrets(t *testing.T) {
 	}
 
 	get := httptest.NewRequest(http.MethodGet, "/api/credential-stages/"+envelope.Data.StageID, nil)
-	get.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(get)
 	getResponse := httptest.NewRecorder()
 	engine.ServeHTTP(getResponse, get)
 	if getResponse.Code != http.StatusOK || strings.Contains(getResponse.Body.String(), "verifier") {
@@ -73,7 +73,7 @@ func TestCredentialStageRoutesRequireAuthAndNeverReturnSecrets(t *testing.T) {
 	}
 
 	remove := httptest.NewRequest(http.MethodDelete, "/api/credential-stages/"+envelope.Data.StageID, nil)
-	remove.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(remove)
 	removeResponse := httptest.NewRecorder()
 	engine.ServeHTTP(removeResponse, remove)
 	if removeResponse.Code != http.StatusOK {
@@ -109,7 +109,7 @@ func TestCredentialStageRoutesUseExistingGroupProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	assertStageNetwork := func(t *testing.T, response *httptest.ResponseRecorder) {
 		t.Helper()
@@ -139,7 +139,7 @@ func TestCredentialStageRoutesUseExistingGroupProxy(t *testing.T) {
 			"/api/credential-stages/authorizations",
 			strings.NewReader(body),
 		)
-		request.Header.Set("Authorization", "Bearer test-auth-key")
+		setTestPlatformSession(request)
 		request.Header.Set("Content-Type", "application/json")
 		response := httptest.NewRecorder()
 		engine.ServeHTTP(response, request)
@@ -164,7 +164,7 @@ func TestCredentialStageRoutesUseExistingGroupProxy(t *testing.T) {
 			t.Fatal(err)
 		}
 		request := httptest.NewRequest(http.MethodPost, "/api/credential-stages/import", &body)
-		request.Header.Set("Authorization", "Bearer test-auth-key")
+		setTestPlatformSession(request)
 		request.Header.Set("Content-Type", writer.FormDataContentType())
 		response := httptest.NewRecorder()
 		engine.ServeHTTP(response, request)
@@ -197,10 +197,10 @@ func TestDeviceAuthorizationRouteReturnsSafeChallengeAndPollsByPOST(t *testing.T
 		return nil, fmt.Errorf("device OAuth must not start a listener")
 	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/credential-stages/authorizations", strings.NewReader(`{"channel_id":"grok"}`))
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	engine.ServeHTTP(response, request)
@@ -219,7 +219,7 @@ func TestDeviceAuthorizationRouteReturnsSafeChallengeAndPollsByPOST(t *testing.T
 
 	now = now.Add(time.Second)
 	poll := httptest.NewRequest(http.MethodPost, "/api/credential-stages/"+envelope.Data.StageID+"/device-poll", nil)
-	poll.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(poll)
 	pollResponse := httptest.NewRecorder()
 	engine.ServeHTTP(pollResponse, poll)
 	if pollResponse.Code != http.StatusOK || strings.Contains(pollResponse.Body.String(), "next-secret") {
@@ -235,10 +235,10 @@ func TestBeginCredentialAuthorizationAllowsManualCallbackWhenListenerIsUnavailab
 		return nil, fmt.Errorf("port is already in use")
 	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/credential-stages/authorizations", strings.NewReader(`{"channel_id":"codex"}`))
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	engine.ServeHTTP(response, request)
@@ -263,10 +263,10 @@ func TestBeginCredentialAuthorizationStartsOnlyTheCallbackRequestedByTheDriver(t
 		return nil, fmt.Errorf("listener must not start")
 	}
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/credential-stages/authorizations", strings.NewReader(`{"channel_id":"codex"}`))
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	engine.ServeHTTP(response, request)
@@ -303,7 +303,7 @@ func TestManualOAuthCallbackCompletesOnlyItsBoundStageOnce(t *testing.T) {
 		return codex.Credential{Type: "codex", AccessToken: "access", RefreshToken: "refresh", AccountID: "account-one", Email: "one@example.com"}, nil
 	})
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	callbackURL := "http://localhost:1455/auth/callback?code=authorization-code&state=" + url.QueryEscape(state)
 
 	mismatched := postManualOAuthCallback(engine, second.StageID, callbackURL)
@@ -411,7 +411,7 @@ func TestOAuthCallbackServerStartsIndependentDriverEndpoints(t *testing.T) {
 func postManualOAuthCallback(engine *gin.Engine, stageID string, callbackURL string) *httptest.ResponseRecorder {
 	body, _ := json.Marshal(map[string]string{"callback_url": callbackURL})
 	request := httptest.NewRequest(http.MethodPost, "/api/credential-stages/"+stageID+"/oauth-callback", bytes.NewReader(body))
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	engine.ServeHTTP(response, request)
@@ -423,7 +423,7 @@ func TestOAuthFileImportRouteStreamsOneFileIntoReadyStage(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -439,7 +439,7 @@ func TestOAuthFileImportRouteStreamsOneFileIntoReadyStage(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/credential-stages/import", &body)
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", writer.FormDataContentType())
 	response := httptest.NewRecorder()
 	engine.ServeHTTP(response, request)
@@ -462,7 +462,7 @@ func TestOAuthFileImportRouteRequiresChannelID(t *testing.T) {
 	initControlI18n(t)
 	fixture := newServiceFixture(t)
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -475,7 +475,7 @@ func TestOAuthFileImportRouteRequiresChannelID(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/credential-stages/import", &body)
-	request.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(request)
 	request.Header.Set("Content-Type", writer.FormDataContentType())
 	response := httptest.NewRecorder()
 	engine.ServeHTTP(response, request)
@@ -676,7 +676,7 @@ func useEphemeralOAuthCallbackListeners(manager *OAuthCallbackManager) {
 func TestNewServerConfiguresOAuthCallbackForWildcardContainerHost(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key", Server: config.ServerConfig{Host: "0.0.0.0"}}, fixture.service)
+	newTestServer(t, &config.Config{Server: config.ServerConfig{Host: "0.0.0.0"}}, fixture.service)
 	if got := fixture.service.oauthCallback.host; got != "0.0.0.0" {
 		t.Fatalf("callback host = %q, want 0.0.0.0", got)
 	}
@@ -690,10 +690,10 @@ func TestCredentialObservationRoutesReadCacheAndRefreshExplicitly(t *testing.T) 
 		return codex.AccountObservation{Payload: []byte(`{"plan_type":"pro","rate_limit":{"primary_window":{"limit_window_seconds":604800,"used_percent":35}}}`)}, nil
 	})
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 
 	detailRequest := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/groups/%d/credentials/%d", groupID, credentialID), nil)
-	detailRequest.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(detailRequest)
 	detailResponse := httptest.NewRecorder()
 	engine.ServeHTTP(detailResponse, detailRequest)
 	if detailResponse.Code != http.StatusOK || !strings.Contains(detailResponse.Body.String(), `"state":"unavailable"`) {
@@ -701,7 +701,7 @@ func TestCredentialObservationRoutesReadCacheAndRefreshExplicitly(t *testing.T) 
 	}
 
 	refreshRequest := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/groups/%d/credentials/%d/observation-refresh", groupID, credentialID), strings.NewReader(`{}`))
-	refreshRequest.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(refreshRequest)
 	refreshRequest.Header.Set("Content-Type", "application/json")
 	refreshResponse := httptest.NewRecorder()
 	engine.ServeHTTP(refreshResponse, refreshRequest)
@@ -711,7 +711,7 @@ func TestCredentialObservationRoutesReadCacheAndRefreshExplicitly(t *testing.T) 
 	}
 
 	secondRequest := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/groups/%d/credentials/%d/observation-refresh", groupID, credentialID), strings.NewReader(`{}`))
-	secondRequest.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(secondRequest)
 	secondRequest.Header.Set("Content-Type", "application/json")
 	secondResponse := httptest.NewRecorder()
 	engine.ServeHTTP(secondResponse, secondRequest)
@@ -734,11 +734,11 @@ func TestCredentialResetCreditRouteRequiresIdempotencyAndReplays(t *testing.T) {
 		return codex.AccountObservation{Payload: []byte(`{}`)}, nil
 	})
 	engine := gin.New()
-	newTestServer(t, &config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{}, fixture.service).RegisterRoutes(engine)
 	path := fmt.Sprintf("/api/groups/%d/credentials/%d/reset-credits/consume", groupID, credentialID)
 
 	missingKey := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
-	missingKey.Header.Set("Authorization", "Bearer test-auth-key")
+	setTestPlatformSession(missingKey)
 	missingKey.Header.Set("Content-Type", "application/json")
 	missingResponse := httptest.NewRecorder()
 	engine.ServeHTTP(missingResponse, missingKey)
@@ -748,7 +748,7 @@ func TestCredentialResetCreditRouteRequiresIdempotencyAndReplays(t *testing.T) {
 
 	for attempt := 0; attempt < 2; attempt++ {
 		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
-		request.Header.Set("Authorization", "Bearer test-auth-key")
+		setTestPlatformSession(request)
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Idempotency-Key", resetCreditTestKey)
 		response := httptest.NewRecorder()

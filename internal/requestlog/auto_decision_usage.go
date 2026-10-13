@@ -36,8 +36,8 @@ func includeDecisionUsage(input UsageQuery, groupIDs []uint) bool {
 
 func decisionUsageScope(db *gorm.DB, input UsageQuery) *gorm.DB {
 	scope := db.Session(&gorm.Session{NewDB: true}).Model(&models.AutoDecisionUsageStat{}).Where("bucket_start_ms >= ? AND bucket_start_ms < ?", input.FromMS, input.ToMS)
-	if input.AccessKeyID != nil {
-		scope = scope.Where("access_key_id = ?", *input.AccessKeyID)
+	if input.ScopeAccessKeyIDs != nil {
+		scope = scope.Where("access_key_id IN ?", input.ScopeAccessKeyIDs)
 	}
 	if input.UpstreamModel != "" {
 		scope = scope.Where("model = ?", input.UpstreamModel)
@@ -65,8 +65,8 @@ const decisionRequestProjection = `completed_at_ms - completed_at_ms % ? AS buck
 func decisionRequestScope(db *gorm.DB, input UsageQuery) *gorm.DB {
 	scope := db.Session(&gorm.Session{NewDB: true}).Model(&models.RequestLog{}).
 		Where("completed_at_ms >= ? AND completed_at_ms < ? AND decision_model <> '' AND decision_pricing_completeness <> 'not_applicable'", input.FromMS, input.ToMS)
-	if input.AccessKeyID != nil {
-		scope = scope.Where("access_key_id = ?", *input.AccessKeyID)
+	if input.ScopeAccessKeyIDs != nil {
+		scope = scope.Where("access_key_id IN ?", input.ScopeAccessKeyIDs)
 	}
 	if input.UpstreamModel != "" {
 		scope = scope.Where("decision_model = ?", input.UpstreamModel)
