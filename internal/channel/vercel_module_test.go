@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"gpt-load/internal/channel/spec"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/protocol"
 )
@@ -89,5 +90,33 @@ func TestVercelChannelContract(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotRoutes, wantRoutes) {
 		t.Fatalf("Vercel routes = %#v, want %#v", gotRoutes, wantRoutes)
+	}
+
+	wantScrub := spec.ResponseScrub{
+		AnyKeys:        []string{"provider_metadata", "generationId"},
+		UsageKeys:      []string{"cost", "market_cost", "gateway_cost", "is_byok", "cost_details"},
+		HeaderPrefixes: []string{"X-Vercel-", "X-Matched-Path"},
+	}
+	scrub, ok := registry.ResponseScrub(Vercel)
+	if !ok || !reflect.DeepEqual(scrub, wantScrub) {
+		t.Fatalf("Vercel response scrub = %#v, want %#v", scrub, wantScrub)
+	}
+	scrub.AnyKeys[0] = "mutated"
+	if again, _ := registry.ResponseScrub(Vercel); !reflect.DeepEqual(again, wantScrub) {
+		t.Fatalf("ResponseScrub returned shared state: %#v", again)
+	}
+}
+
+func TestCompileResponseScrubRejectsBlankEntries(t *testing.T) {
+	t.Parallel()
+
+	for _, rules := range []spec.ResponseScrub{
+		{AnyKeys: []string{""}},
+		{UsageKeys: []string{" cost"}},
+		{HeaderPrefixes: []string{"X-Vercel- "}},
+	} {
+		if _, err := compileResponseScrub("test", rules); err == nil {
+			t.Fatalf("compileResponseScrub(%#v) accepted an invalid entry", rules)
+		}
 	}
 }

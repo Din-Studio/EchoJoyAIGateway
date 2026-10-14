@@ -34,12 +34,21 @@ func RewriteJSON(clientProtocol protocol.Protocol, body []byte, clientModel stri
 // blank-line delimiter is also accepted because some upstream bridges emit one
 // logical event per chunk without retaining the delimiter.
 func RewriteSSE(clientProtocol protocol.Protocol, data []byte, clientModel string) ([]byte, error) {
+	return TransformSSE(data, func(payload []byte) ([]byte, error) {
+		return RewriteJSON(clientProtocol, payload, clientModel)
+	})
+}
+
+// TransformSSE applies transform to the JSON payload of every SSE data event
+// with the same framing guarantees as RewriteSSE. Comments, events without
+// data and [DONE] markers are not passed to transform.
+func TransformSSE(data []byte, transform func(payload []byte) ([]byte, error)) ([]byte, error) {
 	var output bytes.Buffer
 	remaining := data
 	for len(remaining) > 0 {
 		index, delimiterLength := firstSSEDelimiter(remaining)
 		if index < 0 {
-			rewritten, err := rewriteSSEEvent(clientProtocol, remaining, clientModel)
+			rewritten, err := transformSSEEvent(remaining, transform)
 			if err != nil {
 				return nil, err
 			}
@@ -47,7 +56,7 @@ func RewriteSSE(clientProtocol protocol.Protocol, data []byte, clientModel strin
 			break
 		}
 		eventEnd := index + delimiterLength
-		rewritten, err := rewriteSSEEvent(clientProtocol, remaining[:eventEnd], clientModel)
+		rewritten, err := transformSSEEvent(remaining[:eventEnd], transform)
 		if err != nil {
 			return nil, err
 		}
@@ -78,7 +87,7 @@ func modelRewriter(clientProtocol protocol.Protocol) (dialect.ModelRewriter, err
 	}
 }
 
-func rewriteSSEEvent(clientProtocol protocol.Protocol, event []byte, clientModel string) ([]byte, error) {
+func transformSSEEvent(event []byte, transform func(payload []byte) ([]byte, error)) ([]byte, error) {
 	lines := splitSSELines(event)
 	dataValues := make([][]byte, 0, 1)
 	firstDataLine := -1
@@ -98,7 +107,7 @@ func rewriteSSEEvent(clientProtocol protocol.Protocol, event []byte, clientModel
 	if len(payload) == 0 || bytes.Equal(bytes.TrimSpace(payload), []byte("[DONE]")) {
 		return bytes.Clone(event), nil
 	}
-	rewritten, err := RewriteJSON(clientProtocol, payload, clientModel)
+	rewritten, err := transform(payload)
 	if err != nil {
 		return nil, err
 	}

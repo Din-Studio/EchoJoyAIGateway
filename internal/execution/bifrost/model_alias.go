@@ -107,32 +107,49 @@ func rewriteClientResponseModel(clientProtocol protocol.Protocol, body []byte, c
 	return responsealias.RewriteJSON(clientProtocol, body, clientModel)
 }
 
-type nativeAliasSSERewriter struct {
-	clientProtocol protocol.Protocol
-	clientModel    string
-	pending        []byte
-	maxEventBytes  int
-}
-
-func newNativeAliasSSERewriter(spec execution.AttemptSpec) *nativeAliasSSERewriter {
-	if !needsClientModelAlias(spec) {
+// nativeResponseRewrite composes the client model alias with the channel's
+// metadata scrub. It returns nil when native responses pass through unchanged.
+func nativeResponseRewrite(spec execution.AttemptSpec, scrubber *responseScrubber) func([]byte) ([]byte, error) {
+	alias := needsClientModelAlias(spec)
+	if !alias && scrubber == nil {
 		return nil
 	}
-	return &nativeAliasSSERewriter{
-		clientProtocol: spec.ClientProtocol,
-		clientModel:    spec.ClientModel,
-		maxEventBytes:  execution.SSEEventLimit(spec.ClientProtocol),
+	return func(body []byte) ([]byte, error) {
+		if alias {
+			var err error
+			body, err = rewriteClientResponseModel(spec.ClientProtocol, body, spec.ClientModel)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return scrubber.scrubJSON(body)
 	}
 }
 
-func (r *nativeAliasSSERewriter) eventLimit() int {
+type nativeSSERewriter struct {
+	rewrite       func([]byte) ([]byte, error)
+	pending       []byte
+	maxEventBytes int
+}
+
+func newNativeSSERewriter(spec execution.AttemptSpec, rewrite func([]byte) ([]byte, error)) *nativeSSERewriter {
+	if rewrite == nil {
+		return nil
+	}
+	return &nativeSSERewriter{
+		rewrite:       rewrite,
+		maxEventBytes: execution.SSEEventLimit(spec.ClientProtocol),
+	}
+}
+
+func (r *nativeSSERewriter) eventLimit() int {
 	if r != nil && r.maxEventBytes > 0 {
 		return r.maxEventBytes
 	}
 	return maxNativeAliasSSEEventBytes
 }
 
-func (r *nativeAliasSSERewriter) push(chunk []byte) ([]byte, error) {
+func (r *nativeSSERewriter) push(chunk []byte) ([]byte, error) {
 	if r == nil || len(chunk) == 0 {
 		return append([]byte(nil), chunk...), nil
 	}
@@ -152,7 +169,7 @@ func (r *nativeAliasSSERewriter) push(chunk []byte) ([]byte, error) {
 		}
 		event := append([]byte(nil), r.pending[:eventEnd]...)
 		r.pending = r.pending[eventEnd:]
-		rewritten, err := rewriteClientSSEEvent(event, r.clientProtocol, r.clientModel)
+		rewritten, err := responsealias.TransformSSE(event, r.rewrite)
 		if err != nil {
 			return nil, err
 		}
@@ -160,7 +177,7 @@ func (r *nativeAliasSSERewriter) push(chunk []byte) ([]byte, error) {
 	}
 }
 
-func (r *nativeAliasSSERewriter) finish() ([]byte, error) {
+func (r *nativeSSERewriter) finish() ([]byte, error) {
 	if r == nil || len(r.pending) == 0 {
 		return nil, nil
 	}
@@ -169,7 +186,7 @@ func (r *nativeAliasSSERewriter) finish() ([]byte, error) {
 	}
 	event := append([]byte(nil), r.pending...)
 	r.pending = nil
-	return rewriteClientSSEEvent(event, r.clientProtocol, r.clientModel)
+	return responsealias.TransformSSE(event, r.rewrite)
 }
 
 func firstNativeSSEDelimiter(data []byte) (int, int) {

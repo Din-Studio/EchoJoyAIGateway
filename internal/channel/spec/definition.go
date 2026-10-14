@@ -210,6 +210,22 @@ type ProviderBinding struct {
 	DefaultBaseURLs []string
 }
 
+// ResponseScrub declares provider platform metadata removed from native
+// responses before they reach clients. Keys match JSON object member names.
+type ResponseScrub struct {
+	// AnyKeys are removed from every JSON object in a response body.
+	AnyKeys []string
+	// UsageKeys are removed only from objects stored under a "usage" member.
+	UsageKeys []string
+	// HeaderPrefixes match response header names case-insensitively.
+	HeaderPrefixes []string
+}
+
+// Empty reports whether the declaration removes nothing.
+func (s ResponseScrub) Empty() bool {
+	return len(s.AnyKeys) == 0 && len(s.UsageKeys) == 0 && len(s.HeaderPrefixes) == 0
+}
+
 // ExtensionID is a strongly typed code-owned extension binding.
 type ExtensionID string
 
@@ -309,6 +325,7 @@ type Definition struct {
 	Credentials         []Field
 	CredentialValidator CredentialValidatorID
 	Provider            ProviderBinding
+	ResponseScrub       ResponseScrub
 	Routes              []Route
 	Capabilities        CapabilityBindings
 }
