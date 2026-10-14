@@ -1,6 +1,7 @@
 package bifrost
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -194,4 +195,200 @@ func TestVercelRouteCapabilityMatchesDeclaredOperations(t *testing.T) {
 			t.Errorf("route %s/%s/%s rejected: %v", route.ClientProtocol, route.Operation, route.RouteMode, err)
 		}
 	}
+}
+
+const vercelProviderMetadata = `{"gateway":{"routing":{"resolvedProvider":"baseten"},"cost":"0.0000336","generationId":"gen_1"}}`
+
+func TestVercelNativeResponsesScrubPlatformMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		clientProtocol protocol.Protocol
+		operation      execution.Operation
+		path           string
+		body           string
+		stream         bool
+		response       string
+	}{
+		{
+			name: "completions", clientProtocol: protocol.OpenAICompletions,
+			operation: execution.OperationChatCompletion, path: "/v1/chat/completions",
+			body:     `{"model":"provider-model","messages":[{"role":"user","content":"hello"}]}`,
+			response: `{"id":"gen_1","generationId":"gen_1","object":"chat.completion","created":1,"model":"provider-model","choices":[{"index":0,"message":{"role":"assistant","content":"pong","provider_metadata":` + vercelProviderMetadata + `},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0.0000336,"market_cost":0.0000336,"gateway_cost":0.0000336,"is_byok":false,"cost_details":{"upstream_inference_cost":null}}}`,
+		},
+		{
+			name: "responses", clientProtocol: protocol.OpenAIResponses,
+			operation: execution.OperationResponsesCreate, path: "/v1/responses",
+			body:     `{"model":"provider-model","input":"hello","store":false}`,
+			response: `{"id":"gen_1","object":"response","status":"completed","model":"provider-model","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"pong"}]}],"provider_metadata":` + vercelProviderMetadata + `,"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`,
+		},
+		{
+			name: "embeddings", clientProtocol: protocol.OpenAIEmbeddings,
+			operation: execution.OperationEmbeddingsCreate, path: "/v1/embeddings",
+			body:     `{"model":"provider-model","input":"pong"}`,
+			response: `{"object":"list","model":"provider-model","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"provider_metadata":` + vercelProviderMetadata + `,"usage":{"prompt_tokens":1,"total_tokens":1}}`,
+		},
+		{
+			name: "anthropic messages", clientProtocol: protocol.Anthropic,
+			operation: execution.OperationChatCompletion, path: "/v1/messages",
+			body:     `{"model":"provider-model","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`,
+			response: `{"id":"gen_1","type":"message","role":"assistant","model":"provider-model","content":[{"type":"text","text":"pong"}],"provider_metadata":` + vercelProviderMetadata + `,"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`,
+		},
+		{
+			name: "completions stream", clientProtocol: protocol.OpenAICompletions,
+			operation: execution.OperationChatCompletion, path: "/v1/chat/completions", stream: true,
+			body: `{"model":"provider-model","stream":true,"messages":[{"role":"user","content":"hello"}]}`,
+			response: "data: {\"id\":\"gen_1\",\"object\":\"chat.completion.chunk\",\"model\":\"provider-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"pong\"}}]}\n\n" +
+				"data: {\"id\":\"gen_1\",\"generationId\":\"gen_1\",\"object\":\"chat.completion.chunk\",\"model\":\"provider-model\",\"choices\":[{\"index\":0,\"delta\":{\"provider_metadata\":" + vercelProviderMetadata + "},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2,\"cost\":0.0000336}}\n\n" +
+				"data: [DONE]\n\n",
+		},
+		{
+			name: "responses stream", clientProtocol: protocol.OpenAIResponses,
+			operation: execution.OperationResponsesCreate, path: "/v1/responses", stream: true,
+			body: `{"model":"provider-model","input":"hello","store":false,"stream":true}`,
+			response: "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n" +
+				"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"gen_1\",\"object\":\"response\",\"status\":\"completed\",\"model\":\"provider-model\",\"output\":[],\"provider_metadata\":" + vercelProviderMetadata + ",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+		},
+		{
+			name: "anthropic messages stream", clientProtocol: protocol.Anthropic,
+			operation: execution.OperationChatCompletion, path: "/v1/messages", stream: true,
+			body: `{"model":"provider-model","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"hello"}]}`,
+			response: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"gen_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"provider-model\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n" +
+				"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"pong\"}}\n\n" +
+				"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":1,\"output_tokens\":1},\"provider_metadata\":" + vercelProviderMetadata + "}\n\n" +
+				"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.URL.Path != test.path {
+					t.Errorf("upstream path = %s", request.URL.Path)
+				}
+				contentType := "application/json"
+				if test.stream {
+					contentType = "text/event-stream"
+				}
+				writer.Header().Set("Content-Type", contentType)
+				writer.Header().Set("X-Vercel-Id", "sin1::fra1::abc")
+				writer.Header().Set("X-Vercel-Cache", "MISS")
+				writer.Header().Set("X-Matched-Path", test.path)
+				writer.Header().Set("X-Request-Id", "req_1")
+				_, _ = io.WriteString(writer, test.response)
+			}))
+			defer server.Close()
+
+			manager, resolved := newChannelManagerForTest(t, channel.Vercel, server.URL)
+			spec := freezeTestAttempt(execution.AttemptSpec{
+				RequestID: "vercel-request", AttemptID: "vercel-attempt", Sequence: 1,
+				ChannelID: string(channel.Vercel), ClientProtocol: test.clientProtocol,
+				Operation: test.operation, ClientModel: "public-model", UpstreamModel: "provider-model",
+				Method: http.MethodPost, Path: test.path,
+				Header:       http.Header{"Content-Type": {"application/json"}},
+				Body:         []byte(test.body),
+				TargetConfig: resolved.TargetConfig,
+				Credential: execution.NewCredentialSnapshot(
+					17, 1, 1, []byte(`{"api_key":"`+testAPIKey+`"}`),
+				),
+			})
+			var body []byte
+			var headers http.Header
+			if test.stream {
+				var data bytes.Buffer
+				result := manager.ExecuteStream(context.Background(), spec, func(event execution.StreamEvent) error {
+					switch event.Kind {
+					case execution.StreamEventReady:
+						headers = event.Header
+					case execution.StreamEventData:
+						data.Write(event.Data)
+					}
+					return nil
+				})
+				if err := result.Validate(); err != nil || result.Error != nil {
+					t.Fatalf("stream result = %+v err=%v", result, err)
+				}
+				body = data.Bytes()
+			} else {
+				result := manager.Execute(context.Background(), spec)
+				if err := result.Validate(); err != nil || result.Error != nil || result.StatusCode != http.StatusOK {
+					t.Fatalf("result = %+v err=%v", result, err)
+				}
+				body, headers = result.Body, result.Header
+			}
+
+			for _, leaked := range []string{"provider_metadata", "generationId", "baseten", `"cost"`, "gateway_cost", "market_cost", "is_byok", "cost_details", "provider-model"} {
+				if bytes.Contains(body, []byte(leaked)) {
+					t.Errorf("response leaks %s: %s", leaked, body)
+				}
+			}
+			keep := "pong"
+			if test.clientProtocol == protocol.OpenAIEmbeddings {
+				keep = "[0.1,0.2]"
+			}
+			if !bytes.Contains(body, []byte(`"public-model"`)) || !bytes.Contains(body, []byte(keep)) {
+				t.Errorf("response lost content or alias: %s", body)
+			}
+			if headers.Get("X-Vercel-Id") != "" || headers.Get("X-Vercel-Cache") != "" || headers.Get("X-Matched-Path") != "" ||
+				headers.Get("X-Request-Id") != "req_1" {
+				t.Errorf("response headers = %#v", headers)
+			}
+		})
+	}
+}
+
+func TestGatewayWithoutResponseScrubForwardsMetadataUnchanged(t *testing.T) {
+	t.Parallel()
+
+	response := `{"id":"gen_1","object":"chat.completion","created":1,"model":"same-model","choices":[{"index":0,"message":{"role":"assistant","content":"pong","provider_metadata":` + vercelProviderMetadata + `},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0.1}}`
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("X-Vercel-Id", "sin1::fra1::abc")
+		_, _ = io.WriteString(writer, response)
+	}))
+	defer server.Close()
+
+	manager, resolved := newChannelManagerForTest(t, channel.NewAPI, server.URL)
+	result := manager.Execute(context.Background(), freezeTestAttempt(execution.AttemptSpec{
+		RequestID: "newapi-request", AttemptID: "newapi-attempt", Sequence: 1,
+		ChannelID: string(channel.NewAPI), ClientProtocol: protocol.OpenAICompletions,
+		Operation: execution.OperationChatCompletion, ClientModel: "same-model", UpstreamModel: "same-model",
+		Method: http.MethodPost, Path: "/v1/chat/completions",
+		Header:       http.Header{"Content-Type": {"application/json"}},
+		Body:         []byte(`{"model":"same-model","messages":[{"role":"user","content":"hello"}]}`),
+		TargetConfig: resolved.TargetConfig,
+		Credential: execution.NewCredentialSnapshot(
+			17, 1, 1, []byte(`{"api_key":"`+testAPIKey+`"}`),
+		),
+	}))
+	if err := result.Validate(); err != nil || result.Error != nil {
+		t.Fatalf("result = %+v err=%v", result, err)
+	}
+	if string(result.Body) != response || result.Header.Get("X-Vercel-Id") == "" {
+		t.Fatalf("unscrubbed channel changed response: headers=%#v body=%s", result.Header, result.Body)
+	}
+}
+
+func newChannelManagerForTest(t *testing.T, id channel.ID, baseURL string) (*RuntimeManager, channel.ResolvedTarget) {
+	t.Helper()
+
+	registry := channel.NewRegistry()
+	resolved, err := registry.Resolve(id, json.RawMessage(`{"base_url":"`+baseURL+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := newRuntimeManager(runtimeOptions{allowPrivateNetwork: true}, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(manager.Shutdown)
+	if err := manager.Reconcile([]provideradapter.RuntimeTarget{{Target: resolved}}); err != nil {
+		t.Fatal(err)
+	}
+	return manager, resolved
 }

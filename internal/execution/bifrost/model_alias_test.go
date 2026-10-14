@@ -43,7 +43,7 @@ func TestNativeSSEBoundariesUseImagesEventLimit(t *testing.T) {
 		t.Fatalf("first-event gate output/error = %d bytes / %v", len(output), err)
 	}
 
-	rewriter := newNativeAliasSSERewriter(spec)
+	rewriter := newNativeSSERewriter(spec, nativeResponseRewrite(spec, nil))
 	rewritten, err := rewriter.push(wire)
 	if err != nil {
 		t.Fatalf("alias rewriter error = %v", err)
@@ -94,11 +94,12 @@ func TestNativeAliasSSERewriterCoversNativeProtocolShapes(t *testing.T) {
 		{name: "Gemini", clientProtocol: protocol.Gemini, payload: `{"modelVersion":"provider-model","candidates":[]}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			rewriter := newNativeAliasSSERewriter(execution.AttemptSpec{
+			spec := execution.AttemptSpec{
 				ClientProtocol: test.clientProtocol,
 				ClientModel:    "public-model",
 				UpstreamModel:  "provider-model",
-			})
+			}
+			rewriter := newNativeSSERewriter(spec, nativeResponseRewrite(spec, nil))
 			raw := []byte("event: update\r\ndata: " + test.payload + "\r\n\r\ndata: [DONE]\r\n\r\n")
 			split := len(raw) / 2
 			first, err := rewriter.push(raw[:split])
@@ -124,14 +125,15 @@ func TestNativeAliasSSERewriterCoversNativeProtocolShapes(t *testing.T) {
 	}
 }
 
-func TestNativeAliasSSERewriterIsDisabledForEqualAliases(t *testing.T) {
+func TestNativeSSERewriterIsDisabledWithoutAliasOrScrub(t *testing.T) {
 	t.Parallel()
 
-	if rewriter := newNativeAliasSSERewriter(execution.AttemptSpec{
+	spec := execution.AttemptSpec{
 		ClientProtocol: protocol.OpenAICompletions,
 		ClientModel:    "same-model",
 		UpstreamModel:  "same-model",
-	}); rewriter != nil {
+	}
+	if rewriter := newNativeSSERewriter(spec, nativeResponseRewrite(spec, nil)); rewriter != nil {
 		t.Fatal("equal aliases enabled native SSE rewriting")
 	}
 }

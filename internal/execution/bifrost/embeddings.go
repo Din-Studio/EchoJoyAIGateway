@@ -16,6 +16,7 @@ import (
 	"gpt-load/internal/channel"
 	"gpt-load/internal/dialect"
 	"gpt-load/internal/execution"
+	"gpt-load/internal/platform/httpheader"
 	"gpt-load/internal/protocol"
 )
 
@@ -259,6 +260,8 @@ func (r *Runtime) executeEmbedding(
 	if headers == nil {
 		headers = responseHeaders(outcome.response.ExtraFields.ProviderResponseHeaders, bifrostContext, false)
 	}
+	scrubber := r.responseScrubber(spec)
+	scrubber.scrubHeaders(headers)
 	if !ok {
 		return startedUnaryFailure(
 			http.StatusOK,
@@ -279,12 +282,15 @@ func (r *Runtime) executeEmbedding(
 		)
 	}
 	model := openAIResponseModel(body, "")
-	if spec.Operation != execution.OperationProbe && needsClientModelAlias(spec) {
-		var err error
-		body, err = rewriteClientResponseModel(spec.ClientProtocol, body, spec.ClientModel)
+	if rewrite := nativeResponseRewrite(spec, scrubber); spec.Operation != execution.OperationProbe && rewrite != nil {
+		rewritten, err := rewrite(body)
 		if err != nil {
-			return startedUnaryFailure(http.StatusOK, headers, execution.ErrorKindInternal, "rewrite Embeddings response model")
+			return startedUnaryFailure(http.StatusOK, headers, execution.ErrorKindInternal, "rewrite Embeddings response")
 		}
+		if !bytes.Equal(rewritten, body) {
+			httpheader.StripRepresentationMetadata(headers)
+		}
+		body = rewritten
 	}
 	return execution.AttemptResult{
 		DispatchState:     execution.DispatchMaybeSent,
