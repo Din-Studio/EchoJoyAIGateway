@@ -466,6 +466,16 @@ func (r *Registry) CapabilityBindings(id ID) (spec.CapabilityBindings, bool) {
 	return definition.capabilities, true
 }
 
+// ResponseScrub returns an independent copy of the platform metadata a
+// channel removes from native responses.
+func (r *Registry) ResponseScrub(id ID) (spec.ResponseScrub, bool) {
+	definition, ok := r.lookup(id)
+	if !ok {
+		return spec.ResponseScrub{}, false
+	}
+	return cloneResponseScrub(definition.responseScrub), true
+}
+
 // SupportsAuthorizationMethod reports whether a subscription channel declares one entry flow.
 func (r *Registry) SupportsAuthorizationMethod(id ID, method AuthorizationMethod) bool {
 	descriptor, ok := r.Get(id)
@@ -673,6 +683,7 @@ type definition struct {
 	providerKind            ProviderKind
 	connection              spec.Connection
 	capabilities            spec.CapabilityBindings
+	responseScrub           spec.ResponseScrub
 	endpointPolicy          spec.EndpointPolicy
 	fixedBaseURL            string
 	fixedTargetConfig       json.RawMessage

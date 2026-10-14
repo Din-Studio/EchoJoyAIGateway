@@ -127,6 +127,10 @@ func compileModule(source spec.Definition, extensions compiledExtensions) (defin
 	if source.Capabilities.ResetCreditAction != "" && source.Capabilities.QuotaObservation == "" {
 		return definition{}, fmt.Errorf("channel %q binds reset credit without quota observation", id)
 	}
+	responseScrub, err := compileResponseScrub(id, source.ResponseScrub)
+	if err != nil {
+		return definition{}, err
+	}
 
 	fixedBaseURL := ""
 	var fixedTargetConfig json.RawMessage
@@ -180,6 +184,7 @@ func compileModule(source spec.Definition, extensions compiledExtensions) (defin
 		providerKind:            source.Provider.ProviderKind,
 		connection:              cloneConnection(source.Connection),
 		capabilities:            cloneCapabilityBindings(source.Capabilities),
+		responseScrub:           responseScrub,
 		endpointPolicy:          source.Provider.EndpointPolicy,
 		fixedBaseURL:            fixedBaseURL,
 		fixedTargetConfig:       fixedTargetConfig,
@@ -526,6 +531,25 @@ func schemaHasField(schema objectSchema, key string, required bool) bool {
 func cloneConnection(source spec.Connection) spec.Connection {
 	source.AuthorizationMethods = append([]spec.AuthorizationMethod(nil), source.AuthorizationMethods...)
 	return source
+}
+
+func compileResponseScrub(channelID string, source spec.ResponseScrub) (spec.ResponseScrub, error) {
+	for _, values := range [][]string{source.AnyKeys, source.UsageKeys, source.HeaderPrefixes} {
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value {
+				return spec.ResponseScrub{}, fmt.Errorf("channel %q has invalid response scrub entry %q", channelID, value)
+			}
+		}
+	}
+	return cloneResponseScrub(source), nil
+}
+
+func cloneResponseScrub(source spec.ResponseScrub) spec.ResponseScrub {
+	return spec.ResponseScrub{
+		AnyKeys:        append([]string(nil), source.AnyKeys...),
+		UsageKeys:      append([]string(nil), source.UsageKeys...),
+		HeaderPrefixes: append([]string(nil), source.HeaderPrefixes...),
+	}
 }
 
 func cloneCapabilityBindings(source spec.CapabilityBindings) spec.CapabilityBindings {

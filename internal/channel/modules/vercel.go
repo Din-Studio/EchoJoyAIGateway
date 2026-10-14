@@ -34,6 +34,12 @@ func Vercel() spec.Module {
 				// The gateway runtime appends /v1/... itself, so this must stay the root.
 				FixedBaseURL: "https://ai-gateway.vercel.sh",
 			},
+			// Vercel exposes its routing plan, backing provider and billing in every response.
+			ResponseScrub: spec.ResponseScrub{
+				AnyKeys:        []string{"provider_metadata", "generationId"},
+				UsageKeys:      []string{"cost", "market_cost", "gateway_cost", "is_byok", "cost_details"},
+				HeaderPrefixes: []string{"X-Vercel-", "X-Matched-Path"},
+			},
 			Routes: []spec.Route{
 				spec.NewRoute(protocol.OpenAICompletions, execution.OperationChatCompletion, execution.RouteNative),
 				spec.NewRoute(protocol.OpenAICompletions, execution.OperationListModels, execution.RouteNative),

@@ -326,6 +326,7 @@ func (r *Runtime) executePassthrough(
 		return attemptedUnaryFailure(execution.ErrorKindInternal, "execution runtime returned no response stream")
 	}
 
+	scrubber := r.responseScrubber(spec)
 	responseObserved := false
 	status := 0
 	var headers http.Header
@@ -360,6 +361,7 @@ func (r *Runtime) executePassthrough(
 				preResponse.stop()
 				status = response.StatusCode
 				headers = responseHeaders(response.Headers, bifrostContext, false)
+				scrubber.scrubHeaders(headers)
 				requestID = upstreamRequestID(headers)
 			} else if response.StatusCode != status {
 				cancelCall()
@@ -410,12 +412,15 @@ complete:
 			}
 			model = openAIResponseModel(bodyBytes, "")
 		}
-		if needsClientModelAlias(spec) && headers.Get("Content-Encoding") == "" {
-			var err error
-			bodyBytes, err = rewriteClientResponseModel(spec.ClientProtocol, bodyBytes, spec.ClientModel)
+		if rewrite := nativeResponseRewrite(spec, scrubber); rewrite != nil && headers.Get("Content-Encoding") == "" {
+			rewritten, err := rewrite(bodyBytes)
 			if err != nil {
-				return startedUnaryFailure(status, headers, execution.ErrorKindInternal, "rewrite native response model")
+				return startedUnaryFailure(status, headers, execution.ErrorKindInternal, "rewrite native response")
 			}
+			if !bytes.Equal(rewritten, bodyBytes) {
+				httpheader.StripRepresentationMetadata(headers)
+			}
+			bodyBytes = rewritten
 		}
 		return execution.AttemptResult{
 			DispatchState:     execution.DispatchMaybeSent,
@@ -553,7 +558,8 @@ func (r *Runtime) executeNativeStream(
 	var usageEvidence *execution.UsageEvidence
 	var errorBody bytes.Buffer
 	firstEventGate := newNativeFirstSSEEventGate(spec)
-	aliasRewriter := newNativeAliasSSERewriter(spec)
+	scrubber := r.responseScrubber(spec)
+	responseRewriter := newNativeSSERewriter(spec, nativeResponseRewrite(spec, scrubber))
 	idleTimer := newIdleTimer(spec.Timeouts.StreamIdle)
 	defer idleTimer.stop()
 	emitReady := func() error {
@@ -596,8 +602,8 @@ func (r *Runtime) executeNativeStream(
 						return attemptedStreamFailure(execution.ErrorKindInternal, "invalid upstream SSE stream")
 					}
 				}
-				if aliasRewriter != nil && status >= http.StatusOK && status < http.StatusMultipleChoices {
-					data, err := aliasRewriter.finish()
+				if responseRewriter != nil && status >= http.StatusOK && status < http.StatusMultipleChoices {
+					data, err := responseRewriter.finish()
 					if err != nil {
 						return streamAliasFailure(status, headers, requestID, model, usageEvidence)
 					}
@@ -627,6 +633,7 @@ func (r *Runtime) executeNativeStream(
 				responseObserved = true
 				status = response.StatusCode
 				headers = responseHeaders(response.Headers, bifrostContext, true)
+				scrubber.scrubHeaders(headers)
 				requestID = upstreamRequestID(headers)
 				if status < http.StatusOK || status >= http.StatusMultipleChoices {
 					if err := emitReady(); err != nil {
@@ -654,8 +661,8 @@ func (r *Runtime) executeNativeStream(
 						}
 						return nativeStreamProtocolFailure(status, headers, requestID, model, usageEvidence)
 					}
-					if aliasRewriter != nil && len(data) > 0 {
-						data, err = aliasRewriter.push(data)
+					if responseRewriter != nil && len(data) > 0 {
+						data, err = responseRewriter.push(data)
 						if err != nil {
 							cancelCall()
 							if !started {
