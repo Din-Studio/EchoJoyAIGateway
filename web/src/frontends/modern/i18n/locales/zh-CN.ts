@@ -47,6 +47,7 @@ export default {
   },
   shell: {
     refresh: '刷新',
+    teamScope: '团队范围',
     refreshedAt: '更新于 {time}',
     importCredentials: '导入密钥',
     goHome: 'GPT-Load 总览',

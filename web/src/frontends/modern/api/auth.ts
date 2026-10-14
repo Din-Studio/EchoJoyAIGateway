@@ -21,6 +21,10 @@ export async function getAuthSession(
     teams: list(data.teams).map(text),
     platform: boolean(data.platform),
     admin_teams: list(data.admin_teams).map(text),
+    selectable_teams: list(data.selectable_teams).map((row) => {
+      const team = record(row)
+      return { name: text(team.name), display_name: text(team.display_name) }
+    }),
   }
 }
 

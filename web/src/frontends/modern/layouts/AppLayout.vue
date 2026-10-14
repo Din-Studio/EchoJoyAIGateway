@@ -8,6 +8,7 @@ import {
   Menu,
   RefreshCw,
   UserRound,
+  Users,
   X,
 } from '@lucide/vue'
 import { DialogClose, DialogRoot, DialogTrigger } from 'reka-ui'
@@ -27,6 +28,7 @@ import {
   AppIcon,
   AppIconButton,
   AppLoadingIndicator,
+  AppSelect,
   AppTooltip,
 } from '@modern/components/ui'
 import { useAuthSession } from '@modern/features/auth/auth-session'
@@ -74,6 +76,13 @@ const accountLabel = computed(() => {
     : t('auth.noTeams')
   return `${name} · ${roleLabel.value} · ${t('auth.teams')}: ${teams}`
 })
+// 团队范围：可选团队与默认团队都由会话给出，这里只负责展示和切换。
+const teamOptions = computed(() =>
+  session.state.selectableTeams.map((team) => ({
+    value: team.name,
+    label: team.display_name || team.name,
+  })),
+)
 const { title: pageTitle } = usePageTitle()
 const pageRefresh = providePageRefresh()
 const fetching = useIsFetching()
@@ -254,6 +263,17 @@ useMessageSource(() =>
               {{ session.state.user.display_name || session.state.user.name }}
             </AppBadge>
           </AppTooltip>
+          <AppSelect
+            v-if="teamOptions.length > 0"
+            class="modern-team-scope"
+            :model-value="session.state.team"
+            :label="t('shell.teamScope')"
+            label-hidden
+            size="sm"
+            :icon="Users"
+            :options="teamOptions"
+            @update:model-value="session.selectTeam($event)"
+          />
           <AppTooltip v-if="session.state.platform" :label="t('shell.importCredentials')">
             <AppButton
               variant="brand"
@@ -418,6 +438,11 @@ useMessageSource(() =>
   flex-shrink: 0;
   margin-right: var(--modern-space-2);
   white-space: nowrap;
+}
+.modern-team-scope {
+  flex-shrink: 0;
+  inline-size: var(--modern-menu-min-width);
+  margin-right: var(--modern-space-2);
 }
 .modern-content {
   display: flex;

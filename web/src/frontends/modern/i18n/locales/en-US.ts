@@ -47,6 +47,7 @@ export default {
   },
   shell: {
     refresh: 'Refresh',
+    teamScope: 'Team scope',
     refreshedAt: 'Updated {time}',
     importCredentials: 'Import credentials',
     goHome: 'GPT-Load overview',

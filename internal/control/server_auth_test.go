@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"gpt-load/internal/identity"
 	"gpt-load/internal/platform/config"
 )
 
@@ -53,9 +54,21 @@ func TestAuthSessionReturnsTheSignedInPrincipal(t *testing.T) {
 		User:       authSessionUser{ID: "uid-alice", Name: "alice", DisplayName: "Alice"},
 		Teams:      []string{"team-a", "team-b"},
 		AdminTeams: []string{"team-a"},
+		// Members and team admins may only scope the console to their own teams.
+		SelectableTeams: []identity.Team{{Name: "team-a", DisplayName: "team-a"}, {Name: "team-b", DisplayName: "team-b"}},
 	}
 	if !reflect.DeepEqual(envelope.Data, want) {
 		t.Fatalf("session = %+v, want %+v", envelope.Data, want)
+	}
+
+	// Platform admins may scope the console to any Casdoor team.
+	recorder = serveSessionRequest(engine, http.MethodGet, "/api/auth/session", testPlatformSession)
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	wantPlatform := []identity.Team{{Name: "team-a", DisplayName: "Team A"}, {Name: "team-b", DisplayName: "Team B"}}
+	if recorder.Code != http.StatusOK || !reflect.DeepEqual(envelope.Data.SelectableTeams, wantPlatform) {
+		t.Fatalf("platform session = %d %+v, want selectable %+v", recorder.Code, envelope.Data, wantPlatform)
 	}
 }
 

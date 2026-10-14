@@ -129,9 +129,7 @@ func (server *Server) handleUsage(c *gin.Context) {
 		}
 		query.SelfScoped = true
 	}
-	query.ScopeAccessKeyIDs, err = server.service.scopeAccessKeyFilter(
-		c.Request.Context(), principal, query.ScopeAccessKeyIDs,
-	)
+	query.ScopeAccessKeyIDs, err = server.requestScopeFilter(c, query.ScopeAccessKeyIDs)
 	if err != nil {
 		writeServiceError(c, "usage", err)
 		return

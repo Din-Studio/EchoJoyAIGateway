@@ -14,19 +14,43 @@ import (
 	"gpt-load/internal/storage/models"
 )
 
+// teamScopeHeader carries the console's selected team. Empty means every
+// team the Principal may see; a team name intersects that scope with the
+// team's keys, so it can only narrow and needs no membership check.
+const teamScopeHeader = "X-Team-Scope"
+
+// requestScope resolves the AccessKeys the request may read from its
+// Principal and selected team. See scopedAccessKeyIDs for the nil contract.
+func (s *Server) requestScope(c *gin.Context) ([]uint, error) {
+	principal, _ := currentPrincipal(c)
+	return s.service.scopedAccessKeyIDs(c.Request.Context(), principal, c.GetHeader(teamScopeHeader))
+}
+
+// requestScopeFilter is requestScope narrowed to an optional requested key.
+func (s *Server) requestScopeFilter(c *gin.Context, requested []uint) ([]uint, error) {
+	principal, _ := currentPrincipal(c)
+	return s.service.scopeAccessKeyFilter(c.Request.Context(), principal, c.GetHeader(teamScopeHeader), requested)
+}
+
 // scopedAccessKeyIDs returns the AccessKeys p may read: nil (every key) for
-// platform admins, otherwise the keys of the teams they manage plus their
-// own. It must stay one query: an empty result has to remain an empty slice,
+// platform admins with no team selected, otherwise the keys of the teams they
+// manage plus their own, intersected with the selected team when there is
+// one. It must stay one query: an empty result has to remain an empty slice,
 // because nil would mean "every key".
-func (s *Service) scopedAccessKeyIDs(ctx context.Context, p identity.Principal) ([]uint, error) {
-	if p.Platform {
+func (s *Service) scopedAccessKeyIDs(ctx context.Context, p identity.Principal, team string) ([]uint, error) {
+	if p.Platform && team == "" {
 		return nil, nil
 	}
 	query := s.db.WithContext(ctx).Model(&models.AccessKey{})
-	if len(p.AdminTeams) > 0 {
-		query = query.Where("team_id IN ? OR owner_user_id = ?", p.AdminTeams, p.UserID)
-	} else {
-		query = query.Where("owner_user_id = ?", p.UserID)
+	if !p.Platform {
+		if len(p.AdminTeams) > 0 {
+			query = query.Where("team_id IN ? OR owner_user_id = ?", p.AdminTeams, p.UserID)
+		} else {
+			query = query.Where("owner_user_id = ?", p.UserID)
+		}
+	}
+	if team != "" {
+		query = query.Where("team_id = ?", team)
 	}
 	ids := []uint{}
 	if err := query.Order("id ASC").Pluck("id", &ids).Error; err != nil {
@@ -46,9 +70,10 @@ func (s *Service) scopedAccessKeyIDs(ctx context.Context, p identity.Principal) 
 func (s *Service) scopeAccessKeyFilter(
 	ctx context.Context,
 	p identity.Principal,
+	team string,
 	requested []uint,
 ) ([]uint, error) {
-	ids, err := s.scopedAccessKeyIDs(ctx, p)
+	ids, err := s.scopedAccessKeyIDs(ctx, p, team)
 	if err != nil {
 		return nil, err
 	}

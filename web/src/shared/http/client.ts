@@ -12,6 +12,8 @@ export type ApiPath = `/api/${string}`
 export interface ApiClientDependencies {
   fetch: typeof fetch
   getLocale(): AppLocale
+  // 控制台选中的团队；为空时不发头，后端视为不收窄。
+  getTeam(): string
   onUnauthorized(): void
 }
 
@@ -221,6 +223,8 @@ export function createApiClient(deps: ApiClientDependencies): ApiClientWithRespo
     }
     const headers = new Headers(callerHeaders)
     headers.set('Accept-Language', deps.getLocale())
+    const team = deps.getTeam()
+    if (team) headers.set('X-Team-Scope', team)
     if (json !== undefined) {
       headers.set('Content-Type', 'application/json')
     }

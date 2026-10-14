@@ -162,6 +162,61 @@ func TestTeamScopeLimitsWhichKeysEachRoleSees(t *testing.T) {
 	}
 }
 
+// serveTeam is serve with the console's selected team.
+func (f teamScopeFixture) serveTeam(method, target, cookie, team string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, target, bytes.NewReader(nil))
+	setTestSession(request, cookie)
+	request.Header.Set("Accept-Language", "en-US")
+	request.Header.Set(teamScopeHeader, team)
+	recorder := httptest.NewRecorder()
+	f.engine.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func TestSelectedTeamOnlyNarrowsTheScope(t *testing.T) {
+	t.Parallel()
+	f := newTeamScopeFixture(t)
+	f.service.usageStats = requestlog.NewService(f.db, nil, nil)
+	for _, test := range []struct {
+		name   string
+		cookie string
+		team   string
+		want   []uint
+	}{
+		{name: "platform picks team-a", cookie: testPlatformSession, team: "team-a", want: []uint{f.memberKey, f.adminKey}},
+		{name: "platform picks team-b", cookie: testPlatformSession, team: "team-b", want: []uint{f.teamBKey, f.aliceTeamBKey}},
+		{name: "platform picks unknown team", cookie: testPlatformSession, team: "nope", want: []uint{}},
+		{name: "team-a admin picks team-a", cookie: testTeamAdminSession, team: "team-a", want: []uint{f.memberKey, f.adminKey}},
+		{name: "team-a admin picks team-b where they are a member", cookie: testTeamAdminSession, team: "team-b", want: []uint{f.aliceTeamBKey}},
+		{name: "member picks their team", cookie: testMemberSession, team: "team-a", want: []uint{f.memberKey}},
+		{name: "member picks a team they are not in", cookie: testMemberSession, team: "team-b", want: []uint{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			list := f.serveTeam(http.MethodGet, "/api/access-keys", test.cookie, test.team)
+			if list.Code != http.StatusOK {
+				t.Fatalf("list = %d %s", list.Code, list.Body)
+			}
+			listed := []uint{}
+			for _, item := range decodeData[AccessKeyCollectionResponse](t, list).Items {
+				listed = append(listed, item.ID)
+			}
+			slices.Sort(listed)
+			if !slices.Equal(listed, test.want) {
+				t.Fatalf("list = %v, want %v", listed, test.want)
+			}
+		})
+	}
+	// A requested key outside the selected team is missing, not forbidden.
+	usage := f.serveTeam(http.MethodGet, fmt.Sprintf("/api/usage?%s&access_key_id=%d", usageTestDayQuery, f.teamBKey), testPlatformSession, "team-a")
+	if usage.Code != http.StatusNotFound {
+		t.Fatalf("usage for a key outside the selected team = %d %s, want 404", usage.Code, usage.Body)
+	}
+	// Platform-only routes never read the selected team.
+	if teams := f.serveTeam(http.MethodGet, "/api/teams", testPlatformSession, "team-a"); teams.Code != http.StatusOK {
+		t.Fatalf("teams with a selected team = %d %s", teams.Code, teams.Body)
+	}
+}
+
 func TestMembersRevealOnlyTheirOwnKeys(t *testing.T) {
 	t.Parallel()
 	f := newTeamScopeFixture(t)

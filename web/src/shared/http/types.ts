@@ -19,11 +19,18 @@ export interface AuthSessionUser {
   email: string
 }
 
+export interface AuthSessionTeam {
+  name: string
+  display_name: string
+}
+
 export interface AuthSessionPayload {
   user: AuthSessionUser
   teams: string[]
   platform: boolean
   admin_teams: string[]
+  // 控制台可切换到的团队：平台管理员为 Casdoor 全部团队，其他人为自己所属的团队。
+  selectable_teams: AuthSessionTeam[]
 }
 
 export type { AppLocale }

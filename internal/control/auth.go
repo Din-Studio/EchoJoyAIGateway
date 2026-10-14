@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -64,6 +65,9 @@ type authSessionResponse struct {
 	Teams      []string        `json:"teams"`
 	Platform   bool            `json:"platform"`
 	AdminTeams []string        `json:"admin_teams"`
+	// SelectableTeams are the teams the console may scope itself to: every
+	// Casdoor team for platform admins, otherwise the Principal's own teams.
+	SelectableTeams []identity.Team `json:"selectable_teams"`
 }
 
 func (s *Server) authenticate() gin.HandlerFunc {
@@ -141,6 +145,11 @@ func (s *Server) handleAuthSession(c *gin.Context) {
 	if adminTeams == nil {
 		adminTeams = []string{}
 	}
+	selectable, err := s.selectableTeams(c.Request.Context(), principal)
+	if err != nil {
+		writeServiceError(c, "auth_session", err)
+		return
+	}
 	response.SuccessI18n(c, "common.success", authSessionResponse{
 		User: authSessionUser{
 			ID:          principal.UserID,
@@ -148,8 +157,29 @@ func (s *Server) handleAuthSession(c *gin.Context) {
 			DisplayName: principal.DisplayName,
 			Email:       principal.Email,
 		},
-		Teams:      teams,
-		Platform:   principal.Platform,
-		AdminTeams: adminTeams,
+		Teams:           teams,
+		Platform:        principal.Platform,
+		AdminTeams:      adminTeams,
+		SelectableTeams: selectable,
 	})
+}
+
+// selectableTeams lists the teams the console may scope itself to. Platform
+// admins read the full list from Casdoor; everyone else gets their own teams.
+func (s *Server) selectableTeams(ctx context.Context, principal identity.Principal) ([]identity.Team, error) {
+	if principal.Platform {
+		teams, err := s.identity.Teams(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("read Casdoor teams: %w: %w", app_errors.ErrBadGateway, err)
+		}
+		if teams == nil {
+			teams = []identity.Team{}
+		}
+		return teams, nil
+	}
+	teams := make([]identity.Team, 0, len(principal.Teams))
+	for _, name := range principal.Teams {
+		teams = append(teams, identity.Team{Name: name, DisplayName: name})
+	}
+	return teams, nil
 }

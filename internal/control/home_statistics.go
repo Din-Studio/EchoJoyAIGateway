@@ -117,7 +117,8 @@ func (s *Server) handleHomeStatistics(c *gin.Context) {
 		return
 	}
 	principal, _ := currentPrincipal(c)
-	query.ScopeAccessKeyIDs, err = s.service.scopedAccessKeyIDs(c.Request.Context(), principal)
+	query.PlatformView = principal.Platform
+	query.ScopeAccessKeyIDs, err = s.requestScope(c)
 	if err != nil {
 		writeServiceError(c, "home_statistics", err)
 		return

@@ -13,14 +13,15 @@ func (s *Server) handleListProjectModels(c *gin.Context) {
 		return
 	}
 	principal, _ := currentPrincipal(c)
-	scope, err := s.service.scopedAccessKeyIDs(c.Request.Context(), principal)
+	scope, err := s.requestScope(c)
 	if err != nil {
 		writeServiceError(c, "list_project_models", err)
 		return
 	}
-	if scope != nil {
+	query.ScopeAccessKeyIDs = scope
+	query.PlatformView = principal.Platform
+	if !principal.Platform {
 		query.GroupStatus = ProjectModelGroupStatusEnabled
-		query.ScopeAccessKeyIDs = scope
 	}
 	result, err := s.service.ListProjectModels(c.Request.Context(), query)
 	if err != nil {

@@ -108,6 +108,7 @@ func TestQueryHomeStatisticsBuildsTopFiveRankingsAndExcludesLegacyZeroAttemptAgg
 		HomeStatisticsQuery{
 			Range:        HomeStatistics24H,
 			ObservedAtMS: 1_784_896_496_789,
+			PlatformView: true,
 		},
 	)
 	if err != nil {
@@ -206,6 +207,24 @@ func TestQueryHomeStatisticsScopesAccessKeyAndOnlyReturnsModelRankings(t *testin
 		report.TopAccessKeys[0].AccessKey.ID != accessKeyID {
 		t.Fatalf("scoped home statistics = %#v", report)
 	}
+
+	// 平台管理员收窄范围后仍是管理员视图：分组排行照常返回，只是按范围过滤。
+	report, err = newRequestLogTestService(db).QueryHomeStatistics(
+		context.Background(),
+		HomeStatisticsQuery{
+			Range:             HomeStatistics24H,
+			ObservedAtMS:      1_784_896_496_789,
+			ScopeAccessKeyIDs: []uint{accessKeyID},
+			PlatformView:      true,
+		},
+	)
+	if err != nil {
+		t.Fatalf("QueryHomeStatistics() platform view error = %v", err)
+	}
+	if report.Summary.RequestCount != 5 || len(report.TopGroups) != 2 ||
+		len(report.TopAccessKeys) != 1 || report.TopAccessKeys[0].AccessKey.ID != accessKeyID {
+		t.Fatalf("platform-view scoped home statistics = %#v", report)
+	}
 }
 
 func TestQueryHomeStatisticsUsesOneReadSnapshot(t *testing.T) {
@@ -251,6 +270,7 @@ func TestQueryHomeStatisticsUsesOneReadSnapshot(t *testing.T) {
 		HomeStatisticsQuery{
 			Range:        HomeStatistics24H,
 			ObservedAtMS: 1_784_896_496_789,
+			PlatformView: true,
 		},
 	)
 	if err != nil {

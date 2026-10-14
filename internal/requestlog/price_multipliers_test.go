@@ -122,7 +122,7 @@ func TestPriceMultipliersSurvivePersistenceAndAllCostQueries(t *testing.T) {
 				}
 			}
 			home, err := service.QueryHomeStatistics(t.Context(), HomeStatisticsQuery{
-				Range: HomeStatistics24H, ObservedAtMS: from.Add(time.Hour).UnixMilli(),
+				Range: HomeStatistics24H, ObservedAtMS: from.Add(time.Hour).UnixMilli(), PlatformView: true,
 			})
 			if err != nil || home.Summary.EstimatedCostNanoUSD != test.finalTotal || len(home.TopModels) != 1 || len(home.TopGroups) != 1 || len(home.TopAccessKeys) != 1 ||
 				home.TopModels[0].EstimatedCostNanoUSD != test.finalTotal || home.TopGroups[0].EstimatedCostNanoUSD != test.finalTotal || home.TopAccessKeys[0].EstimatedCostNanoUSD != test.finalTotal {

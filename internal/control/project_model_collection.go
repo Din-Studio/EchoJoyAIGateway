@@ -208,7 +208,7 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 		groups,
 		s.channelRegistry,
 		protocolOverrides,
-		query.ScopeAccessKeyIDs == nil,
+		query.PlatformView,
 	)
 	if err != nil {
 		return ProjectModelListResponse{}, err
@@ -305,7 +305,7 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 			// 模型页判定为无效响应，比不发这条数据本身还糟。
 			routeGroups := []ProjectModelGroupDTO{}
 			affectedGroups := []ProjectModelGroupDTO{}
-			if query.ScopeAccessKeyIDs == nil {
+			if query.PlatformView {
 				routeGroups = append(routeGroups, upstream.routeGroups...)
 				affectedGroups = append(affectedGroups, upstream.affectedGroups...)
 			}

@@ -27,9 +27,10 @@ const (
 type HomeStatisticsQuery struct {
 	Range        HomeStatisticsRange
 	ObservedAtMS int64
-	// ScopeAccessKeyIDs limits statistics to these keys and hides group
-	// rankings; nil means every key.
+	// ScopeAccessKeyIDs limits statistics to these keys; nil means every key.
 	ScopeAccessKeyIDs []uint
+	// PlatformView includes group rankings, which only platform admins see.
+	PlatformView bool
 }
 
 type HomeStatisticsRef struct {
@@ -138,7 +139,7 @@ func (service *Service) QueryHomeStatistics(
 		var accessRows []homeAccessKeyRankingRow
 		groupRefs := map[uint]HomeStatisticsRef{}
 		accessRefs := map[uint]HomeStatisticsRef{}
-		if input.ScopeAccessKeyIDs == nil {
+		if input.PlatformView {
 			groupRows, err = queryHomeGroupRankings(
 				usageStatScope(connection, usageInput),
 			)

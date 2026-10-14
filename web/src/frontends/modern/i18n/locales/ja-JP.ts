@@ -47,6 +47,7 @@ export default {
   },
   shell: {
     refresh: '更新',
+    teamScope: 'チーム範囲',
     refreshedAt: '{time} 更新',
     importCredentials: 'キーをインポート',
     goHome: 'GPT-Load の概要',

@@ -290,7 +290,7 @@ func (s *Server) handleListRequestLogs(c *gin.Context) {
 		writeServiceError(c, "list_request_logs", apiErr)
 		return
 	}
-	scope, err := s.service.scopeAccessKeyFilter(c.Request.Context(), principal, query.ScopeAccessKeyIDs)
+	scope, err := s.requestScopeFilter(c, query.ScopeAccessKeyIDs)
 	if err != nil {
 		writeServiceError(c, "list_request_logs", err)
 		return
@@ -323,8 +323,7 @@ func (s *Server) handleGetRequestLog(c *gin.Context) {
 		writeServiceError(c, "get_request_log", app_errors.ErrBadRequest)
 		return
 	}
-	principal, _ := currentPrincipal(c)
-	scope, err := s.service.scopedAccessKeyIDs(c.Request.Context(), principal)
+	scope, err := s.requestScope(c)
 	if err != nil {
 		writeServiceError(c, "get_request_log", err)
 		return

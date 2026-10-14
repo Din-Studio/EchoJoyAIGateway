@@ -203,8 +203,7 @@ func (s *Server) handleHome(c *gin.Context) {
 		writeServiceError(c, "home", err)
 		return
 	}
-	principal, _ := currentPrincipal(c)
-	scope, err := s.service.scopedAccessKeyIDs(c.Request.Context(), principal)
+	scope, err := s.requestScope(c)
 	if err != nil {
 		writeServiceError(c, "home", err)
 		return

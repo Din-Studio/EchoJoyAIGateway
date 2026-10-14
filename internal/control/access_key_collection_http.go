@@ -28,8 +28,7 @@ func (s *Server) handleListAccessKeyCollection(c *gin.Context) {
 		writeServiceError(c, "list_access_keys", apiErr)
 		return
 	}
-	principal, _ := currentPrincipal(c)
-	scope, err := s.service.scopedAccessKeyIDs(c.Request.Context(), principal)
+	scope, err := s.requestScope(c)
 	if err != nil {
 		writeServiceError(c, "list_access_keys", err)
 		return

@@ -39,6 +39,9 @@ type ProjectModelListQuery struct {
 	// ScopeAccessKeyIDs narrows the collection to what these keys can route;
 	// nil means the whole project.
 	ScopeAccessKeyIDs []uint
+	// PlatformView includes group details and admits every GroupStatus;
+	// only platform admins get it.
+	PlatformView bool
 }
 
 func parseProjectModelListQuery(rawQuery string, forceQuery bool) (ProjectModelListQuery, *errors.APIError) {
@@ -120,7 +123,7 @@ func validateProjectModelListQuery(query ProjectModelListQuery) error {
 		utf8.RuneCountInString(query.Search) > maxProjectModelSearchRunes {
 		return errors.ErrValidation
 	}
-	if query.ScopeAccessKeyIDs != nil && query.GroupStatus != ProjectModelGroupStatusEnabled {
+	if !query.PlatformView && query.GroupStatus != ProjectModelGroupStatusEnabled {
 		return errors.ErrValidation
 	}
 	return nil

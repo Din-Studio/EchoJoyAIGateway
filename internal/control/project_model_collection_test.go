@@ -29,7 +29,7 @@ func TestProjectModelsSeparateSameUpstreamModelByChannelAndDetail(t *testing.T) 
 	})
 	mustEnsureInitialPrices(t, fixture)
 	all, err := fixture.service.ListProjectModels(t.Context(), ProjectModelListQuery{
-		GroupStatus: ProjectModelGroupStatusAll, PricingStatus: ProjectModelPricingStatusAll, Page: 1, PageSize: 20,
+		GroupStatus: ProjectModelGroupStatusAll, PricingStatus: ProjectModelPricingStatusAll, Page: 1, PageSize: 20, PlatformView: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -197,6 +197,24 @@ func TestProjectModelsHTTPScopesMemberKeyFiltersAndRelationships(t *testing.T) {
 	} {
 		if strings.Contains(recorder.Body.String(), privateValue) {
 			t.Fatalf("AccessKey models expose %q: %s", privateValue, recorder.Body.String())
+		}
+	}
+
+	// 平台管理员把范围收窄到一把 key 时仍是管理员视图：group_status=all
+	// 可用，分组身份照常返回。范围只决定看哪些模型，不决定是不是管理员。
+	scoped, err := fixture.service.ListProjectModels(t.Context(), ProjectModelListQuery{
+		GroupStatus: ProjectModelGroupStatusAll, PricingStatus: ProjectModelPricingStatusAll,
+		Page: 1, PageSize: 100, ScopeAccessKeyIDs: []uint{created.ID}, PlatformView: true,
+	})
+	if err != nil {
+		t.Fatalf("platform-view scoped ListProjectModels() error = %v", err)
+	}
+	if len(scoped.Items) != 2 || scoped.Items[1].ClientModel != "shared" {
+		t.Fatalf("platform-view scoped models = %#v", scoped.Items)
+	}
+	for _, upstream := range scoped.Items[1].UpstreamModels {
+		if len(upstream.RouteGroups) == 0 {
+			t.Fatalf("platform-view scoped upstream must keep route groups = %#v", upstream)
 		}
 	}
 }

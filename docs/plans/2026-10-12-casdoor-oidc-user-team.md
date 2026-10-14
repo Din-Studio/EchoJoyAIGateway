@@ -500,7 +500,8 @@ func (s *Service) authorizeAccessKey(ctx context.Context, id uint, p identity.Pr
 - **不做 OIDC discovery 和组织结构缓存**。
 - **不改 `FilterSet` 的 nil/empty 语义**：交集为空走 disabled。
 - **前端不建权限表**：菜单只区分"平台"和"所有人"，沿用 `adminOnly` 布尔值，只改它的数据来源。
-- **不做团队总预算、团队切换器、本地 users/teams 表**：团队和成员以 Casdoor 为准。
+- **不做团队总预算、本地 users/teams 表**：团队和成员以 Casdoor 为准。
+- 团队切换器原列于此，2026-10-13 作为请求级作用域收窄实现，见 `2026-10-13-team-scope-switcher.md`。
 
 ## 9. 对抗性审查与消融记录（2026-10-13）
 
