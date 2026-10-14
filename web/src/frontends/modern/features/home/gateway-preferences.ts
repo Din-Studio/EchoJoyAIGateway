@@ -1,6 +1,8 @@
 import {
+  curlProtocols,
   gatewayClients,
   gatewayTargets,
+  type CurlProtocol,
   type GatewayClientID,
   type GatewayTargetID,
 } from './gateway-config'
@@ -10,6 +12,8 @@ interface GatewayPreferences {
   accessKeyID: number
   target: GatewayTargetID
   model: string
+  protocol: CurlProtocol
+  stream: boolean
 }
 
 const defaults: GatewayPreferences = {
@@ -17,6 +21,8 @@ const defaults: GatewayPreferences = {
   accessKeyID: 0,
   target: 'claude',
   model: '',
+  protocol: 'openai-completions',
+  stream: false,
 }
 const memory = new Map<string, GatewayPreferences>()
 const storageKey = (admin: boolean) =>
@@ -39,6 +45,8 @@ export function readGatewayPreferences(admin: boolean): GatewayPreferences {
           : 0,
       target: gatewayTargets.find((target) => target.id === value.target)?.id ?? defaults.target,
       model: typeof value.model === 'string' ? value.model : '',
+      protocol: curlProtocols.find((protocol) => protocol === value.protocol) ?? defaults.protocol,
+      stream: value.stream === true,
     }
   } catch {
     return memory.get(key) ?? { ...defaults }
