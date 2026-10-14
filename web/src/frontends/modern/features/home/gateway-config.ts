@@ -101,12 +101,22 @@ export const gatewayTargets = [
   { id: 'opencode', name: 'OpenCode', protocol: 'openai-completions', requiresModel: true },
 ] as const
 export type GatewayTargetID = (typeof gatewayTargets)[number]['id']
+/* cURL 示例可切换的接口格式，顺序即下拉选项顺序。 */
+export const curlProtocols = [
+  'openai-completions',
+  'openai-responses',
+  'anthropic',
+  'gemini',
+] as const
+export type CurlProtocol = (typeof curlProtocols)[number]
 export interface GatewayConfig {
   client: GatewayClientID
   origin: string
   model: string
   target: GatewayTargetID
   name: string
+  protocol: CurlProtocol
+  stream: boolean
 }
 export interface ConfigBlock {
   label: string
@@ -189,20 +199,46 @@ export function gatewayConfiguration(config: GatewayConfig, key: string): Config
         },
       ]
     case 'curl':
-      return [
-        {
-          label: 'shell',
-          content: [
-            `curl ${shellQuote(endpoint + '/chat/completions')} \\`,
-            `  -H ${shellQuote('Authorization: Bearer ' + key)} \\`,
-            "  -H 'Content-Type: application/json' \\",
-            `  -d ${shellQuote(JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }] }))}`,
-          ].join('\n'),
-        },
-      ]
+      return [{ label: 'shell', content: curlCommand(config, key, model) }]
     default:
       return []
   }
+}
+function curlCommand(config: GatewayConfig, key: string, model: string): string {
+  const root = config.origin.replace(/\/+$/, '')
+  const messages = [{ role: 'user', content: 'ping' }]
+  const stream = config.stream ? { stream: true } : {}
+  const request = {
+    'openai-completions': {
+      url: root + '/v1/chat/completions',
+      headers: ['Authorization: Bearer ' + key],
+      body: { model, messages, ...stream },
+    },
+    'openai-responses': {
+      url: root + '/v1/responses',
+      headers: ['Authorization: Bearer ' + key],
+      body: { model, input: 'ping', ...stream },
+    },
+    anthropic: {
+      url: root + '/v1/messages',
+      headers: ['x-api-key: ' + key, 'anthropic-version: 2023-06-01'],
+      body: { model, max_tokens: 1024, messages, ...stream },
+    },
+    gemini: {
+      url:
+        `${root}/v1beta/models/${encodeURIComponent(model)}:` +
+        (config.stream ? 'streamGenerateContent?alt=sse' : 'generateContent'),
+      headers: ['x-goog-api-key: ' + key],
+      body: { contents: [{ role: 'user', parts: [{ text: 'ping' }] }] },
+    },
+  }[config.protocol]
+  return [
+    `curl${config.stream ? ' -N' : ''} ${shellQuote(request.url)} \\`,
+    ...[...request.headers, 'Content-Type: application/json'].map(
+      (header) => `  -H ${shellQuote(header)} \\`,
+    ),
+    `  -d ${shellQuote(JSON.stringify(request.body))}`,
+  ].join('\n')
 }
 export function gatewayImportURL(config: GatewayConfig, key: string): string {
   if (config.client === 'cc-switch') {

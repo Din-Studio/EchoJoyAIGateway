@@ -11,8 +11,10 @@ import { useMessages } from '@modern/app/messages'
 import { useAuthSession } from '@modern/features/auth/auth-session'
 import { useApiClient } from '@shared/http/client-context'
 import { RequestCancelledError } from '@shared/http/errors'
+import { protocolLabel } from '@modern/i18n/protocols'
 import {
   AppButton,
+  AppCheckbox,
   AppConfirmDialog,
   AppCopyValue,
   AppNotice,
@@ -21,6 +23,7 @@ import {
   AppSelect,
 } from '@modern/components/ui'
 import {
+  curlProtocols,
   gatewayClients,
   gatewayConfiguration,
   gatewayFields,
@@ -71,6 +74,8 @@ const selectedClient = computed(() =>
 )
 const target = ref<GatewayConfig['target']>(remembered.target)
 const model = ref(remembered.model)
+const protocol = ref<GatewayConfig['protocol']>(remembered.protocol)
+const stream = ref(remembered.stream)
 const selectedTarget = computed(() => gatewayTargets.find((item) => item.id === target.value)!)
 const config = computed<GatewayConfig>(() => ({
   client: selectedClient.value.id,
@@ -78,6 +83,8 @@ const config = computed<GatewayConfig>(() => ({
   origin: window.location.origin,
   model: model.value,
   name: 'GPT-Load' + (key.value ? ' · ' + key.value.name : ''),
+  protocol: protocol.value,
+  stream: stream.value,
 }))
 const signature = computed(() => JSON.stringify([config.value, key.value?.id]))
 const mask = computed(() => key.value?.mask ?? 'YOUR_API_KEY')
@@ -88,6 +95,9 @@ const keyOptions = computed(() =>
   props.keys.map((key) => ({ value: String(key.id), label: key.name, description: key.mask })),
 )
 const targetOptions = gatewayTargets.map((target) => ({ value: target.id, label: target.name }))
+const protocolOptions = computed(() =>
+  curlProtocols.map((value) => ({ value, label: protocolLabel(value, t) })),
+)
 const quickImport = computed(() => ['cc-switch', 'cherry-studio'].includes(selectedClient.value.id))
 const needsModel = computed(() => gatewayNeedsModel(selectedClient.value.id, target.value))
 const missingModel = computed(() => needsModel.value && !model.value.trim())
@@ -101,13 +111,23 @@ const importOpen = ref(false)
 const importing = ref(false)
 const importError = ref('')
 watch(
-  () => [state.value.client, key.value?.id, target.value, model.value] as const,
-  ([client, id, target, model]) =>
+  () =>
+    [
+      state.value.client,
+      key.value?.id,
+      target.value,
+      model.value,
+      protocol.value,
+      stream.value,
+    ] as const,
+  ([client, id, target, model, protocol, stream]) =>
     rememberGatewayPreferences(props.admin, {
       client,
       accessKeyID: props.admin ? (id ?? state.value.id) : 0,
       target,
       model,
+      protocol,
+      stream,
     }),
   { immediate: true, flush: 'sync' },
 )
@@ -215,6 +235,14 @@ async function importClient(): Promise<void> {
               size="xs"
               class="modern-connect-field"
             />
+            <AppSelect
+              v-if="selectedClient.id === 'curl'"
+              v-model="protocol"
+              :label="t('home.curlProtocol')"
+              :options="protocolOptions"
+              size="xs"
+              class="modern-connect-field"
+            />
             <AppSearchSelect
               v-if="needsModel"
               v-model="model"
@@ -224,6 +252,11 @@ async function importClient(): Promise<void> {
               size="xs"
               allow-custom
               class="modern-connect-field"
+            />
+            <AppCheckbox
+              v-if="selectedClient.id === 'curl'"
+              v-model="stream"
+              :label="t('home.curlStream')"
             />
             <AppButton
               v-if="quickImport"
