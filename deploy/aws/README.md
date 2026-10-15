@@ -19,6 +19,7 @@
 | `scripts/waf-update.sh` | 调整共用 Web ACL，自动备份，可 `restore` |
 | `scripts/alb-cutover.sh` | 切换或回滚：旧网关的文本接口（`/gateway/v1/chat/completions`、`messages`、`responses`）转给新网关 |
 | `scripts/private-dns.sh` | 给域名建指向 `alb-internal` 的 VPC 私有解析 |
+| `scripts/tunnel.sh` | 用 SSM 端口转发把管理后台或 PostgreSQL 映射到本机 |
 | `remote/` | 在数据层实例上执行的函数和入口脚本 |
 | `tests/` | 静态检查、对真实账号的只读检查、本地 docker 集成测试 |
 

@@ -57,6 +57,17 @@ cluster-e2e: ## Run cluster acceptance on the compose sample with a real Redis C
 bench-cluster: ## Measure cluster throughput and p99 against a single instance (needs >= 8 CPUs)
 	tools/clusterbench/run.sh bench
 
+AWS_DIR := deploy/aws
+TUNNEL ?= admin
+
+.PHONY: aws-deploy
+aws-deploy: ## Build and push the image for HEAD, then roll it out to the AWS gateway
+	cd $(AWS_DIR) && tag=$$(scripts/build-push.sh) && scripts/deploy.sh gateway --image-tag "$$(echo "$$tag" | tail -1)"
+
+.PHONY: aws-tunnel
+aws-tunnel: ## Forward an AWS service to localhost via SSM (TUNNEL=admin|pg)
+	$(AWS_DIR)/scripts/tunnel.sh $(TUNNEL)
+
 .PHONY: help
 help: ## Display available targets
 	@awk 'BEGIN {FS = ":.*?## "; printf "Usage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*?## / { printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
