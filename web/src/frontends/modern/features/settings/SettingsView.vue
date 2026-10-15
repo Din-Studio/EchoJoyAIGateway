@@ -87,7 +87,7 @@ const sectionFields: Record<SectionID, readonly SettingKey[]> = {
     'blacklist_threshold',
     'validation_interval',
   ],
-  browser: ['cors', 'header_rules', 'response_header_rules'],
+  browser: ['public_base_url', 'cors', 'header_rules', 'response_header_rules'],
   maintenance: ['request_log_retention_days', 'models_dev_auto_sync_enabled'],
   experimental: ['auto_model'],
   system: [],
@@ -540,6 +540,27 @@ onScopeDispose(() => {
               </div>
             </template>
             <template v-else-if="id === 'browser'">
+              <SettingItem
+                v-if="matches('public_base_url')"
+                v-bind="settingItem('public_base_url')"
+                :description="t('settingsForm.hints.public_base_url')"
+                stacked
+                class="modern-settings-block"
+                @reset="restore('public_base_url')"
+                @undo="undoRestore('public_base_url')"
+              >
+                <AppTextField
+                  id="settings-public_base_url"
+                  v-model="draft.public_base_url"
+                  :label="t('settingsForm.fields.public_base_url')"
+                  label-hidden
+                  :placeholder="t('settingsForm.publicBaseURLPlaceholder')"
+                  :error="fieldErrors.public_base_url"
+                  :disabled="disabled('public_base_url')"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+              </SettingItem>
               <SettingItem
                 v-if="matches('cors')"
                 v-bind="settingItem('cors')"

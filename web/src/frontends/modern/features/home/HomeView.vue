@@ -169,7 +169,11 @@ watch(
       />
       <div class="modern-home-columns">
         <div class="modern-home-main">
-          <GatewayConnection :keys="base.keys" :admin="admin" />
+          <GatewayConnection
+            :keys="base.keys"
+            :admin="admin"
+            :public-base-url="base.publicBaseURL"
+          />
           <div
             v-if="admin"
             id="route-inspector"

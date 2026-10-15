@@ -38,6 +38,34 @@ func TestRouteStrategyAcceptsOnlyExplicitGlobalPolicies(t *testing.T) {
 	}
 }
 
+func TestPublicBaseURLIsNormalizedSystemOnlySetting(t *testing.T) {
+	const key = "public_base_url"
+	if !IsRuntimeSettingKey(key) {
+		t.Fatal("public_base_url is not a public runtime setting")
+	}
+	if DefaultRuntimeSettings().PublicBaseURL != "" {
+		t.Fatal("default public_base_url must fall back to the browser address")
+	}
+	for raw, want := range map[string]string{
+		" https://Gateway.Example.com/ ": "https://gateway.example.com",
+		"http://localhost:8080":          "http://localhost:8080",
+		"https://example.com:443/gw/":    "https://example.com/gw",
+	} {
+		resolved, err := ResolveRuntimeSettings(config.Settings{key: raw})
+		if err != nil || resolved.PublicBaseURL != want {
+			t.Errorf("ResolveRuntimeSettings(%q) = %q, %v; want %q", raw, resolved.PublicBaseURL, err, want)
+		}
+	}
+	if _, err := ResolveGroupRuntimeSettings(DefaultRuntimeSettings(), config.Settings{key: "https://example.com"}); err == nil {
+		t.Error("Group accepted system-only public_base_url")
+	}
+	for _, value := range []any{nil, "", "example.com", "ftp://example.com", "https://user:pass@example.com", "https://example.com?x=1", "https://example.com#top", 1} {
+		if err := ValidateRuntimeSetting(key, value); err == nil {
+			t.Errorf("ValidateRuntimeSetting(%#v) accepted invalid public_base_url", value)
+		}
+	}
+}
+
 func TestCompilePublishesDefaultRuntimeSettingsWithoutGroups(t *testing.T) {
 	snapshot, err := Compile(CompileInput{})
 	if err != nil {

@@ -10,6 +10,7 @@ export interface HomeKey {
   mask: string
 }
 export interface HomeBase {
+  publicBaseURL: string
   observedAt: number
   startedAt: number
   version: string
@@ -35,6 +36,7 @@ export async function getHome(client: ApiClient, signal: AbortSignal): Promise<H
   const data = record(await client.request('/api/home', { signal }))
   const inventory = record(data.inventory)
   return {
+    publicBaseURL: text(data.public_base_url),
     observedAt: integer(data.server_now_ms),
     startedAt: integer(data.started_at_ms),
     version: text(data.version),
