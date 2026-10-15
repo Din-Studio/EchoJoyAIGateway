@@ -45,6 +45,7 @@ export type SettingsValues = Record<SettingNumber, number> &
   Record<SettingSwitch, boolean> & {
     route_strategy: RouteStrategy
     public_base_url: string
+    gateway_name: string
     header_rules: HeaderRules
     response_header_rules: HeaderRules
     cors: CORSConfig
@@ -55,6 +56,7 @@ export type SettingKey = keyof SettingsValues
 export const settingKeys: readonly SettingKey[] = [
   'route_strategy',
   'public_base_url',
+  'gateway_name',
   ...settingSwitches,
   ...(Object.keys(settingNumbers) as SettingNumber[]),
   'header_rules',
@@ -137,6 +139,7 @@ function readSettings(value: unknown): SettingsData {
       ...switches,
       route_strategy: oneOf(values.route_strategy, routeStrategies),
       public_base_url: text(values.public_base_url),
+      gateway_name: text(values.gateway_name),
       header_rules: readHeaders(values.header_rules),
       response_header_rules: readHeaders(values.response_header_rules),
       cors: readCORS(values.cors),

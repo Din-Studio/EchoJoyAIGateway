@@ -173,6 +173,7 @@ watch(
             :keys="base.keys"
             :admin="admin"
             :public-base-url="base.publicBaseURL"
+            :gateway-name="base.gatewayName"
           />
           <div
             v-if="admin"

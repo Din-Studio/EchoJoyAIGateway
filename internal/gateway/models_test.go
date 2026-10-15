@@ -223,7 +223,7 @@ func TestMarshalModelList(t *testing.T) {
 	}{
 		{
 			name: "OpenAI", value: protocol.OpenAICompletions, ids: []string{"alpha", "zeta"},
-			expected: `{"object":"list","data":[{"id":"alpha","object":"model","created":1735689600,"owned_by":"gpt-load"},{"id":"zeta","object":"model","created":1735689600,"owned_by":"gpt-load"}]}`,
+			expected: `{"object":"list","data":[{"id":"alpha","object":"model","created":1735689600,"owned_by":"echojoy"},{"id":"zeta","object":"model","created":1735689600,"owned_by":"echojoy"}]}`,
 		},
 		{
 			name: "Anthropic", value: protocol.Anthropic, ids: []string{"alpha", "zeta"},
@@ -248,7 +248,7 @@ func TestMarshalModelList(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			body, err := marshalModelList(test.value, test.ids)
+			body, err := marshalModelList(test.value, test.ids, "echojoy")
 			if err != nil {
 				t.Fatalf("marshalModelList() error = %v", err)
 			}

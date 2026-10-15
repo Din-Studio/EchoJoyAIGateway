@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -76,7 +77,7 @@ func collectVisibleModelIDs(
 	value protocol.Protocol,
 	limit int64,
 ) ([]string, error) {
-	emptyBody, err := marshalModelList(value, nil)
+	emptyBody, err := marshalModelList(value, nil, "")
 	if err != nil {
 		return nil, err
 	}
@@ -134,8 +135,9 @@ func collectVisibleModelIDs(
 		result = append(result, modelID)
 	}
 	sort.Strings(result)
+	ownedBy := modelOwner(snapshot)
 	for index, modelID := range result {
-		item, err := marshalModelListItem(value, modelID)
+		item, err := marshalModelListItem(value, modelID, ownedBy)
 		if err != nil {
 			return nil, err
 		}
@@ -212,7 +214,7 @@ func buildVisibleModelList(
 	if err != nil {
 		return nil, err
 	}
-	body, err := marshalModelList(value, ids)
+	body, err := marshalModelList(value, ids, modelOwner(snapshot))
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +224,15 @@ func buildVisibleModelList(
 	return body, nil
 }
 
-func marshalModelListItem(value protocol.Protocol, id string) ([]byte, error) {
+// modelOwner 返回 OpenAI 模型列表的 owned_by：网关名称的小写形式。
+func modelOwner(snapshot *state.ConfigSnapshot) string {
+	if snapshot == nil {
+		return ""
+	}
+	return strings.ToLower(snapshot.Settings.GatewayName)
+}
+
+func marshalModelListItem(value protocol.Protocol, id string, ownedBy string) ([]byte, error) {
 	switch value {
 	case protocol.Anthropic:
 		return json.Marshal(anthropicModel{
@@ -232,12 +242,12 @@ func marshalModelListItem(value protocol.Protocol, id string) ([]byte, error) {
 		return json.Marshal(geminiModel{Name: "models/" + id})
 	default:
 		return json.Marshal(openAIModel{
-			ID: id, Object: "model", Created: modelPlaceholderUnix, OwnedBy: "gpt-load",
+			ID: id, Object: "model", Created: modelPlaceholderUnix, OwnedBy: ownedBy,
 		})
 	}
 }
 
-func marshalModelList(value protocol.Protocol, ids []string) ([]byte, error) {
+func marshalModelList(value protocol.Protocol, ids []string, ownedBy string) ([]byte, error) {
 	switch value {
 	case protocol.Anthropic:
 		data := make([]anthropicModel, 0, len(ids))
@@ -263,7 +273,7 @@ func marshalModelList(value protocol.Protocol, ids []string) ([]byte, error) {
 		data := make([]openAIModel, 0, len(ids))
 		for _, id := range ids {
 			data = append(data, openAIModel{
-				ID: id, Object: "model", Created: modelPlaceholderUnix, OwnedBy: "gpt-load",
+				ID: id, Object: "model", Created: modelPlaceholderUnix, OwnedBy: ownedBy,
 			})
 		}
 		return json.Marshal(openAIModelList{Object: "list", Data: data})
