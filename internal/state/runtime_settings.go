@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/big"
 	"net/textproto"
+	"regexp"
 	"strings"
 	"time"
 
@@ -34,6 +35,7 @@ const (
 	SettingModelsDevAutoSyncEnabled  = "models_dev_auto_sync_enabled"
 	SettingParameterOverrides        = "parameter_overrides"
 	SettingPublicBaseURL             = "public_base_url"
+	SettingGatewayName               = "gateway_name"
 )
 
 type RouteStrategy string
@@ -50,7 +52,11 @@ const (
 	defaultAffinityCapacity        = 10_000
 	maxAffinityCapacity            = 1_000_000
 	maxJSONSafeInteger             = int64(1<<53 - 1)
+	defaultGatewayName             = "GPT-Load"
 )
+
+// gatewayNamePattern 保证名称可直接用作 TOML 键和环境变量名片段。
+var gatewayNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 
 type RuntimeSettings struct {
 	FirstByteTimeout          time.Duration
@@ -71,6 +77,8 @@ type RuntimeSettings struct {
 	ModelsDevAutoSyncEnabled  bool
 	// PublicBaseURL 是客户端接入示例使用的网关根地址；空值表示沿用浏览器当前地址。
 	PublicBaseURL string
+	// GatewayName 是对外展示的网关名称，用于模型列表 owned_by（小写）和客户端接入示例。
+	GatewayName string
 }
 
 type ResolvedGroupSettings struct {
@@ -100,6 +108,7 @@ func DefaultRuntimeSettings() RuntimeSettings {
 		ValidationInterval:        10 * time.Minute,
 		RequestLogRetentionDays:   defaultRequestLogRetentionDays,
 		ModelsDevAutoSyncEnabled:  true,
+		GatewayName:               defaultGatewayName,
 	}
 }
 
@@ -121,7 +130,8 @@ func IsRuntimeSettingKey(key string) bool {
 		SettingValidationInterval,
 		SettingRequestLogRetentionDays,
 		SettingModelsDevAutoSyncEnabled,
-		SettingPublicBaseURL:
+		SettingPublicBaseURL,
+		SettingGatewayName:
 		return true
 	default:
 		return false
@@ -239,6 +249,12 @@ func ResolveRuntimeSettings(settings config.Settings) (RuntimeSettings, error) {
 				return RuntimeSettings{}, err
 			}
 			resolved.PublicBaseURL = baseURL
+		case SettingGatewayName:
+			name, err := parseGatewayName(value)
+			if err != nil {
+				return RuntimeSettings{}, err
+			}
+			resolved.GatewayName = name
 		default:
 			return RuntimeSettings{}, fmt.Errorf("unknown runtime setting %q", key)
 		}
@@ -367,6 +383,9 @@ func ValidateRuntimeSetting(key string, value any) error {
 	case SettingPublicBaseURL:
 		_, err := parsePublicBaseURL(value)
 		return err
+	case SettingGatewayName:
+		_, err := parseGatewayName(value)
+		return err
 	default:
 		return fmt.Errorf("unknown runtime setting %q", key)
 	}
@@ -393,6 +412,17 @@ func parsePublicBaseURL(value any) (string, error) {
 		return "", fmt.Errorf("%s %w", SettingPublicBaseURL, err)
 	}
 	return normalized, nil
+}
+
+func parseGatewayName(value any) (string, error) {
+	text, ok := value.(string)
+	if !ok || !gatewayNamePattern.MatchString(text) {
+		return "", fmt.Errorf(
+			"%s must be 1-64 letters, digits, '-' or '_' starting with a letter or digit",
+			SettingGatewayName,
+		)
+	}
+	return text, nil
 }
 
 func strictBoolean(path string, value any) (bool, error) {

@@ -40,6 +40,7 @@ export type SettingsDraft = Record<SettingNumber, string> &
   Record<SettingSwitch, boolean> & {
     route_strategy: RouteStrategy
     public_base_url: string
+    gateway_name: string
     header_rules: HeaderRow[]
     response_header_rules: HeaderRow[]
     cors: CORSDraft
@@ -66,6 +67,8 @@ function headerRows(value: HeaderRules): HeaderRow[] {
     })),
   ]
 }
+/* 与后端 gateway_name 校验一致：名称会直接用作 TOML 键和环境变量前缀。 */
+const gatewayNamePattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 export function createSettingsDraft(data: SettingsData): SettingsDraft {
   const values = data.values
   return {
@@ -256,6 +259,8 @@ export function settingsErrors(
     } else if (key === 'public_base_url') {
       const value = draft.public_base_url.trim()
       if (value && !validBaseURL(value)) errors.public_base_url = 'publicBaseURL'
+    } else if (key === 'gateway_name') {
+      if (!gatewayNamePattern.test(draft.gateway_name.trim())) errors.gateway_name = 'gatewayName'
     } else if (key === 'header_rules' || key === 'response_header_rules') {
       Object.assign(errors, headerErrors(draft[key], key))
     } else if (key === 'proxy_config') {
@@ -315,6 +320,7 @@ export function buildSettingsPatch(
         remove: draft[key].filter((row) => row.action === 'remove').map((row) => row.name.trim()),
       }
     } else if (key === 'public_base_url') patch[key] = draft.public_base_url.trim() || null
+    else if (key === 'gateway_name') patch[key] = draft.gateway_name.trim()
     else if (key === 'auto_model') patch[key] = autoModelValue(draft.auto_model)
     else if (key === 'cors') patch[key] = corsValue(draft.cors)
     else if (key === 'proxy_config') {

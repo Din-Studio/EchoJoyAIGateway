@@ -36,6 +36,7 @@ type HomeAccessKey struct {
 
 type HomeBase struct {
 	PublicBaseURL    string                   `json:"public_base_url"`
+	GatewayName      string                   `json:"gateway_name"`
 	Inventory        HomeInventory            `json:"inventory"`
 	AccessKeys       []HomeAccessKey          `json:"access_keys"`
 	CurrentAccessKey *AccessKeyCollectionItem `json:"current_access_key"`
@@ -209,6 +210,7 @@ func (s *Service) captureHomeBase(
 	}
 	result := HomeBase{
 		PublicBaseURL: snapshot.Settings.PublicBaseURL,
+		GatewayName:   snapshot.Settings.GatewayName,
 		Inventory:     inventory,
 		AccessKeys:    accessKeys,
 	}

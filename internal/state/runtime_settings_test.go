@@ -66,6 +66,27 @@ func TestPublicBaseURLIsNormalizedSystemOnlySetting(t *testing.T) {
 	}
 }
 
+func TestGatewayNameIsIdentifierSafeSystemOnlySetting(t *testing.T) {
+	const key = "gateway_name"
+	if !IsRuntimeSettingKey(key) {
+		t.Fatal("gateway_name is not a public runtime setting")
+	}
+	for _, value := range []string{"EchoJoy", "echo-joy_2", "9router"} {
+		resolved, err := ResolveRuntimeSettings(config.Settings{key: value})
+		if err != nil || resolved.GatewayName != value {
+			t.Errorf("ResolveRuntimeSettings(%q) = %q, %v", value, resolved.GatewayName, err)
+		}
+	}
+	if _, err := ResolveGroupRuntimeSettings(DefaultRuntimeSettings(), config.Settings{key: "EchoJoy"}); err == nil {
+		t.Error("Group accepted system-only gateway_name")
+	}
+	for _, value := range []any{nil, "", "-echo", "Echo Joy", "echo.joy", strings.Repeat("a", 65), 1} {
+		if err := ValidateRuntimeSetting(key, value); err == nil {
+			t.Errorf("ValidateRuntimeSetting(%#v) accepted invalid gateway_name", value)
+		}
+	}
+}
+
 func TestCompilePublishesDefaultRuntimeSettingsWithoutGroups(t *testing.T) {
 	snapshot, err := Compile(CompileInput{})
 	if err != nil {
@@ -92,6 +113,7 @@ func TestCompilePublishesDefaultRuntimeSettingsWithoutGroups(t *testing.T) {
 		ValidationInterval:        10 * time.Minute,
 		RequestLogRetentionDays:   7,
 		ModelsDevAutoSyncEnabled:  true,
+		GatewayName:               "GPT-Load",
 	}
 	if !reflect.DeepEqual(snapshot.Settings, want) {
 		t.Fatalf("Settings = %#v, want %#v", snapshot.Settings, want)

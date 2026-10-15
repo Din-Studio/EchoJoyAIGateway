@@ -114,6 +114,8 @@ export interface GatewayConfig {
   origin: string
   model: string
   target: GatewayTargetID
+  /* 系统设置中的网关名称：小写形式作为 provider id，大写形式作为环境变量前缀。 */
+  gatewayName: string
   name: string
   protocol: CurlProtocol
   stream: boolean
@@ -136,23 +138,26 @@ export function gatewayConfiguration(config: GatewayConfig, key: string): Config
   const model = config.model.trim() || 'YOUR_MODEL'
   const env = (name: string, value: string) => `export ${name}=${shellQuote(value)}`
   switch (config.client) {
-    case 'codex':
+    case 'codex': {
+      const provider = config.gatewayName.toLowerCase()
+      const envKey = config.gatewayName.toUpperCase().replaceAll('-', '_') + '_API_KEY'
       return [
         {
           label: '~/.codex/config.toml',
           content: [
             `model = ${tomlQuote(model)}`,
-            'model_provider = "gpt-load"',
+            `model_provider = ${tomlQuote(provider)}`,
             '',
-            '[model_providers.gpt-load]',
-            'name = "GPT-Load"',
+            `[model_providers.${provider}]`,
+            `name = ${tomlQuote(config.gatewayName)}`,
             `base_url = ${tomlQuote(endpoint)}`,
-            'env_key = "GPT_LOAD_API_KEY"',
+            `env_key = ${tomlQuote(envKey)}`,
             'wire_api = "responses"',
           ].join('\n'),
         },
-        { label: 'shell', content: env('GPT_LOAD_API_KEY', key) },
+        { label: 'shell', content: env(envKey, key) },
       ]
+    }
     case 'claude-code':
       return [
         {
@@ -256,7 +261,7 @@ export function gatewayImportURL(config: GatewayConfig, key: string): string {
   }
   if (config.client === 'cherry-studio') {
     const value = JSON.stringify({
-      id: 'gpt-load',
+      id: config.gatewayName.toLowerCase(),
       name: config.name,
       type: 'openai',
       baseUrl: gatewayEndpoint(config),

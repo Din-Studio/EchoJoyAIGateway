@@ -39,7 +39,7 @@ export const zhCN = {
   sectionHelp: {
     routing: '路由选择与请求亲和',
     connection: '代理、超时和失败处理',
-    browser: '网关地址、跨域访问与请求头规则',
+    browser: '网关名称与地址、跨域访问与请求头规则',
     maintenance: '日志保留与价格同步',
     experimental: '集中管理默认关闭且可能调整的实验性功能',
     system: '版本与部署信息',
@@ -64,6 +64,7 @@ export const zhCN = {
     response_header_rules: '下游响应头',
     cors: '跨域访问（CORS）',
     public_base_url: '网关公开地址',
+    gateway_name: '网关名称',
   },
   hints: {
     auto_model: 'Jev 选择预设，现有调度选择分组和凭据。',
@@ -86,6 +87,8 @@ export const zhCN = {
     response_header_rules: '返回客户端之前设置或移除的响应头。',
     cors: '仅作用于 /v1 和 /v1beta，管理 API 不开放跨域访问。',
     public_base_url: '首页客户端接入示例和访问密钥分发使用的根地址；留空时使用当前浏览器地址。',
+    gateway_name:
+      '首页客户端接入示例中的提供方名称；其小写形式同时作为 /v1/models 返回的 owned_by。',
   },
   strategies: { native_first: '原生优先', weighted_mix: '混合权重' },
   timeouts: '请求超时',
@@ -131,6 +134,7 @@ export const zhCN = {
   localOnly: '只影响当前浏览器，即时生效',
   errors: {
     publicBaseURL: '请输入不含查询参数和凭据的 http:// 或 https:// 地址。',
+    gatewayName: '请输入 1–64 位字母、数字、- 或 _，并以字母或数字开头。',
     number: '请输入 {min}–{max} 之间的整数。',
     autoModel: '请补全自动入口、兜底、预设与合法参数覆盖。',
     proxy: '请输入有效的 http:// 或 socks5:// 代理地址。',
@@ -196,7 +200,7 @@ export const enUS = {
   sectionHelp: {
     routing: 'Route selection and request affinity',
     connection: 'Proxy, timeouts and failure handling',
-    browser: 'Gateway address, cross-origin access and header rules',
+    browser: 'Gateway name and address, cross-origin access and header rules',
     maintenance: 'Log retention and price sync',
     experimental: 'Manage disabled-by-default features that may change',
     system: 'Version and deployment',
@@ -221,6 +225,7 @@ export const enUS = {
     response_header_rules: 'Downstream response headers',
     cors: 'Cross-origin access (CORS)',
     public_base_url: 'Public gateway URL',
+    gateway_name: 'Gateway name',
   },
   hints: {
     route_strategy:
@@ -247,6 +252,8 @@ export const enUS = {
     cors: 'Applies only to /v1 and /v1beta. Management APIs do not allow cross-origin access.',
     public_base_url:
       'Root URL used by the home client examples and access key handoff. Leave empty to use the current browser address.',
+    gateway_name:
+      'Provider name in the home client examples. Its lowercase form is also the owned_by value returned by /v1/models.',
   },
   strategies: { native_first: 'Native first', weighted_mix: 'Weighted mix' },
   timeouts: 'Request timeouts',
@@ -294,6 +301,7 @@ export const enUS = {
   localOnly: 'Applies immediately to this browser only',
   errors: {
     publicBaseURL: 'Enter an http:// or https:// URL without query parameters or credentials.',
+    gatewayName: 'Enter 1–64 letters, digits, - or _, starting with a letter or digit.',
     number: 'Enter an integer between {min} and {max}.',
     autoModel: 'Complete automatic entries, fallbacks, presets and valid override rules.',
     proxy: 'Enter a valid http:// or socks5:// proxy URL.',
@@ -360,7 +368,7 @@ export const jaJP = {
   sectionHelp: {
     routing: 'ルート選択とリクエスト親和性',
     connection: 'プロキシ、タイムアウト、失敗時の処理',
-    browser: 'ゲートウェイアドレス、クロスオリジンアクセスとヘッダールール',
+    browser: 'ゲートウェイ名とアドレス、クロスオリジンアクセスとヘッダールール',
     maintenance: 'ログ保持と料金同期',
     experimental: '初期状態で無効かつ変更される可能性がある機能を管理',
     system: 'バージョンと配置情報',
@@ -385,6 +393,7 @@ export const jaJP = {
     response_header_rules: '下流レスポンスヘッダー',
     cors: 'クロスオリジンアクセス（CORS）',
     public_base_url: 'ゲートウェイ公開 URL',
+    gateway_name: 'ゲートウェイ名',
   },
   hints: {
     route_strategy:
@@ -411,6 +420,8 @@ export const jaJP = {
     cors: '/v1 と /v1beta のみに適用します。管理 API はクロスオリジンアクセスを許可しません。',
     public_base_url:
       'ホームのクライアント接続例とアクセスキー共有で使うルート URL。空欄の場合は現在のブラウザのアドレスを使います。',
+    gateway_name:
+      'ホームのクライアント接続例で使うプロバイダー名。小文字形は /v1/models の owned_by にも使われます。',
   },
   strategies: { native_first: 'ネイティブ優先', weighted_mix: '重み付き混合' },
   timeouts: 'リクエストのタイムアウト',
@@ -459,6 +470,7 @@ export const jaJP = {
   errors: {
     publicBaseURL:
       'クエリパラメータや認証情報を含まない http:// または https:// の URL を入力してください。',
+    gatewayName: '英字・数字で始まる 1～64 文字の英数字、- または _ を入力してください。',
     number: '{min}～{max} の整数を入力してください。',
     autoModel: '自動入口、フォールバック、プリセット、有効な上書きルールを入力してください。',
     proxy: '有効な http:// または socks5:// プロキシ URL を入力してください。',

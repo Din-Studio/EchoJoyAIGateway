@@ -87,7 +87,7 @@ const sectionFields: Record<SectionID, readonly SettingKey[]> = {
     'blacklist_threshold',
     'validation_interval',
   ],
-  browser: ['public_base_url', 'cors', 'header_rules', 'response_header_rules'],
+  browser: ['gateway_name', 'public_base_url', 'cors', 'header_rules', 'response_header_rules'],
   maintenance: ['request_log_retention_days', 'models_dev_auto_sync_enabled'],
   experimental: ['auto_model'],
   system: [],
@@ -540,6 +540,27 @@ onScopeDispose(() => {
               </div>
             </template>
             <template v-else-if="id === 'browser'">
+              <SettingItem
+                v-if="matches('gateway_name')"
+                v-bind="settingItem('gateway_name')"
+                :description="t('settingsForm.hints.gateway_name')"
+                stacked
+                class="modern-settings-block"
+                @reset="restore('gateway_name')"
+                @undo="undoRestore('gateway_name')"
+              >
+                <AppTextField
+                  id="settings-gateway_name"
+                  v-model="draft.gateway_name"
+                  :label="t('settingsForm.fields.gateway_name')"
+                  label-hidden
+                  placeholder="GPT-Load"
+                  :error="fieldErrors.gateway_name"
+                  :disabled="disabled('gateway_name')"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+              </SettingItem>
               <SettingItem
                 v-if="matches('public_base_url')"
                 v-bind="settingItem('public_base_url')"
