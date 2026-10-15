@@ -52,22 +52,6 @@ type accessKeyCollectionRecord struct {
 	usageCost int64
 }
 
-type accessKeyCollectionRow struct {
-	KeyPrefix             string
-	PriceMultiplierMicros *int64
-	ID                    uint
-	Name                  string
-	Note                  string
-	KeySuffix             string
-	Status                string
-	Filters               models.JSON
-	RPMLimit              int64
-	ExpiresAtMS           *int64
-	CreatedAtMS           int64
-	UpdatedAtMS           int64
-	LastRequestAtMS       *int64
-}
-
 func (s *Service) ListAccessKeyCollection(
 	ctx context.Context,
 	query AccessKeyCollectionQuery,
@@ -128,18 +112,11 @@ func (s *Service) captureAccessKeyCollectionRecords(
 	s.writeMu.RLock()
 	defer s.writeMu.RUnlock()
 
-	var rows []accessKeyCollectionRow
+	var rows []accessKeyActivityRow
 	var costLimitRows []models.AccessKeyCostLimitRule
 	var usageByKey map[uint]requestlog.UsageAggregate
 	if err := s.withReadSnapshot(ctx, func(tx *gorm.DB) error {
-		if err := tx.Model(&models.AccessKey{}).
-			Select(
-				"access_keys.id", "access_keys.name", "access_keys.note", "access_keys.key_prefix", "access_keys.key_suffix",
-				"access_keys.status", "access_keys.filters", "access_keys.rpm_limit",
-				"access_keys.expires_at_ms", "access_keys.price_multiplier_micros",
-				"access_keys.created_at_ms", "access_keys.updated_at_ms",
-				"(SELECT MAX(request_logs.completed_at_ms) FROM request_logs WHERE request_logs.access_key_id = access_keys.id) AS last_request_at_ms",
-			).
+		if err := selectAccessKeyActivityRows(tx).
 			Order("access_keys.id ASC").
 			Scan(&rows).Error; err != nil {
 			return err
@@ -168,30 +145,17 @@ func (s *Service) captureAccessKeyCollectionRecords(
 		return nil, app_errors.ErrInternalServer
 	}
 	for _, row := range rows {
-		metadata, err := mapAccessKeyMetadataRow(accessKeyMetadataRow{
-			PriceMultiplierMicros: row.PriceMultiplierMicros,
-			ID:                    row.ID,
-			Name:                  row.Name,
-			Note:                  row.Note,
-			KeySuffix:             row.KeySuffix,
-			KeyPrefix:             row.KeyPrefix,
-			Status:                row.Status,
-			Filters:               row.Filters,
-			RPMLimit:              row.RPMLimit,
-			ExpiresAtMS:           row.ExpiresAtMS,
-			CreatedAtMS:           row.CreatedAtMS,
-			UpdatedAtMS:           row.UpdatedAtMS,
-		})
+		metadata, err := mapAccessKeyMetadataRow(row.Metadata)
 		if err != nil {
 			return nil, err
 		}
-		metadata.CostLimitRules = mapAccessKeyCostLimitRules(rulesByAccessKey[row.ID])
-		aggregate, err := mapUsageAggregate(usageByKey[row.ID])
+		metadata.CostLimitRules = mapAccessKeyCostLimitRules(rulesByAccessKey[row.Metadata.ID])
+		aggregate, err := mapUsageAggregate(usageByKey[row.Metadata.ID])
 		if err != nil {
 			return nil, err
 		}
 		records = append(records, accessKeyCollectionRecord{
-			usageCost: usageByKey[row.ID].EstimatedCostNanoUSD,
+			usageCost: usageByKey[row.Metadata.ID].EstimatedCostNanoUSD,
 			AccessKeyCollectionItem: AccessKeyCollectionItem{
 				Usage:             &usageDistributionAggregateResponse{RequestCount: aggregate.RequestCount, TotalTokens: aggregate.TotalTokens, EstimatedCostNanoUSD: aggregate.EstimatedCostNanoUSD},
 				AccessKeyMetadata: metadata,

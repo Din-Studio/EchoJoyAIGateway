@@ -141,13 +141,7 @@ func (s *Service) CreateAccessKeyIdempotent(
 			if err != nil {
 				return idempotentMutationResult{}, err
 			}
-			metadata, err := mapAccessKeyMetadataRow(accessKeyMetadataRow{
-				ID: row.ID, Name: row.Name, Note: row.Note, KeyPrefix: *row.KeyPrefix, KeySuffix: row.KeySuffix,
-				PriceMultiplierMicros: row.PriceMultiplierMicros,
-				Status:                row.Status, Filters: row.Filters, RPMLimit: row.RPMLimit,
-				ExpiresAtMS: row.ExpiresAtMS,
-				CreatedAtMS: row.CreatedAtMS, UpdatedAtMS: row.UpdatedAtMS,
-			})
+			metadata, err := mapAccessKeyMetadataRow(accessKeyMetadataRowFromModel(row))
 			if err != nil {
 				return idempotentMutationResult{}, err
 			}

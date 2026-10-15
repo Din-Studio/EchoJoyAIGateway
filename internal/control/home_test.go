@@ -223,6 +223,7 @@ func TestReadAccessKeyHomeBaseScopesInventoryToRoutableModels(t *testing.T) {
 	})
 	created, err := fixture.service.CreateAccessKey(t.Context(), AccessKeyCreateRequest{
 		Name: "scoped home",
+		Note: "home note",
 		Filters: &AccessKeyFilters{
 			Groups:    []uint{allowed.ID},
 			Protocols: []protocol.Protocol{protocol.OpenAICompletions},
@@ -244,7 +245,8 @@ func TestReadAccessKeyHomeBaseScopesInventoryToRoutableModels(t *testing.T) {
 	if result.Inventory != (HomeInventory{GroupCount: 1, ModelCount: 1}) ||
 		len(result.AccessKeys) != 1 || result.AccessKeys[0].ID != created.ID ||
 		!reflect.DeepEqual(result.AccessKeys[0].Models, []string{"client-allowed"}) ||
-		result.CurrentAccessKey == nil || result.CurrentAccessKey.ID != created.ID {
+		result.CurrentAccessKey == nil || result.CurrentAccessKey.ID != created.ID ||
+		result.CurrentAccessKey.Note != "home note" {
 		t.Fatalf("ReadAccessKeyHomeBase() = %#v", result)
 	}
 }
