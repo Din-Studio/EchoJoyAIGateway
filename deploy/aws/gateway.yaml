@@ -1,0 +1,631 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  EchoJoy AI Gateway 网关层：ECS 集群（EC2、host 网络）、ASG 和容量提供程序、任务定义与服务、
+  两个目标组、两个共用 ALB 上的新监听规则、扩缩和告警（计划文档 5.3、6、10 节）。
+  新监听规则把旧网关的文本接口（/gateway/v1/chat/completions、messages、responses）去掉 /gateway 前缀后
+  转给新网关，调用方不用改配置。规则以 NewRulePriority 创建，排在旧网关整域名规则之后，部署后不接流量；
+  由 scripts/alb-cutover.sh 调整旧规则的优先级来切换。
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  Subnets:
+    Type: List<AWS::EC2::Subnet::Id>
+  GatewaySecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  AlertTopicArn:
+    Type: String
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ecs/optimized-ami/amazon-linux-2023/recommended/image_id
+  InstanceType:
+    Type: String
+    Default: c6in.large
+  ImageRepo:
+    Type: String
+    Default: docker.echojoy.cn/echojoy-gateway/ai-gateway
+  ImageTag:
+    Type: String
+    AllowedPattern: "[0-9a-f]{7,40}"
+    Description: git 提交的短 SHA（scripts/build-push.sh 的输出）
+  Registry:
+    Type: String
+    Default: docker.echojoy.cn
+  RegistryUser:
+    Type: String
+    Default: admin
+  SsmPrefix:
+    Type: String
+    Default: /echojoy-gateway/prod
+  GatewayHost:
+    Type: String
+    Default: lingying-gateway.echojoy.cn
+  DevAlbListenerArn:
+    Type: String
+  InternalAlbListenerArn:
+    Type: String
+  DevAlbFullName:
+    Type: String
+    Description: 例如 app/dev-alb/9f75a0a754596426，用于告警维度
+  InternalAlbFullName:
+    Type: String
+  NewRulePriority:
+    Type: Number
+    Default: 30
+  RedisAddrs:
+    Type: String
+    Default: 172.31.15.11:6379,172.31.31.11:6379,172.31.47.11:6379
+  MinTasks:
+    Type: Number
+    Default: 2
+  MaxTasks:
+    Type: Number
+    Default: 24
+  MaxInstances:
+    Type: Number
+    Default: 48
+    Description: 任务上限的两倍，给滚动部署留空间
+
+Resources:
+  # ---------- IAM ----------
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: !Sub ec2.${AWS::URLSuffix}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: registry-credential
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/REGISTRY_PASSWORD
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: gateway-secrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ssm:GetParameters
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/AUTH_KEY
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/ENCRYPTION_KEY
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/DATABASE_DSN
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/REDIS_PASSWORD
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ecs-exec
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: "*"
+
+  # ---------- 集群与容量（6.1 节） ----------
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: echojoy-gateway-prod
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/ai-gateway
+      RetentionInDays: 14
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt InstanceProfile.Arn
+        MetadataOptions:
+          HttpTokens: required
+          HttpEndpoint: enabled
+          HttpPutResponseHopLimit: 2
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true
+            Groups: [!Ref GatewaySecurityGroupId]
+            DeleteOnTermination: true
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: 30
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: ai-gateway
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -euo pipefail
+
+            # 镜像仓库凭证交给 ECS agent（9.1 节），任务定义不需要 Secrets Manager。
+            command -v aws >/dev/null || dnf install -y awscli-2
+            REGISTRY_PASSWORD=$(aws ssm get-parameter --region ${AWS::Region} --with-decryption \
+              --name ${SsmPrefix}/REGISTRY_PASSWORD --query Parameter.Value --output text)
+            AUTH_DATA=$(REGISTRY_PASSWORD="$REGISTRY_PASSWORD" python3 -c \
+              'import json, os; print(json.dumps({"${Registry}": {"username": "${RegistryUser}", "password": os.environ["REGISTRY_PASSWORD"]}}))')
+            umask 077
+            cat >> /etc/ecs/ecs.config <<EOF
+            ECS_CLUSTER=${Cluster}
+            ECS_CONTAINER_STOP_TIMEOUT=30s
+            ECS_IMAGE_PULL_BEHAVIOR=prefer-cached
+            ECS_ENGINE_AUTH_TYPE=docker
+            ECS_ENGINE_AUTH_DATA=$AUTH_DATA
+            EOF
+            chmod 600 /etc/ecs/ecs.config   # 文件在 AMI 里已存在，umask 不起作用；里面有仓库密码
+
+            # 主机网络参数（4.5 节），host 模式下对网关容器生效。
+            cat > /etc/sysctl.d/90-gateway.conf <<'EOF'
+            net.core.somaxconn = 65535
+            net.ipv4.tcp_max_syn_backlog = 65535
+            net.ipv4.ip_local_port_range = 1024 65535
+            net.ipv4.tcp_tw_reuse = 1
+            net.ipv4.tcp_fin_timeout = 15
+            net.core.default_qdisc = fq
+            net.ipv4.tcp_congestion_control = bbr
+            EOF
+            sysctl --system >/dev/null
+
+            # ENA 配额计数器（4.6 节），按 ASG 聚合上报。
+            dnf install -y amazon-cloudwatch-agent
+            cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'EOF'
+            {
+              "metrics": {
+                "append_dimensions": {"AutoScalingGroupName": "${!aws:AutoScalingGroupName}", "InstanceId": "${!aws:InstanceId}"},
+                "aggregation_dimensions": [["AutoScalingGroupName"]],
+                "metrics_collected": {
+                  "ethtool": {
+                    "interface_include": ["*"],
+                    "metrics_include": ["bw_in_allowance_exceeded", "bw_out_allowance_exceeded", "pps_allowance_exceeded", "conntrack_allowance_exceeded"]
+                  }
+                }
+              }
+            }
+            EOF
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s \
+              -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: !Ref Subnets
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: "2"
+      MaxSize: !Ref MaxInstances
+      HealthCheckType: EC2
+      NewInstancesProtectedFromScaleIn: true
+      Tags:
+        - Key: Name
+          Value: ai-gateway
+          PropagateAtLaunch: true
+
+  CapacityProvider:
+    Type: AWS::ECS::CapacityProvider
+    Properties:
+      Name: ai-gateway-asg
+      AutoScalingGroupProvider:
+        AutoScalingGroupArn: !Ref AutoScalingGroup
+        ManagedTerminationProtection: ENABLED
+        ManagedDraining: ENABLED
+        ManagedScaling:
+          Status: ENABLED
+          TargetCapacity: 100
+
+  ClusterCapacityProviders:
+    Type: AWS::ECS::ClusterCapacityProviderAssociations
+    Properties:
+      Cluster: !Ref Cluster
+      CapacityProviders: [!Ref CapacityProvider]
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: !Ref CapacityProvider
+          Weight: 1
+
+  # ---------- 目标组与监听规则（5.3、6.3 节） ----------
+  PublicTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: tg-ai-gateway-pub
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 3001
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 10
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      Matcher:
+        HttpCode: "200"
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "630"
+        - Key: load_balancing.algorithm.type
+          Value: least_outstanding_requests
+
+  InternalTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: tg-ai-gateway-int
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 3001
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 10
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      Matcher:
+        HttpCode: "200"
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "630"
+        - Key: load_balancing.algorithm.type
+          Value: least_outstanding_requests
+
+  PublicListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref DevAlbListenerArn
+      Priority: !Ref NewRulePriority
+      Conditions:
+        - Field: host-header
+          HostHeaderConfig:
+            Values: [!Ref GatewayHost]
+        - Field: path-pattern
+          PathPatternConfig:
+            Values: ["/gateway/v1/chat/completions", "/gateway/v1/messages*", "/gateway/v1/responses*"]
+      Transforms:
+        - Type: url-rewrite
+          UrlRewriteConfig:
+            Rewrites:
+              - Regex: "^/gateway/(.*)$"
+                Replace: "/$1"
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref PublicTargetGroup
+
+  InternalListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref InternalAlbListenerArn
+      Priority: !Ref NewRulePriority
+      Conditions:
+        - Field: host-header
+          HostHeaderConfig:
+            Values: [!Ref GatewayHost]
+        - Field: path-pattern
+          PathPatternConfig:
+            Values: ["/gateway/v1/chat/completions", "/gateway/v1/messages*", "/gateway/v1/responses*"]
+      Transforms:
+        - Type: url-rewrite
+          UrlRewriteConfig:
+            Rewrites:
+              - Regex: "^/gateway/(.*)$"
+                Replace: "/$1"
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref InternalTargetGroup
+
+  # ---------- 任务与服务（6.2、6.4 节） ----------
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: ai-gateway
+      NetworkMode: host
+      RequiresCompatibilities: [EC2]
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: gateway
+          Image: !Sub ${ImageRepo}:${ImageTag}
+          Essential: true
+          MemoryReservation: 3072
+          StopTimeout: 30
+          PortMappings:
+            - ContainerPort: 3001
+              HostPort: 3001
+              Protocol: tcp
+          Ulimits:
+            - Name: nofile
+              SoftLimit: 1048576
+              HardLimit: 1048576
+          Environment:
+            - {Name: HOST, Value: "0.0.0.0"}
+            - {Name: PORT, Value: "3001"}
+            - {Name: READ_TIMEOUT, Value: "120"}
+            - {Name: IDLE_TIMEOUT, Value: "3660"}
+            - {Name: GRACEFUL_SHUTDOWN_TIMEOUT, Value: "20"}
+            - {Name: DATABASE_MAX_OPEN_CONNECTIONS, Value: "8"}
+            - {Name: DATABASE_MAX_IDLE_CONNECTIONS, Value: "4"}
+            - {Name: REDIS_ADDRS, Value: !Ref RedisAddrs}
+            - {Name: GOMEMLIMIT, Value: 3GiB}
+            - {Name: LOG_FORMAT, Value: json}
+            - {Name: LOG_LEVEL, Value: info}
+            - {Name: RESPONSE_BINDING_TTL, Value: 168h}
+          Secrets:
+            - Name: AUTH_KEY
+              ValueFrom: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/AUTH_KEY
+            - Name: ENCRYPTION_KEY
+              ValueFrom: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/ENCRYPTION_KEY
+            - Name: DATABASE_DSN
+              ValueFrom: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/DATABASE_DSN
+            - Name: REDIS_PASSWORD
+              ValueFrom: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/REDIS_PASSWORD
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: gateway
+              mode: non-blocking
+              max-buffer-size: 25m
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: [ClusterCapacityProviders, PublicListenerRule, InternalListenerRule]
+    Properties:
+      ServiceName: ai-gateway
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      # 不设 DesiredCount：创建后由扩缩目标的下限拉到 MinTasks，以后的栈更新也不会把扩出来的任务数重置。
+      CapacityProviderStrategy:
+        - CapacityProvider: !Ref CapacityProvider
+          Weight: 1
+      HealthCheckGracePeriodSeconds: 120
+      EnableExecuteCommand: true
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      PlacementStrategies:
+        - Type: spread
+          Field: attribute:ecs.availability-zone
+        - Type: spread
+          Field: instanceId
+      LoadBalancers:
+        - ContainerName: gateway
+          ContainerPort: 3001
+          TargetGroupArn: !Ref PublicTargetGroup
+        - ContainerName: gateway
+          ContainerPort: 3001
+          TargetGroupArn: !Ref InternalTargetGroup
+
+  ScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      ServiceNamespace: ecs
+      ScalableDimension: ecs:service:DesiredCount
+      ResourceId: !Sub service/${Cluster}/${Service.Name}
+      MinCapacity: !Ref MinTasks
+      MaxCapacity: !Ref MaxTasks
+
+  CpuScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: cpu-60
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: 60
+        ScaleInCooldown: 900
+        ScaleOutCooldown: 60
+
+  # ---------- 告警（10 节） ----------
+  PublicTarget5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gateway-tg-pub-5xx
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_Target_5XX_Count
+      Dimensions:
+        - {Name: TargetGroup, Value: !GetAtt PublicTargetGroup.TargetGroupFullName}
+        - {Name: LoadBalancer, Value: !Ref DevAlbFullName}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 50
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopicArn]
+
+  InternalTarget5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gateway-tg-int-5xx
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_Target_5XX_Count
+      Dimensions:
+        - {Name: TargetGroup, Value: !GetAtt InternalTargetGroup.TargetGroupFullName}
+        - {Name: LoadBalancer, Value: !Ref InternalAlbFullName}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 50
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopicArn]
+
+  PublicUnhealthyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gateway-tg-pub-unhealthy
+      Namespace: AWS/ApplicationELB
+      MetricName: UnHealthyHostCount
+      Dimensions:
+        - {Name: TargetGroup, Value: !GetAtt PublicTargetGroup.TargetGroupFullName}
+        - {Name: LoadBalancer, Value: !Ref DevAlbFullName}
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopicArn]
+
+  InternalUnhealthyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gateway-tg-int-unhealthy
+      Namespace: AWS/ApplicationELB
+      MetricName: UnHealthyHostCount
+      Dimensions:
+        - {Name: TargetGroup, Value: !GetAtt InternalTargetGroup.TargetGroupFullName}
+        - {Name: LoadBalancer, Value: !Ref InternalAlbFullName}
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopicArn]
+
+  RunningTasksAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gateway-running-tasks
+      Namespace: ECS/ContainerInsights
+      MetricName: RunningTaskCount
+      Dimensions:
+        - {Name: ClusterName, Value: !Ref Cluster}
+        - {Name: ServiceName, Value: !GetAtt Service.Name}
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 5
+      Threshold: !Ref MinTasks
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopicArn]
+
+  EnaAllowanceAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gateway-ena-allowance-exceeded
+      AlarmDescription: ENA 配额计数器持续增长（带宽、PPS 或连接跟踪被限），计数器是累计值，用 RATE 判断
+      Metrics:
+        - Id: bwin
+          ReturnData: false
+          MetricStat:
+            Metric: {Namespace: CWAgent, MetricName: ethtool_bw_in_allowance_exceeded, Dimensions: [{Name: AutoScalingGroupName, Value: !Ref AutoScalingGroup}]}
+            Period: 60
+            Stat: Sum
+        - Id: bwout
+          ReturnData: false
+          MetricStat:
+            Metric: {Namespace: CWAgent, MetricName: ethtool_bw_out_allowance_exceeded, Dimensions: [{Name: AutoScalingGroupName, Value: !Ref AutoScalingGroup}]}
+            Period: 60
+            Stat: Sum
+        - Id: pps
+          ReturnData: false
+          MetricStat:
+            Metric: {Namespace: CWAgent, MetricName: ethtool_pps_allowance_exceeded, Dimensions: [{Name: AutoScalingGroupName, Value: !Ref AutoScalingGroup}]}
+            Period: 60
+            Stat: Sum
+        - Id: conntrack
+          ReturnData: false
+          MetricStat:
+            Metric: {Namespace: CWAgent, MetricName: ethtool_conntrack_allowance_exceeded, Dimensions: [{Name: AutoScalingGroupName, Value: !Ref AutoScalingGroup}]}
+            Period: 60
+            Stat: Sum
+        - Id: growth
+          Expression: MAX([RATE(bwin), RATE(bwout), RATE(pps), RATE(conntrack)])
+          ReturnData: true
+      EvaluationPeriods: 5
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopicArn]
+
+  NetworkOutAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gateway-network-out
+      AlarmDescription: 任一网关实例 5 分钟出流量超过基线带宽 3.125 Gbps 的 60%（1.875 Gbps）
+      Namespace: AWS/EC2
+      MetricName: NetworkOut
+      Dimensions:
+        - {Name: AutoScalingGroupName, Value: !Ref AutoScalingGroup}
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 70312500000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopicArn]
+
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+  ServiceName:
+    Value: !GetAtt Service.Name
+  AutoScalingGroupName:
+    Value: !Ref AutoScalingGroup
+  PublicTargetGroupArn:
+    Value: !Ref PublicTargetGroup
+  InternalTargetGroupArn:
+    Value: !Ref InternalTargetGroup
+  PublicListenerRuleArn:
+    Value: !Ref PublicListenerRule
+  InternalListenerRuleArn:
+    Value: !Ref InternalListenerRule

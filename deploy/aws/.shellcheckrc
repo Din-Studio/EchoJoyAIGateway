@@ -1,0 +1,5 @@
+# 脚本以 source "$(dirname "$0")/lib.sh" 引用同目录文件
+source-path=SCRIPTDIR
+external-sources=true
+# AWS CLI 的 JMESPath 用反引号表示字面量，必须放在单引号里
+disable=SC2016

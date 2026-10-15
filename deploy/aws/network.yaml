@@ -1,0 +1,152 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  EchoJoy AI Gateway 生产环境基础资源：安全组、告警主题、费用预算。
+  不新建子网和路由表，复用默认 VPC（计划文档 5.1、5.2、10 节）。
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  DevAlbSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: 现有 dev-alb 的安全组
+  InternalAlbSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: 现有 alb-internal 的安全组
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: 告警和预算通知的收件邮箱，留空则不订阅
+  MonthlyBudgetCny:
+    Type: Number
+    Default: 0
+    Description: 账号每月费用预算（元），0 表示不建预算
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+  HasBudget: !And
+    - !Condition HasAlertEmail
+    - !Not [!Equals [!Ref MonthlyBudgetCny, 0]]
+
+Resources:
+  GatewaySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: ai-gateway-instance
+      GroupDescription: AI gateway ECS instances, port 3001 from the two shared ALBs only
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3001
+          ToPort: 3001
+          SourceSecurityGroupId: !Ref DevAlbSecurityGroupId
+          Description: dev-alb
+        - IpProtocol: tcp
+          FromPort: 3001
+          ToPort: 3001
+          SourceSecurityGroupId: !Ref InternalAlbSecurityGroupId
+          Description: alb-internal
+      Tags:
+        - Key: Name
+          Value: ai-gateway-instance
+
+  RedisSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: ai-gateway-redis
+      GroupDescription: AI gateway Redis Cluster nodes
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref GatewaySecurityGroup
+          Description: gateway
+      Tags:
+        - Key: Name
+          Value: ai-gateway-redis
+
+  RedisClientFromSelf:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RedisSecurityGroup
+      SourceSecurityGroupId: !Ref RedisSecurityGroup
+      IpProtocol: tcp
+      FromPort: 6379
+      ToPort: 6379
+      Description: redis-cli --cluster between nodes
+
+  RedisBusFromSelf:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RedisSecurityGroup
+      SourceSecurityGroupId: !Ref RedisSecurityGroup
+      IpProtocol: tcp
+      FromPort: 16379
+      ToPort: 16379
+      Description: cluster bus
+
+  PostgresSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: ai-gateway-pg
+      GroupDescription: AI gateway PostgreSQL
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref GatewaySecurityGroup
+          Description: gateway
+      Tags:
+        - Key: Name
+          Value: ai-gateway-pg
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: gateway-prod-alerts
+
+  AlertEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Condition: HasBudget
+    Properties:
+      Budget:
+        BudgetName: echojoy-monthly-cost
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetCny
+          Unit: CNY
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+
+Outputs:
+  GatewaySecurityGroupId:
+    Value: !Ref GatewaySecurityGroup
+  RedisSecurityGroupId:
+    Value: !Ref RedisSecurityGroup
+  PostgresSecurityGroupId:
+    Value: !Ref PostgresSecurityGroup
+  AlertTopicArn:
+    Value: !Ref AlertTopic
