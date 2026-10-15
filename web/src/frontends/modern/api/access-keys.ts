@@ -28,6 +28,7 @@ export interface CostWindow extends CostRule {
 export interface AccessKey {
   id: number
   name: string
+  note: string
   masked_key: string
   status: 'active' | 'disabled'
   filters: AccessScope
@@ -68,6 +69,7 @@ export interface AccessCollection {
 export interface AccessInput {
   key?: string
   name: string
+  note: string
   status: AccessKey['status']
   filters: AccessScope
   expires_at_ms: number | null
@@ -112,6 +114,7 @@ function readAccessKey(value: unknown): AccessKey {
   return {
     id: integer(row.id, 1),
     name: text(row.name),
+    note: text(row.note),
     masked_key: text(row.masked_key),
     status: oneOf(row.status, ['active', 'disabled'] as const),
     filters: {

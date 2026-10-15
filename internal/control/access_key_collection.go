@@ -57,6 +57,7 @@ type accessKeyCollectionRow struct {
 	PriceMultiplierMicros *int64
 	ID                    uint
 	Name                  string
+	Note                  string
 	KeySuffix             string
 	Status                string
 	Filters               models.JSON
@@ -133,7 +134,7 @@ func (s *Service) captureAccessKeyCollectionRecords(
 	if err := s.withReadSnapshot(ctx, func(tx *gorm.DB) error {
 		if err := tx.Model(&models.AccessKey{}).
 			Select(
-				"access_keys.id", "access_keys.name", "access_keys.key_prefix", "access_keys.key_suffix",
+				"access_keys.id", "access_keys.name", "access_keys.note", "access_keys.key_prefix", "access_keys.key_suffix",
 				"access_keys.status", "access_keys.filters", "access_keys.rpm_limit",
 				"access_keys.expires_at_ms", "access_keys.price_multiplier_micros",
 				"access_keys.created_at_ms", "access_keys.updated_at_ms",
@@ -171,6 +172,7 @@ func (s *Service) captureAccessKeyCollectionRecords(
 			PriceMultiplierMicros: row.PriceMultiplierMicros,
 			ID:                    row.ID,
 			Name:                  row.Name,
+			Note:                  row.Note,
 			KeySuffix:             row.KeySuffix,
 			KeyPrefix:             row.KeyPrefix,
 			Status:                row.Status,

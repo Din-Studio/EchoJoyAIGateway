@@ -5,6 +5,7 @@ type AccessKey struct {
 	PriceMultiplierMicros   *int64  `gorm:"column:price_multiplier_micros;type:bigint;not null;default:1000000;check:chk_access_key_price_multiplier,price_multiplier_micros >= 0 AND price_multiplier_micros <= 1000000000"`
 	ID                      uint    `gorm:"primaryKey;autoIncrement"`
 	Name                    string  `gorm:"type:varchar(255);not null"`
+	Note                    string  `gorm:"type:text;not null;default:''"`
 	KeyValue                string  `gorm:"type:text;not null"`
 	KeyHash                 string  `gorm:"type:varchar(128);not null;uniqueIndex"`
 	KeyPrefix               *string `gorm:"type:varchar(6);not null;default:'sk-gl-';check:chk_access_key_prefix,length(key_prefix) IN (0,6)"`

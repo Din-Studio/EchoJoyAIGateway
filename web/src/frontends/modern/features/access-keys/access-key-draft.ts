@@ -10,6 +10,7 @@ export interface RuleDraft extends CostRule {
 }
 export interface AccessDraft {
   name: string
+  note: string
   key: string
   enabled: boolean
   never: boolean
@@ -47,6 +48,7 @@ export function draftFor(row?: AccessKey, duplicate = false): AccessDraft {
     : { groups: [], protocols: [], models: [], allowed_cidrs: [] }
   return {
     name: row?.name ?? '',
+    note: row?.note ?? '',
     key: '',
     enabled: row?.status !== 'disabled',
     never: row?.expires_at_ms == null,
@@ -84,6 +86,7 @@ function periodSeconds(rule: RuleDraft): number {
 export function inputFor(draft: AccessDraft): AccessInput {
   return {
     name: draft.name.trim(),
+    note: draft.note.trim(),
     ...(draft.key ? { key: draft.key } : {}),
     status: draft.enabled ? 'active' : 'disabled',
     expires_at_ms: draft.never ? null : (parseLocalDateTime(draft.expires)?.getTime() ?? NaN),
@@ -123,6 +126,7 @@ export function patchFor(base: AccessKey, input: AccessInput): Partial<AccessInp
   const patch: Partial<AccessInput> = {}
   if (input.key) patch.key = input.key
   if (base.name !== input.name) patch.name = input.name
+  if (base.note !== input.note) patch.note = input.note
   if (base.status !== input.status) patch.status = input.status
   if (base.expires_at_ms !== input.expires_at_ms) patch.expires_at_ms = input.expires_at_ms
   if (base.rpm_limit !== input.rpm_limit) patch.rpm_limit = input.rpm_limit
@@ -142,6 +146,7 @@ export function draftErrors(draft: AccessDraft, base?: AccessKey): Record<string
     /\p{Cc}/u.test(input.name)
   )
     errors.name = 'required'
+  if ([...input.note].length > 500) errors.note = 'noteTooLong'
   if (draft.key && !/^[\x21-\x7e]{1,256}$/.test(draft.key)) errors.key = 'invalidKey'
   if (!/^\d*$/.test(draft.rpm) || !Number.isSafeInteger(input.rpm_limit))
     errors.rpm = 'invalidNumber'
