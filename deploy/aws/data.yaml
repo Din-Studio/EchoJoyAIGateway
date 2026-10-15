@@ -1,0 +1,570 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  EchoJoy AI Gateway 数据层：3 台 Redis Cluster 主节点和 1 台 PostgreSQL，
+  固定私有 IP、独立数据卷、DLM 快照、pg_dump 备份桶、自动恢复与告警（计划文档 7、8、10 节）。
+  实例上的服务由 scripts/bootstrap-redis.sh 和 scripts/bootstrap-pg.sh 配置。
+  t3a 默认就是 unlimited 积分模式（宁夏的 CloudFormation 暂不支持在实例上设置 CreditSpecification）。
+  实例不开 DisableApiTermination，否则首次创建失败时栈无法回滚；数据由数据卷的
+  DeletionPolicy: Snapshot 和 deploy.sh 开启的栈删除保护来保护。
+
+Parameters:
+  SubnetA:
+    Type: AWS::EC2::Subnet::Id
+  SubnetB:
+    Type: AWS::EC2::Subnet::Id
+  SubnetC:
+    Type: AWS::EC2::Subnet::Id
+  RedisSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  PostgresSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  AlertTopicArn:
+    Type: String
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+  RedisInstanceType:
+    Type: String
+    Default: t3a.medium
+  PostgresInstanceType:
+    Type: String
+    Default: m5a.large
+  RedisIpA:
+    Type: String
+  RedisIpB:
+    Type: String
+  RedisIpC:
+    Type: String
+  PostgresIp:
+    Type: String
+  RedisDataVolumeGiB:
+    Type: Number
+    Default: 20
+  PostgresDataVolumeGiB:
+    Type: Number
+    Default: 200
+  SsmPrefix:
+    Type: String
+    Default: /echojoy-gateway/prod
+
+Resources:
+  DataInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: !Sub ec2.${AWS::URLSuffix}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: data-tier
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/REDIS_PASSWORD
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/PG_PASSWORD
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/REGISTRY_PASSWORD
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub ${BackupBucket.Arn}/*
+              - Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: EchoJoyGateway
+
+  DataInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref DataInstanceRole]
+
+  DataLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        IamInstanceProfile:
+          Arn: !GetAtt DataInstanceProfile.Arn
+        MetadataOptions:
+          HttpTokens: required
+          HttpEndpoint: enabled
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: 20
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash
+            # 只装 docker。角色相关的配置由 bootstrap 脚本经 SSM 下发，可重复执行。
+            set -euo pipefail
+            dnf install -y docker
+            systemctl enable --now docker
+
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub echojoy-gateway-pg-backup-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-30d
+            Status: Enabled
+            ExpirationInDays: 30
+
+  # ---------- Redis ----------
+  RedisA:
+    Type: AWS::EC2::Instance
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref DataLaunchTemplate
+        Version: !GetAtt DataLaunchTemplate.LatestVersionNumber
+      InstanceType: !Ref RedisInstanceType
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          SubnetId: !Ref SubnetA
+          PrivateIpAddress: !Ref RedisIpA
+          GroupSet: [!Ref RedisSecurityGroupId]
+          AssociatePublicIpAddress: true
+          DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: redis-a
+        - Key: Role
+          Value: gateway-redis
+
+  RedisB:
+    Type: AWS::EC2::Instance
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref DataLaunchTemplate
+        Version: !GetAtt DataLaunchTemplate.LatestVersionNumber
+      InstanceType: !Ref RedisInstanceType
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          SubnetId: !Ref SubnetB
+          PrivateIpAddress: !Ref RedisIpB
+          GroupSet: [!Ref RedisSecurityGroupId]
+          AssociatePublicIpAddress: true
+          DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: redis-b
+        - Key: Role
+          Value: gateway-redis
+
+  RedisC:
+    Type: AWS::EC2::Instance
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref DataLaunchTemplate
+        Version: !GetAtt DataLaunchTemplate.LatestVersionNumber
+      InstanceType: !Ref RedisInstanceType
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          SubnetId: !Ref SubnetC
+          PrivateIpAddress: !Ref RedisIpC
+          GroupSet: [!Ref RedisSecurityGroupId]
+          AssociatePublicIpAddress: true
+          DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: redis-c
+        - Key: Role
+          Value: gateway-redis
+
+  RedisDataA:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      AvailabilityZone: !GetAtt RedisA.AvailabilityZone
+      Size: !Ref RedisDataVolumeGiB
+      VolumeType: gp3
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: redis-a-data
+        - Key: Backup
+          Value: redis
+
+  RedisDataB:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      AvailabilityZone: !GetAtt RedisB.AvailabilityZone
+      Size: !Ref RedisDataVolumeGiB
+      VolumeType: gp3
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: redis-b-data
+        - Key: Backup
+          Value: redis
+
+  RedisDataC:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      AvailabilityZone: !GetAtt RedisC.AvailabilityZone
+      Size: !Ref RedisDataVolumeGiB
+      VolumeType: gp3
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: redis-c-data
+        - Key: Backup
+          Value: redis
+
+  RedisDataAttachA:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref RedisA
+      VolumeId: !Ref RedisDataA
+      Device: /dev/sdf
+
+  RedisDataAttachB:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref RedisB
+      VolumeId: !Ref RedisDataB
+      Device: /dev/sdf
+
+  RedisDataAttachC:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref RedisC
+      VolumeId: !Ref RedisDataC
+      Device: /dev/sdf
+
+  # ---------- PostgreSQL ----------
+  Postgres:
+    Type: AWS::EC2::Instance
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref DataLaunchTemplate
+        Version: !GetAtt DataLaunchTemplate.LatestVersionNumber
+      InstanceType: !Ref PostgresInstanceType
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          SubnetId: !Ref SubnetA
+          PrivateIpAddress: !Ref PostgresIp
+          GroupSet: [!Ref PostgresSecurityGroupId]
+          AssociatePublicIpAddress: true
+          DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: pg
+        - Key: Role
+          Value: gateway-postgres
+
+  PostgresData:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      AvailabilityZone: !GetAtt Postgres.AvailabilityZone
+      Size: !Ref PostgresDataVolumeGiB
+      VolumeType: gp3
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: pg-data
+        - Key: Backup
+          Value: pg
+
+  PostgresDataAttach:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref Postgres
+      VolumeId: !Ref PostgresData
+      Device: /dev/sdf
+
+  # ---------- 快照（8.2、7.2 节） ----------
+  DlmRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: dlm.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole
+
+  PostgresSnapshotPolicy:
+    Type: AWS::DLM::LifecyclePolicy
+    Properties:
+      Description: gateway pg data volume every 4h keep 7 days
+      State: ENABLED
+      ExecutionRoleArn: !GetAtt DlmRole.Arn
+      PolicyDetails:
+        ResourceTypes: [VOLUME]
+        TargetTags:
+          - Key: Backup
+            Value: pg
+        Schedules:
+          - Name: every-4h
+            CopyTags: true
+            CreateRule:
+              Interval: 4
+              IntervalUnit: HOURS
+              Times: ["00:00"]
+            RetainRule:
+              Count: 42
+
+  RedisSnapshotPolicy:
+    Type: AWS::DLM::LifecyclePolicy
+    Properties:
+      Description: gateway redis data volumes daily keep 7 days
+      State: ENABLED
+      ExecutionRoleArn: !GetAtt DlmRole.Arn
+      PolicyDetails:
+        ResourceTypes: [VOLUME]
+        TargetTags:
+          - Key: Backup
+            Value: redis
+        Schedules:
+          - Name: daily
+            CopyTags: true
+            CreateRule:
+              Interval: 24
+              IntervalUnit: HOURS
+              Times: ["18:00"]
+            RetainRule:
+              Count: 7
+
+  # ---------- 自动恢复（10 节） ----------
+  RecoverRedisA:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gateway-redis-a-system-check
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_System
+      Dimensions: [{Name: InstanceId, Value: !Ref RedisA}]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Sub arn:${AWS::Partition}:automate:${AWS::Region}:ec2:recover
+        - !Ref AlertTopicArn
+
+  RecoverRedisB:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gateway-redis-b-system-check
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_System
+      Dimensions: [{Name: InstanceId, Value: !Ref RedisB}]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Sub arn:${AWS::Partition}:automate:${AWS::Region}:ec2:recover
+        - !Ref AlertTopicArn
+
+  RecoverRedisC:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gateway-redis-c-system-check
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_System
+      Dimensions: [{Name: InstanceId, Value: !Ref RedisC}]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Sub arn:${AWS::Partition}:automate:${AWS::Region}:ec2:recover
+        - !Ref AlertTopicArn
+
+  RecoverPostgres:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gateway-pg-system-check
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_System
+      Dimensions: [{Name: InstanceId, Value: !Ref Postgres}]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Sub arn:${AWS::Partition}:automate:${AWS::Region}:ec2:recover
+        - !Ref AlertTopicArn
+
+  # ---------- 服务指标告警（10 节，指标由实例上的 report-metrics 每分钟上报） ----------
+  RedisClusterStateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gateway-redis-cluster-state
+      AlarmDescription: 任一节点报告 cluster_state 不为 ok，或停止上报
+      Metrics:
+        - Id: a
+          ReturnData: false
+          MetricStat:
+            Metric: {Namespace: EchoJoyGateway, MetricName: RedisClusterOk, Dimensions: [{Name: Node, Value: redis-a}]}
+            Period: 60
+            Stat: Minimum
+        - Id: b
+          ReturnData: false
+          MetricStat:
+            Metric: {Namespace: EchoJoyGateway, MetricName: RedisClusterOk, Dimensions: [{Name: Node, Value: redis-b}]}
+            Period: 60
+            Stat: Minimum
+        - Id: c
+          ReturnData: false
+          MetricStat:
+            Metric: {Namespace: EchoJoyGateway, MetricName: RedisClusterOk, Dimensions: [{Name: Node, Value: redis-c}]}
+            Period: 60
+            Stat: Minimum
+        - Id: worst
+          Expression: MIN([FILL(a, 0), FILL(b, 0), FILL(c, 0)])
+          ReturnData: true
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopicArn]
+      OKActions: [!Ref AlertTopicArn]
+
+  RedisMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gateway-redis-memory
+      AlarmDescription: 任一节点 used_memory 超过 maxmemory 的 70%
+      Metrics:
+        - Id: a
+          ReturnData: false
+          MetricStat:
+            Metric: {Namespace: EchoJoyGateway, MetricName: RedisMemoryUsedPercent, Dimensions: [{Name: Node, Value: redis-a}]}
+            Period: 300
+            Stat: Maximum
+        - Id: b
+          ReturnData: false
+          MetricStat:
+            Metric: {Namespace: EchoJoyGateway, MetricName: RedisMemoryUsedPercent, Dimensions: [{Name: Node, Value: redis-b}]}
+            Period: 300
+            Stat: Maximum
+        - Id: c
+          ReturnData: false
+          MetricStat:
+            Metric: {Namespace: EchoJoyGateway, MetricName: RedisMemoryUsedPercent, Dimensions: [{Name: Node, Value: redis-c}]}
+            Period: 300
+            Stat: Maximum
+        - Id: worst
+          Expression: MAX([a, b, c])
+          ReturnData: true
+      EvaluationPeriods: 1
+      Threshold: 70
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopicArn]
+
+  RedisCpuCreditsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gateway-redis-cpu-surplus-charged
+      AlarmDescription: t3a 开始按 vCPU 小时额外计费
+      Metrics:
+        - Id: a
+          ReturnData: false
+          MetricStat:
+            Metric: {Namespace: AWS/EC2, MetricName: CPUSurplusCreditsCharged, Dimensions: [{Name: InstanceId, Value: !Ref RedisA}]}
+            Period: 300
+            Stat: Maximum
+        - Id: b
+          ReturnData: false
+          MetricStat:
+            Metric: {Namespace: AWS/EC2, MetricName: CPUSurplusCreditsCharged, Dimensions: [{Name: InstanceId, Value: !Ref RedisB}]}
+            Period: 300
+            Stat: Maximum
+        - Id: c
+          ReturnData: false
+          MetricStat:
+            Metric: {Namespace: AWS/EC2, MetricName: CPUSurplusCreditsCharged, Dimensions: [{Name: InstanceId, Value: !Ref RedisC}]}
+            Period: 300
+            Stat: Maximum
+        - Id: worst
+          Expression: MAX([a, b, c])
+          ReturnData: true
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopicArn]
+
+  PostgresUpAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gateway-pg-up
+      AlarmDescription: pg_isready 失败，或停止上报
+      Namespace: EchoJoyGateway
+      MetricName: PostgresUp
+      Dimensions: [{Name: Node, Value: pg}]
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopicArn]
+      OKActions: [!Ref AlertTopicArn]
+
+  PostgresDiskAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gateway-pg-data-disk
+      AlarmDescription: PostgreSQL 数据卷使用率超过 75%
+      Namespace: EchoJoyGateway
+      MetricName: DataDiskUsedPercent
+      Dimensions: [{Name: Node, Value: pg}]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 75
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopicArn]
+
+Outputs:
+  RedisAInstanceId:
+    Value: !Ref RedisA
+  RedisBInstanceId:
+    Value: !Ref RedisB
+  RedisCInstanceId:
+    Value: !Ref RedisC
+  PostgresInstanceId:
+    Value: !Ref Postgres
+  BackupBucketName:
+    Value: !Ref BackupBucket
