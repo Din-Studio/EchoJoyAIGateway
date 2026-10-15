@@ -10,6 +10,7 @@ import (
 	"io"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 
@@ -140,6 +141,7 @@ type AccessKeyCreateRequest struct {
 	Key             string                          `json:"key"`
 	PriceMultiplier optionalField[string]           `json:"price_multiplier"`
 	Name            string                          `json:"name"`
+	Note            string                          `json:"note"`
 	Status          *state.AccessKeyStatus          `json:"status"`
 	Filters         *AccessKeyFilters               `json:"filters"`
 	RPMLimit        OptionalRPMLimit                `json:"rpm_limit"`
@@ -151,6 +153,7 @@ type AccessKeyUpdateRequest struct {
 	Key             string                          `json:"key"`
 	PriceMultiplier optionalField[string]           `json:"price_multiplier"`
 	Name            *string                         `json:"name"`
+	Note            *string                         `json:"note"`
 	Status          *state.AccessKeyStatus          `json:"status"`
 	Filters         *AccessKeyFilters               `json:"filters"`
 	RPMLimit        OptionalRPMLimit                `json:"rpm_limit"`
@@ -166,6 +169,7 @@ type AccessKeyMetadata struct {
 	PriceMultiplier string                    `json:"price_multiplier"`
 	ID              uint                      `json:"id"`
 	Name            string                    `json:"name"`
+	Note            string                    `json:"note"`
 	MaskedKey       string                    `json:"masked_key"`
 	Status          state.AccessKeyStatus     `json:"status"`
 	Filters         AccessKeyFilters          `json:"filters"`
@@ -201,6 +205,7 @@ type accessKeyMetadataRow struct {
 	PriceMultiplierMicros *int64
 	ID                    uint
 	Name                  string
+	Note                  string
 	KeySuffix             string
 	Status                string
 	Filters               models.JSON
@@ -291,6 +296,10 @@ func (s *Service) CreateAccessKey(
 	if err != nil {
 		return AccessKeyCreateResult{}, err
 	}
+	note, err := normalizeAccessKeyNote(request.Note)
+	if err != nil {
+		return AccessKeyCreateResult{}, err
+	}
 	filters, err := normalizeAccessKeyFilters(request.Filters)
 	if err != nil {
 		return AccessKeyCreateResult{}, err
@@ -331,6 +340,7 @@ func (s *Service) CreateAccessKey(
 			return err
 		}
 		row.PriceMultiplierMicros = priceMultiplierStorage(priceMultiplier)
+		row.Note = note
 		row.Status = string(status)
 		row.ExpiresAtMS = cloneOptionalInt64(request.ExpiresAtMS)
 		if err := tx.Create(&row).Error; err != nil {
@@ -341,7 +351,7 @@ func (s *Service) CreateAccessKey(
 			return err
 		}
 		metadata, err := mapAccessKeyMetadataRow(accessKeyMetadataRow{
-			ID: row.ID, Name: row.Name, KeyPrefix: *row.KeyPrefix, KeySuffix: row.KeySuffix,
+			ID: row.ID, Name: row.Name, Note: row.Note, KeyPrefix: *row.KeyPrefix, KeySuffix: row.KeySuffix,
 			PriceMultiplierMicros: row.PriceMultiplierMicros,
 			Status:                row.Status, Filters: row.Filters, RPMLimit: row.RPMLimit,
 			ExpiresAtMS: row.ExpiresAtMS,
@@ -388,7 +398,7 @@ func (s *Service) accessKeyUpdateMutation(
 	id uint,
 	request AccessKeyUpdateRequest,
 ) (func(*gorm.DB) (AccessKeyMetadata, error), error) {
-	if id == 0 || (request.Key == "" && request.Name == nil && request.Status == nil && request.Filters == nil &&
+	if id == 0 || (request.Key == "" && request.Name == nil && request.Note == nil && request.Status == nil && request.Filters == nil &&
 		!request.RPMLimit.Set && !request.CostLimitRules.Set && !request.ExpiresAtMS.Set && !request.PriceMultiplier.Set) {
 		return nil, app_errors.ErrBadRequest
 	}
@@ -420,6 +430,14 @@ func (s *Service) accessKeyUpdateMutation(
 			return nil, err
 		}
 		name = &normalized
+	}
+	var note *string
+	if request.Note != nil {
+		normalized, err := normalizeAccessKeyNote(*request.Note)
+		if err != nil {
+			return nil, err
+		}
+		note = &normalized
 	}
 	if request.Status != nil &&
 		*request.Status != state.AccessKeyStatusActive &&
@@ -455,7 +473,7 @@ func (s *Service) accessKeyUpdateMutation(
 		var row accessKeyMetadataRow
 		if err := tx.Model(&models.AccessKey{}).
 			Select(
-				"id", "name", "key_prefix", "key_suffix", "status", "filters", "rpm_limit", "expires_at_ms", "price_multiplier_micros",
+				"id", "name", "note", "key_prefix", "key_suffix", "status", "filters", "rpm_limit", "expires_at_ms", "price_multiplier_micros",
 				"created_at_ms", "updated_at_ms",
 			).
 			Where("id = ?", id).
@@ -506,6 +524,10 @@ func (s *Service) accessKeyUpdateMutation(
 			row.Name = *name
 			updates["name"] = row.Name
 		}
+		if note != nil {
+			row.Note = *note
+			updates["note"] = row.Note
+		}
 		if request.Status != nil {
 			status = *request.Status
 			updates["status"] = string(status)
@@ -540,7 +562,7 @@ func (s *Service) accessKeyUpdateMutation(
 		}
 		if err := tx.Model(&models.AccessKey{}).
 			Select(
-				"id", "name", "key_prefix", "key_suffix", "status", "filters", "rpm_limit", "expires_at_ms", "price_multiplier_micros",
+				"id", "name", "note", "key_prefix", "key_suffix", "status", "filters", "rpm_limit", "expires_at_ms", "price_multiplier_micros",
 				"created_at_ms", "updated_at_ms",
 			).
 			Where("id = ?", row.ID).
@@ -588,7 +610,7 @@ func (s *Service) GetAccessKey(
 	if err := s.db.WithContext(ctx).
 		Model(&models.AccessKey{}).
 		Select(
-			"id", "name", "key_prefix", "key_suffix", "status", "filters", "rpm_limit", "expires_at_ms", "price_multiplier_micros",
+			"id", "name", "note", "key_prefix", "key_suffix", "status", "filters", "rpm_limit", "expires_at_ms", "price_multiplier_micros",
 			"created_at_ms", "updated_at_ms",
 		).
 		Where("id = ?", id).
@@ -701,7 +723,7 @@ func mapAccessKeyMetadataRow(row accessKeyMetadataRow) (AccessKeyMetadata, error
 	}
 	return AccessKeyMetadata{
 		PriceMultiplier: priceMultiplierResponse(row.PriceMultiplierMicros),
-		ID:              row.ID, Name: row.Name,
+		ID:              row.ID, Name: row.Name, Note: row.Note,
 		MaskedKey: maskedAccessKey(row.KeyPrefix, row.KeySuffix),
 		Status:    status, Filters: filters, RPMLimit: row.RPMLimit,
 		ExpiresAtMS:    cloneOptionalInt64(row.ExpiresAtMS),
@@ -760,6 +782,16 @@ func normalizeAccessKeyName(raw string) (string, error) {
 		return "", err
 	}
 	return *normalized, nil
+}
+
+const maxAccessKeyNoteRunes = 500
+
+func normalizeAccessKeyNote(raw string) (string, error) {
+	normalized := strings.TrimSpace(raw)
+	if utf8.RuneCountInString(normalized) > maxAccessKeyNoteRunes {
+		return "", app_errors.ErrValidation
+	}
+	return normalized, nil
 }
 
 func normalizeRPMLimit(value OptionalRPMLimit, defaultValue int64) (int64, error) {

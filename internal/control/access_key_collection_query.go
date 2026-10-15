@@ -110,6 +110,7 @@ func matchesAccessKeyCollectionQuery(
 	}
 	return query.Query == "" ||
 		accessKeyCollectionContainsFold(record.Name, query.Query) ||
+		accessKeyCollectionContainsFold(record.Note, query.Query) ||
 		accessKeyCollectionContainsFold(record.MaskedKey, query.Query)
 }
 

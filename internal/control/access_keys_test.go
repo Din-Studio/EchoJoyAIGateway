@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 	"gorm.io/gorm"
 
 	"gpt-load/internal/platform/config"
+	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/state"
 	stateloader "gpt-load/internal/state/loader"
@@ -384,6 +386,47 @@ func TestUpdateAccessKeyPreservesCredentialAcrossPointerPatches(t *testing.T) {
 	}
 	if got := fixture.manager.Current().Revision; got != before {
 		t.Fatalf("revision after empty update = %d, want %d", got, before)
+	}
+}
+
+func TestAccessKeyNoteRoundTripsThroughCreateUpdateAndReads(t *testing.T) {
+	t.Parallel()
+	fixture := newServiceFixture(t)
+	created, err := fixture.service.CreateAccessKey(context.Background(), AccessKeyCreateRequest{
+		Name: "noted", Note: "  owned by billing\nrotate monthly  ",
+	})
+	if err != nil {
+		t.Fatalf("CreateAccessKey() error = %v", err)
+	}
+	if created.Note != "owned by billing\nrotate monthly" {
+		t.Fatalf("created note = %q", created.Note)
+	}
+
+	note := "moved to search team"
+	updated, err := fixture.service.UpdateAccessKey(context.Background(), created.ID, AccessKeyUpdateRequest{Note: &note})
+	if err != nil {
+		t.Fatalf("note-only UpdateAccessKey() error = %v", err)
+	}
+	if updated.Note != note || updated.Name != "noted" {
+		t.Fatalf("note-only update = %#v", updated)
+	}
+	got, err := fixture.service.GetAccessKey(context.Background(), created.ID)
+	if err != nil || got.Note != note {
+		t.Fatalf("GetAccessKey() = %#v, %v", got, err)
+	}
+	list, err := fixture.service.ListAccessKeyCollection(context.Background(), AccessKeyCollectionQuery{Query: "SEARCH TEAM"})
+	if err != nil || len(list.Items) != 1 || list.Items[0].Note != note {
+		t.Fatalf("ListAccessKeyCollection() = %#v, %v", list.Items, err)
+	}
+
+	tooLong := strings.Repeat("备", maxAccessKeyNoteRunes+1)
+	if _, err := fixture.service.UpdateAccessKey(context.Background(), created.ID, AccessKeyUpdateRequest{Note: &tooLong}); !errors.Is(err, app_errors.ErrValidation) {
+		t.Fatalf("too-long note error = %v, want ErrValidation", err)
+	}
+	cleared := " "
+	updated, err = fixture.service.UpdateAccessKey(context.Background(), created.ID, AccessKeyUpdateRequest{Note: &cleared})
+	if err != nil || updated.Note != "" {
+		t.Fatalf("clear note = %#v, %v", updated, err)
 	}
 }
 

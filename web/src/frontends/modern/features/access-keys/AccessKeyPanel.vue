@@ -468,6 +468,15 @@ onScopeDispose(() => {
               :error="fieldError('name')"
               autocomplete="off"
             />
+            <AppTextArea
+              v-model="draft.note"
+              :label="t('accessKeys.note')"
+              :placeholder="t('accessKeys.notePlaceholder')"
+              :rows="2"
+              size="sm"
+              :disabled="pending"
+              :error="fieldError('note')"
+            />
             <div v-if="base" class="modern-access-current-key">
               <AppCopyValue
                 :key="base.updated_at_ms"

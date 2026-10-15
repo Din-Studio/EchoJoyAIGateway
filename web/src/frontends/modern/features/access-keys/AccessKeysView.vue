@@ -484,6 +484,7 @@ onScopeDispose(() => {
           <AppButton variant="text" @click="setPanel('detail', row.id)"
             ><AppOverflowText :text="row.name"
           /></AppButton>
+          <AppOverflowText v-if="row.note" class="modern-access-note-text" :text="row.note" />
         </div>
         <div class="modern-access-key">
           <AppCopyValue
@@ -665,9 +666,18 @@ onScopeDispose(() => {
 .modern-access-row > div {
   min-width: 0;
 }
+.modern-access-name {
+  display: grid;
+  justify-items: start;
+}
 .modern-access-name :deep(.modern-button) {
   max-width: 100%;
   font-weight: var(--modern-weight-medium);
+}
+.modern-access-name :deep(.modern-access-note-text) {
+  max-width: 100%;
+  color: var(--modern-muted);
+  font-size: var(--modern-font-size-small);
 }
 .modern-access-key {
   font-family: var(--modern-font-mono);

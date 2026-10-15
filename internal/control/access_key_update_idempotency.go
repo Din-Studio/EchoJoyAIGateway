@@ -32,6 +32,13 @@ func (s *Service) UpdateAccessKeyIdempotent(ctx context.Context, idempotencyKey 
 		}
 		digestRequest.Name = &name
 	}
+	if request.Note != nil {
+		note, err := normalizeAccessKeyNote(*request.Note)
+		if err != nil {
+			return AccessKeyMetadata{}, err
+		}
+		digestRequest.Note = &note
+	}
 	if request.PriceMultiplier.Set {
 		multiplier, err := normalizePriceMultiplier(request.PriceMultiplier)
 		if err != nil {

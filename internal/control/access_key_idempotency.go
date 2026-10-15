@@ -27,6 +27,7 @@ type accessKeyCreateDigestBody struct {
 	KeyHash         string                          `json:"key_hash,omitempty"`
 	PriceMultiplier string                          `json:"price_multiplier,omitempty"`
 	Name            string                          `json:"name"`
+	Note            string                          `json:"note,omitempty"`
 	Status          *state.AccessKeyStatus          `json:"status,omitempty"`
 	Filters         accessKeyFilterDigestBody       `json:"filters"`
 	RPMLimit        int64                           `json:"rpm_limit"`
@@ -48,6 +49,10 @@ func (s *Service) CreateAccessKeyIdempotent(
 		keyHash = s.encryption.Hash(request.Key)
 	}
 	name, err := normalizeAccessKeyName(request.Name)
+	if err != nil {
+		return AccessKeyCreateResult{}, err
+	}
+	note, err := normalizeAccessKeyNote(request.Note)
 	if err != nil {
 		return AccessKeyCreateResult{}, err
 	}
@@ -85,7 +90,7 @@ func (s *Service) CreateAccessKeyIdempotent(
 	canonicalBody, err := canonicalIdempotencyBody(accessKeyCreateDigestBody{
 		KeyHash:         keyHash,
 		PriceMultiplier: priceMultiplierDigest(priceMultiplier),
-		Name:            name, Status: digestStatus, Filters: digestFilters, RPMLimit: rpmLimit,
+		Name:            name, Note: note, Status: digestStatus, Filters: digestFilters, RPMLimit: rpmLimit,
 		CostLimitRules: costLimitRuleRequestsForDigest(costLimitRules),
 		ExpiresAtMS:    request.ExpiresAtMS,
 	})
@@ -126,6 +131,7 @@ func (s *Service) CreateAccessKeyIdempotent(
 				return idempotentMutationResult{}, err
 			}
 			row.PriceMultiplierMicros = priceMultiplierStorage(priceMultiplier)
+			row.Note = note
 			row.Status = string(status)
 			row.ExpiresAtMS = cloneOptionalInt64(request.ExpiresAtMS)
 			if err := tx.Create(&row).Error; err != nil {
@@ -136,7 +142,7 @@ func (s *Service) CreateAccessKeyIdempotent(
 				return idempotentMutationResult{}, err
 			}
 			metadata, err := mapAccessKeyMetadataRow(accessKeyMetadataRow{
-				ID: row.ID, Name: row.Name, KeyPrefix: *row.KeyPrefix, KeySuffix: row.KeySuffix,
+				ID: row.ID, Name: row.Name, Note: row.Note, KeyPrefix: *row.KeyPrefix, KeySuffix: row.KeySuffix,
 				PriceMultiplierMicros: row.PriceMultiplierMicros,
 				Status:                row.Status, Filters: row.Filters, RPMLimit: row.RPMLimit,
 				ExpiresAtMS: row.ExpiresAtMS,
