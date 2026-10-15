@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -215,6 +216,46 @@ type accessKeyMetadataRow struct {
 	UpdatedAtMS           int64
 }
 
+// accessKeyMetadataColumns 与 accessKeyMetadataRow 一一对应，所有元数据读取共用这份列名。
+var accessKeyMetadataColumns = []string{
+	"id", "name", "note", "key_prefix", "key_suffix", "status", "filters", "rpm_limit",
+	"expires_at_ms", "price_multiplier_micros", "created_at_ms", "updated_at_ms",
+}
+
+// accessKeyActivityRow 在元数据之外带上最近一次请求时间，供密钥列表和首页读取。
+type accessKeyActivityRow struct {
+	Metadata        accessKeyMetadataRow `gorm:"embedded"`
+	LastRequestAtMS *int64
+}
+
+func loadAccessKeyMetadataRow(tx *gorm.DB, id uint) (accessKeyMetadataRow, error) {
+	var row accessKeyMetadataRow
+	if err := tx.Model(&models.AccessKey{}).
+		Select(accessKeyMetadataColumns).
+		Where("id = ?", id).
+		Take(&row).Error; err != nil {
+		return accessKeyMetadataRow{}, app_errors.ParseDBError(err)
+	}
+	return row, nil
+}
+
+func selectAccessKeyActivityRows(tx *gorm.DB) *gorm.DB {
+	return tx.Model(&models.AccessKey{}).Select(append(
+		slices.Clone(accessKeyMetadataColumns),
+		"(SELECT MAX(request_logs.completed_at_ms) FROM request_logs WHERE request_logs.access_key_id = access_keys.id) AS last_request_at_ms",
+	))
+}
+
+func accessKeyMetadataRowFromModel(row models.AccessKey) accessKeyMetadataRow {
+	return accessKeyMetadataRow{
+		ID: row.ID, Name: row.Name, Note: row.Note, KeyPrefix: *row.KeyPrefix, KeySuffix: row.KeySuffix,
+		PriceMultiplierMicros: row.PriceMultiplierMicros,
+		Status:                row.Status, Filters: row.Filters, RPMLimit: row.RPMLimit,
+		ExpiresAtMS: row.ExpiresAtMS,
+		CreatedAtMS: row.CreatedAtMS, UpdatedAtMS: row.UpdatedAtMS,
+	}
+}
+
 type generatedAccessKeyCredential struct {
 	KeyPrefix string
 	Plaintext string
@@ -350,13 +391,7 @@ func (s *Service) CreateAccessKey(
 		if err != nil {
 			return err
 		}
-		metadata, err := mapAccessKeyMetadataRow(accessKeyMetadataRow{
-			ID: row.ID, Name: row.Name, Note: row.Note, KeyPrefix: *row.KeyPrefix, KeySuffix: row.KeySuffix,
-			PriceMultiplierMicros: row.PriceMultiplierMicros,
-			Status:                row.Status, Filters: row.Filters, RPMLimit: row.RPMLimit,
-			ExpiresAtMS: row.ExpiresAtMS,
-			CreatedAtMS: row.CreatedAtMS, UpdatedAtMS: row.UpdatedAtMS,
-		})
+		metadata, err := mapAccessKeyMetadataRow(accessKeyMetadataRowFromModel(row))
 		if err != nil {
 			return err
 		}
@@ -470,15 +505,9 @@ func (s *Service) accessKeyUpdateMutation(
 				return result, err
 			}
 		}
-		var row accessKeyMetadataRow
-		if err := tx.Model(&models.AccessKey{}).
-			Select(
-				"id", "name", "note", "key_prefix", "key_suffix", "status", "filters", "rpm_limit", "expires_at_ms", "price_multiplier_micros",
-				"created_at_ms", "updated_at_ms",
-			).
-			Where("id = ?", id).
-			Take(&row).Error; err != nil {
-			return result, app_errors.ParseDBError(err)
+		row, err := loadAccessKeyMetadataRow(tx, id)
+		if err != nil {
+			return result, err
 		}
 		if !validAccessKeyPrefix(row.KeyPrefix) || !validAccessKeySuffix(row.KeySuffix) {
 			return result, fmt.Errorf(
@@ -560,14 +589,8 @@ func (s *Service) accessKeyUpdateMutation(
 		if err != nil {
 			return result, err
 		}
-		if err := tx.Model(&models.AccessKey{}).
-			Select(
-				"id", "name", "note", "key_prefix", "key_suffix", "status", "filters", "rpm_limit", "expires_at_ms", "price_multiplier_micros",
-				"created_at_ms", "updated_at_ms",
-			).
-			Where("id = ?", row.ID).
-			Take(&row).Error; err != nil {
-			return result, app_errors.ParseDBError(err)
+		if row, err = loadAccessKeyMetadataRow(tx, row.ID); err != nil {
+			return result, err
 		}
 		result, err = mapAccessKeyMetadataRow(row)
 		if err == nil {
@@ -606,16 +629,9 @@ func (s *Service) GetAccessKey(
 	if id == 0 {
 		return AccessKeyMetadata{}, app_errors.ErrBadRequest
 	}
-	var row accessKeyMetadataRow
-	if err := s.db.WithContext(ctx).
-		Model(&models.AccessKey{}).
-		Select(
-			"id", "name", "note", "key_prefix", "key_suffix", "status", "filters", "rpm_limit", "expires_at_ms", "price_multiplier_micros",
-			"created_at_ms", "updated_at_ms",
-		).
-		Where("id = ?", id).
-		Take(&row).Error; err != nil {
-		return AccessKeyMetadata{}, app_errors.ParseDBError(err)
+	row, err := loadAccessKeyMetadataRow(s.db.WithContext(ctx), id)
+	if err != nil {
+		return AccessKeyMetadata{}, err
 	}
 	costLimitRows, err := loadAccessKeyCostLimitRuleRows(s.db.WithContext(ctx), row.ID)
 	if err != nil {

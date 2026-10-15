@@ -146,17 +146,3 @@ func (s *Service) RotateAccessKeyIdempotent(
 	}
 	return result, nil
 }
-
-func loadAccessKeyMetadataRow(tx *gorm.DB, id uint) (accessKeyMetadataRow, error) {
-	var row accessKeyMetadataRow
-	if err := tx.Model(&models.AccessKey{}).
-		Select(
-			"id", "name", "note", "key_prefix", "key_suffix", "status", "filters", "rpm_limit",
-			"expires_at_ms", "created_at_ms", "updated_at_ms", "price_multiplier_micros",
-		).
-		Where("id = ?", id).
-		Take(&row).Error; err != nil {
-		return accessKeyMetadataRow{}, app_errors.ParseDBError(err)
-	}
-	return row, nil
-}

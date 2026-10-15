@@ -61,25 +61,10 @@ type homeCredentialRow struct {
 	Status              models.CredentialStatus
 }
 
-type homeAccessKeyRow struct {
-	KeyPrefix             string
-	PriceMultiplierMicros *int64
-	ID                    uint
-	Name                  string
-	KeySuffix             string
-	Status                string
-	Filters               models.JSON
-	RPMLimit              int64
-	ExpiresAtMS           *int64
-	CreatedAtMS           int64
-	UpdatedAtMS           int64
-	LastRequestAtMS       *int64
-}
-
 type homeReadRows struct {
 	groupCount  int64
 	credentials []homeCredentialRow
-	accessKeys  []homeAccessKeyRow
+	accessKeys  []accessKeyActivityRow
 }
 
 func (s *Service) ReadHomeBase(
@@ -272,13 +257,7 @@ func (s *Service) readHomeRows(
 		if err := homeCredentialRowsScope(tx).Find(&result.credentials).Error; err != nil {
 			return fmt.Errorf("query home credentials: %w", err)
 		}
-		if err := tx.Model(&models.AccessKey{}).
-			Select(
-				"id", "name", "key_prefix", "key_suffix", "status", "filters", "rpm_limit", "price_multiplier_micros",
-				"expires_at_ms",
-				"created_at_ms", "updated_at_ms",
-				"(SELECT MAX(request_logs.completed_at_ms) FROM request_logs WHERE request_logs.access_key_id = access_keys.id) AS last_request_at_ms",
-			).
+		if err := selectAccessKeyActivityRows(tx).
 			Where("status = ?", state.AccessKeyStatusActive).
 			Order("id ASC").
 			Find(&result.accessKeys).Error; err != nil {
@@ -529,11 +508,12 @@ func countAvailableHomeCredentialsInGroups(
 }
 
 func mapHomeAccessKeys(
-	rows []homeAccessKeyRow,
+	rows []accessKeyActivityRow,
 	snapshot *state.ConfigSnapshot,
 ) ([]HomeAccessKey, error) {
 	result := make([]HomeAccessKey, 0, len(rows))
-	for _, row := range rows {
+	for _, activity := range rows {
+		row := activity.Metadata
 		if uint64(row.ID) > uint64(maxSafeInteger) {
 			return nil, fmt.Errorf(
 				"map home access key %d: unsafe id: %w",
@@ -585,10 +565,10 @@ func mapHomeAccessKeys(
 	return result, nil
 }
 
-func filterHomeAccessKeyRows(rows []homeAccessKeyRow, accessKeyID uint) []homeAccessKeyRow {
-	result := make([]homeAccessKeyRow, 0, 1)
+func filterHomeAccessKeyRows(rows []accessKeyActivityRow, accessKeyID uint) []accessKeyActivityRow {
+	result := make([]accessKeyActivityRow, 0, 1)
 	for _, row := range rows {
-		if row.ID == accessKeyID {
+		if row.Metadata.ID == accessKeyID {
 			result = append(result, row)
 		}
 	}
@@ -596,16 +576,10 @@ func filterHomeAccessKeyRows(rows []homeAccessKeyRow, accessKeyID uint) []homeAc
 }
 
 func mapHomeCurrentAccessKey(
-	row homeAccessKeyRow,
+	row accessKeyActivityRow,
 	observedAtMS int64,
 ) (AccessKeyCollectionItem, error) {
-	metadata, err := mapAccessKeyMetadataRow(accessKeyMetadataRow{
-		PriceMultiplierMicros: row.PriceMultiplierMicros,
-		ID:                    row.ID, Name: row.Name, KeyPrefix: row.KeyPrefix, KeySuffix: row.KeySuffix,
-		Status: row.Status, Filters: row.Filters, RPMLimit: row.RPMLimit,
-		ExpiresAtMS: row.ExpiresAtMS,
-		CreatedAtMS: row.CreatedAtMS, UpdatedAtMS: row.UpdatedAtMS,
-	})
+	metadata, err := mapAccessKeyMetadataRow(row.Metadata)
 	if err != nil {
 		return AccessKeyCollectionItem{}, err
 	}
