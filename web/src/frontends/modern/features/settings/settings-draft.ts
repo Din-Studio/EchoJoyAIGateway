@@ -11,6 +11,7 @@ import {
 } from '@modern/api/settings'
 import type { HeaderRules } from '@modern/api/group-detail'
 import { validProxyURL } from '@modern/app/proxy'
+import { validBaseURL } from '@modern/features/groups/group-create-rules'
 import {
   autoModelDraft,
   autoModelValue,
@@ -38,6 +39,7 @@ export interface CORSDraft {
 export type SettingsDraft = Record<SettingNumber, string> &
   Record<SettingSwitch, boolean> & {
     route_strategy: RouteStrategy
+    public_base_url: string
     header_rules: HeaderRow[]
     response_header_rules: HeaderRow[]
     cors: CORSDraft
@@ -251,6 +253,9 @@ export function settingsErrors(
       const number = key as SettingNumber
       const rule = settingNumbers[number]
       if (!validInteger(draft[number], rule.min, rule.max)) errors[key] = 'number'
+    } else if (key === 'public_base_url') {
+      const value = draft.public_base_url.trim()
+      if (value && !validBaseURL(value)) errors.public_base_url = 'publicBaseURL'
     } else if (key === 'header_rules' || key === 'response_header_rules') {
       Object.assign(errors, headerErrors(draft[key], key))
     } else if (key === 'proxy_config') {
@@ -309,7 +314,8 @@ export function buildSettingsPatch(
         ),
         remove: draft[key].filter((row) => row.action === 'remove').map((row) => row.name.trim()),
       }
-    } else if (key === 'auto_model') patch[key] = autoModelValue(draft.auto_model)
+    } else if (key === 'public_base_url') patch[key] = draft.public_base_url.trim() || null
+    else if (key === 'auto_model') patch[key] = autoModelValue(draft.auto_model)
     else if (key === 'cors') patch[key] = corsValue(draft.cors)
     else if (key === 'proxy_config') {
       const proxy = draft.proxy_config

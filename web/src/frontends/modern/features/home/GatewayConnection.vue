@@ -39,7 +39,7 @@ import HomeSectionLink from './HomeSectionLink.vue'
 import ConnectTerminal from './ConnectTerminal.vue'
 import { readGatewayPreferences, rememberGatewayPreferences } from './gateway-preferences'
 
-const props = defineProps<{ keys: HomeKey[]; admin: boolean }>()
+const props = defineProps<{ keys: HomeKey[]; admin: boolean; publicBaseUrl: string }>()
 const { t } = useI18n()
 const client = useApiClient()
 const session = useAuthSession()
@@ -80,7 +80,7 @@ const selectedTarget = computed(() => gatewayTargets.find((item) => item.id === 
 const config = computed<GatewayConfig>(() => ({
   client: selectedClient.value.id,
   target: target.value,
-  origin: window.location.origin,
+  origin: props.publicBaseUrl || window.location.origin,
   model: model.value,
   name: 'GPT-Load' + (key.value ? ' · ' + key.value.name : ''),
   protocol: protocol.value,

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"gpt-load/internal/channel/spec"
 	"gpt-load/internal/parameteroverride"
 	"gpt-load/internal/platform/config"
 	"gpt-load/internal/platform/httpheader"
@@ -32,6 +33,7 @@ const (
 	SettingRequestLogRetentionDays   = "request_log_retention_days"
 	SettingModelsDevAutoSyncEnabled  = "models_dev_auto_sync_enabled"
 	SettingParameterOverrides        = "parameter_overrides"
+	SettingPublicBaseURL             = "public_base_url"
 )
 
 type RouteStrategy string
@@ -67,6 +69,8 @@ type RuntimeSettings struct {
 	ValidationInterval        time.Duration
 	RequestLogRetentionDays   int
 	ModelsDevAutoSyncEnabled  bool
+	// PublicBaseURL 是客户端接入示例使用的网关根地址；空值表示沿用浏览器当前地址。
+	PublicBaseURL string
 }
 
 type ResolvedGroupSettings struct {
@@ -116,7 +120,8 @@ func IsRuntimeSettingKey(key string) bool {
 		SettingAffinityCapacity,
 		SettingValidationInterval,
 		SettingRequestLogRetentionDays,
-		SettingModelsDevAutoSyncEnabled:
+		SettingModelsDevAutoSyncEnabled,
+		SettingPublicBaseURL:
 		return true
 	default:
 		return false
@@ -228,6 +233,12 @@ func ResolveRuntimeSettings(settings config.Settings) (RuntimeSettings, error) {
 				return RuntimeSettings{}, err
 			}
 			resolved.ModelsDevAutoSyncEnabled = value
+		case SettingPublicBaseURL:
+			baseURL, err := parsePublicBaseURL(value)
+			if err != nil {
+				return RuntimeSettings{}, err
+			}
+			resolved.PublicBaseURL = baseURL
 		default:
 			return RuntimeSettings{}, fmt.Errorf("unknown runtime setting %q", key)
 		}
@@ -353,6 +364,9 @@ func ValidateRuntimeSetting(key string, value any) error {
 	case SettingModelsDevAutoSyncEnabled:
 		_, err := strictBoolean(key, value)
 		return err
+	case SettingPublicBaseURL:
+		_, err := parsePublicBaseURL(value)
+		return err
 	default:
 		return fmt.Errorf("unknown runtime setting %q", key)
 	}
@@ -367,6 +381,18 @@ func parseRouteStrategy(value any) (RouteStrategy, error) {
 		}
 	}
 	return "", fmt.Errorf("%s must be native_first or weighted_mix", SettingRouteStrategy)
+}
+
+func parsePublicBaseURL(value any) (string, error) {
+	text, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", SettingPublicBaseURL)
+	}
+	normalized, err := spec.NormalizeBaseURL(text)
+	if err != nil {
+		return "", fmt.Errorf("%s %w", SettingPublicBaseURL, err)
+	}
+	return normalized, nil
 }
 
 func strictBoolean(path string, value any) (bool, error) {

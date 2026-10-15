@@ -18,6 +18,7 @@ import {
   AppTextArea,
 } from '@modern/components/ui'
 import { useLoadingActivity } from '@modern/components/ui/loading'
+import { getSettings } from '@modern/api/settings'
 import { useApiClient } from '@shared/http/client-context'
 import { accessTime } from './access-key-display'
 const props = defineProps<{ id: number; hint: AccessFilters }>()
@@ -30,15 +31,15 @@ const row = ref<AccessKey>()
 const loading = ref(true)
 const failed = ref(false)
 let controller: AbortController | undefined
-const endpoint = window.location.origin
-const login = new URL(router.resolve({ name: 'modern-login' }).href, endpoint).href
+const endpoint = ref(window.location.origin)
+const login = computed(() => endpoint.value + router.resolve({ name: 'modern-login' }).href)
 const instructions = computed(() =>
   row.value && key.value
     ? t('accessKeys.handoffText', {
         name: row.value.name,
         key: key.value,
-        endpoint,
-        login,
+        endpoint: endpoint.value,
+        login: login.value,
         expires:
           row.value.expires_at_ms === null
             ? t('accessKeys.never')
@@ -54,9 +55,10 @@ async function load(): Promise<void> {
   failed.value = false
   key.value = ''
   try {
-    const [metadata, secret] = await Promise.all([
+    const [metadata, secret, settings] = await Promise.all([
       getAccessKey(client, props.id, request.signal, props.hint),
       revealAccessKey(client, props.id, request.signal),
+      getSettings(client, request.signal),
     ])
     if (request.signal.aborted) return
     if (!metadata) {
@@ -65,6 +67,7 @@ async function load(): Promise<void> {
     }
     row.value = metadata
     key.value = secret
+    endpoint.value = settings.values.public_base_url || window.location.origin
   } catch {
     if (!request.signal.aborted) failed.value = true
   } finally {

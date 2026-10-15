@@ -35,6 +35,7 @@ type HomeAccessKey struct {
 }
 
 type HomeBase struct {
+	PublicBaseURL    string                   `json:"public_base_url"`
 	Inventory        HomeInventory            `json:"inventory"`
 	AccessKeys       []HomeAccessKey          `json:"access_keys"`
 	CurrentAccessKey *AccessKeyCollectionItem `json:"current_access_key"`
@@ -207,8 +208,9 @@ func (s *Service) captureHomeBase(
 		return HomeBase{}, err
 	}
 	result := HomeBase{
-		Inventory:  inventory,
-		AccessKeys: accessKeys,
+		PublicBaseURL: snapshot.Settings.PublicBaseURL,
+		Inventory:     inventory,
+		AccessKeys:    accessKeys,
 	}
 	if accessKeyID != nil {
 		current, err := mapHomeCurrentAccessKey(accessKeyRows[0], nowMS)
