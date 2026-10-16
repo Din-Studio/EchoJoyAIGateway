@@ -6,7 +6,8 @@ info:
     name: MIT
     identifier: MIT
   description: |
-    控制面 HTTP 接口，路由前缀为 `/api`。当前收录范围：AccessKey 管理。
+    控制面 HTTP 接口，路由前缀为 `/api`。当前收录范围：AccessKey 管理；模型总览、模型价格、分组模型与模型发现。
+    数据面接口（`/v1/*`、`/v1beta/*`）不在本文档内。
 
     ## 鉴权
     所有接口使用 `Authorization: Bearer <token>`。控制面只有两种身份：
@@ -15,7 +16,7 @@ info:
     - `access_key`：token 为某个 AccessKey，仅能以 GET 访问只读白名单
       （`/api/auth/session`、`/api/home`、`/api/models`、`/api/usage`、`/api/logs` 等）。
 
-    本文档中的 AccessKey 管理接口**仅限 `admin`**，AccessKey 调用返回 `403 FORBIDDEN`。
+    本文档中除 `GET /api/models` 外的接口**仅限 `admin`**，AccessKey 调用返回 `403 FORBIDDEN`。
     同一来源 IP 连续认证失败会被临时锁定，返回 `429 AUTH_LOCKED` 并带 `Retry-After`。
 
     ## 响应包络
@@ -42,6 +43,14 @@ security:
 tags:
   - name: AccessKeys
     description: AccessKey 管理（仅 admin）
+  - name: Models
+    description: 模型总览（admin 与 AccessKey 均可调用）
+  - name: ModelPrices
+    description: 模型价格与 models.dev 目录同步（仅 admin）
+  - name: GroupModels
+    description: 分组的模型列表与别名（仅 admin）
+  - name: ModelDiscovery
+    description: 从上游发现可用模型（仅 admin）
 
 paths:
   /api/access-keys:
@@ -56,7 +65,7 @@ paths:
       parameters:
         - name: q
           in: query
-          description: 按名称或掩码密钥做大小写不敏感的包含匹配；首尾空白会被去除。
+          description: 按名称、备注或掩码密钥做大小写不敏感的包含匹配；首尾空白会被去除。
           schema: { type: string, maxLength: 200 }
         - name: status
           in: query
@@ -115,6 +124,7 @@ paths:
             schema: { $ref: '#/components/schemas/AccessKeyCreateRequest' }
             example:
               name: team-a
+              note: 负责人 alice，每月轮换
               filters:
                 groups: [1]
                 protocols: [openai-completions, anthropic]
@@ -224,6 +234,7 @@ paths:
         - `cost_limit_rules` 整体替换：带 `id` 的保留并更新该规则，不带 `id` 的新建，
           未出现的已有规则被删除。修改周期会重置该规则的用量。
         - `expires_at_ms` 传 `null` 表示改为永不过期。
+        - `note` 传空串（或全空白）表示清空备注。
         - 传入非空 `key` 会替换密钥明文，此时必须带 `Idempotency-Key`；响应不回显明文。
       parameters:
         - name: Idempotency-Key
@@ -399,16 +410,534 @@ paths:
         '429': { $ref: '#/components/responses/AuthLocked' }
         '500': { $ref: '#/components/responses/InternalError' }
 
+  /api/models:
+    get:
+      tags: [Models]
+      operationId: listProjectModels
+      summary: 分页查询模型总览
+      description: |
+        以客户端模型名（启用别名时为别名，否则为上游模型 ID）为根聚合全部分组模型，
+        每个客户端模型下列出它能路由到的上游模型及其价格、路由分组和目录参考信息。
+        条目按 `client_model` 升序。只接受下列查询参数，出现其他参数或同一参数重复时返回 `400 BAD_REQUEST`。
+
+        **允许 `access_key` 身份调用**，此时：
+        - `group_status` 固定为 `enabled`，传入值被忽略；
+        - 只包含该密钥 `filters` 允许访问的分组、协议与模型，`protocols` 也按密钥过滤；
+        - `route_groups`、`affected_groups` 恒为空数组，只返回被分组引用的价格。
+      security:
+        - adminBearer: []
+        - accessKeyBearer: []
+      parameters:
+        - name: group_status
+          in: query
+          description: '`enabled` 只统计启用的分组；`all` 包含停用分组。'
+          schema: { type: string, enum: [enabled, all], default: enabled }
+        - name: pricing_status
+          in: query
+          description: 按上游模型的定价状态过滤；某客户端模型下的上游模型全部被过滤掉时，该客户端模型不出现。
+          schema: { type: string, enum: [pending, configured, all], default: all }
+        - name: q
+          in: query
+          description: |
+            大小写不敏感的包含匹配，首尾空白会被去除。匹配范围：客户端模型名、上游模型 ID、渠道 ID、
+            目录模型名、目录供应商 ID/名称、路由分组名。
+          schema: { type: string, maxLength: 200 }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: page_size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/ProjectModelCollection' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/models/discover:
+    post:
+      tags: [ModelDiscovery]
+      operationId: discoverDraftModels
+      summary: 用草稿连接发现模型
+      description: |
+        在创建分组前，用尚未保存的渠道连接调用上游模型列表接口，返回候选模型。不写入任何数据。
+
+        - `api_key` 连接：传 `credentials`，按顺序逐个尝试，第一个成功的结果即返回；不可传 `staged_credential_id`。
+        - `subscription` 连接：传 `staged_credential_id`（已完成授权的暂存凭据），不可传 `credentials`。
+
+        上游请求总超时 30 秒，最多翻 20 页、20000 个模型；全部凭据都失败时返回 `502 BAD_GATEWAY`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModelDiscoveryRequest' }
+            example:
+              channel_id: openai
+              connection_type: api_key
+              params: {}
+              credentials:
+                - fields: { api_key: sk-xxxx }
+                  concurrency_limit: 0
+      responses:
+        '200':
+          description: 候选模型
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/ModelDiscoveryResult' }
+        '400':
+          description: |
+            `INVALID_JSON` / `VALIDATION_FAILED`（渠道、连接类型、参数、代理或凭据不合法；
+            凭据字段错误时 `data` 为 `CredentialValidationData`）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CredentialValidationData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: |
+            `STAGED_CREDENTIAL_NOT_READY` / `STAGED_CREDENTIAL_MISMATCH` /
+            `CREDENTIAL_REAUTHORIZATION_REQUIRED` / `CREDENTIAL_AUTH_OUTCOME_UNKNOWN`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '410':
+          description: '`STAGED_CREDENTIAL_EXPIRED`：暂存凭据已过期'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+        '503':
+          description: '`CREDENTIAL_REFRESH_TEMPORARILY_UNAVAILABLE`：订阅凭据刷新暂时不可用'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/model-prices:
+    get:
+      tags: [ModelPrices]
+      operationId: listModelPrices
+      summary: 分页查询模型价格
+      description: |
+        价格按「渠道 + 上游模型 ID」唯一。排序：待定价优先，其次被引用优先，再按 `model_id`、`channel_id`、`id` 升序。
+        只接受下列查询参数，出现其他参数或同一参数重复时返回 `400 BAD_REQUEST`。
+      parameters:
+        - name: usage
+          in: query
+          description: '`in_use` 被分组引用；`unreferenced` 未被引用；`all` 全部。'
+          schema: { type: string, enum: [in_use, unreferenced, all], default: in_use }
+        - name: status
+          in: query
+          schema: { type: string, enum: [pending, configured, all], default: all }
+        - name: search
+          in: query
+          description: 按 `model_id` 或 `channel_id` 做大小写不敏感的包含匹配；首尾空白会被去除。
+          schema: { type: string, maxLength: 200 }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: page_size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        type: object
+                        required: [items, pagination]
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: '#/components/schemas/ModelPrice' }
+                          pagination: { $ref: '#/components/schemas/Pagination' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/model-prices/sync:
+    post:
+      tags: [ModelPrices]
+      operationId: syncModelPrices
+      summary: 手动同步 models.dev 价格目录
+      description: |
+        立即从 models.dev 拉取模型目录并对账自动价格（`method=auto_sync` 的条目），手工价格不受影响。
+        手动触发不受「自动同步」开关限制；已有同步在进行时，等待并返回该次结果。
+        不接受查询参数，不读取请求体。
+      responses:
+        '200':
+          description: 同步完成（含目录未变化 `not_modified=true`）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/CatalogSyncStatus' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '502':
+          description: '`BAD_GATEWAY`：同步失败，`data` 为本次同步状态（`error_code=catalog_sync_failed`）'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CatalogSyncStatus' }
+
+  /api/model-prices/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ModelPriceID'
+    get:
+      tags: [ModelPrices]
+      operationId: getUpstreamModelDetail
+      summary: 获取上游模型价格详情
+      description: |
+        返回价格编辑器所需的完整视图：价格本身、目录参考，以及引用该价格的全部「客户端模型 + 分组」关联。
+        不受模型总览的分页、搜索、启用状态、定价状态过滤影响，停用分组也会列出。不接受查询参数。
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/UpstreamModelDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    put:
+      tags: [ModelPrices]
+      operationId: updateModelPrice
+      summary: 手工设置模型价格（整体替换）
+      description: |
+        整体替换价格，保存后变为手工价格（`can_reset=true`），之后的目录同步不再覆盖它。
+
+        - `input`、`output`、`cache_read`、`cache_write`、`context_tiers`、`mode_schedules` 都必须出现；
+          价格槽传 `null` 表示该项不计费，数组和对象不可为 `null`。
+        - 四个价格槽、所有分档价格都为 `null` 且 `mode_schedules` 为空时，表示「标记为不计费」，
+          必须同时传 `confirm_unpriced: true`，否则返回 `409 MODEL_PRICE_UNPRICED_CONFIRMATION_REQUIRED`。
+        - `mode_schedules` 的模式集合必须与现有价格一致，仅 `ultrafast` 可以新增或移除。
+        - 不接受查询参数。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModelPriceUpdateRequest' }
+            example:
+              input: '3'
+              output: '15'
+              cache_read: '0.3'
+              cache_write: '3.75'
+              context_tiers:
+                - { threshold_tokens: 200000, input: '6', output: '22.5', cache_read: '0.6', cache_write: '7.5' }
+              mode_schedules: {}
+      responses:
+        '200':
+          description: 更新后的价格
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/ModelPrice' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: '`MODEL_PRICE_UNPRICED_CONFIRMATION_REQUIRED`：标记为不计费需要 `confirm_unpriced: true`，`data` 为 `{id}`'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ModelPriceIDData' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/RecoveryPending' }
+    delete:
+      tags: [ModelPrices]
+      operationId: deleteModelPrice
+      summary: 删除模型价格
+      description: 只能删除未被任何分组引用的手工价格（即 `can_delete=true`）。不接受查询参数。
+      responses:
+        '200':
+          description: 删除成功，响应不含 `data`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            `MODEL_PRICE_REFERENCED`：仍被分组引用，`data` 为 `{id, reference_count, reference_group_count}`；
+            `MODEL_PRICE_AUTOMATIC_DELETE_FORBIDDEN`：自动价格不可手动删除，`data` 为 `{id}`
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        anyOf:
+                          - $ref: '#/components/schemas/ModelPriceReferenceData'
+                          - $ref: '#/components/schemas/ModelPriceIDData'
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/RecoveryPending' }
+
+  /api/model-prices/{id}/reset:
+    parameters:
+      - $ref: '#/components/parameters/ModelPriceID'
+    post:
+      tags: [ModelPrices]
+      operationId: resetModelPrice
+      summary: 恢复为目录自动价格
+      description: |
+        丢弃手工价格，按当前 models.dev 目录重新匹配自动价格；目录中没有匹配项时，价格全部清空并变为待定价。
+        请求体可省略或为 `{}`，不接受查询参数。
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        '200':
+          description: 重置后的价格
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/ModelPrice' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/RecoveryPending' }
+
+  /api/groups/{group_id}/models:
+    parameters:
+      - $ref: '#/components/parameters/GroupID'
+    get:
+      tags: [GroupModels]
+      operationId: getGroupModels
+      summary: 获取分组模型列表
+      description: 按保存顺序返回分组的模型配置及各模型的定价状态。
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/GroupModels' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    put:
+      tags: [GroupModels]
+      operationId: updateGroupModels
+      summary: 替换分组模型列表
+      description: |
+        用 `models` 整体替换分组的模型列表（可为空数组）。`id`、`alias` 会去除首尾空白；
+        `alias_enabled=false` 时 `alias` 被丢弃。同一分组内客户端模型名（别名或 ID）不可重复。
+        上游模型 ID 集合发生变化时，会在后台触发一次价格目录同步。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [models]
+              properties:
+                models:
+                  type: array
+                  items: { $ref: '#/components/schemas/GroupModelInput' }
+            example:
+              models:
+                - { id: gpt-4o, alias: '', alias_enabled: false }
+                - { id: claude-sonnet-4-5-20250929, alias: claude-sonnet, alias_enabled: true }
+      responses:
+        '200':
+          description: 替换后的模型列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/GroupModels' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: '`MODEL_NAME_CONFLICT`：客户端模型名冲突，`data` 列出冲突项'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ModelNameConflictData' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503':
+          description: '`CONTROL_RECOVERY_PENDING` / `CONTROL_OPERATION_INCOMPLETE`'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/groups/{group_id}/models/discover:
+    parameters:
+      - $ref: '#/components/parameters/GroupID'
+    post:
+      tags: [ModelDiscovery]
+      operationId: discoverGroupModels
+      summary: 用已保存分组发现模型
+      description: |
+        使用分组已保存的连接和启用中的凭据调用上游模型列表接口，返回候选模型，不修改分组。
+        按凭据 ID 顺序逐个尝试，第一个成功的结果即返回；超时与分页上限同草稿发现接口。
+        请求体可省略或为 `{}`。
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        '200':
+          description: 候选模型
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/ModelDiscoveryResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            `NO_ACTIVE_CREDENTIAL`：分组没有启用中的凭据；订阅分组还可能返回
+            `CREDENTIAL_REAUTHORIZATION_REQUIRED` / `CREDENTIAL_AUTH_OUTCOME_UNKNOWN`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+        '503':
+          description: '`CREDENTIAL_REFRESH_TEMPORARILY_UNAVAILABLE`：订阅凭据刷新暂时不可用'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
 components:
   securitySchemes:
     adminBearer:
       type: http
       scheme: bearer
       description: 管理员密钥，即服务端环境变量 `AUTH_KEY` 的值。
+    accessKeyBearer:
+      type: http
+      scheme: bearer
+      description: 启用中的 AccessKey，仅可访问只读白名单接口；受该密钥的 `allowed_cidrs` 约束。
 
   parameters:
     AccessKeyID:
       name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    ModelPriceID:
+      name: id
+      in: path
+      required: true
+      description: 模型价格 ID。
+      schema: { type: integer, minimum: 1, maximum: 9007199254740991 }
+    GroupID:
+      name: group_id
       in: path
       required: true
       schema: { type: integer, minimum: 1 }
@@ -435,12 +964,12 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     Forbidden:
-      description: '`FORBIDDEN`：AccessKey 身份无权访问管理接口'
+      description: '`FORBIDDEN`：AccessKey 身份无权访问该接口'
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     NotFound:
-      description: '`NOT_FOUND`：AccessKey 不存在'
+      description: '`NOT_FOUND`：资源不存在'
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
@@ -483,6 +1012,16 @@ components:
                       retry_after_seconds: { type: integer, minimum: 1 }
     InternalError:
       description: '`INTERNAL_SERVER_ERROR` / `DATABASE_ERROR`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    BadGateway:
+      description: '`BAD_GATEWAY`：上游请求失败或超时'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    RecoveryPending:
+      description: '`CONTROL_RECOVERY_PENDING`：之前已提交的操作仍在恢复，稍后重试'
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
@@ -542,6 +1081,11 @@ components:
       description: 去除首尾空白后非空，不超过 255 字节，不含控制字符。
       minLength: 1
       maxLength: 255
+
+    AccessKeyNote:
+      type: string
+      description: 备注，去除首尾空白后不超过 500 个字符（按 Unicode 字符计），可含换行；空串表示无备注。
+      maxLength: 500
 
     PriceMultiplier:
       type: string
@@ -648,6 +1192,10 @@ components:
       required: [name]
       properties:
         name: { $ref: '#/components/schemas/AccessKeyName' }
+        note:
+          allOf:
+            - $ref: '#/components/schemas/AccessKeyNote'
+          default: ''
         key:
           allOf:
             - $ref: '#/components/schemas/AccessKeyPlaintext'
@@ -681,6 +1229,10 @@ components:
       minProperties: 1
       properties:
         name: { $ref: '#/components/schemas/AccessKeyName' }
+        note:
+          allOf:
+            - $ref: '#/components/schemas/AccessKeyNote'
+          description: 空串表示清空备注。
         key:
           allOf:
             - $ref: '#/components/schemas/AccessKeyPlaintext'
@@ -701,6 +1253,7 @@ components:
       required:
         - id
         - name
+        - note
         - masked_key
         - status
         - price_multiplier
@@ -713,6 +1266,9 @@ components:
       properties:
         id: { type: integer }
         name: { type: string }
+        note:
+          type: string
+          description: 备注；未设置时为空串。
         masked_key:
           type: string
           description: 掩码密钥，形如 `sk-gl-****ab12`；短密钥只显示 `****` 或末 4 位。
@@ -814,13 +1370,523 @@ components:
         items:
           type: array
           items: { $ref: '#/components/schemas/AccessKeyCollectionItem' }
-        pagination:
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
+    Pagination:
+      type: object
+      required: [page, page_size, total_items, total_pages]
+      properties:
+        page: { type: integer }
+        page_size: { type: integer }
+        total_items:
+          type: integer
+          description: 筛选后的条目总数。
+        total_pages: { type: integer }
+
+    PricingStatus:
+      type: string
+      description: '`pending` 待定价（无任何价格且非手工设置）；`configured` 已定价或已手工标记为不计费。'
+      enum: [pending, configured]
+
+    PricePerMillion:
+      type: [string, 'null']
+      description: 每百万 token 的美元价格，非负十进制字符串，最多 9 位小数；`null` 表示该项不计费。
+      pattern: '^[0-9]+(\.[0-9]{1,9})?$'
+      examples: ['3', '0.075']
+
+    PriceSlots:
+      type: object
+      required: [input, output, cache_read, cache_write]
+      properties:
+        input: { $ref: '#/components/schemas/PricePerMillion' }
+        output: { $ref: '#/components/schemas/PricePerMillion' }
+        cache_read: { $ref: '#/components/schemas/PricePerMillion' }
+        cache_write: { $ref: '#/components/schemas/PricePerMillion' }
+
+    ContextTier:
+      type: object
+      description: 输入 token 数达到 `threshold_tokens` 后改用该档价格。
+      required: [threshold_tokens, prices]
+      properties:
+        threshold_tokens: { type: integer, minimum: 0 }
+        prices: { $ref: '#/components/schemas/PriceSlots' }
+
+    ModeSchedule:
+      type: object
+      required: [prices, context_tiers]
+      properties:
+        prices: { $ref: '#/components/schemas/PriceSlots' }
+        context_tiers:
+          type: array
+          items: { $ref: '#/components/schemas/ContextTier' }
+
+    PricingMode:
+      type: string
+      description: 非标准计费模式。`fast` 不支持分档价格。
+      enum: [fast, ultrafast]
+
+    ModelPrice:
+      type: object
+      required:
+        - id
+        - channel_id
+        - channel_name
+        - channel_mark
+        - channel_icon
+        - model_id
+        - prices
+        - mode_schedules
+        - pricing_status
+        - method
+        - matched_provider_id
+        - match_source
+        - referenced
+        - reference_count
+        - reference_group_count
+        - context_tiers
+        - updated_at_ms
+        - can_reset
+        - can_delete
+      properties:
+        id: { type: integer }
+        channel_id: { type: string, examples: [openai] }
+        channel_name: { type: string }
+        channel_mark:
+          type: string
+          description: 渠道简写标记，前端在缺少图标时用作占位。
+        channel_icon:
+          type: string
+          description: 前端图标资源名，默认等于渠道 ID。
+        model_id:
+          type: string
+          description: 上游模型 ID。
+        prices: { $ref: '#/components/schemas/PriceSlots' }
+        mode_schedules:
           type: object
-          required: [page, page_size, total_items, total_pages]
+          description: 按模式的独立价格，键为 `PricingMode`；没有时为 `{}`。
+          propertyNames: { $ref: '#/components/schemas/PricingMode' }
+          additionalProperties: { $ref: '#/components/schemas/ModeSchedule' }
+        pricing_status: { $ref: '#/components/schemas/PricingStatus' }
+        method:
+          type: [string, 'null']
+          description: |
+            `auto_sync` 来自 models.dev 目录自动匹配；`user_set` 手工设置；
+            `user_marked_unpriced` 手工标记为不计费；自动价格尚未匹配到目录时为 `null`。
+          enum: [auto_sync, user_set, user_marked_unpriced, null]
+        matched_provider_id:
+          type: [string, 'null']
+          description: 自动价格匹配到的 models.dev 供应商 ID；手工价格或未匹配时为 `null`。
+        match_source:
+          type: [string, 'null']
+          description: |
+            `channel_catalog_provider` 来自渠道对应的目录供应商；
+            `provider_priority_fallback` 按供应商优先级回退匹配；未匹配时为 `null`。
+          enum: [channel_catalog_provider, provider_priority_fallback, null]
+        referenced: { type: boolean }
+        reference_count:
+          type: integer
+          description: 引用该价格的分组模型条目数（含停用分组）。
+        reference_group_count:
+          type: integer
+          description: 引用该价格的分组数（含停用分组）。
+        context_tiers:
+          type: array
+          items: { $ref: '#/components/schemas/ContextTier' }
+        updated_at_ms: { type: integer }
+        can_reset:
+          type: boolean
+          description: 是否为手工价格，可恢复为目录自动价格。
+        can_delete:
+          type: boolean
+          description: 手工价格且未被引用时为 `true`。
+
+    ModelPriceIDData:
+      type: object
+      required: [id]
+      properties:
+        id: { type: integer }
+
+    ModelPriceReferenceData:
+      type: object
+      required: [id, reference_count, reference_group_count]
+      properties:
+        id: { type: integer }
+        reference_count: { type: integer }
+        reference_group_count: { type: integer }
+
+    ContextTierInput:
+      type: object
+      additionalProperties: false
+      description: |
+        请求中的分档价格字段是平铺的（响应中嵌套在 `prices` 下）。
+        `threshold_tokens` 必须是 JSON 整数且严格递增；每档至少一个价格非 `null`。
+      required: [threshold_tokens]
+      properties:
+        threshold_tokens: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        input: { $ref: '#/components/schemas/PricePerMillion' }
+        output: { $ref: '#/components/schemas/PricePerMillion' }
+        cache_read: { $ref: '#/components/schemas/PricePerMillion' }
+        cache_write: { $ref: '#/components/schemas/PricePerMillion' }
+
+    ModeScheduleInput:
+      type: object
+      additionalProperties: false
+      required: [prices, context_tiers]
+      properties:
+        prices:
+          type: object
+          additionalProperties: false
+          description: 四个价格槽都必须出现，且至少一个非 `null`。
+          required: [input, output, cache_read, cache_write]
           properties:
-            page: { type: integer }
-            page_size: { type: integer }
-            total_items:
+            input: { $ref: '#/components/schemas/PricePerMillion' }
+            output: { $ref: '#/components/schemas/PricePerMillion' }
+            cache_read: { $ref: '#/components/schemas/PricePerMillion' }
+            cache_write: { $ref: '#/components/schemas/PricePerMillion' }
+        context_tiers:
+          type: array
+          description: '`fast` 模式必须为空数组。'
+          items: { $ref: '#/components/schemas/ContextTierInput' }
+
+    ModelPriceUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [input, output, cache_read, cache_write, context_tiers, mode_schedules]
+      properties:
+        input: { $ref: '#/components/schemas/PricePerMillion' }
+        output: { $ref: '#/components/schemas/PricePerMillion' }
+        cache_read: { $ref: '#/components/schemas/PricePerMillion' }
+        cache_write: { $ref: '#/components/schemas/PricePerMillion' }
+        context_tiers:
+          type: array
+          items: { $ref: '#/components/schemas/ContextTierInput' }
+        mode_schedules:
+          type: object
+          propertyNames: { $ref: '#/components/schemas/PricingMode' }
+          additionalProperties: { $ref: '#/components/schemas/ModeScheduleInput' }
+        confirm_unpriced:
+          type: boolean
+          default: false
+          description: 确认将该模型标记为不计费；仅在所有价格都为 `null` 时需要。
+
+    CatalogSyncStatus:
+      type: object
+      required: [trigger, checked_at_ms, successful_fetch_at_ms, not_modified, skipped]
+      properties:
+        trigger:
+          type: string
+          enum: [startup, periodic, group_change, settings_change, manual]
+        checked_at_ms: { type: integer }
+        successful_fetch_at_ms:
+          type: integer
+          description: 最近一次成功拉取目录的时间；从未成功时为 0。
+        not_modified:
+          type: boolean
+          description: 目录自上次拉取后未变化。
+        skipped:
+          type: boolean
+          description: 自动同步开关关闭导致的跳过；手动同步恒为 `false`。
+        error_code:
+          type: string
+          description: 失败时为 `catalog_sync_failed`；成功时省略。
+
+    ProjectModelGroup:
+      type: object
+      required: [id, name, channel_id, params, enabled, client_protocols]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        channel_id: { type: string }
+        params:
+          type: object
+          description: 分组的渠道参数（规范化后）；AccessKey 身份下恒为 `{}`。
+        enabled: { type: boolean }
+        client_protocols:
+          type: array
+          items: { $ref: '#/components/schemas/Protocol' }
+
+    CatalogModel:
+      type: object
+      description: models.dev 目录中的模型元数据；未知的字符串字段为空串，未知的布尔/数值字段为 `null`。
+      required: [id, name, description, family, capabilities, modalities, limits, knowledge, release_date, last_updated, open_weights, status]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        family: { type: string }
+        capabilities:
+          type: object
+          required: [attachment, reasoning, tool_call, structured_output, temperature]
+          properties:
+            attachment: { type: [boolean, 'null'] }
+            reasoning: { type: [boolean, 'null'] }
+            tool_call: { type: [boolean, 'null'] }
+            structured_output: { type: [boolean, 'null'] }
+            temperature: { type: [boolean, 'null'] }
+        modalities:
+          type: object
+          required: [input, output]
+          properties:
+            input: { type: array, items: { type: string } }
+            output: { type: array, items: { type: string } }
+        limits:
+          type: object
+          required: [context, input, output]
+          properties:
+            context: { type: [integer, 'null'] }
+            input: { type: [integer, 'null'] }
+            output: { type: [integer, 'null'] }
+        knowledge: { type: string }
+        release_date: { type: string }
+        last_updated: { type: string }
+        open_weights: { type: [boolean, 'null'] }
+        status: { type: string }
+
+    CatalogReference:
+      type: [object, 'null']
+      description: 匹配到的 models.dev 目录条目；目录未加载或无匹配时为 `null`。
+      required: [source, provider_id, provider_name, model]
+      properties:
+        source:
+          type: string
+          description: '`actual_provider` 来自渠道对应的目录供应商；`reference_provider` 来自其他供应商的参考数据。'
+          enum: [actual_provider, reference_provider]
+        provider_id: { type: string }
+        provider_name: { type: string }
+        model: { $ref: '#/components/schemas/CatalogModel' }
+
+    ProjectUpstreamModel:
+      type: object
+      required: [model_id, alias_applied, price, route_groups, affected_groups, catalog_reference]
+      properties:
+        model_id: { type: string }
+        alias_applied:
+          type: boolean
+          description: 客户端模型名是否来自别名。
+        price: { $ref: '#/components/schemas/ModelPrice' }
+        route_groups:
+          type: array
+          description: 该客户端模型经由哪些分组路由到此上游模型，按名称、ID 排序。
+          items: { $ref: '#/components/schemas/ProjectModelGroup' }
+        affected_groups:
+          type: array
+          description: 引用同一价格的全部分组（修改价格会影响它们）。
+          items: { $ref: '#/components/schemas/ProjectModelGroup' }
+        catalog_reference: { $ref: '#/components/schemas/CatalogReference' }
+
+    ProjectModel:
+      type: object
+      required: [client_model, protocols, upstream_models]
+      properties:
+        client_model:
+          type: string
+          description: 客户端请求时使用的模型名。
+        protocols:
+          type: array
+          description: 可用的入口协议，按固定协议顺序排列。
+          items: { $ref: '#/components/schemas/Protocol' }
+        upstream_models:
+          type: array
+          description: 按 `model_id`、`price.channel_id` 升序。
+          items: { $ref: '#/components/schemas/ProjectUpstreamModel' }
+
+    ProjectModelCollection:
+      type: object
+      required: [summary, catalog, items, pagination]
+      properties:
+        summary:
+          type: object
+          description: 按 `group_status` 统计，不受 `pricing_status`、`q`、分页影响。
+          required: [client_model_count, upstream_model_count, price_count, pending_price_count, unreferenced_price_count]
+          properties:
+            client_model_count: { type: integer }
+            upstream_model_count: { type: integer }
+            price_count: { type: integer }
+            pending_price_count: { type: integer }
+            unreferenced_price_count:
               type: integer
-              description: 筛选后的条目总数。
-            total_pages: { type: integer }
+              description: 未被任何分组引用的价格数；AccessKey 身份下恒为 0。
+        catalog:
+          type: object
+          description: models.dev 目录状态。
+          required: [available, checked_at_ms, successful_fetch_at_ms, error_code]
+          properties:
+            available:
+              type: boolean
+              description: 当前是否有可用的目录快照。
+            checked_at_ms: { type: integer }
+            successful_fetch_at_ms: { type: integer }
+            error_code:
+              type: string
+              description: 最近一次同步失败时为 `catalog_sync_failed`，否则为空串。
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ProjectModel' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
+    UpstreamModelDetail:
+      type: object
+      required: [model_id, price, catalog_reference, associations, client_model_count, group_count]
+      properties:
+        model_id: { type: string }
+        price: { $ref: '#/components/schemas/ModelPrice' }
+        catalog_reference: { $ref: '#/components/schemas/CatalogReference' }
+        associations:
+          type: array
+          description: 按客户端模型名、分组名、分组 ID 排序。
+          items:
+            type: object
+            required: [client_model, alias_applied, group]
+            properties:
+              client_model: { type: string }
+              alias_applied: { type: boolean }
+              group: { $ref: '#/components/schemas/ProjectModelGroup' }
+        client_model_count: { type: integer }
+        group_count: { type: integer }
+
+    GroupModelInput:
+      type: object
+      additionalProperties: false
+      required: [id, alias_enabled]
+      properties:
+        id:
+          type: string
+          description: 上游模型 ID，去除首尾空白后非空。
+          minLength: 1
+        alias:
+          type: string
+          description: 客户端可见的别名；`alias_enabled=true` 时去除首尾空白后必须非空。
+        alias_enabled: { type: boolean }
+
+    GroupModel:
+      type: object
+      required: [id, alias, alias_enabled, client_model, pricing_status]
+      properties:
+        id: { type: string }
+        alias:
+          type: string
+          description: 未启用别名时为空串。
+        alias_enabled: { type: boolean }
+        client_model:
+          type: string
+          description: 启用别名时为 `alias`，否则为 `id`。
+        pricing_status: { $ref: '#/components/schemas/PricingStatus' }
+
+    GroupModels:
+      type: object
+      required: [items, total, pending]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/GroupModel' }
+        total: { type: integer }
+        pending:
+          type: integer
+          description: 待定价的模型数。
+
+    ModelNameConflictData:
+      type: object
+      required: [conflicts]
+      properties:
+        conflicts:
+          type: array
+          items:
+            type: object
+            required: [client_model, indexes]
+            properties:
+              client_model: { type: string }
+              indexes:
+                type: array
+                description: 冲突条目在请求 `models` 数组中的下标（从 0 开始）。
+                items: { type: integer, minimum: 0 }
+
+    CredentialEntryInput:
+      type: object
+      additionalProperties: false
+      required: [fields]
+      properties:
+        fields:
+          type: object
+          description: '渠道定义的凭据字段，如 `{"api_key": "..."}`；字段集合见 `GET /api/channels`。'
+          additionalProperties: { type: string }
+        concurrency_limit:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          default: 0
+          description: 单凭据并发上限，0 表示不限。
+
+    OutboundProxyConfig:
+      type: object
+      additionalProperties: false
+      required: [mode]
+      description: 出站代理。发现接口只接受 `direct` 与 `custom`；仅支持代理的渠道可传。
+      properties:
+        mode: { type: string, enum: [direct, custom] }
+        url:
+          type: string
+          description: '`custom` 时必填的代理地址；`direct` 时不可传。'
+
+    ModelDiscoveryRequest:
+      type: object
+      additionalProperties: false
+      required: [channel_id, connection_type]
+      properties:
+        channel_id:
+          type: string
+          description: 渠道 ID，取值见 `GET /api/channels`。
+        connection_type:
+          type: string
+          description: 必须与该渠道的连接类型一致。
+          enum: [api_key, subscription]
+        params:
+          type: object
+          description: 渠道参数，按渠道定义校验。
+        credentials:
+          type: array
+          description: '`api_key` 连接必填，1–500 条；同一凭据重复出现时去重。'
+          minItems: 1
+          maxItems: 500
+          items: { $ref: '#/components/schemas/CredentialEntryInput' }
+        staged_credential_id:
+          type: string
+          description: '`subscription` 连接必填：已完成授权的暂存凭据 ID。'
+        proxy: { $ref: '#/components/schemas/OutboundProxyConfig' }
+
+    CredentialValidationData:
+      type: object
+      description: 凭据校验失败的位置。
+      required: [entry, field, reason_code]
+      properties:
+        entry:
+          type: integer
+          minimum: 1
+          description: '`credentials` 中的序号（从 1 开始）。'
+        field: { type: string, examples: [concurrency_limit] }
+        reason_code: { type: string, examples: [invalid_value, conflicting_value] }
+
+    ModelCandidate:
+      type: object
+      required: [id, name, sources, pricing_status, pricing_source]
+      properties:
+        id: { type: string }
+        name:
+          type: string
+          description: 目录中有名称时为目录名称，否则为 `id`。
+        sources:
+          type: array
+          description: '`live` 上游实时返回；`catalog` 存在于该渠道的 models.dev 目录。'
+          items: { type: string, enum: [live, catalog] }
+        pricing_status: { $ref: '#/components/schemas/PricingStatus' }
+        pricing_source:
+          type: [string, 'null']
+          description: 自动价格来源的目录供应商名称；手工价格或无目录价格时为 `null`。
+
+    ModelDiscoveryResult:
+      type: object
+      required: [models]
+      properties:
+        models:
+          type: array
+          description: 先列上游实时返回的模型（保持上游顺序），再列仅存在于目录的模型（按名称排序）。
+          items: { $ref: '#/components/schemas/ModelCandidate' }
