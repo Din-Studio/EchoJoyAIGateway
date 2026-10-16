@@ -31,8 +31,9 @@ const counts = [
   'unpriced_request_count',
   'pricing_partial_count',
 ] as const
+// estimated_cost_nano 以报表的 currency 计，只含以该币种结算的费用。
 export type UsageAggregate = Record<(typeof counts)[number], number> & {
-  estimated_cost_nano_usd: string
+  estimated_cost_nano: string
 }
 export interface UsageItem {
   group_id?: number
@@ -40,7 +41,7 @@ export interface UsageItem {
   model?: string
   request_count: number
   total_tokens: number
-  estimated_cost_nano_usd: string
+  estimated_cost_nano: string
 }
 export interface UsageDistribution {
   items: UsageItem[]
@@ -51,6 +52,9 @@ export interface UsageReport {
   to_ms: number
   observed_at_ms: number
   bucket_width_ms: number
+  currency: string
+  // 范围内还有费用、但不是 currency 的币种；这些费用不计入本币合计。
+  other_currencies: string[]
   summary: UsageAggregate
   series: (UsageAggregate & { bucket_start_ms: number; bucket_end_ms: number })[]
   distributions: Partial<Record<UsageDimension, Record<UsageMetric, UsageDistribution>>>
@@ -78,14 +82,14 @@ function aggregate(value: unknown): UsageAggregate {
         result.output_tokens
   )
     throw new InvalidResponseError()
-  return { ...result, estimated_cost_nano_usd: money(row.estimated_cost_nano_usd) }
+  return { ...result, estimated_cost_nano: money(row.estimated_cost_nano) }
 }
 function item(value: unknown, dimension?: UsageDimension): UsageItem {
   const row = record(value)
   return {
     request_count: integer(row.request_count),
     total_tokens: integer(row.total_tokens),
-    estimated_cost_nano_usd: money(row.estimated_cost_nano_usd),
+    estimated_cost_nano: money(row.estimated_cost_nano),
     ...(dimension === 'model' ? { model: text(row.model) } : {}),
     ...(dimension === 'group' ? { group_id: integer(row.group_id, 1) } : {}),
     ...(dimension === 'access_key' ? { access_key_id: integer(row.access_key_id, 1) } : {}),
@@ -148,6 +152,8 @@ export async function getUsage(
     to_ms: to,
     observed_at_ms: integer(row.observed_at_ms),
     bucket_width_ms: width,
+    currency: text(row.currency),
+    other_currencies: list(row.other_currencies).map(text),
     summary: aggregate(row.summary),
     series,
     distributions,

@@ -15,7 +15,6 @@ import (
 	platformhttp "gpt-load/internal/platform/httpclient"
 	"gpt-load/internal/scheduler"
 	"gpt-load/internal/state"
-	"gpt-load/internal/telemetry"
 )
 
 var reasonAutoModelUnavailable = reason{http.StatusServiceUnavailable, "auto_model_unavailable", "Automatic model selection is unavailable."}
@@ -281,9 +280,4 @@ func (recorder *requestRecorder) autoLogDecision() *automodel.Decision {
 	copy.Selection.ParameterOverrides = nil
 	copy.Selection.TaskFingerprint = ""
 	return &copy
-}
-
-// 保留原有分量的报价和舍入；只将两笔已知金额安全相加。
-func addDecisionCost(answer int64, decision *automodel.Decision) int64 {
-	return telemetry.TotalPricing(telemetry.PricingObservation{EstimatedCostNanoUSD: answer}, decision).EstimatedCostNanoUSD
 }

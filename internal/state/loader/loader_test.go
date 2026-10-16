@@ -813,13 +813,13 @@ func TestLoaderMapsAccessKeyCostLimits(t *testing.T) {
 	mustCreate(t, db, &accessKey)
 	rule := models.AccessKeyCostLimitRule{
 		AccessKeyID: accessKey.ID, Kind: models.AccessKeyCostLimitKindPeriodic,
-		LimitNanoUSD: 20, PeriodSeconds: 5 * 60 * 60, RuleRevision: 1,
+		LimitNano: 20, PeriodSeconds: 5 * 60 * 60, RuleRevision: 1,
 	}
 	mustCreate(t, db, &rule)
 	startedAt := time.Now().UTC().Truncate(time.Second)
 	endsAt := startedAt.Add(5 * time.Hour)
 	mustCreate(t, db, &models.AccessKeyCostLimitState{
-		RuleID: rule.ID, RuleRevision: 1, UsedNanoUSD: 7,
+		RuleID: rule.ID, RuleRevision: 1, UsedNano: 7,
 		WindowStartedAtMS: int64Pointer(startedAt.UnixMilli()), WindowEndsAtMS: int64Pointer(endsAt.UnixMilli()),
 		WindowGeneration: 2, SnapshotVersion: 4,
 	})
@@ -830,7 +830,7 @@ func TestLoaderMapsAccessKeyCostLimits(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 	rules := manager.Current().AccessKeysByID[accessKey.ID].CostLimitRules
-	if len(rules) != 1 || rules[0].ID != rule.ID || rules[0].LimitNanoUSD != 20 ||
+	if len(rules) != 1 || rules[0].ID != rule.ID || rules[0].LimitNano != 20 ||
 		rules[0].PeriodSeconds != 5*60*60 {
 		t.Fatalf("snapshot rules = %#v", rules)
 	}

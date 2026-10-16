@@ -120,13 +120,13 @@ const display = computed(() => {
       const rate = logCacheRate(row)
       return logHasUsage(row) && rate !== null ? n(rate, { maximumFractionDigits: 1 }) + '%' : '—'
     }
-    case 'estimated_cost_nano_usd':
+    case 'estimated_cost_nano':
       return row.cost_state === 'unpriced'
         ? t('logs.values.unpriced')
         : row.cost_state === 'not_applicable'
           ? '—'
           : (row.pricing_completeness === 'partial' ? '≈ ' : '') +
-            logMoney(row.estimated_cost_nano_usd, locale.value)
+            logMoney(row.estimated_cost_nano, row.currency, locale.value)
     case 'context_threshold_tokens':
       return row.context_threshold_tokens === null
         ? '—'
@@ -156,9 +156,9 @@ const deleted = computed(() => {
 })
 const hint = computed(() => {
   const row = props.row
-  if (props.column === 'estimated_cost_nano_usd')
+  if (props.column === 'estimated_cost_nano')
     return row.cost_state === 'priced'
-      ? `${exactLogMoney(row.estimated_cost_nano_usd)} · ${valueName(row.pricing_completeness)}`
+      ? `${exactLogMoney(row.estimated_cost_nano, row.currency, locale.value)} · ${valueName(row.pricing_completeness)}`
       : valueName(row.cost_state)
   if (props.column === 'attempt_count')
     return t('logs.attemptCount', { count: n(row.attempt_count) })
@@ -252,8 +252,7 @@ const hint = computed(() => {
     :full-text="hint"
     :class="{
       'modern-log-empty': table && display === '—',
-      'modern-log-amount':
-        table && column === 'estimated_cost_nano_usd' && row.cost_state === 'priced',
+      'modern-log-amount': table && column === 'estimated_cost_nano' && row.cost_state === 'priced',
       'modern-log-number':
         table &&
         (tokenValue !== undefined || column === 'duration_ms' || column === 'first_response_ms'),

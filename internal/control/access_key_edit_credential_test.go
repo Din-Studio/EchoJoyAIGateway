@@ -21,16 +21,16 @@ func TestEditAccessKeyReplaysNormalizedFields(t *testing.T) {
 	created, err := fixture.service.CreateAccessKey(t.Context(), AccessKeyCreateRequest{
 		Name: "before",
 		CostLimitRules: OptionalAccessKeyCostLimitRules{Set: true, Values: []AccessKeyCostLimitRuleRequest{
-			{Kind: "total", LimitUSD: "10"},
-			{Kind: "periodic", LimitUSD: "2", PeriodSeconds: 3600},
+			{Kind: "total", Limit: "10"},
+			{Kind: "periodic", Limit: "2", PeriodSeconds: 3600},
 		}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	totalID, periodicID := created.CostLimitRules[0].ID, created.CostLimitRules[1].ID
-	totalRule := fmt.Sprintf(`{"id":%d,"kind":"total","limit_usd":"10"}`, totalID)
-	periodicRule := fmt.Sprintf(`{"id":%d,"kind":"periodic","limit_usd":"2","period_seconds":3600}`, periodicID)
+	totalRule := fmt.Sprintf(`{"id":%d,"kind":"total","limit":"10"}`, totalID)
+	periodicRule := fmt.Sprintf(`{"id":%d,"kind":"periodic","limit":"2","period_seconds":3600}`, periodicID)
 	engine := newAccessKeyLifecycleEngine(t, fixture)
 	path := fmt.Sprintf("/api/access-keys/%d", created.ID)
 	for index, test := range []struct {
@@ -41,17 +41,17 @@ func TestEditAccessKeyReplaysNormalizedFields(t *testing.T) {
 		{"fractional multiplier", `"price_multiplier":"1.50"`, `"price_multiplier":"1.5"`, `"price_multiplier":"1.6"`},
 		{
 			"cost amount",
-			fmt.Sprintf(`"cost_limit_rules":[{"id":%d,"kind":"total","limit_usd":"10.00"},%s]`, totalID, periodicRule),
+			fmt.Sprintf(`"cost_limit_rules":[{"id":%d,"kind":"total","limit":"10.00"},%s]`, totalID, periodicRule),
 			fmt.Sprintf(`"cost_limit_rules":[%s,%s]`, totalRule, periodicRule),
-			fmt.Sprintf(`"cost_limit_rules":[{"id":%d,"kind":"total","limit_usd":"11"},%s]`, totalID, periodicRule),
+			fmt.Sprintf(`"cost_limit_rules":[{"id":%d,"kind":"total","limit":"11"},%s]`, totalID, periodicRule),
 		},
 		{
 			"cost rule order and identity",
 			fmt.Sprintf(`"cost_limit_rules":[%s,%s]`, totalRule, periodicRule),
 			fmt.Sprintf(`"cost_limit_rules":[%s,%s]`, periodicRule, totalRule),
-			fmt.Sprintf(`"cost_limit_rules":[{"kind":"total","limit_usd":"10"},%s]`, periodicRule),
+			fmt.Sprintf(`"cost_limit_rules":[{"kind":"total","limit":"10"},%s]`, periodicRule),
 		},
-		{"empty cost rules", `"cost_limit_rules":[]`, `"cost_limit_rules":[]`, `"cost_limit_rules":[{"kind":"total","limit_usd":"10"}]`},
+		{"empty cost rules", `"cost_limit_rules":[]`, `"cost_limit_rules":[]`, `"cost_limit_rules":[{"kind":"total","limit":"10"}]`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			operationID := fmt.Sprintf("00000000-0000-4000-8000-%012d", 8621+index)
@@ -166,7 +166,7 @@ func TestEditAccessKeyReplacesCredentialAtomicallyAndReplays(t *testing.T) {
 	fixture := newServiceFixture(t)
 	created, err := fixture.service.CreateAccessKey(t.Context(), AccessKeyCreateRequest{
 		Name: "original", Key: "original-credential-value", RPMLimit: OptionalRPMLimit{Set: true, Value: 7},
-		CostLimitRules: OptionalAccessKeyCostLimitRules{Set: true, Values: []AccessKeyCostLimitRuleRequest{{Kind: "total", LimitUSD: "10"}}},
+		CostLimitRules: OptionalAccessKeyCostLimitRules{Set: true, Values: []AccessKeyCostLimitRuleRequest{{Kind: "total", Limit: "10"}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -197,7 +197,7 @@ func TestEditAccessKeyReplacesCredentialAtomicallyAndReplays(t *testing.T) {
 		t.Fatal("old credential remains active")
 	}
 	quotaAfter := accessQuotaView(t, fixture, created.ID, fixture.service.now())
-	if len(quotaAfter.Rules) != 1 || quotaAfter.Rules[0].UsedNanoUSD != quotaBefore.Rules[0].UsedNanoUSD || quotaAfter.Rules[0].ID != quotaBefore.Rules[0].ID {
+	if len(quotaAfter.Rules) != 1 || quotaAfter.Rules[0].UsedNano != quotaBefore.Rules[0].UsedNano || quotaAfter.Rules[0].ID != quotaBefore.Rules[0].ID {
 		t.Fatal("editing the key reset usage or quota identity")
 	}
 

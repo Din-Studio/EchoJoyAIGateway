@@ -1,3 +1,4 @@
+import { roundDecimalString } from '@modern/components/ui/format'
 import {
   priceFields,
   type PriceField,
@@ -17,12 +18,16 @@ export interface PriceDraftSchedule {
   prices: Record<PriceField, string>
   tiers: PriceDraftTier[]
 }
-export function draftSlots(slots?: PriceSlots): Record<PriceField, string> {
+// 非美元价格由美元价格按汇率换算而来，第 9 位小数上有不超过 5e-9 的换算尾差。
+// 回显时只抹掉这一位；未改动的价格原样提交后，美元值的变化不超过存储精度 1 nano。
+export function draftSlots(slots?: PriceSlots, currency = 'USD'): Record<PriceField, string> {
+  const value = (raw: string | null | undefined) =>
+    raw == null ? '' : currency === 'USD' ? raw : roundDecimalString(raw, 8)
   return {
-    input: slots?.input ?? '',
-    output: slots?.output ?? '',
-    cache_read: slots?.cache_read ?? '',
-    cache_write: slots?.cache_write ?? '',
+    input: value(slots?.input),
+    output: value(slots?.output),
+    cache_read: value(slots?.cache_read),
+    cache_write: value(slots?.cache_write),
   }
 }
 let nextTier = 0
@@ -32,11 +37,11 @@ export function newPriceTier(): PriceDraftTier {
 export function priceDraft(price: ModelPrice): PriceDraftSchedule[] {
   const read = (mode: string, schedule: PriceSchedule): PriceDraftSchedule => ({
     mode,
-    prices: draftSlots(schedule.prices),
+    prices: draftSlots(schedule.prices, price.currency),
     tiers: schedule.context_tiers.map((tier) => ({
       key: String(++nextTier),
       threshold: String(tier.threshold_tokens),
-      prices: draftSlots(tier.prices),
+      prices: draftSlots(tier.prices, price.currency),
     })),
   })
   return [

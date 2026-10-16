@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gpt-load/internal/platform/redact"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/usage"
 )
@@ -76,7 +77,7 @@ func TestPriceMultipliersSurvivePersistenceAndAllCostQueries(t *testing.T) {
 				t.Fatal(err)
 			}
 			minimum := test.finalTotal - 1
-			page, err := service.List(t.Context(), ListQuery{Limit: 10, CostMinNanoUSD: &minimum})
+			page, err := service.List(t.Context(), ListQuery{Limit: 10, CostMinNano: &minimum, CostCurrency: pricing.CurrencyUSD})
 			if err != nil || len(page.Items) != 1 || page.Items[0].EstimatedCostNanoUSD != test.finalTotal || len(page.Items[0].Attempts) != 0 {
 				t.Fatalf("filtered list = %#v, %v", page, err)
 			}
@@ -102,7 +103,7 @@ func TestPriceMultipliersSurvivePersistenceAndAllCostQueries(t *testing.T) {
 				}
 			}
 			from := event.CompletedAt.Truncate(time.Hour)
-			report, err := service.QueryUsage(t.Context(), UsageQuery{
+			report, err := service.QueryUsage(t.Context(), UsageQuery{Currency: pricing.CurrencyUSD,
 				FromMS: from.UnixMilli(), ToMS: from.Add(time.Hour).UnixMilli(), Granularity: UsageGranularityHour,
 			})
 			if err != nil || report.Summary.EstimatedCostNanoUSD != test.finalTotal || report.Summary.RequestCount != 1 {
@@ -121,7 +122,7 @@ func TestPriceMultipliersSurvivePersistenceAndAllCostQueries(t *testing.T) {
 					t.Fatalf("cost distribution %s = %#v", dimension, distribution)
 				}
 			}
-			home, err := service.QueryHomeStatistics(t.Context(), HomeStatisticsQuery{
+			home, err := service.QueryHomeStatistics(t.Context(), HomeStatisticsQuery{Currency: pricing.CurrencyUSD,
 				Range: HomeStatistics24H, ObservedAtMS: from.Add(time.Hour).UnixMilli(),
 			})
 			if err != nil || home.Summary.EstimatedCostNanoUSD != test.finalTotal || len(home.TopModels) != 1 || len(home.TopGroups) != 1 || len(home.TopAccessKeys) != 1 ||

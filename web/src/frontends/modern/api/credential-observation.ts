@@ -8,6 +8,8 @@ export interface QuotaUsage {
   to?: number
   requests: number
   tokens: number
+  // cost 是按当前汇率换算到 currency 的参考费用。
+  currency: string
   cost: string
   complete: boolean
   usageComplete: boolean
@@ -102,7 +104,7 @@ export function readObservation(value: unknown): CredentialObservation | undefin
           const window = record(value)
           const usage =
             window.observed_usage === undefined ? undefined : record(window.observed_usage)
-          const cost = usage ? text(usage.estimated_reference_cost_nano_usd) : '0'
+          const cost = usage ? text(usage.estimated_reference_cost_nano) : '0'
           if (!/^\d+$/u.test(cost)) throw new InvalidResponseError()
           return {
             id: text(window.id),
@@ -124,6 +126,7 @@ export function readObservation(value: unknown): CredentialObservation | undefin
                   to: optionalTime(usage.window_end_ms),
                   requests: integer(usage.request_count),
                   tokens: integer(usage.total_tokens),
+                  currency: text(usage.currency),
                   cost,
                   complete: boolean(usage.data_complete),
                   usageComplete: boolean(usage.usage_complete),

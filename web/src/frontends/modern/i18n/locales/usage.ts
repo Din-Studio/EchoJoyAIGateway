@@ -45,6 +45,9 @@ export const zhCN = {
   incomplete: '统计不完整',
   incompleteHint:
     '用量缺失 {missing} 条，部分用量 {partial} 条。若采集发生丢弃或写入失败，统计也可能不完整。',
+  otherCurrencies: '含其他币种',
+  otherCurrenciesHint:
+    '所选时间范围内还有以 {currencies} 结算的费用，未计入当前 {currency} 合计。费用按请求结算时的币种和汇率记账。',
   chartKeyboard: '{metric}趋势，使用左右方向键查看数据，Home 和 End 跳转首尾，Esc 关闭提示',
   filters: {
     upstream_model: '上游模型',
@@ -101,6 +104,9 @@ export const enUS = {
   incomplete: 'Incomplete statistics',
   incompleteHint:
     '{missing} requests have missing usage; {partial} have partial usage. Collection drops or write failures can also make statistics incomplete.',
+  otherCurrencies: 'Other currencies',
+  otherCurrenciesHint:
+    'Some costs in this range were settled in {currencies} and are not included in the {currency} totals. Each request is recorded in the currency and rate in effect when it settled.',
   chartKeyboard:
     '{metric} trend. Use arrow keys to inspect points, Home and End to jump, and Escape to dismiss.',
   filters: {
@@ -163,6 +169,9 @@ export const jaJP = {
   incomplete: '統計が不完全',
   incompleteHint:
     '使用量なし {missing} 件、一部使用量 {partial} 件。収集時の破棄や書き込み失敗も統計に影響します。',
+  otherCurrencies: '他の通貨あり',
+  otherCurrenciesHint:
+    'この期間には {currencies} で精算された料金もあり、現在の {currency} の合計には含まれていません。料金は各リクエストの精算時の通貨とレートで記録されます。',
   chartKeyboard: '{metric}の推移。矢印キーでデータ、Home と End で先頭と末尾、Esc で閉じます。',
   filters: {
     upstream_model: '上流モデル',

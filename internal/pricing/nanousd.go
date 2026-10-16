@@ -2,13 +2,11 @@ package pricing
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"math/big"
-	"strconv"
 	"strings"
 )
-
-const nanoUSDPerUSD int64 = 1_000_000_000
 
 // NanoUSD is a USD amount represented in billionths of one USD.
 type NanoUSD int64
@@ -21,50 +19,62 @@ type Multiplier struct {
 
 // ParseUSD parses a non-negative decimal USD amount with at most nine decimal places.
 func ParseUSD(value string) (NanoUSD, error) {
+	amount, err := parseScaledDecimal(value, AmountDecimalPlaces)
+	if err != nil {
+		return 0, fmt.Errorf("USD price %w", err)
+	}
+	return NanoUSD(amount), nil
+}
+
+// parseScaledDecimal parses a non-negative decimal with at most places
+// fractional digits into an integer scaled by 10^places.
+func parseScaledDecimal(value string, places int) (int64, error) {
 	if value == "" || strings.TrimSpace(value) != value {
-		return 0, errors.New("USD price must be a non-empty decimal")
+		return 0, errors.New("must be a non-empty decimal")
 	}
 
 	integer, fraction, hasFraction := strings.Cut(value, ".")
-	if integer == "" || (hasFraction && fraction == "") || strings.Contains(fraction, ".") || len(fraction) > 9 {
-		return 0, errors.New("USD price must have at most nine decimal places")
+	if integer == "" || (hasFraction && fraction == "") || strings.Contains(fraction, ".") || len(fraction) > places {
+		return 0, fmt.Errorf("must have at most %d decimal places", places)
 	}
 	if !decimalDigits(integer) || (hasFraction && !decimalDigits(fraction)) {
-		return 0, errors.New("USD price must be a non-negative decimal")
+		return 0, errors.New("must be a non-negative decimal")
 	}
 
 	amount := new(big.Int)
-	if _, ok := amount.SetString(integer+fraction+strings.Repeat("0", 9-len(fraction)), 10); !ok || !amount.IsInt64() {
-		return 0, errors.New("USD price exceeds int64 nano USD")
+	if _, ok := amount.SetString(integer+fraction+strings.Repeat("0", places-len(fraction)), 10); !ok || !amount.IsInt64() {
+		return 0, errors.New("exceeds the int64 range")
 	}
-	return NanoUSD(amount.Int64()), nil
+	return amount.Int64(), nil
 }
 
 // FormatUSD formats a NanoUSD amount as a plain decimal USD string.
 func FormatUSD(value NanoUSD) string {
-	amount := big.NewInt(int64(value))
+	return formatScaledDecimal(int64(value), AmountDecimalPlaces)
+}
+
+// formatScaledDecimal formats an integer scaled by 10^places as a plain
+// decimal string without trailing fractional zeros.
+func formatScaledDecimal(value int64, places int) string {
+	amount := big.NewInt(value)
 	negative := amount.Sign() < 0
 	if negative {
 		amount.Abs(amount)
 	}
 
 	whole, fraction := new(big.Int), new(big.Int)
-	whole.QuoRem(amount, big.NewInt(nanoUSDPerUSD), fraction)
-	if fraction.Sign() == 0 {
-		if negative {
-			return "-" + whole.String()
-		}
-		return whole.String()
-	}
-
-	fractionText := strconv.FormatInt(fraction.Int64(), 10)
-	fractionText = strings.Repeat("0", 9-len(fractionText)) + fractionText
-	fractionText = strings.TrimRight(fractionText, "0")
+	whole.QuoRem(amount, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(places)), nil), fraction)
 	prefix := ""
 	if negative {
 		prefix = "-"
 	}
-	return prefix + whole.String() + "." + fractionText
+	if fraction.Sign() == 0 {
+		return prefix + whole.String()
+	}
+
+	fractionText := fraction.String()
+	fractionText = strings.Repeat("0", places-len(fractionText)) + fractionText
+	return prefix + whole.String() + "." + strings.TrimRight(fractionText, "0")
 }
 
 // QuoteComponent returns the rounded nano USD cost of one usage component.

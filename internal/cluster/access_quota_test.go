@@ -139,9 +139,9 @@ func assertQuotaText(t *testing.T, operation, got, want string) {
 func TestAccessQuotaEnforcesTotalAndPeriodicWindows(t *testing.T) {
 	_, client := newTestClient(t)
 	rules := []accessquota.Rule{
-		{ID: 10, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 100},
-		{ID: 11, Revision: 1, Kind: accessquota.KindPeriodic, LimitNanoUSD: 20, PeriodSeconds: 5 * 60 * 60},
-		{ID: 12, Revision: 1, Kind: accessquota.KindPeriodic, LimitNanoUSD: 30, PeriodSeconds: 24 * 60 * 60},
+		{ID: 10, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 100},
+		{ID: 11, Revision: 1, Kind: accessquota.KindPeriodic, Currency: "USD", LimitNano: 20, PeriodSeconds: 5 * 60 * 60},
+		{ID: 12, Revision: 1, Kind: accessquota.KindPeriodic, Currency: "USD", LimitNano: 30, PeriodSeconds: 24 * 60 * 60},
 	}
 	states := newFakeQuotaStates(freshCheckpoints(1, rules)...)
 	scenario := quotaScenario{t: t, quota: NewAccessQuota(client, states), snapshot: quotaSnapshot(1, rules), key: 1}
@@ -314,8 +314,8 @@ view: at=1000000 allowed=false recoverable=false next=- rules=[20@1 used=9223372
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, client := newTestClient(t)
-			rules := []accessquota.Rule{{ID: 20, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: math.MaxInt64 - 1}}
-			checkpoint := accessquota.RestoredState{AccessKeyID: 2, RuleID: 20, RuleRevision: 1, UsedNanoUSD: test.used, SnapshotVersion: 4}
+			rules := []accessquota.Rule{{ID: 20, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: math.MaxInt64 - 1}}
+			checkpoint := accessquota.RestoredState{AccessKeyID: 2, RuleID: 20, RuleRevision: 1, UsedNano: test.used, SnapshotVersion: 4}
 			scenario := quotaScenario{
 				t: t, quota: NewAccessQuota(client, newFakeQuotaStates(checkpoint)),
 				snapshot: quotaSnapshot(2, rules), key: 2,
@@ -330,9 +330,9 @@ view: at=1000000 allowed=false recoverable=false next=- rules=[20@1 used=9223372
 
 func TestAccessQuotaHydratesFromCheckpointOnce(t *testing.T) {
 	server, client := newTestClient(t)
-	rules := []accessquota.Rule{{ID: 30, Revision: 3, Kind: accessquota.KindTotal, LimitNanoUSD: 100}}
+	rules := []accessquota.Rule{{ID: 30, Revision: 3, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 100}}
 	states := newFakeQuotaStates(accessquota.RestoredState{
-		AccessKeyID: 3, RuleID: 30, RuleRevision: 3, UsedNanoUSD: 60, SnapshotVersion: 9,
+		AccessKeyID: 3, RuleID: 30, RuleRevision: 3, UsedNano: 60, SnapshotVersion: 9,
 	})
 	quota := NewAccessQuota(client, states)
 	snapshot := quotaSnapshot(3, rules)
@@ -343,7 +343,7 @@ func TestAccessQuotaHydratesFromCheckpointOnce(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(view.Rules) != 1 || view.Rules[0].UsedNanoUSD != 60 {
+		if len(view.Rules) != 1 || view.Rules[0].UsedNano != 60 {
 			t.Fatalf("View() = %#v, want checkpoint usage", view)
 		}
 	}
@@ -370,7 +370,7 @@ func TestAccessQuotaHydratesFromCheckpointOnce(t *testing.T) {
 }
 
 func TestAccessQuotaRejectsStaleOrInconsistentCheckpoints(t *testing.T) {
-	rules := []accessquota.Rule{{ID: 40, Revision: 2, Kind: accessquota.KindTotal, LimitNanoUSD: 100}}
+	rules := []accessquota.Rule{{ID: 40, Revision: 2, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 100}}
 	now := time.Unix(3_000, 0)
 	for _, test := range []struct {
 		name      string
@@ -398,7 +398,7 @@ func TestAccessQuotaRejectsStaleOrInconsistentCheckpoints(t *testing.T) {
 
 	t.Run("redis holds a newer revision", func(t *testing.T) {
 		_, client := newTestClient(t)
-		newer := []accessquota.Rule{{ID: 40, Revision: 3, Kind: accessquota.KindTotal, LimitNanoUSD: 100}}
+		newer := []accessquota.Rule{{ID: 40, Revision: 3, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 100}}
 		states := newFakeQuotaStates(accessquota.RestoredState{AccessKeyID: 5, RuleID: 40, RuleRevision: 3, SnapshotVersion: 1})
 		quota := NewAccessQuota(client, states)
 		if _, err := quota.Check(t.Context(), quotaSnapshot(5, newer), 5, now); err != nil {
@@ -413,8 +413,8 @@ func TestAccessQuotaRejectsStaleOrInconsistentCheckpoints(t *testing.T) {
 func TestAccessQuotaSharesCountAcrossInstances(t *testing.T) {
 	_, client := newTestClient(t)
 	rules := []accessquota.Rule{
-		{ID: 50, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 1_000},
-		{ID: 51, Revision: 1, Kind: accessquota.KindPeriodic, LimitNanoUSD: 300, PeriodSeconds: 60},
+		{ID: 50, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 1_000},
+		{ID: 51, Revision: 1, Kind: accessquota.KindPeriodic, Currency: "USD", LimitNano: 300, PeriodSeconds: 60},
 	}
 	states := newFakeQuotaStates(freshCheckpoints(7, rules)...)
 	snapshot := quotaSnapshot(7, rules)
@@ -445,7 +445,7 @@ func TestAccessQuotaSharesCountAcrossInstances(t *testing.T) {
 
 func TestAccessQuotaDirtyTrackingSurvivesConcurrentChanges(t *testing.T) {
 	server, client := newTestClient(t)
-	rules := []accessquota.Rule{{ID: 60, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 1_000}}
+	rules := []accessquota.Rule{{ID: 60, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 1_000}}
 	quota := NewAccessQuota(client, newFakeQuotaStates(freshCheckpoints(8, rules)...))
 	wakes := 0
 	quota.SetDirtyNotifier(func() { wakes++ })
@@ -462,7 +462,7 @@ func TestAccessQuotaDirtyTrackingSurvivesConcurrentChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	dirty, err := quota.DirtySnapshots(t.Context(), 10)
-	if err != nil || len(dirty) != 1 || dirty[0].UsedNanoUSD != 5 || dirty[0].SnapshotVersion != 2 {
+	if err != nil || len(dirty) != 1 || dirty[0].UsedNano != 5 || dirty[0].SnapshotVersion != 2 {
 		t.Fatalf("DirtySnapshots() = %#v, %v", dirty, err)
 	}
 	if _, err := quota.Complete(t.Context(), ticket, 6); err != nil {
@@ -473,7 +473,7 @@ func TestAccessQuotaDirtyTrackingSurvivesConcurrentChanges(t *testing.T) {
 		t.Fatal("Ack() of an older version dropped a newer change")
 	}
 	dirty, err = quota.DirtySnapshots(t.Context(), 10)
-	if err != nil || len(dirty) != 1 || dirty[0].UsedNanoUSD != 11 {
+	if err != nil || len(dirty) != 1 || dirty[0].UsedNano != 11 {
 		t.Fatalf("DirtySnapshots() = %#v, %v", dirty, err)
 	}
 	quota.Ack(8, 60, dirty[0].RuleRevision, dirty[0].SnapshotVersion)
@@ -526,8 +526,8 @@ func TestAccessQuotaDirtyTrackingSurvivesConcurrentChanges(t *testing.T) {
 
 func TestAccessQuotaStateUsesSlidingTTL(t *testing.T) {
 	server, client := newTestClient(t)
-	rules := []accessquota.Rule{{ID: 70, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 1_000}}
-	states := newFakeQuotaStates(accessquota.RestoredState{AccessKeyID: 9, RuleID: 70, RuleRevision: 1, UsedNanoUSD: 40, SnapshotVersion: 3})
+	rules := []accessquota.Rule{{ID: 70, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 1_000}}
+	states := newFakeQuotaStates(accessquota.RestoredState{AccessKeyID: 9, RuleID: 70, RuleRevision: 1, UsedNano: 40, SnapshotVersion: 3})
 	quota := NewAccessQuota(client, states)
 	snapshot := quotaSnapshot(9, rules)
 	key := client.Key(accessKeyHashTag(9), "quota", "70")
@@ -561,7 +561,7 @@ func TestAccessQuotaStateUsesSlidingTTL(t *testing.T) {
 		t.Fatal("idle quota state did not expire")
 	}
 	view, err := quota.View(t.Context(), snapshot, 9, now)
-	if err != nil || view.Rules[0].UsedNanoUSD != 40 || states.readCount() != 2 {
+	if err != nil || view.Rules[0].UsedNano != 40 || states.readCount() != 2 {
 		t.Fatalf("View() after expiry = %#v, %v, checkpoint reads %d", view, err, states.readCount())
 	}
 }
@@ -579,7 +579,7 @@ func formatQuotaRules(rules []accessquota.RuleView) string {
 	parts := make([]string, 0, len(rules))
 	for _, rule := range rules {
 		parts = append(parts, fmt.Sprintf("%d@%d used=%d left=%d %s window=%s..%s#%d",
-			rule.ID, rule.Revision, rule.UsedNanoUSD, rule.RemainingNanoUSD, rule.Status,
+			rule.ID, rule.Revision, rule.UsedNano, rule.RemainingNano, rule.Status,
 			formatQuotaMS(rule.WindowStartedAtMS), formatQuotaMS(rule.WindowEndsAtMS), rule.WindowGeneration))
 	}
 	return "[" + strings.Join(parts, "; ") + "]"
@@ -609,7 +609,7 @@ func formatQuotaStates(states []accessquota.RestoredState) string {
 	parts := make([]string, 0, len(states))
 	for _, row := range states {
 		parts = append(parts, fmt.Sprintf("key=%d rule=%d@%d used=%d window=%s..%s#%d version=%d",
-			row.AccessKeyID, row.RuleID, row.RuleRevision, row.UsedNanoUSD,
+			row.AccessKeyID, row.RuleID, row.RuleRevision, row.UsedNano,
 			formatQuotaMS(row.WindowStartedAtMS), formatQuotaMS(row.WindowEndsAtMS),
 			row.WindowGeneration, row.SnapshotVersion))
 	}

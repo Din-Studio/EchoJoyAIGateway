@@ -14,6 +14,7 @@ import (
 
 func TestMapEventV3PersistsMillisecondLedgerAndQuotesUpstreamModel(t *testing.T) {
 	event := telemetry.RequestEvent{
+		Currency:              pricing.USDCurrency,
 		RequestID:             "00000000-0000-4000-8000-000000004001",
 		CompletedAt:           time.Date(2026, time.July, 24, 12, 34, 56, 789_000_000, time.UTC),
 		AccessKeyID:           41,

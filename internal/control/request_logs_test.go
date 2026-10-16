@@ -311,8 +311,8 @@ func TestRequestLogEndpointParsesAdvancedFilters(t *testing.T) {
 		"input_tokens_max=2000",
 		"output_tokens_min=10",
 		"output_tokens_max=500",
-		"cost_min_nano_usd=1000",
-		"cost_max_nano_usd=9000000",
+		"cost_min_nano=1000",
+		"cost_max_nano=9000000",
 	}, "&")
 	recorder := performRequestLogRequest(engine, "test-auth-key", query)
 	if recorder.Code != http.StatusOK {
@@ -343,8 +343,8 @@ func TestRequestLogEndpointParsesAdvancedFilters(t *testing.T) {
 		got.InputTokensMax == nil || *got.InputTokensMax != 2000 ||
 		got.OutputTokensMin == nil || *got.OutputTokensMin != 10 ||
 		got.OutputTokensMax == nil || *got.OutputTokensMax != 500 ||
-		got.CostMinNanoUSD == nil || *got.CostMinNanoUSD != 1000 ||
-		got.CostMaxNanoUSD == nil || *got.CostMaxNanoUSD != 9000000 {
+		got.CostMinNano == nil || *got.CostMinNano != 1000 ||
+		got.CostMaxNano == nil || *got.CostMaxNano != 9000000 {
 		t.Fatalf("parsed advanced query = %#v", got)
 	}
 }
@@ -390,7 +390,7 @@ func TestRequestLogEndpointRejectsInvalidAdvancedFilters(t *testing.T) {
 		"duration_min_ms=20&duration_max_ms=10",
 		"input_tokens_min=20&input_tokens_max=10",
 		"output_tokens_min=20&output_tokens_max=10",
-		"cost_min_nano_usd=20&cost_max_nano_usd=10",
+		"cost_min_nano=20&cost_max_nano=10",
 	}
 	for _, query := range tests {
 		t.Run(query, func(t *testing.T) {
@@ -614,6 +614,8 @@ func TestRequestLogDetailEndpointReturnsAttemptsAndFrozenPricingReceipt(t *testi
 			ContextThresholdTokens: &contextThreshold,
 			UncachedInputTokens:    1000,
 			EstimatedCostNanoUSD:   amount,
+			Settlement:             pricing.Currency{Code: pricing.CurrencyCNY, RateMicros: 7_100_000},
+			EstimatedCostNano:      7_100_000,
 			Attempts: []requestlog.Attempt{{
 				Sequence:          1,
 				GroupID:           12,
@@ -685,6 +687,9 @@ func TestRequestLogDetailEndpointReturnsAttemptsAndFrozenPricingReceipt(t *testi
 					PricingMode      string `json:"pricing_mode"`
 					ContextThreshold string `json:"context_threshold_tokens"`
 					TotalNanoUSD     string `json:"total_nano_usd"`
+					Settlement       string `json:"settlement_currency"`
+					ExchangeRate     string `json:"exchange_rate"`
+					TotalNano        string `json:"total_nano"`
 					Rule             struct {
 						ChannelID string `json:"channel_id"`
 						ModelID   string `json:"model_id"`
@@ -692,6 +697,7 @@ func TestRequestLogDetailEndpointReturnsAttemptsAndFrozenPricingReceipt(t *testi
 					LineItems []struct {
 						Quantity      string `json:"quantity"`
 						AmountNanoUSD string `json:"amount_nano_usd"`
+						AmountNano    string `json:"amount_nano"`
 					} `json:"line_items"`
 				} `json:"pricing_receipt"`
 			} `json:"attempts"`
@@ -729,7 +735,12 @@ func TestRequestLogDetailEndpointReturnsAttemptsAndFrozenPricingReceipt(t *testi
 		envelope.Data.Attempts[0].PricingReceipt.TotalNanoUSD != "1000000" ||
 		len(envelope.Data.Attempts[0].PricingReceipt.LineItems) != 1 ||
 		envelope.Data.Attempts[0].PricingReceipt.LineItems[0].Quantity != "1000" ||
-		envelope.Data.Attempts[0].PricingReceipt.LineItems[0].AmountNanoUSD != "1000000" {
+		envelope.Data.Attempts[0].PricingReceipt.LineItems[0].AmountNanoUSD != "1000000" ||
+		// 回执按请求冻结的汇率换算，而不是当前汇率。
+		envelope.Data.Attempts[0].PricingReceipt.Settlement != "CNY" ||
+		envelope.Data.Attempts[0].PricingReceipt.ExchangeRate != "7.1" ||
+		envelope.Data.Attempts[0].PricingReceipt.TotalNano != "7100000" ||
+		envelope.Data.Attempts[0].PricingReceipt.LineItems[0].AmountNano != "7100000" {
 		t.Fatalf("detail projection = %#v", envelope.Data)
 	}
 	for _, legacyField := range []string{`"key_id"`, `"upstream_key_id"`} {
@@ -788,7 +799,7 @@ func TestRequestLogPricingReceiptKeepsHistoricalSchemasReadable(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mapped, err := mapRequestLogPricingReceipt(&test.receipt)
+			mapped, err := mapRequestLogPricingReceipt(&test.receipt, pricing.USDCurrency)
 			if err != nil {
 				t.Fatalf("mapRequestLogPricingReceipt() error = %v", err)
 			}
@@ -1374,7 +1385,7 @@ func TestRequestLogAttemptActionUsesCredentialTerms(t *testing.T) {
 		telemetry.Action("fail_credential"):     "fail_credential",
 		telemetry.ActionTerminate:               string(telemetry.ActionTerminate),
 	} {
-		mapped, err := mapRequestLogAttempt(requestlog.Attempt{Action: input}, nil)
+		mapped, err := mapRequestLogAttempt(requestlog.Attempt{Action: input}, pricing.USDCurrency, nil)
 		if err != nil {
 			t.Fatalf("mapRequestLogAttempt(%q) error = %v", input, err)
 		}

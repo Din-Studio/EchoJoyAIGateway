@@ -101,7 +101,7 @@ export const advancedLogFilters: readonly LogFilterDefinition[] = [
     (name): LogFilterDefinition[] => [
       {
         key: (name === 'cost'
-          ? 'cost_min_nano_usd'
+          ? 'cost_min_nano'
           : name === 'first_response' || name === 'duration'
             ? `${name}_min_ms`
             : `${name}_min`) as LogFilterName,
@@ -110,7 +110,7 @@ export const advancedLogFilters: readonly LogFilterDefinition[] = [
       },
       {
         key: (name === 'cost'
-          ? 'cost_max_nano_usd'
+          ? 'cost_max_nano'
           : name === 'first_response' || name === 'duration'
             ? `${name}_max_ms`
             : `${name}_max`) as LogFilterName,
@@ -212,13 +212,14 @@ export function serializeLogState(state: LogRouteState): LocationQueryRaw {
     ...(state.detail ? { detail: state.detail } : {}),
   }
 }
-export function nanoToUSD(value?: string): string {
+// 费用筛选以系统货币的 1e-9 单位传给接口，输入框显示十进制金额。
+export function nanoToDecimal(value?: string): string {
   if (!value || !unsigned.test(value)) return ''
   const digits = value.padStart(10, '0')
   const fraction = digits.slice(-9).replace(/0+$/, '')
   return digits.slice(0, -9) + (fraction ? '.' + fraction : '')
 }
-export function usdToNano(value: string): string | undefined {
+export function decimalToNano(value: string): string | undefined {
   const match = /^(0|[1-9]\d*)(?:\.(\d{1,9}))?$/.exec(value.trim())
   if (!match) return undefined
   const amount = BigInt(match[1]!) * 1000000000n + BigInt((match[2] ?? '').padEnd(9, '0'))

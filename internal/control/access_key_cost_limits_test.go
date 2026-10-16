@@ -23,9 +23,9 @@ func TestAccessKeyCostLimitRulesCreateAndReconcileDesiredList(t *testing.T) {
 	created := serveAccessKeyCostLimitRequest(t, engine, http.MethodPost, "/api/access-keys", `{
 		"name":"limited",
 		"cost_limit_rules":[
-			{"kind":"total","limit_usd":"100"},
-			{"kind":"periodic","limit_usd":"20","period_seconds":18000},
-			{"kind":"periodic","limit_usd":"30","period_seconds":86400}
+			{"kind":"total","limit":"100"},
+			{"kind":"periodic","limit":"20","period_seconds":18000},
+			{"kind":"periodic","limit":"30","period_seconds":86400}
 		]
 	}`, "00000000-0000-4000-8000-000000009001")
 	if created.Code != http.StatusOK {
@@ -65,7 +65,7 @@ func TestAccessKeyCostLimitRulesCreateAndReconcileDesiredList(t *testing.T) {
 	if err := fixture.db.Model(&models.AccessKeyCostLimitState{}).
 		Where("rule_id = ?", periodic[0].ID).
 		Updates(map[string]any{
-			"used_nano_usd":        int64(15_000_000_000),
+			"used_nano":            int64(15_000_000_000),
 			"window_started_at_ms": int64(1_787_184_000_000),
 			"window_ends_at_ms":    int64(1_787_202_000_000),
 			"window_generation":    uint64(2),
@@ -77,9 +77,9 @@ func TestAccessKeyCostLimitRulesCreateAndReconcileDesiredList(t *testing.T) {
 	path := fmt.Sprintf("/api/access-keys/%d", createdEnvelope.Data.ID)
 	updated := serveAccessKeyCostLimitRequest(t, engine, http.MethodPut, path, fmt.Sprintf(`{
 		"cost_limit_rules":[
-			{"id":%d,"kind":"total","limit_usd":"120"},
-			{"id":%d,"kind":"periodic","limit_usd":"25","period_seconds":18000},
-			{"kind":"periodic","limit_usd":"40","period_seconds":36000}
+			{"id":%d,"kind":"total","limit":"120"},
+			{"id":%d,"kind":"periodic","limit":"25","period_seconds":18000},
+			{"kind":"periodic","limit":"40","period_seconds":36000}
 		]
 	}`, rules[0].ID, periodic[0].ID), "")
 	if updated.Code != http.StatusOK {
@@ -93,7 +93,7 @@ func TestAccessKeyCostLimitRulesCreateAndReconcileDesiredList(t *testing.T) {
 	if err := fixture.db.First(&preserved, periodic[0].ID).Error; err != nil {
 		t.Fatalf("load preserved state: %v", err)
 	}
-	if preserved.UsedNanoUSD != 15_000_000_000 || preserved.RuleRevision != periodic[0].RuleRevision ||
+	if preserved.UsedNano != 15_000_000_000 || preserved.RuleRevision != periodic[0].RuleRevision ||
 		preserved.WindowGeneration != 2 {
 		t.Fatalf("amount update reset state = %#v", preserved)
 	}
@@ -108,9 +108,9 @@ func TestAccessKeyCostLimitRulesCreateAndReconcileDesiredList(t *testing.T) {
 
 	changedDuration := serveAccessKeyCostLimitRequest(t, engine, http.MethodPut, path, fmt.Sprintf(`{
 		"cost_limit_rules":[
-			{"id":%d,"kind":"total","limit_usd":"120"},
-			{"id":%d,"kind":"periodic","limit_usd":"25","period_seconds":21600},
-			{"id":%d,"kind":"periodic","limit_usd":"40","period_seconds":36000}
+			{"id":%d,"kind":"total","limit":"120"},
+			{"id":%d,"kind":"periodic","limit":"25","period_seconds":21600},
+			{"id":%d,"kind":"periodic","limit":"40","period_seconds":36000}
 		]
 	}`, current[0].ID, periodic[0].ID, current[2].ID), "")
 	if changedDuration.Code != http.StatusOK {
@@ -120,7 +120,7 @@ func TestAccessKeyCostLimitRulesCreateAndReconcileDesiredList(t *testing.T) {
 	if err := fixture.db.First(&reset, periodic[0].ID).Error; err != nil {
 		t.Fatalf("load reset state: %v", err)
 	}
-	if reset.RuleRevision != periodic[0].RuleRevision+1 || reset.UsedNanoUSD != 0 ||
+	if reset.RuleRevision != periodic[0].RuleRevision+1 || reset.UsedNano != 0 ||
 		reset.WindowStartedAtMS != nil || reset.WindowEndsAtMS != nil || reset.WindowGeneration != 0 {
 		t.Fatalf("duration update state = %#v, want reset next revision", reset)
 	}
@@ -132,9 +132,9 @@ func TestAccessKeyCostLimitRulesResetOnlySelectedRules(t *testing.T) {
 	created := serveAccessKeyCostLimitRequest(t, engine, http.MethodPost, "/api/access-keys", `{
 		"name":"resettable",
 		"cost_limit_rules":[
-			{"kind":"total","limit_usd":"100"},
-			{"kind":"periodic","limit_usd":"20","period_seconds":18000},
-			{"kind":"periodic","limit_usd":"30","period_seconds":86400}
+			{"kind":"total","limit":"100"},
+			{"kind":"periodic","limit":"20","period_seconds":18000},
+			{"kind":"periodic","limit":"30","period_seconds":86400}
 		]
 	}`, "00000000-0000-4000-8000-000000009004")
 	if created.Code != http.StatusOK {
@@ -170,16 +170,16 @@ func TestAccessKeyCostLimitRulesResetOnlySelectedRules(t *testing.T) {
 	if len(view.Rules) != 3 {
 		t.Fatalf("runtime rules = %#v", view.Rules)
 	}
-	if view.Rules[0].ID != rules[0].ID || view.Rules[0].UsedNanoUSD != 0 ||
+	if view.Rules[0].ID != rules[0].ID || view.Rules[0].UsedNano != 0 ||
 		view.Rules[0].Status != accessquota.RuleStatusAvailable {
 		t.Fatalf("reset total runtime = %#v", view.Rules[0])
 	}
-	if view.Rules[1].ID != rules[1].ID || view.Rules[1].UsedNanoUSD != 0 ||
+	if view.Rules[1].ID != rules[1].ID || view.Rules[1].UsedNano != 0 ||
 		view.Rules[1].Status != accessquota.RuleStatusInactive ||
 		view.Rules[1].WindowStartedAtMS != nil || view.Rules[1].WindowEndsAtMS != nil {
 		t.Fatalf("reset periodic runtime = %#v", view.Rules[1])
 	}
-	if view.Rules[2].ID != rules[2].ID || view.Rules[2].UsedNanoUSD != 15_000_000_000 ||
+	if view.Rules[2].ID != rules[2].ID || view.Rules[2].UsedNano != 15_000_000_000 ||
 		view.Rules[2].Status != accessquota.RuleStatusAvailable ||
 		view.Rules[2].WindowStartedAtMS == nil || view.Rules[2].WindowEndsAtMS == nil {
 		t.Fatalf("unselected periodic runtime = %#v", view.Rules[2])
@@ -198,7 +198,7 @@ func TestAccessKeyCostLimitRulesResetOnlySelectedRules(t *testing.T) {
 		if err := fixture.db.First(&state, rule.ID).Error; err != nil {
 			t.Fatal(err)
 		}
-		if index < 2 && (state.RuleRevision != 2 || state.UsedNanoUSD != 0 ||
+		if index < 2 && (state.RuleRevision != 2 || state.UsedNano != 0 ||
 			state.WindowStartedAtMS != nil || state.WindowEndsAtMS != nil ||
 			state.WindowGeneration != 0 || state.SnapshotVersion != 1) {
 			t.Fatalf("reset state for rule %d = %#v", rule.ID, state)
@@ -214,7 +214,7 @@ func TestAccessKeyCostLimitRulesResetRejectsInvalidSelection(t *testing.T) {
 		engine,
 		http.MethodPost,
 		"/api/access-keys",
-		`{"name":"limited","cost_limit_rules":[{"kind":"total","limit_usd":"10"}]}`,
+		`{"name":"limited","cost_limit_rules":[{"kind":"total","limit":"10"}]}`,
 		"00000000-0000-4000-8000-000000009005",
 	)
 	if created.Code != http.StatusOK {
@@ -246,7 +246,7 @@ func TestAccessKeyCostLimitRulesAreValidatedAndIdempotent(t *testing.T) {
 	t.Parallel()
 	fixture, engine := newAccessKeyCostLimitHTTPFixture(t)
 	const idempotencyKey = "00000000-0000-4000-8000-000000009002"
-	payload := `{"name":"idempotent","cost_limit_rules":[{"kind":"total","limit_usd":"10"}]}`
+	payload := `{"name":"idempotent","cost_limit_rules":[{"kind":"total","limit":"10"}]}`
 	first := serveAccessKeyCostLimitRequest(t, engine, http.MethodPost, "/api/access-keys", payload, idempotencyKey)
 	second := serveAccessKeyCostLimitRequest(t, engine, http.MethodPost, "/api/access-keys", payload, idempotencyKey)
 	if first.Code != http.StatusOK || second.Code != http.StatusOK {
@@ -267,8 +267,8 @@ func TestAccessKeyCostLimitRulesAreValidatedAndIdempotent(t *testing.T) {
 	}
 
 	invalid := []string{
-		`{"name":"zero","cost_limit_rules":[{"kind":"total","limit_usd":"0"}]}`,
-		`{"name":"duplicate","cost_limit_rules":[{"kind":"periodic","limit_usd":"1","period_seconds":300},{"kind":"periodic","limit_usd":"2","period_seconds":300}]}`,
+		`{"name":"zero","cost_limit_rules":[{"kind":"total","limit":"0"}]}`,
+		`{"name":"duplicate","cost_limit_rules":[{"kind":"periodic","limit":"1","period_seconds":300},{"kind":"periodic","limit":"2","period_seconds":300}]}`,
 		`{"name":"null","cost_limit_rules":null}`,
 	}
 	for index, body := range invalid {
@@ -290,7 +290,7 @@ func TestAccessKeyCostLimitRuleKindCannotBeChangedInPlace(t *testing.T) {
 		engine,
 		http.MethodPost,
 		"/api/access-keys",
-		`{"name":"fixed-kind","cost_limit_rules":[{"kind":"total","limit_usd":"10"}]}`,
+		`{"name":"fixed-kind","cost_limit_rules":[{"kind":"total","limit":"10"}]}`,
 		"00000000-0000-4000-8000-000000009003",
 	)
 	if created.Code != http.StatusOK {
@@ -309,7 +309,7 @@ func TestAccessKeyCostLimitRuleKindCannotBeChangedInPlace(t *testing.T) {
 		http.MethodPut,
 		fmt.Sprintf("/api/access-keys/%d", envelope.Data.ID),
 		fmt.Sprintf(
-			`{"cost_limit_rules":[{"id":%d,"kind":"periodic","limit_usd":"10","period_seconds":300}]}`,
+			`{"cost_limit_rules":[{"id":%d,"kind":"periodic","limit":"10","period_seconds":300}]}`,
 			rule.ID,
 		),
 		"",
@@ -358,7 +358,7 @@ func assertAccessKeyCostLimitPeriodPermutation(
 	definitions := make([]AccessKeyCostLimitRuleRequest, 0, len(initial))
 	for _, period := range initial {
 		definitions = append(definitions, AccessKeyCostLimitRuleRequest{
-			Kind: accessquota.KindPeriodic, LimitUSD: "10", PeriodSeconds: period,
+			Kind: accessquota.KindPeriodic, Limit: "10", PeriodSeconds: period,
 		})
 	}
 	created, err := fixture.service.CreateAccessKey(t.Context(), AccessKeyCreateRequest{
@@ -380,7 +380,7 @@ func assertAccessKeyCostLimitPeriodPermutation(
 		if err := fixture.db.Model(&models.AccessKeyCostLimitState{}).
 			Where("rule_id = ?", rule.ID).
 			Updates(map[string]any{
-				"used_nano_usd":        int64(index + 1),
+				"used_nano":            int64(index + 1),
 				"window_started_at_ms": windowStart,
 				"window_ends_at_ms":    windowEnd,
 				"window_generation":    uint64(2),
@@ -394,7 +394,7 @@ func assertAccessKeyCostLimitPeriodPermutation(
 	for index, period := range desired {
 		desiredRules = append(desiredRules, AccessKeyCostLimitRuleRequest{
 			ID: current[index].ID, Kind: accessquota.KindPeriodic,
-			LimitUSD: "10", PeriodSeconds: period,
+			Limit: "10", PeriodSeconds: period,
 		})
 	}
 	if _, err := fixture.service.UpdateAccessKey(t.Context(), created.ID, AccessKeyUpdateRequest{
@@ -427,7 +427,7 @@ func assertAccessKeyCostLimitPeriodPermutation(
 		if err := fixture.db.First(&state, original.ID).Error; err != nil {
 			t.Fatal(err)
 		}
-		if state.RuleRevision != original.RuleRevision+1 || state.UsedNanoUSD != 0 ||
+		if state.RuleRevision != original.RuleRevision+1 || state.UsedNano != 0 ||
 			state.WindowStartedAtMS != nil || state.WindowEndsAtMS != nil ||
 			state.WindowGeneration != 0 || state.SnapshotVersion != 1 {
 			t.Fatalf("reset state for rule %d = %#v", original.ID, state)

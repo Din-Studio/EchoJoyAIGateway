@@ -36,7 +36,7 @@ const protocolsLabel = computed(() =>
 )
 const groupCount = computed(() => modelGroupCount(props.model))
 function price(source: ModelSource, field: PriceField): string {
-  return modelUnitPrice(source.price.prices[field], locale.value)
+  return modelUnitPrice(source.price.prices[field], source.price.currency, locale.value)
 }
 // 表头与来源行是两个独立网格，用 max-content 会各算各的导致列错位。
 // 这里按本卡最长的价格算出一个共享列宽，两边引用同一个值才能对齐。

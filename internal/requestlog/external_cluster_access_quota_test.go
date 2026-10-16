@@ -81,7 +81,7 @@ func TestExternalClusterAccessQuotaCheckpointHydration(t *testing.T) {
 		_ = db.WithContext(ctx).Delete(&models.AccessKey{}, accessKey.ID).Error
 	})
 	ruleRow := models.AccessKeyCostLimitRule{
-		AccessKeyID: accessKey.ID, Kind: models.AccessKeyCostLimitKindTotal, LimitNanoUSD: 1_000, RuleRevision: 1,
+		AccessKeyID: accessKey.ID, Kind: models.AccessKeyCostLimitKindTotal, LimitNano: 1_000, RuleRevision: 1,
 	}
 	if err := db.Create(&ruleRow).Error; err != nil {
 		t.Fatal(err)
@@ -102,7 +102,7 @@ func TestExternalClusterAccessQuotaCheckpointHydration(t *testing.T) {
 	snapshotFor := func(revision uint64) *state.ConfigSnapshot {
 		return &state.ConfigSnapshot{AccessKeysByID: map[uint]state.AccessKeyView{accessKey.ID: {
 			ID: accessKey.ID, CostLimitRules: []accessquota.Rule{{
-				ID: ruleRow.ID, Revision: revision, Kind: accessquota.KindTotal, LimitNanoUSD: 1_000,
+				ID: ruleRow.ID, Revision: revision, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 1_000,
 			}},
 		}}}
 	}
@@ -112,7 +112,7 @@ func TestExternalClusterAccessQuotaCheckpointHydration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("View() error = %v", err)
 		}
-		return view.Rules[0].UsedNanoUSD
+		return view.Rules[0].UsedNano
 	}
 
 	first := snapshotFor(1)
@@ -132,8 +132,8 @@ func TestExternalClusterAccessQuotaCheckpointHydration(t *testing.T) {
 	if err := db.First(&persisted, ruleRow.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if redisUsed := usedIn(quotaA, first); persisted.UsedNanoUSD != 300 || redisUsed != 300 || quotaA.HasDirty() {
-		t.Fatalf("checkpoint used=%d redis used=%d dirty=%v, want 300/300/false", persisted.UsedNanoUSD, redisUsed, quotaA.HasDirty())
+	if redisUsed := usedIn(quotaA, first); persisted.UsedNano != 300 || redisUsed != 300 || quotaA.HasDirty() {
+		t.Fatalf("checkpoint used=%d redis used=%d dirty=%v, want 300/300/false", persisted.UsedNano, redisUsed, quotaA.HasDirty())
 	}
 
 	// Redis loses the key: instance B rebuilds it from the checkpoint.
@@ -152,7 +152,7 @@ func TestExternalClusterAccessQuotaCheckpointHydration(t *testing.T) {
 			return err
 		}
 		return tx.Model(&models.AccessKeyCostLimitState{}).Where("rule_id = ?", ruleRow.ID).
-			Updates(map[string]any{"rule_revision": 2, "used_nano_usd": 0, "snapshot_version": 1}).Error
+			Updates(map[string]any{"rule_revision": 2, "used_nano": 0, "snapshot_version": 1}).Error
 	}); err != nil {
 		t.Fatal(err)
 	}

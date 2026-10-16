@@ -191,7 +191,7 @@ func TestQueryUsageFiltersAndProjectsChannelCredential(t *testing.T) {
 	createUsageStats(t, db, first, second)
 
 	credentialID := uint(11)
-	report, err := newRequestLogTestService(db).QueryUsage(t.Context(), UsageQuery{
+	report, err := newRequestLogTestService(db).QueryUsage(t.Context(), UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS:       start.UnixMilli(),
 		ToMS:         start.Add(7 * time.Hour).UnixMilli(),
 		Granularity:  UsageGranularityHour,
@@ -226,7 +226,7 @@ func TestAccessScopedUsageDistributionCollapsesHiddenRoutesByModel(t *testing.T)
 	createUsageStats(t, db, rows...)
 
 	accessKeyID := uint(41)
-	report, err := newRequestLogTestService(db).QueryUsage(t.Context(), UsageQuery{
+	report, err := newRequestLogTestService(db).QueryUsage(t.Context(), UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS:      start.UnixMilli(),
 		ToMS:        start.Add(7 * time.Hour).UnixMilli(),
 		Granularity: UsageGranularityHour,
@@ -257,7 +257,7 @@ func TestAccessScopedUsageReturnsOnlyModelDistributions(t *testing.T) {
 	createUsageStats(t, db, first, second)
 
 	accessKeyID := uint(41)
-	report, err := newRequestLogTestService(db).QueryUsage(t.Context(), UsageQuery{
+	report, err := newRequestLogTestService(db).QueryUsage(t.Context(), UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS:      start.UnixMilli(),
 		ToMS:        start.Add(7 * time.Hour).UnixMilli(),
 		Granularity: UsageGranularityHour,

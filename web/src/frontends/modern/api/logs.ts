@@ -57,8 +57,8 @@ export const logFilterNames = [
   'input_tokens_max',
   'output_tokens_min',
   'output_tokens_max',
-  'cost_min_nano_usd',
-  'cost_max_nano_usd',
+  'cost_min_nano',
+  'cost_max_nano',
 ] as const
 export type LogFilterName = (typeof logFilterNames)[number]
 export type LogQuery = Partial<Record<LogFilterName, string>>
@@ -127,6 +127,10 @@ export interface LogEntry {
   cache_write_1h_tokens: string
   cache_write_unknown_tokens: string
   output_tokens: string
+  // 结算时冻结的币种与汇率；estimated_cost_nano 以该币种计，estimated_cost_nano_usd 以美元计。
+  currency: string
+  exchange_rate: string
+  estimated_cost_nano: string
   estimated_cost_nano_usd: string
 }
 
@@ -144,22 +148,24 @@ export interface LogAutoDecision {
   confidence: number | null
   input_tokens: string | null
   output_tokens: string | null
-  estimated_cost_nano_usd: string
+  estimated_cost_nano: string
   cost_state: string
   pricing_completeness: string
   receipt: LogReceipt | null
 }
+// 回执按美元计算；以下金额是按结算汇率换算到 currency 的展示值。
 export interface LogPricingLine {
   code: string
   quantity: string
-  rate_nano_usd_per_million: string | null
+  rate_nano_per_million: string | null
   multiplier: { numerator: string; denominator: string }
   state: 'priced' | 'unpriced'
-  amount_nano_usd: string | null
+  amount_nano: string | null
 }
 export interface LogReceipt {
   schema_version: number
   currency: string
+  exchange_rate: string
   method: string
   method_version: number
   pricing_mode: string
@@ -167,8 +173,8 @@ export interface LogReceipt {
   rule: { scope_key: string | null; channel_id: string | null; model_id: string }
   context_threshold_tokens: string | null
   line_items: LogPricingLine[]
-  base_total_nano_usd: string | null
-  total_nano_usd: string
+  base_total_nano: string | null
+  total_nano: string
 }
 export interface LogAttempt {
   sequence: number
@@ -238,7 +244,8 @@ function receipt(value: unknown): LogReceipt | null {
   const multipliers = row.price_multipliers == null ? null : record(row.price_multipliers)
   return {
     schema_version: integer(row.schema_version, 1),
-    currency: text(row.currency),
+    currency: text(row.settlement_currency),
+    exchange_rate: text(row.exchange_rate),
     method: text(row.method),
     method_version: integer(row.method_version, 1),
     pricing_mode: text(row.pricing_mode),
@@ -251,8 +258,8 @@ function receipt(value: unknown): LogReceipt | null {
       model_id: text(rule.model_id),
     },
     context_threshold_tokens: optionalCount(row.context_threshold_tokens),
-    base_total_nano_usd: optionalCount(row.base_total_nano_usd),
-    total_nano_usd: count(row.total_nano_usd),
+    base_total_nano: optionalCount(row.base_total_nano),
+    total_nano: count(row.total_nano),
     line_items: list(row.line_items).map((value) => {
       const line = record(value)
       const multiplier = record(line.multiplier)
@@ -261,10 +268,10 @@ function receipt(value: unknown): LogReceipt | null {
       return {
         code: text(line.code),
         quantity: count(line.quantity),
-        rate_nano_usd_per_million: optionalCount(line.rate_nano_usd_per_million),
+        rate_nano_per_million: optionalCount(line.rate_nano_per_million),
         multiplier: { numerator: count(multiplier.numerator), denominator },
         state: oneOf(line.state, ['priced', 'unpriced'] as const),
-        amount_nano_usd: optionalCount(line.amount_nano_usd),
+        amount_nano: optionalCount(line.amount_nano),
       }
     }),
   }
@@ -332,9 +339,10 @@ function entry(value: unknown): LogEntry {
     cache_write_1h_tokens: count(row.cache_write_1h_tokens),
     cache_write_unknown_tokens: count(row.cache_write_unknown_tokens),
     output_tokens: count(row.output_tokens),
-    estimated_cost_nano_usd: count(
-      row.total_estimated_cost_nano_usd ?? row.estimated_cost_nano_usd,
-    ),
+    currency: text(row.currency),
+    exchange_rate: text(row.exchange_rate),
+    estimated_cost_nano: count(row.total_estimated_cost_nano),
+    estimated_cost_nano_usd: count(row.total_estimated_cost_nano_usd),
   }
 }
 
@@ -367,7 +375,7 @@ function autoDecision(value: unknown): LogAutoDecision {
     confidence,
     input_tokens: row.input_tokens === undefined ? null : count(row.input_tokens),
     output_tokens: row.output_tokens === undefined ? null : count(row.output_tokens),
-    estimated_cost_nano_usd: count(row.estimated_cost_nano_usd),
+    estimated_cost_nano: count(row.estimated_cost_nano),
     cost_state: text(row.cost_state),
     pricing_completeness: text(row.pricing_completeness),
     receipt: row.receipt === undefined ? null : receipt(row.receipt),

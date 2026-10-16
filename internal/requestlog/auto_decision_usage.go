@@ -15,15 +15,15 @@ func writeAutoDecisionUsage(tx *gorm.DB, rows []models.RequestLog) error {
 		if row.DecisionModel == "" || row.DecisionPricingCompleteness == "not_applicable" {
 			continue
 		}
-		stat := models.AutoDecisionUsageStat{BucketStartMS: row.CompletedAtMS - row.CompletedAtMS%epochms.MillisecondsPerHour, AccessKeyID: row.AccessKeyID, Model: row.DecisionModel, EstimatedCostNanoUSD: row.DecisionCostNanoUSD}
+		stat := models.AutoDecisionUsageStat{BucketStartMS: row.CompletedAtMS - row.CompletedAtMS%epochms.MillisecondsPerHour, AccessKeyID: row.AccessKeyID, Model: row.DecisionModel, Currency: row.Currency, EstimatedCostNanoUSD: row.DecisionCostNanoUSD, EstimatedCostNano: row.DecisionCostNano}
 		if row.DecisionPricingCompleteness == "unavailable" && !(row.CostState == "unpriced" && (row.UsageState == "complete" || row.UsageState == "partial")) {
 			stat.UnpricedRequestCount = 1
 		}
 		if row.DecisionPricingCompleteness == "partial" && row.PricingCompleteness != "partial" {
 			stat.PricingPartialCount = 1
 		}
-		updates := incrementAssignments(map[string]int64{"estimated_cost_nano_usd": stat.EstimatedCostNanoUSD, "unpriced_request_count": stat.UnpricedRequestCount, "pricing_partial_count": stat.PricingPartialCount})
-		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "bucket_start_ms"}, {Name: "access_key_id"}, {Name: "model"}}, DoUpdates: clause.Assignments(updates)}).Create(&stat).Error; err != nil {
+		updates := incrementAssignments(map[string]int64{"estimated_cost_nano_usd": stat.EstimatedCostNanoUSD, "estimated_cost_nano": stat.EstimatedCostNano, "unpriced_request_count": stat.UnpricedRequestCount, "pricing_partial_count": stat.PricingPartialCount})
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "bucket_start_ms"}, {Name: "access_key_id"}, {Name: "model"}, {Name: "currency"}}, DoUpdates: clause.Assignments(updates)}).Create(&stat).Error; err != nil {
 			return fmt.Errorf("save automatic decision usage: %w", err)
 		}
 	}
@@ -49,7 +49,7 @@ const decisionUsageProjection = `bucket_start_ms, 0 AS group_id, access_key_id, 
 	0 AS request_count, 0 AS success_count, 0 AS failure_count,
 	0 AS uncached_input_tokens, 0 AS cache_read_tokens, 0 AS cache_write_5m_tokens,
 	0 AS cache_write_1h_tokens, 0 AS cache_write_unknown_tokens, 0 AS output_tokens,
-	estimated_cost_nano_usd, 0 AS usage_missing_count, 0 AS partial_count,
+	estimated_cost_nano_usd, currency, estimated_cost_nano, 0 AS usage_missing_count, 0 AS partial_count,
 	unpriced_request_count, pricing_partial_count, '' AS channel_id, 0 AS credential_id`
 
 const decisionRequestProjection = `completed_at_ms - completed_at_ms % ? AS bucket_start_ms,
@@ -57,7 +57,8 @@ const decisionRequestProjection = `completed_at_ms - completed_at_ms % ? AS buck
 	0 AS request_count, 0 AS success_count, 0 AS failure_count,
 	0 AS uncached_input_tokens, 0 AS cache_read_tokens, 0 AS cache_write_5m_tokens,
 	0 AS cache_write_1h_tokens, 0 AS cache_write_unknown_tokens, 0 AS output_tokens,
-	decision_cost_nano_usd AS estimated_cost_nano_usd, 0 AS usage_missing_count, 0 AS partial_count,
+	decision_cost_nano_usd AS estimated_cost_nano_usd, currency, decision_cost_nano AS estimated_cost_nano,
+	0 AS usage_missing_count, 0 AS partial_count,
 	CASE WHEN decision_pricing_completeness = 'unavailable' AND NOT (cost_state = 'unpriced' AND usage_state IN ('complete','partial')) THEN 1 ELSE 0 END AS unpriced_request_count,
 	CASE WHEN decision_pricing_completeness = 'partial' AND pricing_completeness <> 'partial' THEN 1 ELSE 0 END AS pricing_partial_count,
 	? + 0 AS bucket_alignment_ms`

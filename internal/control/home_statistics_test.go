@@ -400,12 +400,13 @@ func TestHomeStatisticsHTTPDefaultsToDense24HoursAndMapsExactWire(t *testing.T) 
 		"request_count",
 		"total_tokens",
 		"estimated_cost_nano_usd",
+		"estimated_cost_nano",
 	} {
 		if _, exists := modelRanking[key]; !exists {
 			t.Fatalf("model ranking missing %q: %s", key, recorder.Body.String())
 		}
 	}
-	if len(modelRanking) != 4 {
+	if len(modelRanking) != 5 {
 		t.Fatalf("model ranking exposes non-model dimension: %s", recorder.Body.String())
 	}
 	for _, forbidden := range []string{"health", "timezone", "link"} {

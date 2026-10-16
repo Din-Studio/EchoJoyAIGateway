@@ -37,6 +37,7 @@ type usageAggregateResponse struct {
 	OutputTokens            int64  `json:"output_tokens"`
 	TotalTokens             int64  `json:"total_tokens"`
 	EstimatedCostNanoUSD    string `json:"estimated_cost_nano_usd"`
+	EstimatedCostNano       string `json:"estimated_cost_nano"`
 	UsageMissingCount       int64  `json:"usage_missing_count"`
 	PartialCount            int64  `json:"partial_count"`
 	UnpricedRequestCount    int64  `json:"unpriced_request_count"`
@@ -56,6 +57,7 @@ type usageDistributionItemResponse struct {
 	RequestCount         int64   `json:"request_count"`
 	TotalTokens          int64   `json:"total_tokens"`
 	EstimatedCostNanoUSD string  `json:"estimated_cost_nano_usd"`
+	EstimatedCostNano    string  `json:"estimated_cost_nano"`
 }
 
 type usageDistributionResponse struct {
@@ -75,6 +77,7 @@ type usageDistributionAggregateResponse struct {
 	RequestCount         int64  `json:"request_count"`
 	TotalTokens          int64  `json:"total_tokens"`
 	EstimatedCostNanoUSD string `json:"estimated_cost_nano_usd"`
+	EstimatedCostNano    string `json:"estimated_cost_nano"`
 }
 
 type usageCollectionHealthResponse struct {
@@ -90,6 +93,8 @@ type usageResponse struct {
 	FromMS           int64                          `json:"from_ms"`
 	ToMS             int64                          `json:"to_ms"`
 	ObservedAtMS     int64                          `json:"observed_at_ms"`
+	Currency         pricing.CurrencyCode           `json:"currency"`
+	OtherCurrencies  []pricing.CurrencyCode         `json:"other_currencies"`
 	Summary          usageAggregateResponse         `json:"summary"`
 	Series           []usageSeriesResponse          `json:"series"`
 	Distributions    usageDistributionViewsResponse `json:"distributions"`
@@ -129,6 +134,12 @@ func (server *Server) handleUsage(c *gin.Context) {
 		query.AccessKeyID = &accessKeyID
 		query.SelfScoped = true
 	}
+	currency, err := server.service.currentCurrency()
+	if err != nil {
+		writeServiceError(c, "usage", err)
+		return
+	}
+	query.Currency = currency.Code
 	report, err := server.service.QueryUsage(c.Request.Context(), query)
 	if err != nil {
 		writeServiceError(c, "usage", err)
@@ -289,11 +300,13 @@ func (service *Service) mapUsageResponse(
 		return usageResponse{}, fmt.Errorf("map usage observed_at_ms: %w", err)
 	}
 	result := usageResponse{
-		Granularity:   granularity,
-		BucketWidthMS: bucketWidthMS,
-		FromMS:        query.FromMS,
-		ToMS:          query.ToMS,
-		ObservedAtMS:  observedAtMS,
+		Granularity:     granularity,
+		BucketWidthMS:   bucketWidthMS,
+		FromMS:          query.FromMS,
+		ToMS:            query.ToMS,
+		ObservedAtMS:    observedAtMS,
+		Currency:        query.Currency,
+		OtherCurrencies: append([]pricing.CurrencyCode{}, report.OtherCurrencies...),
 		CollectionHealth: usageCollectionHealthResponse{
 			Scope:                "current_process",
 			DroppedTotal:         stats.DroppedTotal,
@@ -420,6 +433,7 @@ func mapUsageDistribution(
 			RequestCount:         aggregate.RequestCount,
 			TotalTokens:          aggregate.TotalTokens,
 			EstimatedCostNanoUSD: aggregate.EstimatedCostNanoUSD,
+			EstimatedCostNano:    aggregate.EstimatedCostNano,
 		}
 		switch distribution.Dimension {
 		case requestlog.UsageDistributionDimensionGroup:
@@ -456,6 +470,7 @@ func validateMappedUsageDistribution(
 		items = append(items, usageDistributionAggregateResponse{
 			RequestCount: item.RequestCount, TotalTokens: item.TotalTokens,
 			EstimatedCostNanoUSD: item.EstimatedCostNanoUSD,
+			EstimatedCostNano:    item.EstimatedCostNano,
 		})
 	}
 	if distribution.Other != nil {
@@ -498,13 +513,14 @@ func mapUsageDistributionAggregate(
 ) (usageDistributionAggregateResponse, error) {
 	if source.RequestCount < 0 || source.RequestCount > maxSafeInteger ||
 		source.TotalTokens < 0 || source.TotalTokens > maxSafeInteger ||
-		source.EstimatedCostNanoUSD < 0 {
+		source.EstimatedCostNanoUSD < 0 || source.EstimatedCostNano < 0 {
 		return usageDistributionAggregateResponse{}, fmt.Errorf("map usage distribution: unsafe aggregate")
 	}
 	return usageDistributionAggregateResponse{
 		RequestCount:         source.RequestCount,
 		TotalTokens:          source.TotalTokens,
 		EstimatedCostNanoUSD: strconv.FormatInt(source.EstimatedCostNanoUSD, 10),
+		EstimatedCostNano:    strconv.FormatInt(source.EstimatedCostNano, 10),
 	}, nil
 }
 
@@ -544,7 +560,7 @@ func mapUsageAggregate(source requestlog.UsageAggregate) (usageAggregateResponse
 	if err != nil {
 		return usageAggregateResponse{}, err
 	}
-	if source.EstimatedCostNanoUSD < 0 {
+	if source.EstimatedCostNanoUSD < 0 || source.EstimatedCostNano < 0 {
 		return usageAggregateResponse{}, fmt.Errorf("map usage cost: negative value")
 	}
 	return usageAggregateResponse{
@@ -554,6 +570,7 @@ func mapUsageAggregate(source requestlog.UsageAggregate) (usageAggregateResponse
 		CacheWriteUnknownTokens: source.CacheWriteUnknownTokens,
 		OutputTokens:            source.OutputTokens, TotalTokens: totalTokens,
 		EstimatedCostNanoUSD: strconv.FormatInt(source.EstimatedCostNanoUSD, 10),
+		EstimatedCostNano:    strconv.FormatInt(source.EstimatedCostNano, 10),
 		UsageMissingCount:    source.UsageMissingCount, PartialCount: source.PartialCount,
 		UnpricedRequestCount: source.UnpricedRequestCount,
 		PricingPartialCount:  source.PricingPartialCount,

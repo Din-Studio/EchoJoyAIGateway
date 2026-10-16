@@ -18,6 +18,7 @@ import (
 	"gpt-load/internal/platform/encryption"
 	"gpt-load/internal/platform/epochms"
 	app_errors "gpt-load/internal/platform/errors"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/state"
 	"gpt-load/internal/storage/models"
 )
@@ -57,6 +58,8 @@ type SettingsValuesResponse struct {
 	ModelsDevAutoSyncEnabled  bool                  `json:"models_dev_auto_sync_enabled"`
 	PublicBaseURL             string                `json:"public_base_url"`
 	GatewayName               string                `json:"gateway_name"`
+	Currency                  pricing.CurrencyCode  `json:"currency"`
+	ExchangeRate              *string               `json:"exchange_rate"`
 	ProxyConfig               outboundproxy.View    `json:"proxy_config"`
 }
 
@@ -152,19 +155,38 @@ func (s *Service) UpdateSettings(
 	}
 
 	previousAutoSyncEnabled := false
+	var currencyBefore, currencyAfter pricing.Currency
+	convertedRules := 0
 	snapshot, err := s.writeConfig(ctx, func(tx *gorm.DB) error {
 		previousAutoSyncEnabled = s.modelsDevAutoSyncEnabled()
+		var err error
+		if currencyBefore, err = loadSettingsCurrency(tx); err != nil {
+			return err
+		}
 		if raw, exists := request.Settings[automodel.SettingKey]; exists {
-			update, err := s.normalizeAutoModelUpdate(tx, raw)
+			update, err := s.normalizeAutoModelUpdate(tx, raw, currencyBefore)
 			if err != nil {
 				return err
 			}
 			updates = append(updates, update)
 		}
-		return s.applySettingUpdates(tx, updates)
+		if err := s.applySettingUpdates(tx, updates); err != nil {
+			return err
+		}
+		if currencyAfter, err = loadSettingsCurrency(tx); err != nil {
+			return err
+		}
+		if currencyAfter.Code == currencyBefore.Code {
+			return nil
+		}
+		convertedRules, err = convertCostLimitRulesCurrency(tx, currencyBefore, currencyAfter)
+		return err
 	}, nil)
 	if err != nil {
 		return SettingsResponse{}, err
+	}
+	if currencyAfter.Code != currencyBefore.Code {
+		logCurrencySwitch(currencyBefore, currencyAfter, convertedRules)
 	}
 	s.requestCatalogSyncOnEnable(
 		settingRequestContains(request, state.SettingModelsDevAutoSyncEnabled),
@@ -345,11 +367,15 @@ func mapSettingsResponse(
 		modelsDevAutoSyncEnabled = *modelsDevAutoSyncOverride
 		readOnly = append(readOnly, state.SettingModelsDevAutoSyncEnabled)
 	}
+	autoModel, err := newAutoModelSettingsView(snapshot.AutoModels, settings.Currency)
+	if err != nil {
+		return SettingsResponse{}, app_errors.ErrInternalServer
+	}
 	return SettingsResponse{
 		AutoModelTemplate: automodel.Template(),
 		Revision:          snapshot.Revision,
 		Values: SettingsValuesResponse{
-			AutoModel:         newAutoModelSettingsView(snapshot.AutoModels),
+			AutoModel:         autoModel,
 			FirstByteTimeout:  durationSeconds(settings.FirstByteTimeout),
 			RequestTimeout:    durationSeconds(settings.RequestTimeout),
 			StreamIdleTimeout: durationSeconds(settings.StreamIdleTimeout),
@@ -382,11 +408,22 @@ func mapSettingsResponse(
 			ModelsDevAutoSyncEnabled:  modelsDevAutoSyncEnabled,
 			PublicBaseURL:             settings.PublicBaseURL,
 			GatewayName:               settings.GatewayName,
+			Currency:                  settings.Currency.Code,
+			ExchangeRate:              settingsExchangeRate(settings.Currency),
 			ProxyConfig:               proxyView,
 		},
 		Overrides: overrides,
 		ReadOnly:  readOnly,
 	}, nil
+}
+
+// settingsExchangeRate is null for USD, whose rate is fixed at 1 and not configurable.
+func settingsExchangeRate(currency pricing.Currency) *string {
+	if currency.Code == pricing.CurrencyUSD {
+		return nil
+	}
+	rate := pricing.FormatExchangeRate(currency.RateMicros)
+	return &rate
 }
 
 func durationSeconds(value time.Duration) int64 {

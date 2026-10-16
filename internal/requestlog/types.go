@@ -105,12 +105,14 @@ type ListQuery struct {
 	InputTokensMax      *int64
 	OutputTokensMin     *int64
 	OutputTokensMax     *int64
-	CostMinNanoUSD      *int64
-	CostMaxNanoUSD      *int64
-	Limit               int
-	Cursor              *Cursor
-	Page                int
-	PageSize            int
+	// CostMinNano/CostMaxNano 以 CostCurrency 计，只匹配以该币种结算的请求。
+	CostMinNano  *int64
+	CostMaxNano  *int64
+	CostCurrency pricing.CurrencyCode
+	Limit        int
+	Cursor       *Cursor
+	Page         int
+	PageSize     int
 }
 
 type AccessKeyRef struct {
@@ -160,6 +162,10 @@ type Record struct {
 	CacheWriteUnknownTokens int64
 	OutputTokens            int64
 	EstimatedCostNanoUSD    int64
+	// Settlement 是结算时冻结的币种与汇率；EstimatedCostNano/DecisionCostNano 以它计。
+	Settlement        pricing.Currency
+	EstimatedCostNano int64
+	DecisionCostNano  int64
 }
 
 type Page struct {
@@ -213,6 +219,8 @@ type UsageQuery struct {
 	ChannelID     channel.ID
 	CredentialID  *uint
 	UpstreamModel string
+	// Currency 选出本币合计统计的币种；其他币种的行只计入美元合计。
+	Currency pricing.CurrencyCode
 }
 
 type UsageAggregate struct {
@@ -226,10 +234,12 @@ type UsageAggregate struct {
 	CacheWriteUnknownTokens int64
 	OutputTokens            int64
 	EstimatedCostNanoUSD    int64
-	UsageMissingCount       int64
-	PartialCount            int64
-	UnpricedRequestCount    int64
-	PricingPartialCount     int64
+	// EstimatedCostNano 只累计以 UsageQuery.Currency 结算的费用。
+	EstimatedCostNano    int64
+	UsageMissingCount    int64
+	PartialCount         int64
+	UnpricedRequestCount int64
+	PricingPartialCount  int64
 }
 
 type UsageSeriesPoint struct {
@@ -249,6 +259,7 @@ type UsageDistributionAggregate struct {
 	RequestCount         int64
 	TotalTokens          int64
 	EstimatedCostNanoUSD int64
+	EstimatedCostNano    int64
 }
 
 type UsageDistribution struct {
@@ -262,6 +273,8 @@ type UsageReport struct {
 	Summary       UsageAggregate
 	Series        []UsageSeriesPoint
 	Distributions UsageDistributions
+	// OtherCurrencies 是范围内还有费用、但不是 UsageQuery.Currency 的币种。
+	OtherCurrencies []pricing.CurrencyCode
 }
 
 type UsageDistributions struct {

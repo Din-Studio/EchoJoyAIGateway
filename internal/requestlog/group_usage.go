@@ -7,6 +7,7 @@ import (
 	"gorm.io/gorm"
 
 	"gpt-load/internal/platform/epochms"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/storage/dbtx"
 )
 
@@ -19,11 +20,16 @@ type GroupUsageReport struct {
 }
 
 // QueryGroupUsage 只汇总当前页的分组，复用精确窗口和最终请求归属，不计算趋势或排行榜。
-func (service *Service) QueryGroupUsage(ctx context.Context, groupIDs []uint, fromMS, toMS int64) (GroupUsageReport, error) {
+func (service *Service) QueryGroupUsage(
+	ctx context.Context,
+	groupIDs []uint,
+	fromMS, toMS int64,
+	currency pricing.CurrencyCode,
+) (GroupUsageReport, error) {
 	if service == nil || service.db == nil {
 		return GroupUsageReport{}, fmt.Errorf("query group usage: database is nil")
 	}
-	input := UsageQuery{FromMS: fromMS, ToMS: toMS}
+	input := UsageQuery{FromMS: fromMS, ToMS: toMS, Currency: currency}
 	if _, err := validateUsageQuery(input); err != nil {
 		return GroupUsageReport{}, err
 	}
@@ -53,7 +59,7 @@ func (service *Service) QueryGroupUsage(ctx context.Context, groupIDs []uint, fr
 			GroupID uint
 			UsageAggregate
 		}
-		if err := scope.Select("group_id, " + usageAggregateSelect).Group("group_id").Scan(&rows).Error; err != nil {
+		if err := scope.Select("group_id, "+usageAggregateSelect, currency).Group("group_id").Scan(&rows).Error; err != nil {
 			return err
 		}
 		for _, row := range rows {

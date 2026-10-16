@@ -206,6 +206,9 @@ func Compile(input CompileInput) (*ConfigSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateCostLimitCurrency(input.AccessKeys, runtimeSettings.Currency.Code); err != nil {
+		return nil, err
+	}
 	autoConfig := automodel.DefaultConfig()
 	if input.AutoModel != nil {
 		autoConfig = *input.AutoModel
@@ -586,6 +589,21 @@ func validateCompileInput(input CompileInput) error {
 	}
 	if err := accessquota.ValidateDefinitions(quotaDefinitions); err != nil {
 		return fmt.Errorf("validate access key cost limit rules: %w", err)
+	}
+	return nil
+}
+
+// validateCostLimitCurrency 要求限额规则与系统货币一致：切换币种时规则会在同一事务内换算。
+func validateCostLimitCurrency(accessKeys []AccessKeyConfig, currency pricing.CurrencyCode) error {
+	for _, accessKey := range accessKeys {
+		for _, rule := range accessKey.CostLimitRules {
+			if rule.Currency != currency {
+				return fmt.Errorf(
+					"access key %d cost limit rule %d is in %s, want system currency %s",
+					accessKey.ID, rule.ID, rule.Currency, currency,
+				)
+			}
+		}
 	}
 	return nil
 }

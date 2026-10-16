@@ -18,8 +18,10 @@ export interface PriceSchedule {
   prices: PriceSlots
   context_tiers: PriceTier[]
 }
+// 价格以美元保存；接口按当前汇率换算为 currency 后返回，提交时也以 currency 计。
 export interface ModelPrice extends PriceSchedule {
   id: number
+  currency: string
   model: string
   channel: { id: string; name: string; icon: string; mark: string }
   mode_schedules: Record<string, PriceSchedule>
@@ -105,6 +107,7 @@ export function readModelPrice(value: unknown): ModelPrice {
   return {
     ...schedule(row),
     id: integer(row.id, 1),
+    currency: text(row.currency),
     model: text(row.model_id),
     channel: {
       id: text(row.channel_id),

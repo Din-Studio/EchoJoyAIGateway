@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"gpt-load/internal/pricing"
 )
 
 const (
@@ -26,11 +28,14 @@ const (
 	KindPeriodic Kind = "periodic"
 )
 
+// Rule limits estimated cost in its own currency; LimitNano and every used
+// amount are billionths of that currency.
 type Rule struct {
 	ID            uint
 	Revision      uint64
 	Kind          Kind
-	LimitNanoUSD  int64
+	Currency      pricing.CurrencyCode
+	LimitNano     int64
 	PeriodSeconds int64
 }
 
@@ -38,7 +43,7 @@ type RestoredState struct {
 	AccessKeyID       uint
 	RuleID            uint
 	RuleRevision      uint64
-	UsedNanoUSD       int64
+	UsedNano          int64
 	WindowStartedAtMS *int64
 	WindowEndsAtMS    *int64
 	WindowGeneration  uint64
@@ -66,8 +71,8 @@ const (
 
 type RuleView struct {
 	Rule
-	UsedNanoUSD       int64
-	RemainingNanoUSD  int64
+	UsedNano          int64
+	RemainingNano     int64
 	Status            RuleStatus
 	WindowStartedAtMS *int64
 	WindowEndsAtMS    *int64
@@ -106,7 +111,7 @@ type accessKeyEntry struct {
 
 type runtimeRule struct {
 	definition        Rule
-	usedNanoUSD       int64
+	usedNano          int64
 	windowStartedAtMS *int64
 	windowEndsAtMS    *int64
 	windowGeneration  uint64
@@ -166,7 +171,7 @@ func validateRules(accessKeyID uint, rules []Rule, globalRuleIDs map[uint]uint) 
 	periodicCount := 0
 	periods := make(map[int64]struct{})
 	for _, rule := range rules {
-		if rule.ID == 0 || rule.Revision == 0 || rule.LimitNanoUSD <= 0 {
+		if rule.ID == 0 || rule.Revision == 0 || rule.LimitNano <= 0 {
 			return fmt.Errorf("reconcile access quota rule for key %d: invalid identity, revision, or limit", accessKeyID)
 		}
 		if owner, exists := globalRuleIDs[rule.ID]; exists {
@@ -221,7 +226,7 @@ func newAccessKeyEntry(rules []Rule) *accessKeyEntry {
 
 func validateRestoredState(state RestoredState) error {
 	if state.AccessKeyID == 0 || state.RuleID == 0 || state.RuleRevision == 0 ||
-		state.UsedNanoUSD < 0 || state.SnapshotVersion == 0 {
+		state.UsedNano < 0 || state.SnapshotVersion == 0 {
 		return fmt.Errorf("restore access quota rule %d: invalid persisted state", state.RuleID)
 	}
 	if (state.WindowStartedAtMS == nil) != (state.WindowEndsAtMS == nil) {
@@ -240,7 +245,7 @@ func applyRestoredState(rule *runtimeRule, state RestoredState) error {
 			return fmt.Errorf("restore total access quota rule %d: window state is not allowed", rule.definition.ID)
 		}
 	} else if state.WindowStartedAtMS == nil {
-		if state.UsedNanoUSD != 0 || state.WindowGeneration != 0 {
+		if state.UsedNano != 0 || state.WindowGeneration != 0 {
 			return fmt.Errorf("restore periodic access quota rule %d: inactive state has usage or generation", rule.definition.ID)
 		}
 	} else {
@@ -252,7 +257,7 @@ func applyRestoredState(rule *runtimeRule, state RestoredState) error {
 			return fmt.Errorf("restore periodic access quota rule %d: window duration does not match period", rule.definition.ID)
 		}
 	}
-	rule.usedNanoUSD = state.UsedNanoUSD
+	rule.usedNano = state.UsedNano
 	rule.windowStartedAtMS = cloneInt64(state.WindowStartedAtMS)
 	rule.windowEndsAtMS = cloneInt64(state.WindowEndsAtMS)
 	rule.windowGeneration = state.WindowGeneration
@@ -268,7 +273,7 @@ func entryFromStates(rules []Rule, states map[uint]RestoredState) *accessKeyEntr
 		if !exists {
 			continue
 		}
-		rule.usedNanoUSD = state.UsedNanoUSD
+		rule.usedNano = state.UsedNano
 		rule.windowStartedAtMS = cloneInt64(state.WindowStartedAtMS)
 		rule.windowEndsAtMS = cloneInt64(state.WindowEndsAtMS)
 		rule.windowGeneration = state.WindowGeneration
@@ -323,18 +328,18 @@ func allowedDecision() Decision {
 
 func ruleViewOf(rule *runtimeRule, nowMS int64) RuleView {
 	view := RuleView{
-		Rule: rule.definition, RemainingNanoUSD: rule.definition.LimitNanoUSD,
+		Rule: rule.definition, RemainingNano: rule.definition.LimitNano,
 		Status: RuleStatusAvailable, WindowGeneration: rule.windowGeneration,
 	}
 	if rule.definition.Kind == KindPeriodic && periodicInactive(rule, nowMS) {
 		view.Status = RuleStatusInactive
 		return view
 	}
-	view.UsedNanoUSD = rule.usedNanoUSD
-	view.RemainingNanoUSD = remaining(rule.definition.LimitNanoUSD, rule.usedNanoUSD)
+	view.UsedNano = rule.usedNano
+	view.RemainingNano = remaining(rule.definition.LimitNano, rule.usedNano)
 	view.WindowStartedAtMS = cloneInt64(rule.windowStartedAtMS)
 	view.WindowEndsAtMS = cloneInt64(rule.windowEndsAtMS)
-	if rule.usedNanoUSD >= rule.definition.LimitNanoUSD {
+	if rule.usedNano >= rule.definition.LimitNano {
 		view.Status = RuleStatusExhausted
 	}
 	return view

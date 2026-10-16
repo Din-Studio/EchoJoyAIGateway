@@ -15,7 +15,7 @@ export const zhCN = {
   timeout: '判断超时（秒，1–60）',
   pricing: '判断费用',
   pricingHint:
-    '单价单位为美元 / 百万 tokens。2026-09-18 核对：两种渠道输入 0.042，输出 0。按实际用量估算，访问密钥倍率生效，不使用回答分组倍率；回答费用另计。更换决策模型时请核对价格。',
+    '单价单位为 {currency} / 百万 tokens。2026-09-18 核对：两种渠道美元报价为输入 0.042、输出 0，切换渠道时按系统汇率换算后填入。按实际用量估算，访问密钥倍率生效，不使用回答分组倍率；回答费用另计。更换决策模型时请核对价格。',
   inputPrice: '输入单价',
   outputPrice: '输出单价',
   entries: '自动模型与预设',
@@ -106,7 +106,7 @@ export const enUS = {
   timeout: 'Decision timeout (seconds, 1–60)',
   pricing: 'Decision pricing',
   pricingHint:
-    'USD per million tokens. Verified 2026-09-18: both providers charge 0.042 input, 0 output. Estimates use reported usage and the access-key multiplier, without the answer Group multiplier. Answer costs are separate. Check prices when changing the decision model.',
+    '{currency} per million tokens. Verified 2026-09-18: both providers charge USD 0.042 input, 0 output; switching providers fills these in at the system exchange rate. Estimates use reported usage and the access-key multiplier, without the answer Group multiplier. Answer costs are separate. Check prices when changing the decision model.',
   inputPrice: 'Input price',
   outputPrice: 'Output price',
   entries: 'Automatic models and presets',
@@ -199,7 +199,7 @@ export const jaJP = {
   timeout: '判定タイムアウト（秒、1–60）',
   pricing: '判定料金',
   pricingHint:
-    '単位は百万 tokens あたりの米ドル。2026-09-18 確認時は両接続先とも入力 0.042、出力 0。報告された使用量とアクセスキー倍率で見積もり、回答グループ倍率は適用しません。回答料金は別途計算します。判定モデル変更時は料金を確認してください。',
+    '単位は百万 tokens あたりの {currency}。2026-09-18 確認時は両接続先とも米ドルで入力 0.042、出力 0 で、接続先を切り替えるとシステムの為替レートで換算して入力します。報告された使用量とアクセスキー倍率で見積もり、回答グループ倍率は適用しません。回答料金は別途計算します。判定モデル変更時は料金を確認してください。',
   inputPrice: '入力単価',
   outputPrice: '出力単価',
   entries: '自動モデルとプリセット',

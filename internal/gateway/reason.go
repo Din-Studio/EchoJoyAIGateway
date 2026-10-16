@@ -89,8 +89,9 @@ var (
 type accessKeyCostLimitRuleError struct {
 	ID             uint             `json:"id"`
 	Kind           accessquota.Kind `json:"kind"`
-	LimitUSD       string           `json:"limit_usd"`
-	UsedUSD        string           `json:"used_usd"`
+	Currency       string           `json:"currency"`
+	Limit          string           `json:"limit"`
+	Used           string           `json:"used"`
 	PeriodSeconds  int64            `json:"period_seconds,omitempty"`
 	WindowEndsAtMS *int64           `json:"window_ends_at_ms,omitempty"`
 }
@@ -121,8 +122,9 @@ func (handler *Handler) writeAccessQuotaReason(
 	for _, rule := range decision.BlockingRules {
 		blocking = append(blocking, accessKeyCostLimitRuleError{
 			ID: rule.ID, Kind: rule.Kind,
-			LimitUSD:       pricing.FormatUSD(pricing.NanoUSD(rule.LimitNanoUSD)),
-			UsedUSD:        pricing.FormatUSD(pricing.NanoUSD(rule.UsedNanoUSD)),
+			Currency:       string(rule.Currency),
+			Limit:          pricing.FormatAmount(rule.LimitNano),
+			Used:           pricing.FormatAmount(rule.UsedNano),
 			PeriodSeconds:  rule.PeriodSeconds,
 			WindowEndsAtMS: cloneReasonInt64(rule.WindowEndsAtMS),
 		})

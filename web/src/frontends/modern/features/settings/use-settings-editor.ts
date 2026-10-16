@@ -10,6 +10,7 @@ import {
   type SettingKey,
   type SettingsData,
 } from '@modern/api/settings'
+import { currencyKey } from '@modern/api/currency'
 import { useMessages, useMessageSource } from '@modern/app/messages'
 import { useLoadingActivity } from '@modern/components/ui/loading'
 import { useApiClient } from '@shared/http/client-context'
@@ -130,8 +131,16 @@ export function useSettingsEditor() {
       // 保存期间可能发生页面可见性刷新；写入确认结果前先取消旧读取。
       await cache.cancelQueries({ queryKey: settingsKey })
       if (controller.signal.aborted) return
+      const currencyChanged = 'currency' in patch || 'exchange_rate' in patch
       cache.setQueryData(settingsKey, data)
       load(data)
+      if (currencyChanged)
+        // 金额、价格与限额都按系统货币返回；切换后让其他页面下次进入时重新读取。
+        await cache.invalidateQueries({
+          predicate: (query) => query.queryKey[0] === 'modern' && query.queryKey[1] !== 'settings',
+          refetchType: 'none',
+        })
+      await cache.invalidateQueries({ queryKey: currencyKey })
       await Promise.all([
         cache.invalidateQueries({ queryKey: ['modern', 'groups'], refetchType: 'none' }),
         cache.invalidateQueries({ queryKey: ['modern', 'group-settings'], refetchType: 'none' }),

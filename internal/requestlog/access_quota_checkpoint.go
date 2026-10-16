@@ -58,7 +58,7 @@ func persistAccessQuotaSnapshot(
 	snapshot accessquota.RestoredState,
 ) (checkpointPersistOutcome, error) {
 	if snapshot.AccessKeyID == 0 || snapshot.RuleID == 0 || snapshot.RuleRevision == 0 ||
-		snapshot.SnapshotVersion == 0 || snapshot.UsedNanoUSD < 0 ||
+		snapshot.SnapshotVersion == 0 || snapshot.UsedNano < 0 ||
 		(snapshot.WindowStartedAtMS == nil) != (snapshot.WindowEndsAtMS == nil) {
 		return "", fmt.Errorf("persist access key cost limit rule %d: invalid snapshot", snapshot.RuleID)
 	}
@@ -70,7 +70,7 @@ func persistAccessQuotaSnapshot(
 			snapshot.SnapshotVersion,
 		).
 		Updates(map[string]any{
-			"used_nano_usd":        snapshot.UsedNanoUSD,
+			"used_nano":            snapshot.UsedNano,
 			"window_started_at_ms": snapshot.WindowStartedAtMS,
 			"window_ends_at_ms":    snapshot.WindowEndsAtMS,
 			"window_generation":    snapshot.WindowGeneration,
@@ -156,7 +156,7 @@ func (reader AccessQuotaStateReader) ReadAccessQuotaStates(
 	for _, row := range rows {
 		states = append(states, accessquota.RestoredState{
 			AccessKeyID: row.AccessKeyID, RuleID: row.RuleID,
-			RuleRevision: row.RuleRevision, UsedNanoUSD: row.UsedNanoUSD,
+			RuleRevision: row.RuleRevision, UsedNano: row.UsedNano,
 			WindowStartedAtMS: row.WindowStartedAtMS, WindowEndsAtMS: row.WindowEndsAtMS,
 			WindowGeneration: row.WindowGeneration, SnapshotVersion: row.SnapshotVersion,
 		})

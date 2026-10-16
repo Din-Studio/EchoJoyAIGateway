@@ -8,6 +8,7 @@ import {
   type SettingsData,
   type SettingsPatch,
   type RouteStrategy,
+  type SystemCurrencyCode,
 } from '@modern/api/settings'
 import type { HeaderRules } from '@modern/api/group-detail'
 import { validProxyURL } from '@modern/app/proxy'
@@ -41,6 +42,8 @@ export type SettingsDraft = Record<SettingNumber, string> &
     route_strategy: RouteStrategy
     public_base_url: string
     gateway_name: string
+    currency: SystemCurrencyCode
+    exchange_rate: string
     header_rules: HeaderRow[]
     response_header_rules: HeaderRow[]
     cors: CORSDraft
@@ -67,6 +70,11 @@ function headerRows(value: HeaderRules): HeaderRow[] {
     })),
   ]
 }
+/* 与后端汇率校验一致：大于 0，最多 6 位小数。 */
+const exchangeRatePattern = /^(0|[1-9]\d*)(\.\d{1,6})?$/
+export function validExchangeRate(value: string): boolean {
+  return exchangeRatePattern.test(value) && !/^0(\.0+)?$/.test(value)
+}
 /* 与后端 gateway_name 校验一致：名称会直接用作 TOML 键和环境变量前缀。 */
 const gatewayNamePattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 export function createSettingsDraft(data: SettingsData): SettingsDraft {
@@ -76,6 +84,7 @@ export function createSettingsDraft(data: SettingsData): SettingsDraft {
     ...(Object.fromEntries(
       Object.keys(settingNumbers).map((key) => [key, String(values[key as SettingNumber])]),
     ) as Record<SettingNumber, string>),
+    exchange_rate: values.exchange_rate ?? '',
     header_rules: headerRows(values.header_rules),
     response_header_rules: headerRows(values.response_header_rules),
     proxy_config: { mode: values.proxy_config.configured_mode, url: '' },
@@ -261,6 +270,9 @@ export function settingsErrors(
       if (value && !validBaseURL(value)) errors.public_base_url = 'publicBaseURL'
     } else if (key === 'gateway_name') {
       if (!gatewayNamePattern.test(draft.gateway_name.trim())) errors.gateway_name = 'gatewayName'
+    } else if (key === 'currency' || key === 'exchange_rate') {
+      if (draft.currency !== 'USD' && !validExchangeRate(draft.exchange_rate.trim()))
+        errors.exchange_rate = 'exchangeRate'
     } else if (key === 'header_rules' || key === 'response_header_rules') {
       Object.assign(errors, headerErrors(draft[key], key))
     } else if (key === 'proxy_config') {
@@ -305,6 +317,13 @@ export function buildSettingsPatch(
   const patch: Record<string, unknown> = {}
   for (const key of changed) {
     if (base.readOnly.includes(key)) continue
+    if (key === 'currency' || key === 'exchange_rate') {
+      // 两项由后端组合校验，任一变化都成对提交；USD 删除两行即恢复默认。
+      const usd = resets.has('currency') || draft.currency === 'USD'
+      patch.currency = usd ? null : draft.currency
+      patch.exchange_rate = usd ? null : draft.exchange_rate.trim()
+      continue
+    }
     if (resets.has(key)) {
       patch[key] = null
       continue

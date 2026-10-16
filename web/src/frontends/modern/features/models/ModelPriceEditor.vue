@@ -127,7 +127,7 @@ async function save(confirmed = false): Promise<void> {
         {{ t('modelManager.priceImpact', { models: n(modelCount), groups: n(groupCount) }) }}
       </p>
       <div class="modern-model-price-editor-hint">
-        <span>{{ t('modelManager.unit') }}</span>
+        <span>{{ t('modelManager.unit', { currency: price.currency }) }}</span>
         <AppTooltip :label="t('modelManager.emptySlotsHint')">
           <span tabindex="0" class="modern-model-price-help"
             ><AppIcon :icon="Info" size="sm"

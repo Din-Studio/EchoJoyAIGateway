@@ -30,7 +30,7 @@ func TestHandlerBlocksAllDataPlaneRoutesUntilPeriodicQuotaRecovers(t *testing.T)
 		t, forwarder, &recordingAccessKeyRPMLimiter{}, &recordingRequestLogSink{}, "sk-first",
 	)
 	if _, err := manager.Publish(gatewayAccessQuotaCompileInput(handler, []accessquota.Rule{
-		{ID: 101, Revision: 1, Kind: accessquota.KindPeriodic, LimitNanoUSD: 100, PeriodSeconds: 300},
+		{ID: 101, Revision: 1, Kind: accessquota.KindPeriodic, Currency: "USD", LimitNano: 100, PeriodSeconds: 300},
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -84,8 +84,8 @@ func TestHandlerTotalQuotaBlockIsNotRetryableAndReturnsEveryBlocker(t *testing.T
 		t, &scriptedForwarder{}, &recordingAccessKeyRPMLimiter{}, &recordingRequestLogSink{},
 	)
 	if _, err := manager.Publish(gatewayAccessQuotaCompileInput(handler, []accessquota.Rule{
-		{ID: 201, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 100},
-		{ID: 202, Revision: 1, Kind: accessquota.KindPeriodic, LimitNanoUSD: 20, PeriodSeconds: 300},
+		{ID: 201, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 100},
+		{ID: 202, Revision: 1, Kind: accessquota.KindPeriodic, Currency: "USD", LimitNano: 20, PeriodSeconds: 300},
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,10 @@ func TestHandlerTotalQuotaBlockIsNotRetryableAndReturnsEveryBlocker(t *testing.T
 	var envelope struct {
 		Data struct {
 			BlockingRules []struct {
-				ID uint `json:"id"`
+				ID       uint   `json:"id"`
+				Currency string `json:"currency"`
+				Limit    string `json:"limit"`
+				Used     string `json:"used"`
 			} `json:"blocking_rules"`
 		} `json:"data"`
 	}
@@ -116,14 +119,16 @@ func TestHandlerTotalQuotaBlockIsNotRetryableAndReturnsEveryBlocker(t *testing.T
 		t.Fatal(err)
 	}
 	if len(envelope.Data.BlockingRules) != 2 || envelope.Data.BlockingRules[0].ID != 201 ||
-		envelope.Data.BlockingRules[1].ID != 202 {
+		envelope.Data.BlockingRules[1].ID != 202 ||
+		envelope.Data.BlockingRules[0].Currency != "USD" ||
+		envelope.Data.BlockingRules[0].Limit != "0.0000001" || envelope.Data.BlockingRules[0].Used != "0.0000001" {
 		t.Fatalf("blocking rules = %#v", envelope.Data.BlockingRules)
 	}
 }
 
 func TestHandlerStartsPeriodicWindowOnlyAtFirstGatewayExecutionAttempt(t *testing.T) {
 	rules := []accessquota.Rule{
-		{ID: 102, Revision: 1, Kind: accessquota.KindPeriodic, LimitNanoUSD: 100, PeriodSeconds: 300},
+		{ID: 102, Revision: 1, Kind: accessquota.KindPeriodic, Currency: "USD", LimitNano: 100, PeriodSeconds: 300},
 	}
 	now := time.Unix(2_000, 0)
 	_, client := clustertest.NewClient(t)
@@ -178,7 +183,7 @@ func TestHandlerAccountsFinalEstimateWhenRequestIDGenerationFails(t *testing.T) 
 		t, forwarder, &recordingAccessKeyRPMLimiter{}, sink, "sk-first",
 	)
 	input := gatewayAccessQuotaCompileInput(handler, []accessquota.Rule{
-		{ID: 103, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 10_000_000_000},
+		{ID: 103, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 10_000_000_000},
 	})
 	setGatewayPriceMultipliers(t, &input, "0.8", "1.5")
 	if _, err := manager.Publish(input); err != nil {
@@ -198,7 +203,7 @@ func TestHandlerAccountsFinalEstimateWhenRequestIDGenerationFails(t *testing.T) 
 		t.Fatalf("response = %d %s", response.Code, response.Body.String())
 	}
 	view, err := quota.View(t.Context(), manager.Current(), 1, time.Unix(3_001, 0))
-	if err != nil || len(view.Rules) != 1 || view.Rules[0].UsedNanoUSD != 2_400_000_000 {
+	if err != nil || len(view.Rules) != 1 || view.Rules[0].UsedNano != 2_400_000_000 {
 		t.Fatalf("quota view = %#v", view)
 	}
 	if events := sink.snapshot(); len(events) != 0 {
@@ -226,7 +231,7 @@ func TestHandlerRejectsStaleSnapshotBeforeQuotaCheck(t *testing.T) {
 		t, forwarder, &recordingAccessKeyRPMLimiter{}, &recordingRequestLogSink{}, "sk-first",
 	)
 	oldRules := []accessquota.Rule{{
-		ID: 301, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 100,
+		ID: 301, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 100,
 	}}
 	if _, err := manager.Publish(gatewayAccessQuotaCompileInput(handler, oldRules)); err != nil {
 		t.Fatal(err)
@@ -236,7 +241,7 @@ func TestHandlerRejectsStaleSnapshotBeforeQuotaCheck(t *testing.T) {
 
 	context, response := prepareAuthenticatedGatewayRequest(t, handler, http.MethodGet, "/v1/models", nil)
 	if _, err := manager.Publish(gatewayAccessQuotaCompileInput(handler, []accessquota.Rule{{
-		ID: 301, Revision: 2, Kind: accessquota.KindTotal, LimitNanoUSD: 200,
+		ID: 301, Revision: 2, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 200,
 	}})); err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +271,7 @@ func TestHandlerRejectsSnapshotChangedBetweenQuotaCheckAndAdmit(t *testing.T) {
 		t, forwarder, &recordingAccessKeyRPMLimiter{}, &recordingRequestLogSink{}, "sk-first",
 	)
 	oldRules := []accessquota.Rule{{
-		ID: 302, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 100,
+		ID: 302, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 100,
 	}}
 	if _, err := manager.Publish(gatewayAccessQuotaCompileInput(handler, oldRules)); err != nil {
 		t.Fatal(err)
@@ -290,7 +295,7 @@ func TestHandlerRejectsSnapshotChangedBetweenQuotaCheckAndAdmit(t *testing.T) {
 	receiveTestSignal(t, body.started, "quota request body read")
 
 	if _, err := manager.Publish(gatewayAccessQuotaCompileInput(handler, []accessquota.Rule{{
-		ID: 302, Revision: 2, Kind: accessquota.KindTotal, LimitNanoUSD: 200,
+		ID: 302, Revision: 2, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 200,
 	}})); err != nil {
 		t.Fatal(err)
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"gpt-load/internal/platform/config"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/requestlog"
 	"gpt-load/internal/storage/models"
 )
@@ -31,7 +32,7 @@ func TestAccessKeyDistributionCollectionMatchesUsageAndSortsBeforePagination(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	window := requestlog.UsageQuery{
+	window := requestlog.UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS: time.Date(2026, 8, 31, 18, 0, 0, 0, time.UTC).UnixMilli(),
 		ToMS:   time.Date(2026, 9, 7, 18, 0, 0, 0, time.UTC).UnixMilli(),
 	}

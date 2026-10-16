@@ -31,6 +31,7 @@ type ModelPriceDTO struct {
 	ChannelMark         string                                 `json:"channel_mark"`
 	ChannelIcon         string                                 `json:"channel_icon"`
 	ModelID             string                                 `json:"model_id"`
+	Currency            pricing.CurrencyCode                   `json:"currency"`
 	Prices              PriceSlotsDTO                          `json:"prices"`
 	ModeSchedules       map[pricing.Mode]ModelPriceScheduleDTO `json:"mode_schedules"`
 	PricingStatus       PricingStatus                          `json:"pricing_status"`

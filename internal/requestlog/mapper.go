@@ -123,10 +123,19 @@ func mapEvent(
 		}
 	}
 
+	if !event.Currency.Valid() {
+		return models.RequestLog{}, fmt.Errorf("invalid settlement currency %q", event.Currency.Code)
+	}
+	settledCost := event.Currency.Settle(pricingObservation.EstimatedCostNanoUSD)
+	settledDecisionCost := event.Currency.Settle(decisionCost)
+
 	return models.RequestLog{
 		AutoDecision:                autoJSON,
 		DecisionModel:               decisionModel,
 		DecisionCostNanoUSD:         decisionCost,
+		DecisionCostNano:            settledDecisionCost,
+		Currency:                    string(event.Currency.Code),
+		ExchangeRateMicros:          event.Currency.RateMicros,
 		DecisionPricingCompleteness: decisionCompleteness,
 		ID:                          event.RequestID,
 		CompletedAtMS:               completedAtMS,
@@ -160,6 +169,7 @@ func mapEvent(
 		CacheWrite1HTokens:          result.Tokens.CacheWrite1H,
 		CacheWriteUnknownTokens:     result.Tokens.CacheWriteUnknown,
 		EstimatedCostNanoUSD:        pricingObservation.EstimatedCostNanoUSD,
+		EstimatedCostNano:           settledCost,
 		UsageState:                  string(result.State),
 		CostState:                   pricingObservation.CostState,
 		PricingCompleteness:         pricingObservation.PricingCompleteness,

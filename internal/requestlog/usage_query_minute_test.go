@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"gpt-load/internal/channel"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/storage/models"
 )
 
@@ -45,7 +46,7 @@ func TestQueryUsageMinuteReadsRollingLogsAndClampsBuckets(t *testing.T) {
 		t.Fatalf("series = %#v, want sparse five-minute buckets clipped to rolling range", report.Series)
 	}
 	assertMinuteUsageReportTotals(t, report)
-	hourQuery := UsageQuery{
+	hourQuery := UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS:      start.Truncate(time.Hour).UnixMilli(),
 		ToMS:        start.Truncate(time.Hour).Add(24 * time.Hour).UnixMilli(),
 		Granularity: UsageGranularityHour,
@@ -314,7 +315,7 @@ func TestQueryUsageMinuteRejectsTokenAndCostOverflow(t *testing.T) {
 }
 
 func minuteUsageQuery(start time.Time) UsageQuery {
-	return UsageQuery{FromMS: start.UnixMilli(), ToMS: start.Add(time.Hour).UnixMilli(), Granularity: UsageGranularityMinute}
+	return UsageQuery{Currency: pricing.CurrencyUSD, FromMS: start.UnixMilli(), ToMS: start.Add(time.Hour).UnixMilli(), Granularity: UsageGranularityMinute}
 }
 
 func assertMinuteUsageReportTotals(t *testing.T, report UsageReport) {

@@ -1,6 +1,6 @@
 import { dateFormatter } from '@modern/components/ui/intl-formatters'
 import type { AccessKey } from '@modern/api/access-keys'
-import { formatNanoUSD } from '@modern/components/ui/format'
+import { formatMoneyNano } from '@modern/components/ui/format'
 import type { SemanticTone } from '@modern/components/ui'
 export function accessState(row: AccessKey & { expired?: boolean }): {
   key: string
@@ -21,10 +21,11 @@ export function accessTime(value: number | null | undefined, locale: string, tim
     ...(time ? { hour: '2-digit', minute: '2-digit' } : {}),
   }).format(value)
 }
-export function accessNanoUSD(value: string): bigint {
+// 十进制金额字符串转换为 1e-9 单位整数。
+export function accessNano(value: string): bigint {
   const [whole = '0', fraction = ''] = value.split('.')
   return BigInt(whole) * 1000000000n + BigInt(fraction.padEnd(9, '0'))
 }
-export function accessUSD(value: string, locale: string): string {
-  return formatNanoUSD(String(accessNanoUSD(value)), locale, 'narrowSymbol')
+export function accessMoney(value: string, currency: string, locale: string): string {
+  return formatMoneyNano(String(accessNano(value)), currency, locale, 'narrowSymbol')
 }

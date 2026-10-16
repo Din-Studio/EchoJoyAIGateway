@@ -578,6 +578,7 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 			handler.requestNow,
 		)
 		recorder.accessKeyMultiplier = accessKey.PriceMultiplier
+		recorder.currency = snapshot.Settings.Currency
 		defer func() {
 			recorder.completeMissingOutcome(
 				ginContext.Writer.Written(),
@@ -588,7 +589,7 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 					ginContext.Request.Context(),
 					accessKey.ID,
 					quotaAdmission.ticket,
-					recorder.estimatedCostNanoUSD(),
+					recorder.estimatedCostNano(),
 				)
 			}
 			recorder.emit()

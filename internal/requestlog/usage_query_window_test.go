@@ -9,6 +9,7 @@ import (
 
 	"gpt-load/internal/channel"
 	"gpt-load/internal/platform/epochms"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/storage/models"
 )
 
@@ -41,7 +42,7 @@ func TestQueryUsageExactWindowBoundaries(t *testing.T) {
 			if err := (&gormBatchWriter{db: db}).WriteBatch(context.Background(), rows); err != nil {
 				t.Fatal(err)
 			}
-			report, err := newRequestLogTestService(db).QueryUsage(context.Background(), UsageQuery{
+			report, err := newRequestLogTestService(db).QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 				FromMS: from.UnixMilli(), ToMS: to.UnixMilli(), Granularity: UsageGranularityHour,
 			})
 			if err != nil {
@@ -86,7 +87,7 @@ func TestQueryUsagePreservesCompletionTimeBuckets(t *testing.T) {
 			if err := (&gormBatchWriter{db: db}).WriteBatch(t.Context(), []models.RequestLog{row}); err != nil {
 				t.Fatal(err)
 			}
-			report, err := newRequestLogTestService(db).QueryUsage(t.Context(), UsageQuery{
+			report, err := newRequestLogTestService(db).QueryUsage(t.Context(), UsageQuery{Currency: pricing.CurrencyUSD,
 				FromMS: from.UnixMilli(), ToMS: from.Add(test.span).UnixMilli(),
 			})
 			if err != nil {
@@ -192,7 +193,7 @@ func TestQueryUsageMergesSourcesBeforeRankingEveryDimension(t *testing.T) {
 			}
 		}
 	}
-	report, err := newRequestLogTestService(db).QueryUsage(context.Background(), UsageQuery{
+	report, err := newRequestLogTestService(db).QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS: start.Add(-30 * time.Minute).UnixMilli(), ToMS: start.Add(7*time.Hour + 30*time.Minute).UnixMilli(),
 	})
 	if err != nil {
@@ -243,7 +244,7 @@ func TestQueryUsageMixedSourcesApplyAllFilters(t *testing.T) {
 		}
 	}
 	groupID, credentialID, accessKeyID := uint(7), uint(11), uint(41)
-	report, err := newRequestLogTestService(db).QueryUsage(context.Background(), UsageQuery{
+	report, err := newRequestLogTestService(db).QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS: start.Add(-30 * time.Minute).UnixMilli(), ToMS: start.Add(7*time.Hour + 30*time.Minute).UnixMilli(),
 		GroupID: &groupID, CredentialID: &credentialID, AccessKeyID: &accessKeyID, ChannelID: channel.OpenAI, UpstreamModel: "model",
 	})
@@ -288,7 +289,7 @@ func TestQueryUsageExactAccessKeyFilterKeepsAdministratorDistributions(t *testin
 					if err := (&gormBatchWriter{db: db}).WriteBatch(t.Context(), rows); err != nil {
 						t.Fatal(err)
 					}
-					report, err := newRequestLogTestService(db).QueryUsage(t.Context(), UsageQuery{
+					report, err := newRequestLogTestService(db).QueryUsage(t.Context(), UsageQuery{Currency: pricing.CurrencyUSD,
 						FromMS: from.UnixMilli(), ToMS: to.UnixMilli(), AccessKeyID: &keyID, SelfScoped: selfScoped,
 					})
 					if err != nil || report.Summary.RequestCount != 3 {
@@ -341,7 +342,7 @@ func TestQueryUsageMixedSourcesRejectCorruptRowsBeforeCombining(t *testing.T) {
 					t.Fatal(err)
 				}
 			})
-			if _, err := newRequestLogTestService(db).QueryUsage(context.Background(), UsageQuery{
+			if _, err := newRequestLogTestService(db).QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 				FromMS: start.Add(-30 * time.Minute).UnixMilli(), ToMS: start.Add(7*time.Hour + 30*time.Minute).UnixMilli(),
 			}); err == nil {
 				t.Fatal("corrupt source accepted after other rows compensated its totals")
@@ -360,7 +361,7 @@ func TestQueryUsageLongWindowAndMissingBoundaryLogs(t *testing.T) {
 		usageStat(to.Truncate(time.Hour).Add(-time.Hour), 7, "retained", 3),
 		usageStat(to.Truncate(time.Hour), 7, "boundary-without-logs", 200),
 	)
-	report, err := newRequestLogTestService(db).QueryUsage(context.Background(), UsageQuery{
+	report, err := newRequestLogTestService(db).QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS: from.UnixMilli(), ToMS: to.UnixMilli(), Granularity: UsageGranularityDay,
 	})
 	if err != nil {

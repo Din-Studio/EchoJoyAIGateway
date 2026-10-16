@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useSystemCurrency } from '@modern/app/currency'
 import { Eye, ScrollText } from '@lucide/vue'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { computed, onMounted, ref } from 'vue'
@@ -41,7 +42,7 @@ import { useLogColumns } from './log-columns'
 import {
   logFilterOptions,
   logStateKeys,
-  nanoToUSD,
+  nanoToDecimal,
   parseLogState,
   serializeLogState,
   type LogRouteState,
@@ -53,6 +54,7 @@ const client = useApiClient()
 const cache = useQueryClient()
 const session = useAuthSession()
 const { t, te, locale } = useI18n()
+const systemCurrency = useSystemCurrency()
 const admin = computed(() => session.state.principalType === 'admin')
 const state = useURLState<LogRouteState>(
   logStateKeys,
@@ -192,7 +194,8 @@ function filterValue(key: string, value: string): string {
   if (key === 'channel_id')
     return channelMap.value?.get(value)?.name ?? (channelMap.value ? t('logs.deleted') : '—')
   if (key === 'protocol') return protocolLabel(value, t)
-  if (key.startsWith('cost_') && key.endsWith('_nano_usd')) return '$' + nanoToUSD(value)
+  if (key.startsWith('cost_') && key.endsWith('_nano'))
+    return `${nanoToDecimal(value)} ${systemCurrency.value?.currency ?? ''}`.trim()
   if ((key === 'stream' || key === 'cache_present') && (value === 'true' || value === 'false'))
     return t(value === 'true' ? 'logs.yes' : 'logs.no')
   return logFilterOptions[key as LogFilterName] && te('logs.values.' + value)

@@ -135,6 +135,7 @@ func TestProjectProcessLogOmitsDefaultAndZeroValueFields(t *testing.T) {
 
 func TestProjectProcessLogPreservesNoCandidateDiagnostics(t *testing.T) {
 	event := telemetry.RequestEvent{
+		Currency:  pricing.USDCurrency,
 		RequestID: "no-candidate", CompletedAt: testEvent("x").CompletedAt,
 		Protocol: protocol.OpenAICompletions, AccessKeyID: 42, ClientModel: "client-model",
 		Status: telemetry.RequestStatusError, StatusCode: http.StatusServiceUnavailable,
@@ -165,6 +166,7 @@ func TestProjectProcessLogSkipsInvalidProjection(t *testing.T) {
 
 func TestProjectProcessLogOmitsMissingAttribution(t *testing.T) {
 	event := telemetry.RequestEvent{
+		Currency:  pricing.USDCurrency,
 		RequestID: "resource", CompletedAt: testEvent("x").CompletedAt,
 		Status: telemetry.RequestStatusSuccess,
 		Usage: telemetry.UsageObservation{

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { DollarSign, Plus, RotateCcw, Trash2 } from '@lucide/vue'
+import { Banknote, Plus, RotateCcw, Trash2 } from '@lucide/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AccessKey } from '@modern/api/access-keys'
@@ -10,7 +10,8 @@ import {
   AppSegmentedField,
   AppTextField,
 } from '@modern/components/ui'
-import { accessTime, accessUSD } from './access-key-display'
+import { useSystemCurrency } from '@modern/app/currency'
+import { accessTime, accessMoney } from './access-key-display'
 import { periodUnits, ruleDraft, type RuleDraft } from './access-key-draft'
 const props = defineProps<{
   runtime?: AccessKey['cost_limit_status']
@@ -21,6 +22,8 @@ const props = defineProps<{
 const rules = defineModel<RuleDraft[]>({ required: true })
 defineEmits<{ reset: [] }>()
 const { t, locale } = useI18n()
+// 规则按系统货币保存；切换币种时服务端会把已有规则一并换算。
+const currency = useSystemCurrency()
 const units = computed(() =>
   Object.keys(periodUnits).map((value) => ({ value, label: t('accessKeys.units.' + value) })),
 )
@@ -33,7 +36,7 @@ function add(kind: 'total' | 'periodic'): void {
     return
   rules.value = [
     ...rules.value,
-    ruleDraft({ kind, limit_usd: '', ...(kind === 'periodic' ? { period_seconds: 18000 } : {}) }),
+    ruleDraft({ kind, limit: '', ...(kind === 'periodic' ? { period_seconds: 18000 } : {}) }),
   ]
 }
 </script>
@@ -56,17 +59,21 @@ function add(kind: 'total' | 'periodic'): void {
           t(rule.kind === 'total' ? 'accessKeys.totalQuota' : 'accessKeys.periodicQuota')
         }}</span>
         <AppTextField
-          v-model="rule.limit_usd"
+          v-model="rule.limit"
           class="modern-access-quota-amount"
           :label="t('accessKeys.amount')"
           label-hidden
-          :icon="DollarSign"
+          :icon="Banknote"
           inputmode="decimal"
           size="xs"
           :disabled="disabled"
           :invalid="Boolean(error)"
           placeholder="0.00"
-        />
+        >
+          <template v-if="currency" #suffix
+            ><span class="modern-access-quota-currency">{{ currency.currency }}</span></template
+          >
+        </AppTextField>
         <div v-if="rule.kind === 'periodic'" class="modern-access-quota-period">
           <span>{{ t('accessKeys.period') }}</span>
           <AppTextField
@@ -99,9 +106,14 @@ function add(kind: 'total' | 'periodic'): void {
       <div v-if="rule.id && byID.get(rule.id)" class="modern-access-quota-runtime">
         <span
           >{{ t('accessKeys.remaining') }}
-          <strong>{{ accessUSD(byID.get(rule.id)!.remaining_usd, locale) }}</strong></span
+          <strong>{{
+            accessMoney(byID.get(rule.id)!.remaining, byID.get(rule.id)!.currency, locale)
+          }}</strong></span
         >
-        <span>{{ t('accessKeys.used') }} {{ accessUSD(byID.get(rule.id)!.used_usd, locale) }}</span>
+        <span
+          >{{ t('accessKeys.used') }}
+          {{ accessMoney(byID.get(rule.id)!.used, byID.get(rule.id)!.currency, locale) }}</span
+        >
         <span>{{
           byID.get(rule.id)!.status === 'inactive'
             ? t('accessKeys.inactive')
@@ -166,6 +178,11 @@ function add(kind: 'total' | 'periodic'): void {
 }
 .modern-access-quota-amount {
   grid-area: amount;
+}
+.modern-access-quota-currency {
+  color: var(--modern-muted);
+  font-size: var(--modern-font-size-small);
+  white-space: nowrap;
 }
 .modern-access-quota-period {
   grid-area: period;

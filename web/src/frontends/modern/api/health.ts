@@ -48,6 +48,7 @@ export interface HealthCredit {
 export interface HealthBlockingRule {
   id: number
   kind: 'total' | 'periodic'
+  currency: string
   limit: string
   used: string
   remaining: string
@@ -178,9 +179,10 @@ export async function getHealth(client: ApiClient, signal: AbortSignal): Promise
           return {
             id: integer(rule.id, 1),
             kind: oneOf(rule.kind, ['total', 'periodic']),
-            limit: decimal(rule.limit_usd),
-            used: decimal(rule.used_usd),
-            remaining: decimal(rule.remaining_usd),
+            currency: text(rule.currency),
+            limit: decimal(rule.limit),
+            used: decimal(rule.used),
+            remaining: decimal(rule.remaining),
             period: integer(rule.period_seconds ?? 0),
             endsAt: timestamp(rule.window_ends_at_ms),
           }

@@ -419,7 +419,7 @@ func TestAuthSessionEndpointAcceptsActiveAccessKeyAndRejectsAdminRoutes(t *testi
 	created, err := fixture.service.CreateAccessKey(t.Context(), AccessKeyCreateRequest{
 		Name: "readonly shared views",
 		CostLimitRules: OptionalAccessKeyCostLimitRules{Set: true, Values: []AccessKeyCostLimitRuleRequest{{
-			Kind: "total", LimitUSD: "1",
+			Kind: "total", Limit: "1",
 		}}},
 	})
 	if err != nil {

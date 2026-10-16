@@ -16,7 +16,7 @@ import (
 type normalizedAccessKeyCostLimitRule struct {
 	ID            uint
 	Kind          accessquota.Kind
-	LimitNanoUSD  int64
+	LimitNano     int64
 	PeriodSeconds int64
 }
 
@@ -46,12 +46,12 @@ func normalizeAccessKeyCostLimitRules(
 			}
 			ids[input.ID] = struct{}{}
 		}
-		parsed, err := pricing.ParseUSD(input.LimitUSD)
+		parsed, err := pricing.ParseAmount(input.Limit)
 		if err != nil || parsed <= 0 {
 			return nil, app_errors.ErrValidation
 		}
 		rule := normalizedAccessKeyCostLimitRule{
-			ID: input.ID, Kind: input.Kind, LimitNanoUSD: int64(parsed),
+			ID: input.ID, Kind: input.Kind, LimitNano: int64(parsed),
 			PeriodSeconds: input.PeriodSeconds,
 		}
 		switch rule.Kind {
@@ -100,13 +100,22 @@ func createAccessKeyCostLimitRules(
 	rules []normalizedAccessKeyCostLimitRule,
 ) ([]models.AccessKeyCostLimitRule, error) {
 	created := make([]models.AccessKeyCostLimitRule, 0, len(rules))
+	if len(rules) == 0 {
+		return created, nil
+	}
+	// 新规则以系统货币计；设置写入与密钥写入同在控制面写锁内，读到的就是生效币种。
+	currency, err := loadSettingsCurrency(tx)
+	if err != nil {
+		return nil, err
+	}
 	for _, definition := range rules {
 		if definition.ID != 0 {
 			return nil, app_errors.ErrValidation
 		}
 		rule := models.AccessKeyCostLimitRule{
 			AccessKeyID: accessKeyID, Kind: models.AccessKeyCostLimitKind(definition.Kind),
-			LimitNanoUSD: definition.LimitNanoUSD, PeriodSeconds: definition.PeriodSeconds,
+			Currency:  string(currency.Code),
+			LimitNano: definition.LimitNano, PeriodSeconds: definition.PeriodSeconds,
 			RuleRevision: 1,
 		}
 		if err := tx.Create(&rule).Error; err != nil {
@@ -186,7 +195,7 @@ func reconcileAccessKeyCostLimitRules(
 		}
 		currentRule := currentByID[definition.ID]
 		semanticsChanged := currentRule.PeriodSeconds != definition.PeriodSeconds
-		updates := map[string]any{"limit_nano_usd": definition.LimitNanoUSD}
+		updates := map[string]any{"limit_nano": definition.LimitNano}
 		if semanticsChanged {
 			if currentRule.RuleRevision == ^uint64(0) {
 				return nil, fmt.Errorf("advance access key cost limit rule %d revision: %w", definition.ID, app_errors.ErrInternalServer)
@@ -288,7 +297,7 @@ func resetAccessKeyCostLimitRuleState(
 		Where("rule_id = ? AND rule_revision = ?", ruleID, currentRevision).
 		Updates(map[string]any{
 			"rule_revision":        nextRevision,
-			"used_nano_usd":        int64(0),
+			"used_nano":            int64(0),
 			"window_started_at_ms": nil,
 			"window_ends_at_ms":    nil,
 			"window_generation":    uint64(0),
@@ -379,7 +388,8 @@ func mapAccessKeyCostLimitRules(rows []models.AccessKeyCostLimitRule) []AccessKe
 	for _, row := range rows {
 		result = append(result, AccessKeyCostLimitRule{
 			ID: row.ID, Kind: accessquota.Kind(row.Kind),
-			LimitUSD:      pricing.FormatUSD(pricing.NanoUSD(row.LimitNanoUSD)),
+			Currency:      pricing.CurrencyCode(row.Currency),
+			Limit:         pricing.FormatAmount(row.LimitNano),
 			PeriodSeconds: row.PeriodSeconds,
 		})
 	}
@@ -392,7 +402,7 @@ func costLimitRuleRequestsForDigest(
 	result := make([]AccessKeyCostLimitRuleRequest, 0, len(rules))
 	for _, rule := range rules {
 		result = append(result, AccessKeyCostLimitRuleRequest{
-			Kind: rule.Kind, LimitUSD: pricing.FormatUSD(pricing.NanoUSD(rule.LimitNanoUSD)),
+			Kind: rule.Kind, Limit: pricing.FormatAmount(rule.LimitNano),
 			PeriodSeconds: rule.PeriodSeconds,
 		})
 	}
@@ -410,10 +420,11 @@ func mapAccessKeyCostLimitStatus(view accessquota.View) AccessKeyCostLimitStatus
 	for _, rule := range view.Rules {
 		result.Rules = append(result.Rules, AccessKeyCostLimitRuleStatus{
 			ID: rule.ID, Kind: rule.Kind,
-			LimitUSD:     pricing.FormatUSD(pricing.NanoUSD(rule.LimitNanoUSD)),
-			UsedUSD:      pricing.FormatUSD(pricing.NanoUSD(rule.UsedNanoUSD)),
-			RemainingUSD: pricing.FormatUSD(pricing.NanoUSD(rule.RemainingNanoUSD)),
-			Status:       rule.Status, PeriodSeconds: rule.PeriodSeconds,
+			Currency:  rule.Currency,
+			Limit:     pricing.FormatAmount(rule.LimitNano),
+			Used:      pricing.FormatAmount(rule.UsedNano),
+			Remaining: pricing.FormatAmount(rule.RemainingNano),
+			Status:    rule.Status, PeriodSeconds: rule.PeriodSeconds,
 			WindowStartedAtMS: cloneCostLimitMilliseconds(rule.WindowStartedAtMS),
 			WindowEndsAtMS:    cloneCostLimitMilliseconds(rule.WindowEndsAtMS),
 		})
@@ -425,7 +436,7 @@ func costLimitDefinitionsFromStatus(status AccessKeyCostLimitStatus) []AccessKey
 	rules := make([]AccessKeyCostLimitRule, 0, len(status.Rules))
 	for _, rule := range status.Rules {
 		rules = append(rules, AccessKeyCostLimitRule{
-			ID: rule.ID, Kind: rule.Kind, LimitUSD: rule.LimitUSD,
+			ID: rule.ID, Kind: rule.Kind, Currency: rule.Currency, Limit: rule.Limit,
 			PeriodSeconds: rule.PeriodSeconds,
 		})
 	}

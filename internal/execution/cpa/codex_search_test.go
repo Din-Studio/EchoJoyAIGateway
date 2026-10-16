@@ -111,7 +111,7 @@ func TestCodexStandaloneSearchGateway(t *testing.T) {
 		}},
 		AccessKeys: []state.AccessKeyConfig{{
 			ID: 1, Name: "client", KeyHash: encryption.Hash("gl-search-client"), Status: state.AccessKeyStatusActive,
-			CostLimitRules: []accessquota.Rule{{ID: 1, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 100}},
+			CostLimitRules: []accessquota.Rule{{ID: 1, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 100}},
 		}},
 	}
 	if _, err := manager.Publish(input); err != nil {

@@ -21,5 +21,19 @@ func (s *Server) handleListProjectModels(c *gin.Context) {
 		writeServiceError(c, "list_project_models", err)
 		return
 	}
+	currency, err := s.service.currentCurrency()
+	if err != nil {
+		writeServiceError(c, "list_project_models", err)
+		return
+	}
+	for itemIndex := range result.Items {
+		upstreams := result.Items[itemIndex].UpstreamModels
+		for index := range upstreams {
+			if upstreams[index].Price, err = upstreams[index].Price.inCurrency(currency); err != nil {
+				writeServiceError(c, "list_project_models", err)
+				return
+			}
+		}
+	}
 	response.SuccessI18n(c, "common.success", result)
 }

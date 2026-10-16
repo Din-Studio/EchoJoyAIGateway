@@ -102,7 +102,10 @@ func (service *Service) List(ctx context.Context, input ListQuery) (Page, error)
 		input.InputTokensMax,
 	)
 	query = applyNullableRange(query, "output_tokens", input.OutputTokensMin, input.OutputTokensMax)
-	query = applyNullableRange(query, "(estimated_cost_nano_usd + decision_cost_nano_usd)", input.CostMinNanoUSD, input.CostMaxNanoUSD)
+	if input.CostMinNano != nil || input.CostMaxNano != nil {
+		query = query.Where("currency = ?", input.CostCurrency)
+		query = applyNullableRange(query, "(estimated_cost_nano + decision_cost_nano)", input.CostMinNano, input.CostMaxNano)
+	}
 	query = applyAttemptFilters(query, input)
 	if input.Cursor != nil {
 		query = query.Where(
@@ -361,6 +364,10 @@ func decodeRequestLogRows(rows []models.RequestLog) ([]Record, error) {
 			}
 		}
 		total := telemetry.TotalPricing(telemetry.PricingObservation{CostState: row.CostState, PricingCompleteness: row.PricingCompleteness, EstimatedCostNanoUSD: row.EstimatedCostNanoUSD}, decision)
+		settlement, err := pricing.NewCurrency(pricing.CurrencyCode(row.Currency), row.ExchangeRateMicros)
+		if err != nil {
+			return nil, fmt.Errorf("decode request log settlement currency: %w", err)
+		}
 		records = append(records, Record{
 			AutoDecision:          decision,
 			TotalPricing:          total,
@@ -402,6 +409,9 @@ func decodeRequestLogRows(rows []models.RequestLog) ([]Record, error) {
 			CacheWriteUnknownTokens: row.CacheWriteUnknownTokens,
 			OutputTokens:            row.OutputTokens,
 			EstimatedCostNanoUSD:    row.EstimatedCostNanoUSD,
+			Settlement:              settlement,
+			EstimatedCostNano:       row.EstimatedCostNano,
+			DecisionCostNano:        row.DecisionCostNano,
 		})
 	}
 	return records, nil

@@ -18,6 +18,7 @@ const props = defineProps<{
   dimension: UsageDimension
   distribution: UsageDistribution
   metric: UsageMetric
+  currency: string
   costUnavailable: boolean
   groups?: readonly GroupRow[]
   accessKeys?: readonly LogAccessKeyOption[]
@@ -37,7 +38,9 @@ const total = computed(() =>
 const share = (row: UsageItem) =>
   total.value ? (distributionValue(row, props.metric) / total.value) * 100 : 0
 const display = (row: UsageItem, metric: UsageMetric) =>
-  metric === 'cost' && props.costUnavailable ? '—' : amount(row, metric, locale.value)
+  metric === 'cost' && props.costUnavailable
+    ? '—'
+    : amount(row, metric, props.currency, locale.value)
 const name = (row: UsageItem & { other: boolean }) =>
   row.other
     ? t('usage.other')

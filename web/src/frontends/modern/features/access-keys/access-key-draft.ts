@@ -101,7 +101,7 @@ export function inputFor(draft: AccessDraft): AccessInput {
     cost_limit_rules: draft.rules.map((rule) => ({
       ...(rule.id !== undefined ? { id: rule.id } : {}),
       kind: rule.kind,
-      limit_usd: normalizeDecimal(rule.limit_usd),
+      limit: normalizeDecimal(rule.limit),
       ...(rule.kind === 'periodic' ? { period_seconds: periodSeconds(rule) } : {}),
     })),
   }
@@ -117,7 +117,7 @@ const ruleJSON = (rules: CostRule[]) =>
       .map((rule) => ({
         id: rule.id,
         kind: rule.kind,
-        limit_usd: normalizeDecimal(rule.limit_usd),
+        limit: normalizeDecimal(rule.limit),
         period_seconds: rule.kind === 'periodic' ? rule.period_seconds : 0,
       }))
       .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
@@ -173,7 +173,7 @@ export function draftErrors(draft: AccessDraft, base?: AccessKey): Record<string
   let totals = 0
   let periodic = 0
   for (const rule of input.cost_limit_rules) {
-    if (!/^(0|[1-9]\d*)(\.\d{1,9})?$/.test(rule.limit_usd) || /^0(?:\.0+)?$/.test(rule.limit_usd))
+    if (!/^(0|[1-9]\d*)(\.\d{1,9})?$/.test(rule.limit) || /^0(?:\.0+)?$/.test(rule.limit))
       errors.rules = 'invalidQuota'
     if (rule.kind === 'total') totals++
     else {

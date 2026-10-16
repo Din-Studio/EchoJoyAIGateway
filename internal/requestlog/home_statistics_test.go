@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/storage/models"
 )
 
@@ -40,7 +41,7 @@ func TestQueryHomeStatisticsReturnsDenseEpochWindowsForEmptyData(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			report, err := newRequestLogTestService(openRequestLogQueryDB(t)).
-				QueryHomeStatistics(context.Background(), HomeStatisticsQuery{
+				QueryHomeStatistics(context.Background(), HomeStatisticsQuery{Currency: pricing.CurrencyUSD,
 					Range:        test.rangeValue,
 					ObservedAtMS: observedAtMS,
 				})
@@ -105,7 +106,7 @@ func TestQueryHomeStatisticsBuildsTopFiveRankingsAndExcludesLegacyZeroAttemptAgg
 
 	report, err := newRequestLogTestService(db).QueryHomeStatistics(
 		context.Background(),
-		HomeStatisticsQuery{
+		HomeStatisticsQuery{Currency: pricing.CurrencyUSD,
 			Range:        HomeStatistics24H,
 			ObservedAtMS: 1_784_896_496_789,
 		},
@@ -190,7 +191,7 @@ func TestQueryHomeStatisticsScopesAccessKeyAndOnlyReturnsModelRankings(t *testin
 
 	report, err := newRequestLogTestService(db).QueryHomeStatistics(
 		context.Background(),
-		HomeStatisticsQuery{
+		HomeStatisticsQuery{Currency: pricing.CurrencyUSD,
 			Range:        HomeStatistics24H,
 			ObservedAtMS: 1_784_896_496_789,
 			AccessKeyID:  &accessKeyID,
@@ -247,7 +248,7 @@ func TestQueryHomeStatisticsUsesOneReadSnapshot(t *testing.T) {
 
 	report, err := newRequestLogTestService(db).QueryHomeStatistics(
 		context.Background(),
-		HomeStatisticsQuery{
+		HomeStatisticsQuery{Currency: pricing.CurrencyUSD,
 			Range:        HomeStatistics24H,
 			ObservedAtMS: 1_784_896_496_789,
 		},
@@ -321,7 +322,7 @@ func TestQueryHomeStatisticsRejectsUnsafeOrCorruptAggregates(t *testing.T) {
 			createCorruptUsageStats(t, db, test.rows...)
 			if _, err := newRequestLogTestService(db).QueryHomeStatistics(
 				context.Background(),
-				HomeStatisticsQuery{
+				HomeStatisticsQuery{Currency: pricing.CurrencyUSD,
 					Range:        HomeStatistics24H,
 					ObservedAtMS: observedAtMS,
 				},

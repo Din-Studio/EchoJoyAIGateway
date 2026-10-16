@@ -28,12 +28,15 @@ func testCustomAccessKeyMigration(t *testing.T, open func(*testing.T) *gorm.DB) 
 				if err := db.Omit("KeyPrefix", "Note").Create(&key).Error; err != nil {
 					t.Fatal(err)
 				}
-				rule = models.AccessKeyCostLimitRule{AccessKeyID: key.ID, Kind: models.AccessKeyCostLimitKindTotal, LimitNanoUSD: 100, RuleRevision: 1}
-				if err := db.Create(&rule).Error; err != nil {
+				// 0010 时限额列仍是 *_nano_usd，0021 才改名，所以这里写原始 SQL。
+				if err := db.Raw(`INSERT INTO access_key_cost_limit_rules
+					(access_key_id, kind, limit_nano_usd, period_seconds, rule_revision, created_at_ms, updated_at_ms)
+					VALUES (?, 'total', 100, 0, 1, 1, 1) RETURNING id`, key.ID).Scan(&rule.ID).Error; err != nil {
 					t.Fatal(err)
 				}
-				state := models.AccessKeyCostLimitState{RuleID: rule.ID, RuleRevision: 1, UsedNanoUSD: 17, SnapshotVersion: 1}
-				if err := db.Create(&state).Error; err != nil {
+				if err := db.Exec(`INSERT INTO access_key_cost_limit_states
+					(rule_id, rule_revision, used_nano_usd, window_generation, snapshot_version, updated_at_ms)
+					VALUES (?, 1, 17, 0, 1, 1)`, rule.ID).Error; err != nil {
 					t.Fatal(err)
 				}
 				// 删除过的较大 ID 也不能因重建表而被再次分配。
@@ -82,7 +85,7 @@ func testCustomAccessKeyMigration(t *testing.T, open func(*testing.T) *gorm.DB) 
 				if err := db.Take(&state, rule.ID).Error; err != nil {
 					t.Fatal(err)
 				}
-				if currentRule.LimitNanoUSD != 100 || state.UsedNanoUSD != 17 {
+				if currentRule.LimitNano != 100 || state.UsedNano != 17 {
 					t.Fatal("quota data changed")
 				}
 			}

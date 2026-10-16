@@ -170,6 +170,7 @@ func aggregationRequestID(index int) string {
 
 func testEvent(id string) telemetry.RequestEvent {
 	return telemetry.RequestEvent{
+		Currency:              pricing.USDCurrency,
 		RequestID:             id,
 		CompletedAt:           time.Date(2026, time.July, 24, 12, 0, 0, 0, time.UTC),
 		AccessKeyID:           42,

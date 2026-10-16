@@ -146,7 +146,7 @@ func TestWebsocketQuotaCountsConcurrentTurnsOnceWithoutReservation(t *testing.T)
 	h.requestLogSink = sink
 	limiter := &recordingAccessKeyRPMLimiter{}
 	h.limiter = limiter
-	input.AccessKeys[0].CostLimitRules = []accessquota.Rule{{ID: 1, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 4}}
+	input.AccessKeys[0].CostLimitRules = []accessquota.Rule{{ID: 1, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 4}}
 	if _, err := h.manager.Publish(input); err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestWebsocketQuotaCountsConcurrentTurnsOnceWithoutReservation(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := view.Rules[0].UsedNanoUSD; got != 6 {
+	if got := view.Rules[0].UsedNano; got != 6 {
 		t.Fatalf("used=%d want 6 (existing in-flight overspend)", got)
 	}
 	if len(limiter.snapshot()) != 2 {

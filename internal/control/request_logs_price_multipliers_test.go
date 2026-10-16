@@ -32,7 +32,7 @@ func TestMapRequestLogReceiptIncludesFrozenPriceMultipliers(t *testing.T) {
 	}`, test.schema, test.lineAmount, test.baseField), &receipt); err != nil {
 				t.Fatal(err)
 			}
-			response, err := mapRequestLogPricingReceipt(&receipt)
+			response, err := mapRequestLogPricingReceipt(&receipt, pricing.USDCurrency)
 			if err != nil {
 				t.Fatal(err)
 			}

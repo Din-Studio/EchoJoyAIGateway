@@ -13,9 +13,9 @@ const { t, locale } = useI18n()
 const report = computed(() => props.report)
 const compact = (value: number) => formatCompactNumber(value, locale.value)
 const cost = (row: UsageAggregate) =>
-  row.estimated_cost_nano_usd === '0' && (row.unpriced_request_count || row.pricing_partial_count)
+  row.estimated_cost_nano === '0' && (row.unpriced_request_count || row.pricing_partial_count)
     ? '—'
-    : formatUsageCost(row.estimated_cost_nano_usd, locale.value)
+    : formatUsageCost(row.estimated_cost_nano, report.value.currency, locale.value)
 interface UsageCard {
   id: 'requests' | 'success' | 'tokens' | 'cache' | 'cost'
   icon: Component

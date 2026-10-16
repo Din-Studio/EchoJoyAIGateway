@@ -4,19 +4,24 @@ import { useI18n } from 'vue-i18n'
 import type { LogAutoDecision, LogPricingLine, LogReceipt } from '@modern/api/logs'
 import { AppOverflowText } from '@modern/components/ui'
 import { exactLogMoney, logMoney, logNumber } from './log-display'
+// 金额均以 currency 计：回执按美元计算，接口已按该请求结算时的汇率换算。
 const props = defineProps<{
   receipt?: LogReceipt | null
   decision?: LogAutoDecision | null
   totalCost?: string
+  currency: string
+  exchangeRate: string
 }>()
+const money = (value: string) => logMoney(value, props.currency, locale.value)
+const exact = (value: string) => exactLogMoney(value, props.currency, locale.value)
 const { t, te, locale } = useI18n()
 function lineName(value: string): string {
   return te('logs.priceLines.' + value) ? t('logs.priceLines.' + value) : value
 }
 function rate(line: LogPricingLine): string {
-  return line.rate_nano_usd_per_million === null
+  return line.rate_nano_per_million === null
     ? t('logs.values.unpriced')
-    : exactLogMoney(line.rate_nano_usd_per_million) + ' / 1M'
+    : exact(line.rate_nano_per_million) + ' / 1M'
 }
 function adjustment(line: LogPricingLine): string | undefined {
   return line.multiplier.numerator !== line.multiplier.denominator
@@ -39,7 +44,7 @@ const decisionRate = computed(() => {
   const receipt = props.decision?.receipt
   if (!receipt) return '—'
   const rates = receipt.line_items
-    .filter((line) => line.rate_nano_usd_per_million !== null)
+    .filter((line) => line.rate_nano_per_million !== null)
     .map((line) => `${lineName(line.code)} ${rate(line)}`)
     .join(' · ')
   if (!rates) return '—'
@@ -47,11 +52,7 @@ const decisionRate = computed(() => {
   return multipliers ? `${rates} × ${multipliers.group} × ${multipliers.access_key}` : rates
 })
 const total = computed(
-  () =>
-    props.totalCost ??
-    props.receipt?.total_nano_usd ??
-    props.decision?.estimated_cost_nano_usd ??
-    '0',
+  () => props.totalCost ?? props.receipt?.total_nano ?? props.decision?.estimated_cost_nano ?? '0',
 )
 </script>
 
@@ -80,8 +81,8 @@ const total = computed(
         <AppOverflowText :text="decisionQuantity || '—'" />
         <AppOverflowText :text="decisionRate" />
         <AppOverflowText
-          :text="logMoney(decision.estimated_cost_nano_usd, locale)"
-          :full-text="exactLogMoney(decision.estimated_cost_nano_usd)"
+          :text="money(decision.estimated_cost_nano)"
+          :full-text="exact(decision.estimated_cost_nano)"
         />
       </div>
       <div v-for="line in receipt?.line_items ?? []" :key="line.code" class="modern-log-price-row">
@@ -96,14 +97,8 @@ const total = computed(
           :full-text="[rate(line), adjustment(line)].filter(Boolean).join(' ')"
         />
         <AppOverflowText
-          :text="
-            line.amount_nano_usd === null
-              ? t('logs.values.unpriced')
-              : logMoney(line.amount_nano_usd, locale)
-          "
-          :full-text="
-            line.amount_nano_usd === null ? undefined : exactLogMoney(line.amount_nano_usd)
-          "
+          :text="line.amount_nano === null ? t('logs.values.unpriced') : money(line.amount_nano)"
+          :full-text="line.amount_nano === null ? undefined : exact(line.amount_nano)"
         />
       </div>
     </div>
@@ -112,10 +107,13 @@ const total = computed(
       ><span>{{ t('logs.keyMultiplier') }} ×{{ receipt.price_multipliers.access_key }}</span>
     </div>
     <div class="modern-log-receipt-total">
-      <span v-if="!decision && receipt && receipt.base_total_nano_usd !== null"
-        >{{ t('logs.baseCost') }} {{ exactLogMoney(receipt.base_total_nano_usd) }}</span
+      <span v-if="currency !== 'USD'">{{
+        t('logs.exchangeRate', { rate: exchangeRate, currency })
+      }}</span
+      ><span v-if="!decision && receipt && receipt.base_total_nano !== null"
+        >{{ t('logs.baseCost') }} {{ exact(receipt.base_total_nano) }}</span
       ><span
-        >{{ t('logs.totalCost') }} <strong>{{ exactLogMoney(total) }}</strong></span
+        >{{ t('logs.totalCost') }} <strong>{{ exact(total) }}</strong></span
       >
     </div>
   </div>

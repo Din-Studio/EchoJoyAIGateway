@@ -11,16 +11,19 @@ export interface AccessScope {
   models: string[]
   allowed_cidrs: string[]
 }
+// 金额是以 currency 计的十进制字符串；新建规则不带 currency，按系统货币保存。
 export interface CostRule {
   id?: number
   kind: 'total' | 'periodic'
-  limit_usd: string
+  currency?: string
+  limit: string
   period_seconds?: number
 }
 export interface CostWindow extends CostRule {
   id: number
-  used_usd: string
-  remaining_usd: string
+  currency: string
+  used: string
+  remaining: string
   status: 'available' | 'inactive' | 'exhausted'
   window_started_at_ms: number | null
   window_ends_at_ms: number | null
@@ -49,7 +52,12 @@ export interface AccessKey {
 export interface AccessKeyRow extends AccessKey {
   expired: boolean
   last_request_at_ms: number | null
-  usage?: { request_count: number; total_tokens: number; estimated_cost_nano_usd: string }
+  usage?: {
+    request_count: number
+    total_tokens: number
+    currency: string
+    estimated_cost_nano: string
+  }
 }
 export interface AccessFilters {
   q: string
@@ -64,7 +72,7 @@ export interface AccessCollection {
   items: AccessKeyRow[]
   summary: { total: number; active: number; disabled: number }
   pagination: { page: number; page_size: number; total_items: number; total_pages: number }
-  usage_window: { from_ms: number; to_ms: number; observed_at_ms: number }
+  usage_window: { from_ms: number; to_ms: number; observed_at_ms: number; currency: string }
 }
 export interface AccessInput {
   key?: string
@@ -91,7 +99,8 @@ function readRule(value: unknown): CostRule {
   return {
     id: integer(row.id, 1),
     kind,
-    limit_usd: decimal(row.limit_usd),
+    currency: text(row.currency),
+    limit: decimal(row.limit),
     ...(kind === 'periodic' ? { period_seconds: integer(row.period_seconds, 60) } : {}),
   }
 }
@@ -100,8 +109,9 @@ function readWindow(value: unknown): CostWindow {
   return {
     ...readRule(row),
     id: integer(row.id, 1),
-    used_usd: decimal(row.used_usd),
-    remaining_usd: decimal(row.remaining_usd),
+    currency: text(row.currency),
+    used: decimal(row.used),
+    remaining: decimal(row.remaining),
     status: oneOf(row.status, ['available', 'inactive', 'exhausted'] as const),
     window_started_at_ms: timestamp(row.window_started_at_ms),
     window_ends_at_ms: timestamp(row.window_ends_at_ms),
@@ -140,10 +150,11 @@ function readAccessKey(value: unknown): AccessKey {
     updated_at_ms: integer(row.updated_at_ms),
   }
 }
-export function readAccessKeyRow(value: unknown): AccessKeyRow {
+// usageCurrency 是用量统计的币种；不带用量的视图（如首页当前密钥）不需要。
+export function readAccessKeyRow(value: unknown, usageCurrency = ''): AccessKeyRow {
   const row = record(value)
   const usage = row.usage == null ? undefined : record(row.usage)
-  const cost = usage ? text(usage.estimated_cost_nano_usd) : undefined
+  const cost = usage ? text(usage.estimated_cost_nano) : undefined
   if (cost !== undefined && !/^\d+$/.test(cost)) throw new InvalidResponseError()
   return {
     ...readAccessKey(row),
@@ -154,7 +165,8 @@ export function readAccessKeyRow(value: unknown): AccessKeyRow {
           usage: {
             request_count: integer(usage.request_count),
             total_tokens: integer(usage.total_tokens),
-            estimated_cost_nano_usd: cost!,
+            currency: usageCurrency,
+            estimated_cost_nano: cost!,
           },
         }
       : {}),
@@ -178,8 +190,9 @@ export async function getAccessKeys(
   const summary = record(data.summary)
   const pagination = record(data.pagination)
   const window = record(data.usage_window)
+  const currency = text(window.currency)
   return {
-    items: list(data.items).map(readAccessKeyRow),
+    items: list(data.items).map((item) => readAccessKeyRow(item, currency)),
     summary: {
       total: integer(summary.total),
       active: integer(summary.active),
@@ -195,6 +208,7 @@ export async function getAccessKeys(
       from_ms: integer(window.from_ms),
       to_ms: integer(window.to_ms),
       observed_at_ms: integer(window.observed_at_ms),
+      currency,
     },
   }
 }
