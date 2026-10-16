@@ -21,7 +21,7 @@ import (
 type AccessQuotaGate interface {
 	Check(ctx context.Context, snapshot *state.ConfigSnapshot, accessKeyID uint, now time.Time) (accessquota.Decision, error)
 	Admit(ctx context.Context, snapshot *state.ConfigSnapshot, accessKeyID uint, now time.Time) (accessquota.Ticket, accessquota.Decision, error)
-	Complete(ctx context.Context, ticket accessquota.Ticket, costNanoUSD int64) (accessquota.CompletionResult, error)
+	Complete(ctx context.Context, ticket accessquota.Ticket, costNano int64) (accessquota.CompletionResult, error)
 }
 
 // limitStateFailureReason maps an AccessQuotaGate or AccessKeyRPMLimiter
@@ -49,9 +49,9 @@ func (handler *Handler) completeAccessQuota(
 	ctx context.Context,
 	accessKeyID uint,
 	ticket accessquota.Ticket,
-	costNanoUSD int64,
+	costNano int64,
 ) {
-	completion, err := handler.accessQuota.Complete(context.WithoutCancel(ctx), ticket, costNanoUSD)
+	completion, err := handler.accessQuota.Complete(context.WithoutCancel(ctx), ticket, costNano)
 	if err != nil {
 		utils.LogPlaneBestEffort(
 			handler.logger,
@@ -60,7 +60,7 @@ func (handler *Handler) completeAccessQuota(
 			logrus.Fields{
 				"event":         "access_quota.complete_failed",
 				"access_key_id": accessKeyID,
-				"cost_nano_usd": costNanoUSD,
+				"cost_nano":     costNano,
 				"error":         err.Error(),
 			},
 			"Access key cost limit accounting failed",

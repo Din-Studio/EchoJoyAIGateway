@@ -11,11 +11,11 @@ import {
   AppTag,
 } from '@modern/components/ui'
 import {
-  accessNanoUSD,
+  accessNano,
   accessState,
   accessTime,
 } from '@modern/features/access-keys/access-key-display'
-import { formatNanoUSD } from '@modern/components/ui/format'
+import { formatMoneyNano } from '@modern/components/ui/format'
 
 const props = defineProps<{ row: AccessKeyRow }>()
 const { t, n, locale } = useI18n()
@@ -23,8 +23,8 @@ const status = computed(() => accessState(props.row))
 const windows = computed(
   () => new Map(props.row.cost_limit_status?.rules.map((window) => [window.id, window])),
 )
-const money = (value: string) =>
-  formatNanoUSD(String(accessNanoUSD(value)), locale.value, 'narrowSymbol', 2)
+const money = (value: string, currency: string | undefined) =>
+  formatMoneyNano(String(accessNano(value)), currency ?? 'USD', locale.value, 'narrowSymbol', 2)
 function title(rule: CostRule): string {
   if (rule.kind === 'total') return t('home.totalQuota')
   const seconds = rule.period_seconds ?? 0
@@ -36,12 +36,9 @@ function title(rule: CostRule): string {
 }
 function percent(window?: CostWindow): number | undefined {
   if (!window) return undefined
-  const limit = accessNanoUSD(window.limit_usd)
+  const limit = accessNano(window.limit)
   return limit > 0n
-    ? Math.max(
-        0,
-        Math.min(100, Number((accessNanoUSD(window.remaining_usd) * 10000n) / limit) / 100),
-      )
+    ? Math.max(0, Math.min(100, Number((accessNano(window.remaining) * 10000n) / limit) / 100))
     : 0
 }
 </script>
@@ -114,10 +111,13 @@ function percent(window?: CostWindow): number | undefined {
             ><span>{{
               windows.get(rule.id!)
                 ? t('home.remaining', {
-                    remaining: money(windows.get(rule.id!)!.remaining_usd),
-                    limit: money(rule.limit_usd),
+                    remaining: money(
+                      windows.get(rule.id!)!.remaining,
+                      windows.get(rule.id!)!.currency,
+                    ),
+                    limit: money(rule.limit, rule.currency),
                   })
-                : money(rule.limit_usd)
+                : money(rule.limit, rule.currency)
             }}</span>
           </div>
           <AppProgressBar
@@ -129,7 +129,9 @@ function percent(window?: CostWindow): number | undefined {
           <div class="modern-home-key-note">
             <span>{{
               windows.get(rule.id!)
-                ? t('home.used', { value: money(windows.get(rule.id!)!.used_usd) })
+                ? t('home.used', {
+                    value: money(windows.get(rule.id!)!.used, windows.get(rule.id!)!.currency),
+                  })
                 : t('home.quotaUnavailable')
             }}</span>
             <span v-if="windows.get(rule.id!)?.status === 'inactive'">{{

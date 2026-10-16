@@ -4,7 +4,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { CredentialQuota } from '@modern/api/credential-observation'
 import { AppIcon, AppOverflowText, AppTooltip } from '@modern/components/ui'
-import { formatCompactNumber, formatNanoUSD } from '@modern/components/ui/format'
+import { formatCompactNumber, formatMoneyNano } from '@modern/components/ui/format'
 import {
   credentialTime,
   quotaRemaining,
@@ -17,7 +17,7 @@ const props = defineProps<{ windows: readonly CredentialQuota[] }>()
 const { t, te, n, locale } = useI18n()
 const minimumUsedPercent = 5
 const minimumRequests = 10
-const minimumCostNanoUSD = 10_000_000n
+const minimumCostNano = 10_000_000n
 const rows = computed(() =>
   sortedQuotaWindows(
     props.windows.filter(
@@ -38,19 +38,31 @@ function estimate(window: CredentialQuota): { text: string; hint: string } {
     return { text: '—', hint: t('credentialCards.estimateIncomplete') }
   const used = 100 - remaining
   const cost = BigInt(usage.cost)
-  if (used < minimumUsedPercent || usage.requests < minimumRequests || cost < minimumCostNanoUSD)
+  if (used < minimumUsedPercent || usage.requests < minimumRequests || cost < minimumCostNano)
     return {
       text: '—',
       hint: t('credentialCards.estimateSmallSample', {
         percent: n(minimumUsedPercent),
         requests: n(minimumRequests),
-        cost: formatNanoUSD(minimumCostNanoUSD.toString(), locale.value, 'narrowSymbol', 2),
+        cost: formatMoneyNano(
+          minimumCostNano.toString(),
+          usage.currency,
+          locale.value,
+          'narrowSymbol',
+          2,
+        ),
       }),
     }
-  // 以万分之一的比例精度外推，金额保留纳美元整数，避免转换原始金额时丢失精度。
+  // 以万分之一的比例精度外推，金额保留纳单位整数，避免转换原始金额时丢失精度。
   const usedBasisPoints = BigInt(Math.round(used * 100))
   const fullCost = (cost * 10_000n + usedBasisPoints / 2n) / usedBasisPoints
-  const amount = formatNanoUSD(fullCost.toString(), locale.value, 'narrowSymbol', 2)
+  const amount = formatMoneyNano(
+    fullCost.toString(),
+    usage.currency,
+    locale.value,
+    'narrowSymbol',
+    2,
+  )
   const hint = [
     t('credentialCards.estimateOnly'),
     t('credentialCards.estimateCost', { value: amount }),
@@ -145,7 +157,11 @@ function warning(window: CredentialQuota): string | undefined {
         </div>
         <div role="cell">
           <AppOverflowText
-            :text="window.usage ? formatNanoUSD(window.usage.cost, locale, 'narrowSymbol') : '—'"
+            :text="
+              window.usage
+                ? formatMoneyNano(window.usage.cost, window.usage.currency, locale, 'narrowSymbol')
+                : '—'
+            "
           />
         </div>
         <div role="cell" class="modern-window-usage-estimate">

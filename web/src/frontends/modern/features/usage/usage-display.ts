@@ -1,5 +1,5 @@
 import type { UsageAggregate, UsageItem, UsageMetric, UsageReport } from '@modern/api/usage'
-import { formatCompactNumber, formatNanoUSD } from '@modern/components/ui/format'
+import { formatCompactNumber, formatMoneyNano } from '@modern/components/ui/format'
 import { numberFormatter } from '@modern/components/ui/intl-formatters'
 import type { TrendMetric } from './usage-state'
 
@@ -19,24 +19,29 @@ export function percentage(value: number | null, locale: string): string {
 }
 export function distributionValue(row: UsageItem, metric: UsageMetric): number {
   return metric === 'cost'
-    ? Number(row.estimated_cost_nano_usd) / 1e9
+    ? Number(row.estimated_cost_nano) / 1e9
     : metric === 'tokens'
       ? row.total_tokens
       : row.request_count
 }
-export function formatUsageCost(value: string, locale: string): string {
-  return formatNanoUSD(value, locale, 'narrowSymbol', 2)
+export function formatUsageCost(value: string, currency: string, locale: string): string {
+  return formatMoneyNano(value, currency, locale, 'narrowSymbol', 2)
 }
-export function amount(row: UsageItem, metric: UsageMetric, locale: string): string {
+export function amount(
+  row: UsageItem,
+  metric: UsageMetric,
+  currency: string,
+  locale: string,
+): string {
   return metric === 'cost'
-    ? formatUsageCost(row.estimated_cost_nano_usd, locale)
+    ? formatUsageCost(row.estimated_cost_nano, currency, locale)
     : formatCompactNumber(distributionValue(row, metric), locale)
 }
 export function metricValue(row: UsageAggregate, metric: TrendMetric): number | null {
   if (metric === 'cache') return cacheRate(row)
   if (
     metric === 'cost' &&
-    row.estimated_cost_nano_usd === '0' &&
+    row.estimated_cost_nano === '0' &&
     (row.unpriced_request_count > 0 || row.pricing_partial_count > 0)
   )
     return null

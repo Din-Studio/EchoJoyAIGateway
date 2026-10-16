@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/testutil/pgtest"
@@ -99,7 +100,7 @@ func TestExternalDatabaseUsageExactWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := newRequestLogTestService(db)
-	query := UsageQuery{FromMS: from.UnixMilli(), ToMS: to.UnixMilli(), CredentialID: &credentialID}
+	query := UsageQuery{Currency: pricing.CurrencyUSD, FromMS: from.UnixMilli(), ToMS: to.UnixMilli(), CredentialID: &credentialID}
 	assertCount := func(query UsageQuery, want int64) UsageReport {
 		t.Helper()
 		report, err := service.QueryUsage(t.Context(), query)
@@ -199,7 +200,7 @@ func TestExternalDatabaseUsageExactWindow(t *testing.T) {
 			t.Fatal(err)
 		}
 		started := time.Now()
-		report, err := service.QueryUsage(t.Context(), UsageQuery{FromMS: longFrom.UnixMilli(), ToMS: longTo.UnixMilli(), CredentialID: &credentialID})
+		report, err := service.QueryUsage(t.Context(), UsageQuery{Currency: pricing.CurrencyUSD, FromMS: longFrom.UnixMilli(), ToMS: longTo.UnixMilli(), CredentialID: &credentialID})
 		if err != nil {
 			t.Fatal(err)
 		}

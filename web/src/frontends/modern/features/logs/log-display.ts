@@ -1,4 +1,5 @@
 import { numberFormatter, dateFormatter } from '@modern/components/ui/intl-formatters'
+import { exactMoneyNano } from '@modern/components/ui/format'
 import type { LogEntry } from '@modern/api/logs'
 import type { SemanticTone } from '@modern/components/ui'
 
@@ -26,7 +27,7 @@ export function logCanMergeError(row: LogEntry): boolean {
       row.cache_write_5m_tokens,
       row.cache_write_1h_tokens,
       row.cache_write_unknown_tokens,
-      row.estimated_cost_nano_usd,
+      row.estimated_cost_nano,
     ].every((value) => BigInt(value) === 0n)
   )
 }
@@ -36,21 +37,19 @@ export function logNumber(value: string | number, locale: string, compact = fals
     compact ? { notation: 'compact', maximumFractionDigits: 1 } : {},
   ).format(typeof value === 'string' ? BigInt(value) : value)
 }
-export function logMoney(value: string, locale: string): string {
+export function logMoney(value: string, currency: string, locale: string): string {
   const amount = BigInt(value)
   const formatter = numberFormatter(locale, {
     style: 'currency',
-    currency: 'USD',
+    currency,
     currencyDisplay: 'narrowSymbol',
     maximumFractionDigits: 6,
   })
   if (amount > 0n && amount < 1000n) return '<' + formatter.format(0.000001)
   return formatter.format(Number((amount + 500n) / 1000n) / 1000000)
 }
-export function exactLogMoney(value: string): string {
-  const padded = value.padStart(10, '0')
-  const fraction = padded.slice(-9).replace(/0+$/, '')
-  return '$' + padded.slice(0, -9) + (fraction ? '.' + fraction : '')
+export function exactLogMoney(value: string, currency: string, locale: string): string {
+  return exactMoneyNano(value, currency, locale)
 }
 export function logDuration(ms: number | null, locale: string): string {
   if (ms === null) return '—'

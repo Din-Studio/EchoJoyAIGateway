@@ -6,6 +6,7 @@ import (
 	"gpt-load/internal/automodel"
 	"gpt-load/internal/channel"
 	"gpt-load/internal/execution"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/reasoning"
 	"gpt-load/internal/usage"
@@ -155,6 +156,8 @@ type RequestEvent struct {
 	Reasoning             reasoning.Config
 	Attempts              []Attempt
 	Usage                 UsageObservation
+	// Currency 是请求授权时快照中的系统货币与汇率，费用按它折算为本币入账。
+	Currency pricing.Currency
 }
 
 type RequestLogSink interface {

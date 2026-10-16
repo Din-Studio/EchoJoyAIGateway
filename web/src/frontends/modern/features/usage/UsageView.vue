@@ -469,6 +469,17 @@ const bucketLabel = computed(() => {
       >
         <AppBadge tone="warning" size="xs" tabindex="0">{{ t('usage.incomplete') }}</AppBadge>
       </AppTooltip>
+      <AppTooltip
+        v-if="report && report.other_currencies.length"
+        :label="
+          t('usage.otherCurrenciesHint', {
+            currencies: report.other_currencies.join(', '),
+            currency: report.currency,
+          })
+        "
+      >
+        <AppBadge tone="info" size="xs" tabindex="0">{{ t('usage.otherCurrencies') }}</AppBadge>
+      </AppTooltip>
       <AppFilterSummary :items="filterSummary" @remove="reset" @reset="reset()" />
     </div>
     <AppCollectionState
@@ -533,8 +544,9 @@ const bucketLabel = computed(() => {
               :dimension="dimension"
               :distribution="report.distributions[dimension]![state.metric]"
               :metric="state.metric"
+              :currency="report.currency"
               :cost-unavailable="
-                report.summary.estimated_cost_nano_usd === '0' &&
+                report.summary.estimated_cost_nano === '0' &&
                 (report.summary.unpriced_request_count > 0 ||
                   report.summary.pricing_partial_count > 0)
               "

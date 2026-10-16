@@ -49,6 +49,7 @@ type authSessionResponse struct {
 
 var accessKeyControlRoutes = map[string]struct{}{
 	"/api/auth/session":     {},
+	"/api/currency":         {},
 	"/api/home":             {},
 	"/api/home/statistics":  {},
 	"/api/models":           {},

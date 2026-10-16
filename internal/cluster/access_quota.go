@@ -124,18 +124,18 @@ func (quota *AccessQuota) Admit(
 func (quota *AccessQuota) Complete(
 	ctx context.Context,
 	ticket accessquota.Ticket,
-	costNanoUSD int64,
+	costNano int64,
 ) (accessquota.CompletionResult, error) {
-	if ticket.AccessKeyID == 0 || len(ticket.Rules) == 0 || costNanoUSD == 0 {
+	if ticket.AccessKeyID == 0 || len(ticket.Rules) == 0 || costNano == 0 {
 		return accessquota.CompletionResult{}, nil
 	}
 	keys := make([]string, 0, len(ticket.Rules))
 	headroom := int64(math.MaxInt64)
-	if costNanoUSD > 0 {
-		headroom -= costNanoUSD
+	if costNano > 0 {
+		headroom -= costNano
 	}
 	args := make([]any, 0, 3+len(ticket.Rules)*2)
-	args = append(args, strconv.FormatInt(costNanoUSD, 10), strconv.FormatInt(headroom, 10), quotaStateTTLArg())
+	args = append(args, strconv.FormatInt(costNano, 10), strconv.FormatInt(headroom, 10), quotaStateTTLArg())
 	for _, rule := range ticket.Rules {
 		keys = append(keys, quota.ruleKey(ticket.AccessKeyID, rule.RuleID))
 		args = append(args, strconv.FormatUint(rule.RuleRevision, 10), strconv.FormatUint(rule.WindowGeneration, 10))
@@ -322,7 +322,7 @@ func (quota *AccessQuota) evaluate(
 		keys = append(keys, quota.ruleKey(accessKeyID, rule.ID))
 		windowEnd := nowMS + rule.PeriodSeconds*int64(time.Second/time.Millisecond)
 		args = append(args, strconv.FormatUint(rule.Revision, 10), string(rule.Kind),
-			strconv.FormatInt(rule.LimitNanoUSD, 10), strconv.FormatInt(windowEnd, 10))
+			strconv.FormatInt(rule.LimitNano, 10), strconv.FormatInt(windowEnd, 10))
 	}
 	for attempt := 0; ; attempt++ {
 		reply, err := quota.runState(ctx, quotaScript, keys, args)
@@ -403,7 +403,7 @@ func (quota *AccessQuota) hydrate(
 		}
 		keys = append(keys, quota.ruleKey(accessKeyID, rule.ID))
 		args = append(args,
-			strconv.FormatUint(checkpoint.RuleRevision, 10), strconv.FormatInt(checkpoint.UsedNanoUSD, 10),
+			strconv.FormatUint(checkpoint.RuleRevision, 10), strconv.FormatInt(checkpoint.UsedNano, 10),
 			formatOptionalMS(checkpoint.WindowStartedAtMS), formatOptionalMS(checkpoint.WindowEndsAtMS),
 			strconv.FormatUint(checkpoint.WindowGeneration, 10), strconv.FormatUint(checkpoint.SnapshotVersion, 10))
 	}
@@ -484,7 +484,7 @@ func parseRuleState(accessKeyID, ruleID uint, revision uint64, fields []string) 
 		return accessquota.RestoredState{}, fmt.Errorf("decode access quota rule %d state: %w", ruleID, err)
 	}
 	return accessquota.RestoredState{
-		AccessKeyID: accessKeyID, RuleID: ruleID, RuleRevision: revision, UsedNanoUSD: used,
+		AccessKeyID: accessKeyID, RuleID: ruleID, RuleRevision: revision, UsedNano: used,
 		WindowStartedAtMS: started, WindowEndsAtMS: ends, WindowGeneration: generation, SnapshotVersion: version,
 	}, nil
 }

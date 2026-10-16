@@ -20,7 +20,7 @@ import {
   AppSwitch,
   AppTextField,
 } from '@modern/components/ui'
-import { formatCompactNumber, formatNanoUSD } from '@modern/components/ui/format'
+import { formatCompactNumber, formatMoneyNano } from '@modern/components/ui/format'
 import type { SemanticTone } from '@modern/components/ui/types'
 import { useApiClient } from '@shared/http/client-context'
 
@@ -262,9 +262,9 @@ const lastActive = computed(() =>
         </AppTooltip>
         <span class="modern-group-secondary modern-group-cost">
           {{
-            !usage || (partial && usage.costNanoUSD === '0')
+            !usage || (partial && usage.costNano === '0')
               ? '—'
-              : formatNanoUSD(usage.costNanoUSD, locale)
+              : formatMoneyNano(usage.costNano, usage.currency, locale)
           }}
         </span>
       </div>

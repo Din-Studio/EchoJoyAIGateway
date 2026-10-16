@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useSystemCurrency } from '@modern/app/currency'
 import { SlidersHorizontal } from '@lucide/vue'
 import { computed, onScopeDispose, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -31,8 +32,8 @@ import { useApiClient } from '@shared/http/client-context'
 import {
   advancedLogFilters,
   logFilterErrors,
-  nanoToUSD,
-  usdToNano,
+  nanoToDecimal,
+  decimalToNano,
   type LogFilterDefinition,
 } from './log-filters'
 
@@ -53,6 +54,8 @@ const emit = defineEmits<{
   more: [value: boolean]
 }>()
 const { t, te } = useI18n()
+// 费用筛选只匹配以当前系统货币结算的请求，金额单位即系统货币。
+const systemCurrency = useSystemCurrency()
 const client = useApiClient()
 const draft = ref<LogQuery>({})
 const from = ref('')
@@ -69,8 +72,8 @@ watch(
     edited = false
     draft.value = {
       ...filters,
-      cost_min_nano_usd: nanoToUSD(filters.cost_min_nano_usd),
-      cost_max_nano_usd: nanoToUSD(filters.cost_max_nano_usd),
+      cost_min_nano: nanoToDecimal(filters.cost_min_nano),
+      cost_max_nano: nanoToDecimal(filters.cost_max_nano),
     }
     from.value = formatLocalDateTime(Number(filters.from_ms))
     to.value = formatLocalDateTime(Number(filters.to_ms))
@@ -84,14 +87,14 @@ const request = computed(() => {
       .map(([key, value]) => [key, value?.trim()])
       .filter(([, value]) => value),
   ) as LogQuery
-  for (const key of ['cost_min_nano_usd', 'cost_max_nano_usd'] as const)
-    if (draft.value[key]?.trim()) result[key] = usdToNano(draft.value[key]!)
+  for (const key of ['cost_min_nano', 'cost_max_nano'] as const)
+    if (draft.value[key]?.trim()) result[key] = decimalToNano(draft.value[key]!)
   return result
 })
 const errors = computed(() => {
   const result = logFilterErrors(request.value)
-  for (const key of ['cost_min_nano_usd', 'cost_max_nano_usd'] as const)
-    if (draft.value[key]?.trim() && usdToNano(draft.value[key]!) === undefined)
+  for (const key of ['cost_min_nano', 'cost_max_nano'] as const)
+    if (draft.value[key]?.trim() && decimalToNano(draft.value[key]!) === undefined)
       result[key] = 'invalidAmount'
   return result
 })
@@ -137,12 +140,16 @@ function rangeLabel(field: LogFilterDefinition): string {
   // 下限字段代表整段范围；重试次数没有对应列，单独取筛选文案。
   if (field.key === 'retry_count_min') return t('logs.filters.retry_count')
   const column = field.key.startsWith('cost_')
-    ? 'estimated_cost_nano_usd'
+    ? 'estimated_cost_nano'
     : field.key.replace('_min', '')
   return t('logs.columns.' + column)
 }
 function rangeUnit(field: LogFilterDefinition): string {
-  return field.key.endsWith('_ms') ? ' (ms)' : field.kind === 'money' ? ' ($)' : ''
+  return field.key.endsWith('_ms')
+    ? ' (ms)'
+    : field.kind === 'money' && systemCurrency.value
+      ? ` (${systemCurrency.value.currency})`
+      : ''
 }
 function upperKey(key: LogFilterName): LogFilterName {
   return key.replace('_min', '_max') as LogFilterName

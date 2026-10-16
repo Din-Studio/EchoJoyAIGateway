@@ -859,7 +859,7 @@ func TestEnrichCredentialObservationUsageUsesHourlyStatsForEveryWindow(t *testin
 	if shortUsage == nil || longUsage == nil ||
 		shortUsage.RequestCount != 3 || shortUsage.InputTokens != 16 ||
 		shortUsage.OutputTokens != 7 || shortUsage.TotalTokens != 23 ||
-		shortUsage.EstimatedReferenceCostNanoUSD != "29" ||
+		shortUsage.EstimatedReferenceCostNano != "29" ||
 		response.Snapshot.QuotaWindows[2].ObservedUsage != nil {
 		t.Fatalf("enriched snapshot = %#v", response.Snapshot)
 	}

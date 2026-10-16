@@ -201,7 +201,9 @@ export interface GroupUsage {
   requests: number
   successes: number
   tokens: number
-  costNanoUSD: string
+  // costNano 以 currency 计，只含以该币种结算的费用。
+  currency: string
+  costNano: string
   incomplete: boolean
 }
 
@@ -230,9 +232,10 @@ export async function getGroupUsage(
     !boolean(data.data_complete) ||
     integer(health.dropped_total) > 0 ||
     integer(health.write_failure_total) > 0
+  const currency = text(data.currency)
   const items = list(data.items).map((raw): GroupUsage => {
     const item = record(raw)
-    const cost = text(item.estimated_cost_nano_usd)
+    const cost = text(item.estimated_cost_nano)
     if (!/^(0|[1-9]\d*)$/u.test(cost)) throw new InvalidResponseError()
     const requests = integer(item.request_count)
     const successes = integer(item.success_count)
@@ -242,7 +245,8 @@ export async function getGroupUsage(
       requests,
       successes,
       tokens: integer(item.total_tokens),
-      costNanoUSD: cost,
+      currency,
+      costNano: cost,
       incomplete:
         integer(item.usage_missing_count) > 0 ||
         integer(item.partial_count) > 0 ||

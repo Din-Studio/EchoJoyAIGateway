@@ -13,7 +13,7 @@ import {
   AppSegmentedBar,
   AppTooltip,
 } from '@modern/components/ui'
-import { formatCompactNumber, formatNanoUSD } from '@modern/components/ui/format'
+import { formatCompactNumber, formatMoneyNano } from '@modern/components/ui/format'
 
 const props = defineProps<{
   group: GroupRow
@@ -101,7 +101,7 @@ useLoadingActivity(() => props.loading)
       </div>
       <div>
         <dt>{{ t('groups.row.estimatedCost') }}</dt>
-        <dd>{{ missing ? '—' : formatNanoUSD(usage!.costNanoUSD, locale) }}</dd>
+        <dd>{{ missing ? '—' : formatMoneyNano(usage!.costNano, usage!.currency, locale) }}</dd>
       </div>
     </dl>
     <div class="modern-group-overview-trend">

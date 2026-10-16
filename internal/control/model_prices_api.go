@@ -48,6 +48,9 @@ type ModelPriceListQuery struct {
 	PageSize int64
 }
 
+// nullableDecimal decodes a price per million tokens. JSON carries it in the
+// system currency; the HTTP handler calls convertToUSD before the service reads
+// nanoUSD, so the service always sees USD.
 type nullableDecimal struct {
 	present bool
 	nanoUSD *int64
@@ -194,12 +197,11 @@ func (value *nullableDecimal) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &decimal); err != nil {
 		return err
 	}
-	parsed, err := pricing.ParseUSD(decimal)
+	parsed, err := pricing.ParseAmount(decimal)
 	if err != nil {
 		return fmt.Errorf("parse model price decimal: %v: %w", err, app_errors.ErrValidation)
 	}
-	nanoUSD := int64(parsed)
-	value.nanoUSD = &nanoUSD
+	value.nanoUSD = &parsed
 	return nil
 }
 
@@ -356,6 +358,17 @@ func (s *Server) handleListModelPrices(c *gin.Context) {
 		writeServiceError(c, "list_model_prices", err)
 		return
 	}
+	currency, err := s.service.currentCurrency()
+	if err != nil {
+		writeServiceError(c, "list_model_prices", err)
+		return
+	}
+	for index := range result.Items {
+		if result.Items[index], err = result.Items[index].inCurrency(currency); err != nil {
+			writeServiceError(c, "list_model_prices", err)
+			return
+		}
+	}
 	response.SuccessI18n(c, "common.success", result)
 }
 
@@ -371,6 +384,15 @@ func (s *Server) handleGetUpstreamModelDetail(c *gin.Context) {
 	}
 	result, err := s.service.GetUpstreamModelDetail(c.Request.Context(), id)
 	if err != nil {
+		writeServiceError(c, "get_upstream_model_detail", err)
+		return
+	}
+	currency, err := s.service.currentCurrency()
+	if err != nil {
+		writeServiceError(c, "get_upstream_model_detail", err)
+		return
+	}
+	if result.Price, err = result.Price.inCurrency(currency); err != nil {
 		writeServiceError(c, "get_upstream_model_detail", err)
 		return
 	}
@@ -391,12 +413,26 @@ func (s *Server) handleUpdateModelPrice(c *gin.Context) {
 		writeServiceError(c, "update_model_price", mapControlJSONError(err))
 		return
 	}
+	currency, err := s.service.currentCurrency()
+	if err != nil {
+		writeServiceError(c, "update_model_price", err)
+		return
+	}
+	if err := request.convertToUSD(currency); err != nil {
+		writeServiceError(c, "update_model_price", err)
+		return
+	}
 	result, err := s.service.UpdateModelPrice(c.Request.Context(), id, request)
 	if err != nil {
 		writeServiceError(c, "update_model_price", err)
 		return
 	}
-	response.SuccessI18n(c, "common.success", result)
+	converted, err := result.inCurrency(currency)
+	if err != nil {
+		writeServiceError(c, "update_model_price", err)
+		return
+	}
+	response.SuccessI18n(c, "common.success", converted)
 }
 
 func (s *Server) handleResetModelPrice(c *gin.Context) {
@@ -413,7 +449,17 @@ func (s *Server) handleResetModelPrice(c *gin.Context) {
 		writeServiceError(c, "reset_model_price", err)
 		return
 	}
-	response.SuccessI18n(c, "common.success", result)
+	currency, err := s.service.currentCurrency()
+	if err != nil {
+		writeServiceError(c, "reset_model_price", err)
+		return
+	}
+	converted, err := result.inCurrency(currency)
+	if err != nil {
+		writeServiceError(c, "reset_model_price", err)
+		return
+	}
+	response.SuccessI18n(c, "common.success", converted)
 }
 
 func (s *Server) handleDeleteModelPrice(c *gin.Context) {

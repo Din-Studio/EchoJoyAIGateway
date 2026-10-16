@@ -17,6 +17,7 @@ import (
 
 	"gpt-load/internal/channel"
 	"gpt-load/internal/platform/config"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/requestlog"
 	"gpt-load/internal/storage/models"
 )
@@ -595,7 +596,7 @@ func TestUsageAPIRejectsStrictInvalidQueriesWithoutCallingReader(t *testing.T) {
 func TestMapUsageRejectsUnsafeOrMismatchedDistribution(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
-	query := requestlog.UsageQuery{
+	query := requestlog.UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS:      time.Date(2026, time.July, 27, 0, 0, 0, 0, time.UTC).UnixMilli(),
 		ToMS:        time.Date(2026, time.July, 28, 0, 0, 0, 0, time.UTC).UnixMilli(),
 		Granularity: requestlog.UsageGranularityHour,

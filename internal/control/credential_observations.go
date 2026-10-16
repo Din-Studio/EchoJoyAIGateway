@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"strconv"
 	"time"
 
 	"gorm.io/gorm"
 
 	"gpt-load/internal/channel"
 	app_errors "gpt-load/internal/platform/errors"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/requestlog"
 	"gpt-load/internal/storage/models"
 	providerobservation "gpt-load/internal/subscription/providers/observation"
@@ -63,18 +63,20 @@ type ObservationQuotaWindow struct {
 }
 
 type ObservationWindowUsage struct {
-	WindowStartMS                 int64  `json:"window_start_ms"`
-	WindowEndMS                   int64  `json:"window_end_ms"`
-	Source                        string `json:"source"`
-	DataComplete                  bool   `json:"data_complete"`
-	UsageComplete                 bool   `json:"usage_complete"`
-	PricingComplete               bool   `json:"pricing_complete"`
-	RequestCount                  int64  `json:"request_count"`
-	InputTokens                   int64  `json:"input_tokens"`
-	OutputTokens                  int64  `json:"output_tokens"`
-	TotalTokens                   int64  `json:"total_tokens"`
-	EstimatedReferenceCostNanoUSD string `json:"estimated_reference_cost_nano_usd"`
-	LastUsedAtMS                  *int64 `json:"last_used_at_ms,omitempty"`
+	WindowStartMS   int64  `json:"window_start_ms"`
+	WindowEndMS     int64  `json:"window_end_ms"`
+	Source          string `json:"source"`
+	DataComplete    bool   `json:"data_complete"`
+	UsageComplete   bool   `json:"usage_complete"`
+	PricingComplete bool   `json:"pricing_complete"`
+	RequestCount    int64  `json:"request_count"`
+	InputTokens     int64  `json:"input_tokens"`
+	OutputTokens    int64  `json:"output_tokens"`
+	TotalTokens     int64  `json:"total_tokens"`
+	// 参考费用不参与对账，按当前汇率把美元合计换算为系统货币。
+	Currency                   pricing.CurrencyCode `json:"currency"`
+	EstimatedReferenceCostNano string               `json:"estimated_reference_cost_nano"`
+	LastUsedAtMS               *int64               `json:"last_used_at_ms,omitempty"`
 }
 
 type CredentialObservationSnapshot struct {
@@ -839,6 +841,10 @@ func (s *Service) enrichCredentialObservationUsage(
 		response.Snapshot == nil {
 		return
 	}
+	currency, err := s.currentCurrency()
+	if err != nil {
+		return
+	}
 	for index := range response.Snapshot.QuotaWindows {
 		window := &response.Snapshot.QuotaWindows[index]
 		if window.Scope != "account" || window.ResetAtMS == nil ||
@@ -866,7 +872,7 @@ func (s *Service) enrichCredentialObservationUsage(
 		if err != nil {
 			continue
 		}
-		mapped, ok := mapObservationWindowUsage(fromMS, *window.ResetAtMS, observed)
+		mapped, ok := mapObservationWindowUsage(fromMS, *window.ResetAtMS, observed, currency)
 		if ok {
 			window.ObservedUsage = mapped
 		}
@@ -877,6 +883,7 @@ func mapObservationWindowUsage(
 	fromMS int64,
 	toMS int64,
 	observed requestlog.CredentialWindowUsage,
+	currency pricing.Currency,
 ) (*ObservationWindowUsage, bool) {
 	inputTokens := int64(0)
 	for _, value := range []int64{
@@ -904,11 +911,12 @@ func mapObservationWindowUsage(
 		UsageComplete: observed.UsageMissingCount == 0 && observed.PartialCount == 0,
 		PricingComplete: observed.UnpricedRequestCount == 0 &&
 			observed.PricingPartialCount == 0,
-		RequestCount:                  observed.RequestCount,
-		InputTokens:                   inputTokens,
-		OutputTokens:                  observed.OutputTokens,
-		TotalTokens:                   totalTokens,
-		EstimatedReferenceCostNanoUSD: strconv.FormatInt(observed.EstimatedCostNanoUSD, 10),
-		LastUsedAtMS:                  observed.LastUsedAtMS,
+		RequestCount:               observed.RequestCount,
+		InputTokens:                inputTokens,
+		OutputTokens:               observed.OutputTokens,
+		TotalTokens:                totalTokens,
+		Currency:                   currency.Code,
+		EstimatedReferenceCostNano: settledNanoString(currency, observed.EstimatedCostNanoUSD),
+		LastUsedAtMS:               observed.LastUsedAtMS,
 	}, true
 }

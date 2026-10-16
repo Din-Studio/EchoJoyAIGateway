@@ -163,6 +163,7 @@ func (s *Server) HTTPModule() httproute.Module {
 			controlRoute("control.usage", http.MethodGet, "/usage", s.handleUsage),
 			controlRoute("control.route.inspect", http.MethodPost, "/route/inspect", s.handleRouteInspect),
 			controlRoute("control.settings.get", http.MethodGet, "/settings", s.handleGetSettings),
+			controlRoute("control.currency", http.MethodGet, "/currency", s.handleCurrency),
 			controlRoute(
 				"control.settings.update",
 				http.MethodPut,

@@ -45,7 +45,7 @@ func (service *Service) QueryUsage(ctx context.Context, input UsageQuery) (Usage
 		if err := validateUsageIntegrity(scope, 0); err != nil {
 			return err
 		}
-		summary, err := queryUsageSummary(scope.Session(&gorm.Session{}))
+		summary, err := queryUsageSummary(scope.Session(&gorm.Session{}), input.Currency)
 		if err != nil {
 			return err
 		}
@@ -54,13 +54,17 @@ func (service *Service) QueryUsage(ctx context.Context, input UsageQuery) (Usage
 			return err
 		}
 		distributions, err := queryUsageDistributions(
-			scope.Session(&gorm.Session{}), summary, input.SelfScoped,
+			scope.Session(&gorm.Session{}), summary, input,
 		)
 		if err != nil {
 			return err
 		}
+		others, err := queryOtherCurrencies(scope.Session(&gorm.Session{}), input.Currency)
+		if err != nil {
+			return err
+		}
 		report = UsageReport{
-			Summary: summary, Series: series, Distributions: distributions,
+			Summary: summary, Series: series, Distributions: distributions, OtherCurrencies: others,
 		}
 		return nil
 	})
@@ -84,13 +88,16 @@ func validateUsageQuery(input UsageQuery) (int64, error) {
 	if input.CredentialID != nil && *input.CredentialID == 0 {
 		return 0, fmt.Errorf("query usage: invalid credential scope")
 	}
+	if _, err := pricing.ParseCurrencyCode(string(input.Currency)); err != nil {
+		return 0, fmt.Errorf("query usage: %w", err)
+	}
 	return bucketWidthMS, nil
 }
 
 func queryUsageDistributions(
 	scope *gorm.DB,
 	summary UsageAggregate,
-	selfScoped bool,
+	input UsageQuery,
 ) (UsageDistributions, error) {
 	result := UsageDistributions{
 		Group:     make(map[UsageDistributionMetric]UsageDistribution, 3),
@@ -102,7 +109,7 @@ func queryUsageDistributions(
 		UsageDistributionDimensionModel,
 		UsageDistributionDimensionAccessKey,
 	}
-	if selfScoped {
+	if input.SelfScoped {
 		dimensions = []UsageDistributionDimension{UsageDistributionDimensionModel}
 	}
 	for _, dimension := range dimensions {
@@ -111,7 +118,7 @@ func queryUsageDistributions(
 			UsageDistributionMetricTokens,
 			UsageDistributionMetricCost,
 		} {
-			distribution, err := queryUsageDistribution(scope, summary, dimension, metric)
+			distribution, err := queryUsageDistribution(scope, summary, dimension, metric, input.Currency)
 			if err != nil {
 				return UsageDistributions{}, err
 			}
@@ -207,9 +214,9 @@ func validateUsageIntegrity(scope *gorm.DB, bucketAlignmentMS int64) error {
 	return nil
 }
 
-func queryUsageSummary(scope *gorm.DB) (UsageAggregate, error) {
+func queryUsageSummary(scope *gorm.DB, currency pricing.CurrencyCode) (UsageAggregate, error) {
 	var summary UsageAggregate
-	if err := scope.Select(usageAggregateSelect).Find(&summary).Error; err != nil {
+	if err := scope.Select(usageAggregateSelect, currency).Find(&summary).Error; err != nil {
 		return UsageAggregate{}, fmt.Errorf("query usage summary: %w", err)
 	}
 	if err := validateUsageAggregate(summary); err != nil {
@@ -218,14 +225,14 @@ func queryUsageSummary(scope *gorm.DB) (UsageAggregate, error) {
 	return summary, nil
 }
 
-func queryUsageSeries(scope *gorm.DB, bucketWidthMS int64) ([]UsageSeriesPoint, error) {
+func queryUsageSeries(scope *gorm.DB, bucketWidthMS int64, currency pricing.CurrencyCode) ([]UsageSeriesPoint, error) {
 	if bucketWidthMS < epochms.MillisecondsPerHour ||
 		bucketWidthMS > epochms.MillisecondsPerDay ||
 		bucketWidthMS%epochms.MillisecondsPerHour != 0 {
 		return nil, fmt.Errorf("query usage series: invalid bucket width %d", bucketWidthMS)
 	}
 	var source []usageHourPoint
-	if err := scope.Select("bucket_start_ms, " + usageAggregateSelect).
+	if err := scope.Select("bucket_start_ms, "+usageAggregateSelect, currency).
 		Group("bucket_start_ms").
 		Order("bucket_start_ms ASC").
 		Find(&source).Error; err != nil {
@@ -256,11 +263,12 @@ func queryUsageDistribution(
 	summary UsageAggregate,
 	dimension UsageDistributionDimension,
 	metric UsageDistributionMetric,
+	currency pricing.CurrencyCode,
 ) (UsageDistribution, error) {
 	if dimension == UsageDistributionDimensionGroup {
 		scope = scope.Where("group_id > 0")
 		var err error
-		summary, err = queryUsageSummary(scope.Session(&gorm.Session{}))
+		summary, err = queryUsageSummary(scope.Session(&gorm.Session{}), currency)
 		if err != nil {
 			return UsageDistribution{}, err
 		}
@@ -269,15 +277,15 @@ func queryUsageDistribution(
 	query := scope.Session(&gorm.Session{})
 	switch dimension {
 	case UsageDistributionDimensionGroup:
-		query = query.Select("group_id, 0 AS access_key_id, '' AS model, "+usageDistributionAggregateSelect).
+		query = query.Select("group_id, 0 AS access_key_id, '' AS model, "+usageDistributionAggregateSelect, currency).
 			Where("group_id IN (?)", scope.Session(&gorm.Session{NewDB: true}).
 				Model(&models.Group{}).Select("id")).
 			Group("group_id")
 	case UsageDistributionDimensionModel:
-		query = query.Select("0 AS group_id, 0 AS access_key_id, model, " + usageDistributionAggregateSelect).
+		query = query.Select("0 AS group_id, 0 AS access_key_id, model, "+usageDistributionAggregateSelect, currency).
 			Group("model")
 	case UsageDistributionDimensionAccessKey:
-		query = query.Select("0 AS group_id, access_key_id, '' AS model, "+usageDistributionAggregateSelect).
+		query = query.Select("0 AS group_id, access_key_id, '' AS model, "+usageDistributionAggregateSelect, currency).
 			Where("access_key_id IN (?)", scope.Session(&gorm.Session{NewDB: true}).
 				Model(&models.AccessKey{}).Select("id")).
 			Group("access_key_id")
@@ -342,7 +350,7 @@ func queryUsageDistribution(
 	if err != nil {
 		return UsageDistribution{}, fmt.Errorf("calculate other usage distribution: %w", err)
 	}
-	if other.RequestCount > 0 || other.TotalTokens > 0 || other.EstimatedCostNanoUSD > 0 {
+	if other.RequestCount > 0 || other.TotalTokens > 0 || other.EstimatedCostNanoUSD > 0 || other.EstimatedCostNano > 0 {
 		result.Other = &other
 	}
 	return result, nil
@@ -413,6 +421,11 @@ func addUsageAggregates(left, right UsageAggregate) (UsageAggregate, error) {
 		return UsageAggregate{}, fmt.Errorf("estimated cost nano USD overflow or negative")
 	}
 	result.EstimatedCostNanoUSD = int64(cost)
+	settled, ok := usage.CheckedAdd(left.EstimatedCostNano, right.EstimatedCostNano)
+	if !ok {
+		return UsageAggregate{}, fmt.Errorf("estimated cost nano overflow or negative")
+	}
+	result.EstimatedCostNano = settled
 	if err := validateUsageAggregate(result); err != nil {
 		return UsageAggregate{}, err
 	}
@@ -437,8 +450,13 @@ func addUsageDistributionAggregates(
 	if !ok {
 		return UsageDistributionAggregate{}, fmt.Errorf("estimated cost overflow or negative")
 	}
+	settled, ok := usage.CheckedAdd(left.EstimatedCostNano, right.EstimatedCostNano)
+	if !ok {
+		return UsageDistributionAggregate{}, fmt.Errorf("estimated settled cost overflow or negative")
+	}
 	return UsageDistributionAggregate{
-		RequestCount: requests, TotalTokens: tokens, EstimatedCostNanoUSD: int64(cost),
+		RequestCount: requests, TotalTokens: tokens,
+		EstimatedCostNanoUSD: int64(cost), EstimatedCostNano: int64(settled),
 	}, nil
 }
 
@@ -452,13 +470,15 @@ func subtractUsageDistributionAggregate(
 	}
 	if part.RequestCount < 0 || part.RequestCount > total.RequestCount ||
 		part.TotalTokens < 0 || part.TotalTokens > totalTokens ||
-		part.EstimatedCostNanoUSD < 0 || part.EstimatedCostNanoUSD > total.EstimatedCostNanoUSD {
+		part.EstimatedCostNanoUSD < 0 || part.EstimatedCostNanoUSD > total.EstimatedCostNanoUSD ||
+		part.EstimatedCostNano < 0 || part.EstimatedCostNano > total.EstimatedCostNano {
 		return UsageDistributionAggregate{}, fmt.Errorf("invalid distribution remainder")
 	}
 	return UsageDistributionAggregate{
 		RequestCount:         total.RequestCount - part.RequestCount,
 		TotalTokens:          totalTokens - part.TotalTokens,
 		EstimatedCostNanoUSD: total.EstimatedCostNanoUSD - part.EstimatedCostNanoUSD,
+		EstimatedCostNano:    total.EstimatedCostNano - part.EstimatedCostNano,
 	}, nil
 }
 
@@ -493,7 +513,7 @@ func validateUsageAggregate(aggregate UsageAggregate) error {
 	if _, err := usageAggregateTotalTokens(aggregate); err != nil {
 		return err
 	}
-	if aggregate.EstimatedCostNanoUSD < 0 {
+	if aggregate.EstimatedCostNanoUSD < 0 || aggregate.EstimatedCostNano < 0 {
 		return fmt.Errorf("invalid cost")
 	}
 	return nil
@@ -530,6 +550,7 @@ const usageAggregateSelect = "" +
 	"COALESCE(SUM(cache_write_unknown_tokens), 0) AS cache_write_unknown_tokens, " +
 	"COALESCE(SUM(output_tokens), 0) AS output_tokens, " +
 	"COALESCE(SUM(estimated_cost_nano_usd), 0) AS estimated_cost_nano_usd, " +
+	settledCostSum + " AS estimated_cost_nano, " +
 	"COALESCE(SUM(usage_missing_count), 0) AS usage_missing_count, " +
 	"COALESCE(SUM(partial_count), 0) AS partial_count, " +
 	"COALESCE(SUM(unpriced_request_count), 0) AS unpriced_request_count, " +
@@ -546,7 +567,23 @@ const usageDistributionTotalTokensExpression = "" +
 const usageDistributionAggregateSelect = "" +
 	"COALESCE(SUM(request_count), 0) AS request_count, " +
 	usageDistributionTotalTokensExpression + " AS total_tokens, " +
-	"COALESCE(SUM(estimated_cost_nano_usd), 0) AS estimated_cost_nano_usd"
+	"COALESCE(SUM(estimated_cost_nano_usd), 0) AS estimated_cost_nano_usd, " +
+	settledCostSum + " AS estimated_cost_nano"
+
+// settledCostSum sums only rows settled in the bound currency; callers pass
+// that currency as the select argument for its single placeholder.
+const settledCostSum = "COALESCE(SUM(CASE WHEN currency = ? THEN estimated_cost_nano ELSE 0 END), 0)"
+
+// queryOtherCurrencies lists the currencies other than the selected one that
+// still carry cost in the scope.
+func queryOtherCurrencies(scope *gorm.DB, currency pricing.CurrencyCode) ([]pricing.CurrencyCode, error) {
+	var codes []pricing.CurrencyCode
+	if err := scope.Where("currency <> ? AND estimated_cost_nano_usd > 0", currency).
+		Distinct("currency").Order("currency ASC").Pluck("currency", &codes).Error; err != nil {
+		return nil, fmt.Errorf("query other usage currencies: %w", err)
+	}
+	return codes, nil
+}
 
 type usageHourPoint struct {
 	BucketStartMS int64

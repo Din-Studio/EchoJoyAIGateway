@@ -24,7 +24,8 @@ import (
 func TestDecodeRequestLogRowsPreservesUsageCostAttribution(t *testing.T) {
 	reasoningBudget := int64(8192)
 	rows := []models.RequestLog{{
-		ID:                    "00000000-0000-4000-8000-000000000601",
+		ID:       "00000000-0000-4000-8000-000000000601",
+		Currency: "USD", ExchangeRateMicros: 1_000_000,
 		CompletedAtMS:         1_785_085_323_000,
 		AccessKeyID:           61,
 		GroupID:               17,
@@ -141,7 +142,8 @@ func TestDecodeAttemptRowsRejectsInvalidUpstreamProtocolOnEveryAttempt(t *testin
 
 func TestDecodeRequestLogRowsRejectsInvalidUsageCostValues(t *testing.T) {
 	base := models.RequestLog{
-		ID:                  "00000000-0000-4000-8000-000000000602",
+		ID:       "00000000-0000-4000-8000-000000000602",
+		Currency: "USD", ExchangeRateMicros: 1_000_000,
 		CompletedAtMS:       1_785_110_400_000,
 		Protocol:            string(protocol.OpenAICompletions),
 		ModelConsistency:    string(telemetry.ModelConsistencyNotApplicable),
@@ -228,7 +230,8 @@ func TestDecodeRequestLogRowsAcceptsApprovedUsageCostMatrix(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			row := models.RequestLog{
-				ID:                   "00000000-0000-4000-8000-000000000604",
+				ID:       "00000000-0000-4000-8000-000000000604",
+				Currency: "USD", ExchangeRateMicros: 1_000_000,
 				CompletedAtMS:        1_785_110_400_000,
 				Protocol:             string(protocol.OpenAICompletions),
 				ModelConsistency:     string(telemetry.ModelConsistencyNotApplicable),
@@ -253,7 +256,8 @@ func TestDecodeRequestLogRowsAcceptsApprovedUsageCostMatrix(t *testing.T) {
 
 func TestDecodeRequestLogRowsRejectsInvalidModelConsistency(t *testing.T) {
 	row := models.RequestLog{
-		ID:                    "00000000-0000-4000-8000-000000000606",
+		ID:       "00000000-0000-4000-8000-000000000606",
+		Currency: "USD", ExchangeRateMicros: 1_000_000,
 		CompletedAtMS:         1_785_110_400_000,
 		Protocol:              string(protocol.OpenAICompletions),
 		UpstreamModel:         "model-a",
@@ -980,7 +984,8 @@ func requestLogQueryRow(
 		})
 	}
 	return models.RequestLog{
-		ID:                    id,
+		ID:       id,
+		Currency: "USD", ExchangeRateMicros: 1_000_000,
 		CompletedAtMS:         completedAt.UTC().UnixMilli(),
 		AccessKeyID:           accessKeyID,
 		Protocol:              string(protocol.OpenAICompletions),

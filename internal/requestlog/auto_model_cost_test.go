@@ -39,7 +39,7 @@ func TestDecisionFeeIsCountedGloballyOnceAndExcludedFromGroup(t *testing.T) {
 		}
 	}
 	service := newRequestLogTestService(db)
-	query := UsageQuery{FromMS: row.CompletedAtMS - 1000, ToMS: row.CompletedAtMS + 86400000}
+	query := UsageQuery{Currency: pricing.CurrencyUSD, FromMS: row.CompletedAtMS - 1000, ToMS: row.CompletedAtMS + 86400000}
 	report, err := service.QueryUsage(context.Background(), query)
 	if err != nil {
 		t.Fatal(err)

@@ -9,6 +9,7 @@ import (
 
 	"gpt-load/internal/execution"
 	"gpt-load/internal/platform/epochms"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/storage/dbtx"
 	"gpt-load/internal/storage/models"
 )
@@ -123,7 +124,8 @@ func (service *Service) queryCredentialHourlyUsage(
 		if err := validateUsageStatIntegrity(scope); err != nil {
 			return CredentialWindowUsage{}, err
 		}
-		aggregate, err := queryUsageSummary(scope)
+		// 凭证窗口只展示美元参考费用（接口按当前汇率换算），不需要本币合计。
+		aggregate, err := queryUsageSummary(scope, pricing.CurrencyUSD)
 		if err != nil {
 			return CredentialWindowUsage{}, err
 		}

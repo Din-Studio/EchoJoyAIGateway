@@ -114,7 +114,7 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 	finish := func() {
 		finishOnce.Do(func() {
 			if admission.admitted {
-				h.completeAccessQuota(s.ctx, s.keyID, admission.ticket, recorder.estimatedCostNanoUSD())
+				h.completeAccessQuota(s.ctx, s.keyID, admission.ticket, recorder.estimatedCostNano())
 			}
 			recorder.emit()
 		})
@@ -147,6 +147,7 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		return
 	}
 	recorder.accessKeyMultiplier = key.PriceMultiplier
+	recorder.currency = snapshot.Settings.Currency
 	decision, err := h.accessQuota.Check(s.ctx, snapshot, key.ID, h.quotaNow())
 	if err != nil {
 		reject(limitStateFailureReason(err))

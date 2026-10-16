@@ -26,7 +26,7 @@ import {
   AppProgressBar,
 } from '@modern/components/ui'
 import { formatCompactNumber } from '@modern/components/ui/format'
-import { accessUSD } from '@modern/features/access-keys/access-key-display'
+import { accessMoney } from '@modern/features/access-keys/access-key-display'
 import {
   healthLogsLocation,
   healthManageLocation,
@@ -196,11 +196,11 @@ function period(seconds: number): string {
               <dl class="modern-health-rule-amounts">
                 <div>
                   <dt>{{ t('health.used') }}</dt>
-                  <dd>{{ accessUSD(rule.used, locale) }}</dd>
+                  <dd>{{ accessMoney(rule.used, rule.currency, locale) }}</dd>
                 </div>
                 <div>
                   <dt>{{ t('health.limit') }}</dt>
-                  <dd>{{ accessUSD(rule.limit, locale) }}</dd>
+                  <dd>{{ accessMoney(rule.limit, rule.currency, locale) }}</dd>
                 </div>
               </dl>
               <AppProgressBar :label="t('health.remaining')" :value="0" tone="danger" size="sm" />

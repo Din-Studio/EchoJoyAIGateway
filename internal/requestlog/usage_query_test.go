@@ -9,6 +9,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/testutil/pgtest"
@@ -35,7 +36,7 @@ func TestQueryUsageHourAggregatesFiltersAndLeavesSparseBucketsAbsent(t *testing.
 	createUsageStats(t, db, rows...)
 
 	groupID := uint(7)
-	report, err := service.QueryUsage(context.Background(), UsageQuery{
+	report, err := service.QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS:        start.UnixMilli(),
 		ToMS:          start.Add(24 * time.Hour).UnixMilli(),
 		Granularity:   UsageGranularityHour,
@@ -91,7 +92,7 @@ func TestQueryUsageExcludesLegacyZeroAttemptAggregates(t *testing.T) {
 	}
 	createUsageStats(t, db, attributed, legacyZeroAttempt)
 
-	report, err := service.QueryUsage(context.Background(), UsageQuery{
+	report, err := service.QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS:      start.UnixMilli(),
 		ToMS:        start.Add(7 * time.Hour).UnixMilli(),
 		Granularity: UsageGranularityHour,
@@ -130,7 +131,7 @@ func TestQueryUsageScopesAccessKeyAndDistributesByModel(t *testing.T) {
 	createUsageStats(t, db, firstGroup, secondGroup, otherModel, otherAccessKey)
 
 	accessKeyID := uint(41)
-	report, err := service.QueryUsage(context.Background(), UsageQuery{
+	report, err := service.QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS:      start.UnixMilli(),
 		ToMS:        start.Add(7 * time.Hour).UnixMilli(),
 		Granularity: UsageGranularityHour,
@@ -162,7 +163,7 @@ func TestQueryUsageRejectsZeroAccessKeyScope(t *testing.T) {
 	start := time.Date(2026, time.August, 8, 16, 0, 0, 0, time.UTC)
 	zero := uint(0)
 
-	_, err := service.QueryUsage(context.Background(), UsageQuery{
+	_, err := service.QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS:      start.UnixMilli(),
 		ToMS:        start.Add(7 * time.Hour).UnixMilli(),
 		Granularity: UsageGranularityHour,
@@ -191,7 +192,7 @@ func TestQueryUsageDistributionAggregatesCredentialsAndFoldsRemainder(t *testing
 	}
 	createUsageStats(t, db, rows...)
 
-	report, err := service.QueryUsage(context.Background(), UsageQuery{
+	report, err := service.QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS:      start.UnixMilli(),
 		ToMS:        start.Add(7 * time.Hour).UnixMilli(),
 		Granularity: UsageGranularityHour,
@@ -249,7 +250,7 @@ func TestQueryUsageGroupDistributionKeepsOnlyPersistedGroupsInTopFive(t *testing
 		UsageDistributionMetricRequests,
 		UsageDistributionMetricCost,
 	} {
-		report, err := service.QueryUsage(context.Background(), UsageQuery{
+		report, err := service.QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 			FromMS:      start.UnixMilli(),
 			ToMS:        start.Add(7 * time.Hour).UnixMilli(),
 			Granularity: UsageGranularityHour,
@@ -315,7 +316,7 @@ func TestQueryUsageAccessKeyTokenDistributionKeepsOnlyPersistedKeys(t *testing.T
 	deletedOrUnknown.OutputTokens = 0
 	createUsageStats(t, db, requestHeavy, tokenHeavy, deletedOrUnknown)
 
-	report, err := service.QueryUsage(context.Background(), UsageQuery{
+	report, err := service.QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS:      start.UnixMilli(),
 		ToMS:        start.Add(7 * time.Hour).UnixMilli(),
 		Granularity: UsageGranularityHour,
@@ -359,7 +360,7 @@ func TestQueryUsageModelDistributionAggregatesGroupsAndCredentials(t *testing.T)
 	}
 	createUsageStats(t, db, rows...)
 
-	report, err := service.QueryUsage(context.Background(), UsageQuery{
+	report, err := service.QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS:      start.UnixMilli(),
 		ToMS:        start.Add(7 * time.Hour).UnixMilli(),
 		Granularity: UsageGranularityHour,
@@ -388,7 +389,7 @@ func TestQueryUsageMergesHourlyRowsIntoThirtyUTCDays(t *testing.T) {
 	}
 	createUsageStats(t, db, rows...)
 
-	report, err := service.QueryUsage(context.Background(), UsageQuery{
+	report, err := service.QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS:      start.UnixMilli(),
 		ToMS:        start.AddDate(0, 0, 30).UnixMilli(),
 		Granularity: UsageGranularityDay,
@@ -434,7 +435,7 @@ func TestQueryUsageMergesHourlyRowsIntoAdaptiveBuckets(t *testing.T) {
 				usageStat(start.Add(2*width-time.Hour), 9, "merge", 4),
 			)
 
-			report, err := service.QueryUsage(context.Background(), UsageQuery{
+			report, err := service.QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 				FromMS:        start.UnixMilli(),
 				ToMS:          start.Add(test.span).UnixMilli(),
 				Granularity:   UsageGranularityHour,
@@ -482,7 +483,7 @@ func TestQueryUsageIgnoresCallerBucketWidths(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			db := openRequestLogQueryDB(t)
 			service := newRequestLogTestService(db)
-			_, err := service.QueryUsage(context.Background(), UsageQuery{
+			_, err := service.QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 				FromMS:        test.from.UnixMilli(),
 				ToMS:          test.to.UnixMilli(),
 				Granularity:   test.granularity,
@@ -525,7 +526,7 @@ func TestQueryUsageOrdersDistributionByRequestsAndCost(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			report, err := service.QueryUsage(context.Background(), UsageQuery{
+			report, err := service.QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 				FromMS:      start.UnixMilli(),
 				ToMS:        start.Add(7 * time.Hour).UnixMilli(),
 				Granularity: UsageGranularityHour,
@@ -589,7 +590,7 @@ func TestQueryUsageUsesOneReadSnapshot(t *testing.T) {
 		}
 	})
 
-	report, err := service.QueryUsage(context.Background(), UsageQuery{
+	report, err := service.QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS:      start.UnixMilli(),
 		ToMS:        start.Add(7 * time.Hour).UnixMilli(),
 		Granularity: UsageGranularityHour,
@@ -629,7 +630,7 @@ func TestQueryUsageCancelsAfterBeginWithoutPoisoningDatabaseConnection(t *testin
 		}
 	}()
 
-	_, err := service.QueryUsage(ctx, UsageQuery{
+	_, err := service.QueryUsage(ctx, UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS:      start.UnixMilli(),
 		ToMS:        start.Add(7 * time.Hour).UnixMilli(),
 		Granularity: UsageGranularityHour,
@@ -685,16 +686,16 @@ func TestQueryUsageRejectsCorruptRowsOutsideTopDistribution(t *testing.T) {
 	}
 	createCorruptUsageStats(t, db, rows...)
 
-	input := UsageQuery{
+	input := UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS:      start.UnixMilli(),
 		ToMS:        start.Add(7 * time.Hour).UnixMilli(),
 		Granularity: UsageGranularityHour,
 	}
-	summary, err := queryUsageSummary(usageStatScope(db, input))
+	summary, err := queryUsageSummary(usageStatScope(db, input), pricing.CurrencyUSD)
 	if err != nil || summary.RequestCount != 303 {
 		t.Fatalf("pre-integrity summary = %#v/%v, want valid 303-request aggregate", summary, err)
 	}
-	if series, err := queryUsageSeries(usageStatScope(db, input), time.Hour.Milliseconds()); err != nil || len(series) != 1 {
+	if series, err := queryUsageSeries(usageStatScope(db, input), time.Hour.Milliseconds(), pricing.CurrencyUSD); err != nil || len(series) != 1 {
 		t.Fatalf("pre-integrity series = %#v/%v, want one valid hour aggregate", series, err)
 	}
 	if distribution, err := queryUsageDistribution(
@@ -702,6 +703,7 @@ func TestQueryUsageRejectsCorruptRowsOutsideTopDistribution(t *testing.T) {
 		summary,
 		UsageDistributionDimensionGroup,
 		UsageDistributionMetricRequests,
+		pricing.CurrencyUSD,
 	); err != nil || len(distribution.Items) != 5 || distribution.Items[4].GroupID != 5 {
 		t.Fatalf("pre-integrity distribution = %#v/%v, want valid top five", distribution, err)
 	}
@@ -811,7 +813,7 @@ func TestQueryUsageRejectsCorruptAggregates(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			db := openRequestLogQueryDB(t)
 			createCorruptUsageStats(t, db, test.rows...)
-			_, err := newRequestLogTestService(db).QueryUsage(context.Background(), UsageQuery{
+			_, err := newRequestLogTestService(db).QueryUsage(context.Background(), UsageQuery{Currency: pricing.CurrencyUSD,
 				FromMS:      start.UnixMilli(),
 				ToMS:        start.Add(7 * time.Hour).UnixMilli(),
 				Granularity: UsageGranularityHour,

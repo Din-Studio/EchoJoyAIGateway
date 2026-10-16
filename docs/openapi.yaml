@@ -34,7 +34,12 @@ info:
 
     ## 约定
     - 时间戳均为 Unix 毫秒（`*_at_ms`）。
-    - 金额均为十进制字符串：`*_usd` 单位美元，`*_nano_usd` 单位 1e-9 美元。
+    - 金额均为十进制字符串，币种由同一响应中的 `currency`（ISO 4217，目前为 `USD` 或 `CNY`）给出：
+      不带后缀的金额（如 `limit`）是该币种的十进制金额，`*_nano` 是 1e-9 个该币种单位；
+      `*_nano_usd` 始终是 1e-9 美元。
+    - 存储与计费以美元为准：上游价格恒为美元；每笔请求结算时按当时的系统货币与汇率同时记录美元与本币金额，
+      之后修改汇率或切换币种不会改写已发生的费用。系统货币见 `GET /api/currency`。
+    - 价格类金额（模型价格）以美元保存，接口按当前汇率换算为系统货币返回，提交时也以系统货币计。
 servers:
   - url: http://localhost:3001
     description: 本地默认端口（`PORT`，默认 3001）
@@ -51,8 +56,34 @@ tags:
     description: 分组的模型列表与别名（仅 admin）
   - name: ModelDiscovery
     description: 从上游发现可用模型（仅 admin）
+  - name: Currency
+    description: 系统货币（admin 与 AccessKey 均可调用）
 
 paths:
+  /api/currency:
+    get:
+      tags: [Currency]
+      operationId: getCurrency
+      summary: 读取系统货币
+      description: 新请求结算使用的系统货币与汇率（1 USD = `exchange_rate` 个系统货币单位；USD 时为 `1`）。
+      security:
+        - adminBearer: []
+        - accessKeyBearer: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/SystemCurrency' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
   /api/access-keys:
     get:
       tags: [AccessKeys]
@@ -132,8 +163,8 @@ paths:
                 allowed_cidrs: [10.0.0.0/8]
               rpm_limit: 60
               cost_limit_rules:
-                - { kind: total, limit_usd: "100" }
-                - { kind: periodic, limit_usd: "5", period_seconds: 86400 }
+                - { kind: total, limit: "100" }
+                - { kind: periodic, limit: "5", period_seconds: 86400 }
               expires_at_ms: 1798732800000
       responses:
         '200':
@@ -1093,11 +1124,26 @@ components:
       pattern: '^[0-9]+(\.[0-9]{1,6})?$'
       examples: ['1', '0.8']
 
-    USDAmount:
+    MoneyAmount:
       type: string
-      description: 美元金额十进制字符串，最多 9 位小数。
+      description: 金额十进制字符串，最多 9 位小数；币种见同一对象或响应中的 `currency`。
       pattern: '^[0-9]+(\.[0-9]{1,9})?$'
       examples: ['5', '12.5']
+
+    CurrencyCode:
+      type: string
+      description: ISO 4217 币种代码。
+      enum: [USD, CNY]
+
+    SystemCurrency:
+      type: object
+      required: [currency, exchange_rate]
+      properties:
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        exchange_rate:
+          type: string
+          description: 1 USD 兑换的系统货币数量，最多 6 位小数。
+          examples: ['1', '7.1']
 
     AccessKeyFilters:
       type: object
@@ -1133,27 +1179,28 @@ components:
     CostLimitRuleInput:
       type: object
       additionalProperties: false
-      required: [kind, limit_usd]
+      required: [kind, limit]
       description: |
         `total`：累计总额，最多一条，不能带 `period_seconds`。
         `periodic`：周期额度，`period_seconds` 取值 60–31536000，同一周期不可重复，最多 10 条。
-        `limit_usd` 必须大于 0。
+        `limit` 以系统货币计，必须大于 0。切换系统货币时，所有规则会按旧汇率 → 美元 → 新汇率换算，已用额度清零。
       properties:
         id:
           type: integer
           minimum: 1
           description: 仅更新接口可用，表示保留并修改该已有规则；`kind` 不可变。
         kind: { type: string, enum: [total, periodic] }
-        limit_usd: { $ref: '#/components/schemas/USDAmount' }
+        limit: { $ref: '#/components/schemas/MoneyAmount' }
         period_seconds: { type: integer, minimum: 60, maximum: 31536000 }
 
     CostLimitRule:
       type: object
-      required: [id, kind, limit_usd]
+      required: [id, kind, currency, limit]
       properties:
         id: { type: integer }
         kind: { type: string, enum: [total, periodic] }
-        limit_usd: { $ref: '#/components/schemas/USDAmount' }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        limit: { $ref: '#/components/schemas/MoneyAmount' }
         period_seconds:
           type: integer
           description: 仅 `periodic` 规则返回。
@@ -1162,10 +1209,10 @@ components:
       allOf:
         - $ref: '#/components/schemas/CostLimitRule'
         - type: object
-          required: [used_usd, remaining_usd, status]
+          required: [used, remaining, status]
           properties:
-            used_usd: { type: string }
-            remaining_usd: { type: string }
+            used: { $ref: '#/components/schemas/MoneyAmount' }
+            remaining: { $ref: '#/components/schemas/MoneyAmount' }
             status: { type: string, enum: [available, inactive, exhausted] }
             window_started_at_ms: { type: integer }
             window_ends_at_ms: { type: integer }
@@ -1323,13 +1370,16 @@ components:
 
     UsageAggregate:
       type: object
-      required: [request_count, total_tokens, estimated_cost_nano_usd]
+      required: [request_count, total_tokens, estimated_cost_nano, estimated_cost_nano_usd]
       properties:
         request_count: { type: integer }
         total_tokens: { type: integer }
+        estimated_cost_nano:
+          type: string
+          description: 以 `usage_window.currency` 结算的估算费用，单位 1e-9 该币种；其他币种结算的费用不计入。
         estimated_cost_nano_usd:
           type: string
-          description: 估算费用，单位 1e-9 美元。
+          description: 全部估算费用的美元合计，单位 1e-9 美元。
 
     AccessKeyCollectionItem:
       allOf:
@@ -1353,12 +1403,13 @@ components:
       properties:
         usage_window:
           type: object
-          required: [observed_at_ms, range, from_ms, to_ms]
+          required: [observed_at_ms, range, from_ms, to_ms, currency]
           properties:
             observed_at_ms: { type: integer }
             range: { type: string, const: 7d }
             from_ms: { type: integer }
             to_ms: { type: integer }
+            currency: { $ref: '#/components/schemas/CurrencyCode' }
         summary:
           type: object
           description: 全量统计，不受筛选条件影响。
@@ -1390,7 +1441,9 @@ components:
 
     PricePerMillion:
       type: [string, 'null']
-      description: 每百万 token 的美元价格，非负十进制字符串，最多 9 位小数；`null` 表示该项不计费。
+      description: |
+        每百万 token 的价格，以所属对象的 `currency`（系统货币）计，非负十进制字符串，最多 9 位小数；
+        `null` 表示该项不计费。价格以美元保存，读写时按当前汇率换算。
       pattern: '^[0-9]+(\.[0-9]{1,9})?$'
       examples: ['3', '0.075']
 
@@ -1434,6 +1487,7 @@ components:
         - channel_mark
         - channel_icon
         - model_id
+        - currency
         - prices
         - mode_schedules
         - pricing_status
@@ -1460,6 +1514,7 @@ components:
         model_id:
           type: string
           description: 上游模型 ID。
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
         prices: { $ref: '#/components/schemas/PriceSlots' }
         mode_schedules:
           type: object

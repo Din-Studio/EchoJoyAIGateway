@@ -25,6 +25,8 @@ export const settingSwitches = [
 export type SettingSwitch = (typeof settingSwitches)[number]
 export const routeStrategies = ['native_first', 'weighted_mix'] as const
 export type RouteStrategy = (typeof routeStrategies)[number]
+export const systemCurrencies = ['USD', 'CNY'] as const
+export type SystemCurrencyCode = (typeof systemCurrencies)[number]
 export interface CORSConfig {
   enabled: boolean
   allowed_origins: string[]
@@ -46,6 +48,9 @@ export type SettingsValues = Record<SettingNumber, number> &
     route_strategy: RouteStrategy
     public_base_url: string
     gateway_name: string
+    // 新请求结算的系统货币；USD 时汇率固定为 1，exchange_rate 为 null。
+    currency: SystemCurrencyCode
+    exchange_rate: string | null
     header_rules: HeaderRules
     response_header_rules: HeaderRules
     cors: CORSConfig
@@ -57,6 +62,8 @@ export const settingKeys: readonly SettingKey[] = [
   'route_strategy',
   'public_base_url',
   'gateway_name',
+  'currency',
+  'exchange_rate',
   ...settingSwitches,
   ...(Object.keys(settingNumbers) as SettingNumber[]),
   'header_rules',
@@ -140,6 +147,8 @@ function readSettings(value: unknown): SettingsData {
       route_strategy: oneOf(values.route_strategy, routeStrategies),
       public_base_url: text(values.public_base_url),
       gateway_name: text(values.gateway_name),
+      currency: oneOf(values.currency, systemCurrencies),
+      exchange_rate: values.exchange_rate === null ? null : text(values.exchange_rate),
       header_rules: readHeaders(values.header_rules),
       response_header_rules: readHeaders(values.response_header_rules),
       cors: readCORS(values.cors),

@@ -10,11 +10,12 @@ import (
 	"gpt-load/internal/platform/epochms"
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/platform/response"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/requestlog"
 )
 
 type groupUsageReader interface {
-	QueryGroupUsage(context.Context, []uint, int64, int64) (requestlog.GroupUsageReport, error)
+	QueryGroupUsage(context.Context, []uint, int64, int64, pricing.CurrencyCode) (requestlog.GroupUsageReport, error)
 }
 
 type modernGroupUsageItem struct {
@@ -26,6 +27,7 @@ type modernGroupUsageResponse struct {
 	FromMS           int64                         `json:"from_ms"`
 	ToMS             int64                         `json:"to_ms"`
 	ObservedAtMS     int64                         `json:"observed_at_ms"`
+	Currency         pricing.CurrencyCode          `json:"currency"`
 	DataComplete     bool                          `json:"data_complete"`
 	CollectionHealth usageCollectionHealthResponse `json:"collection_health"`
 	Items            []modernGroupUsageItem        `json:"items"`
@@ -69,8 +71,13 @@ func (server *Server) handleModernGroupUsage(c *gin.Context) {
 		writeServiceError(c, "modern_group_usage", app_errors.ErrInternalServer)
 		return
 	}
+	currency, err := server.service.currentCurrency()
+	if err != nil {
+		writeServiceError(c, "modern_group_usage", err)
+		return
+	}
 	fromMS := max(int64(0), observedAt-epochms.MillisecondsPerDay)
-	report, err := reader.QueryGroupUsage(c.Request.Context(), ids, fromMS, observedAt)
+	report, err := reader.QueryGroupUsage(c.Request.Context(), ids, fromMS, observedAt, currency.Code)
 	if err != nil {
 		writeServiceError(c, "modern_group_usage", app_errors.ParseDBError(err))
 		return
@@ -82,7 +89,7 @@ func (server *Server) handleModernGroupUsage(c *gin.Context) {
 		return
 	}
 	result := modernGroupUsageResponse{
-		FromMS: fromMS, ToMS: observedAt, ObservedAtMS: observedAt, DataComplete: report.DataComplete,
+		FromMS: fromMS, ToMS: observedAt, ObservedAtMS: observedAt, Currency: currency.Code, DataComplete: report.DataComplete,
 		Items: make([]modernGroupUsageItem, 0, len(ids)),
 		CollectionHealth: usageCollectionHealthResponse{
 			Scope: "current_process", DroppedTotal: stats.DroppedTotal, WriteFailureTotal: stats.WriteFailureTotal, LastWriteFailureAtMS: lastFailure,

@@ -9,6 +9,7 @@ import (
 
 	"gpt-load/internal/channel"
 	"gpt-load/internal/platform/config"
+	"gpt-load/internal/pricing"
 )
 
 func TestRouteStrategyAcceptsOnlyExplicitGlobalPolicies(t *testing.T) {
@@ -114,6 +115,7 @@ func TestCompilePublishesDefaultRuntimeSettingsWithoutGroups(t *testing.T) {
 		RequestLogRetentionDays:   7,
 		ModelsDevAutoSyncEnabled:  true,
 		GatewayName:               "GPT-Load",
+		Currency:                  pricing.USDCurrency,
 	}
 	if !reflect.DeepEqual(snapshot.Settings, want) {
 		t.Fatalf("Settings = %#v, want %#v", snapshot.Settings, want)
@@ -805,5 +807,36 @@ func TestResolvedGroupSettingsOwnsHeaderRuleCopies(t *testing.T) {
 	if base.HeaderRules.Set["X-System"] != "system" || base.HeaderRules.Remove[0] != "X-Old" ||
 		second.HeaderRules.Set["X-System"] != "system" || second.HeaderRules.Remove[0] != "X-Old" {
 		t.Fatalf("header rules aliased: base=%#v second=%#v", base.HeaderRules, second.HeaderRules)
+	}
+}
+
+func TestCurrencySettingsCombineCodeAndExchangeRate(t *testing.T) {
+	for _, key := range []string{SettingCurrency, SettingExchangeRate} {
+		if !IsRuntimeSettingKey(key) {
+			t.Fatalf("%s is not a public runtime setting", key)
+		}
+		if _, err := ResolveGroupRuntimeSettings(DefaultRuntimeSettings(), config.Settings{key: "USD"}); err == nil {
+			t.Fatalf("group accepted system-only %s", key)
+		}
+	}
+	resolved, err := ResolveRuntimeSettings(config.Settings{SettingCurrency: "CNY", SettingExchangeRate: "7.1"})
+	if err != nil || resolved.Currency != (pricing.Currency{Code: pricing.CurrencyCNY, RateMicros: 7_100_000}) {
+		t.Fatalf("ResolveRuntimeSettings(CNY 7.1) = %#v, %v", resolved.Currency, err)
+	}
+	if resolved, err := ResolveRuntimeSettings(config.Settings{}); err != nil || resolved.Currency != pricing.USDCurrency {
+		t.Fatalf("default currency = %#v, %v", resolved.Currency, err)
+	}
+	for name, settings := range map[string]config.Settings{
+		"CNY without rate":  {SettingCurrency: "CNY"},
+		"USD with rate":     {SettingCurrency: "USD", SettingExchangeRate: "7.1"},
+		"rate without code": {SettingExchangeRate: "7.1"},
+		"unsupported code":  {SettingCurrency: "EUR", SettingExchangeRate: "1.1"},
+		"zero rate":         {SettingCurrency: "CNY", SettingExchangeRate: "0"},
+		"too precise rate":  {SettingCurrency: "CNY", SettingExchangeRate: "7.1234567"},
+		"numeric rate":      {SettingCurrency: "CNY", SettingExchangeRate: 7.1},
+	} {
+		if _, err := ResolveRuntimeSettings(settings); err == nil {
+			t.Errorf("%s accepted", name)
+		}
 	}
 }

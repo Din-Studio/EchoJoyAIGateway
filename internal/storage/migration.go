@@ -35,7 +35,7 @@ type migration struct {
 
 var migrations = []migration{
 	{ID: migrationfiles.ID0001, Up: migrationfiles.Up0001, Validate: migrationfiles.Validate0001, ValidateCurrent: migrationfiles.ValidateCurrent0001},
-	{ID: migrationfiles.ID0002, Up: migrationfiles.Up0002, Validate: migrationfiles.Validate0002},
+	{ID: migrationfiles.ID0002, Up: migrationfiles.Up0002, Validate: migrationfiles.Validate0002, ValidateCurrent: migrationfiles.ValidateCurrent0002},
 	{ID: migrationfiles.ID0003, Up: migrationfiles.Up0003, Validate: migrationfiles.Validate0003},
 	{ID: migrationfiles.ID0004, Up: migrationfiles.Up0004, Validate: migrationfiles.Validate0004},
 	{ID: migrationfiles.ID0005, Up: migrationfiles.Up0005, Validate: migrationfiles.Validate0005},
@@ -54,6 +54,7 @@ var migrations = []migration{
 	{ID: migrationfiles.ID0018, Up: migrationfiles.Up0018, Validate: migrationfiles.Validate0018},
 	{ID: migrationfiles.ID0019, Up: migrationfiles.Up0019, Validate: migrationfiles.Validate0019},
 	{ID: migrationfiles.ID0020, Up: migrationfiles.Up0020, Validate: migrationfiles.Validate0020},
+	{ID: migrationfiles.ID0021, Up: migrationfiles.Up0021, Validate: migrationfiles.Validate0021},
 }
 
 func applyMigrations(db *gorm.DB) error {

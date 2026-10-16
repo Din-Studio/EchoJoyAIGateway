@@ -18,6 +18,7 @@ import (
 	"gpt-load/internal/accessquota"
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/platform/utils"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/state"
 	"gpt-load/internal/storage/models"
@@ -64,10 +65,11 @@ func (value *OptionalNullableEpochMS) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// AccessKeyCostLimitRuleRequest.Limit is a decimal amount in the system currency.
 type AccessKeyCostLimitRuleRequest struct {
 	ID            uint             `json:"id,omitempty"`
 	Kind          accessquota.Kind `json:"kind"`
-	LimitUSD      string           `json:"limit_usd"`
+	Limit         string           `json:"limit"`
 	PeriodSeconds int64            `json:"period_seconds,omitempty"`
 }
 
@@ -98,19 +100,22 @@ func (value *OptionalAccessKeyCostLimitRules) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// AccessKeyCostLimitRule amounts are decimal strings in the rule's currency.
 type AccessKeyCostLimitRule struct {
-	ID            uint             `json:"id"`
-	Kind          accessquota.Kind `json:"kind"`
-	LimitUSD      string           `json:"limit_usd"`
-	PeriodSeconds int64            `json:"period_seconds,omitempty"`
+	ID            uint                 `json:"id"`
+	Kind          accessquota.Kind     `json:"kind"`
+	Currency      pricing.CurrencyCode `json:"currency"`
+	Limit         string               `json:"limit"`
+	PeriodSeconds int64                `json:"period_seconds,omitempty"`
 }
 
 type AccessKeyCostLimitRuleStatus struct {
 	ID                uint                   `json:"id"`
 	Kind              accessquota.Kind       `json:"kind"`
-	LimitUSD          string                 `json:"limit_usd"`
-	UsedUSD           string                 `json:"used_usd"`
-	RemainingUSD      string                 `json:"remaining_usd"`
+	Currency          pricing.CurrencyCode   `json:"currency"`
+	Limit             string                 `json:"limit"`
+	Used              string                 `json:"used"`
+	Remaining         string                 `json:"remaining"`
 	Status            accessquota.RuleStatus `json:"status"`
 	PeriodSeconds     int64                  `json:"period_seconds,omitempty"`
 	WindowStartedAtMS *int64                 `json:"window_started_at_ms,omitempty"`

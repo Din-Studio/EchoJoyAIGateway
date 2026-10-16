@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CircleDollarSign, CircleHelp } from '@lucide/vue'
+import { CircleHelp, Coins } from '@lucide/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { AppBadge, AppTooltip } from '@modern/components/ui'
@@ -29,7 +29,7 @@ const detail = computed(() =>
 <template>
   <AppTooltip :label="detail">
     <AppBadge
-      :icon="priced ? CircleDollarSign : CircleHelp"
+      :icon="priced ? Coins : CircleHelp"
       :tone="priced ? 'success' : 'neutral'"
       variant="plain"
       :tabindex="detail ? 0 : undefined"

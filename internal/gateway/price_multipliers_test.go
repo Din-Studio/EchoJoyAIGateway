@@ -35,7 +35,7 @@ func TestHandlerFreezesPriceMultipliersAndAccountsTheSameEstimate(t *testing.T) 
 			engine, handler, manager, _ := newRequestLogHandlerTestRuntime(
 				t, forwarder, &recordingAccessKeyRPMLimiter{}, sink, "sk-first",
 			)
-			rules := []accessquota.Rule{{ID: 901, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 10_000_000}}
+			rules := []accessquota.Rule{{ID: 901, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 10_000_000}}
 			quota := useSharedAccessQuota(t, handler)
 			table, err := pricing.NewTable([]pricing.Rule{{
 				Identity: pricing.Identity{ChannelID: "openai", ModelID: "gpt-4o"},
@@ -90,7 +90,7 @@ func TestHandlerFreezesPriceMultipliersAndAccountsTheSameEstimate(t *testing.T) 
 				t.Fatalf("frozen receipt = %#v", receipt)
 			}
 			view, err := quota.View(t.Context(), manager.Current(), 1, time.Now())
-			if err != nil || len(view.Rules) != 1 || view.Rules[0].UsedNanoUSD != 4 {
+			if err != nil || len(view.Rules) != 1 || view.Rules[0].UsedNano != 4 {
 				t.Fatalf("quota = %#v, want the same adjusted estimate", view)
 			}
 		})

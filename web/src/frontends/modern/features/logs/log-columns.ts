@@ -21,7 +21,7 @@ export const logColumnIds = [
   'input_tokens',
   'output_tokens',
   'cache_read_tokens',
-  'estimated_cost_nano_usd',
+  'estimated_cost_nano',
   'upstream_model',
   'upstream_reported_model',
   'model_consistency',
@@ -77,7 +77,7 @@ const definitions: readonly [LogColumnId, number, LogColumnSection, boolean, boo
     ['output_tokens', 56, 'tokens', true],
     ['cache_read_tokens', 60, 'tokens', true],
     ['cache_hit_rate', 56, 'tokens', true],
-    ['estimated_cost_nano_usd', 76, 'billing', true],
+    ['estimated_cost_nano', 76, 'billing', true],
     // 用户额外选择的字段统一追加，不打断默认列和错误摘要区域。
     ['request_id', 180, 'request', false],
     ['operation', 88, 'request', false],
@@ -107,7 +107,7 @@ const previousDefaultColumns: readonly LogColumnId[] = [
   'first_response_ms',
   'input_tokens',
   'output_tokens',
-  'estimated_cost_nano_usd',
+  'estimated_cost_nano',
 ]
 // 右对齐并使用等宽数字的字段，便于按位比较。
 export const numericColumns: ReadonlySet<LogColumnId> = new Set([
@@ -121,7 +121,7 @@ export const numericColumns: ReadonlySet<LogColumnId> = new Set([
   'cache_hit_rate',
   'cache_write_tokens',
   'total_tokens',
-  'estimated_cost_nano_usd',
+  'estimated_cost_nano',
   'context_threshold_tokens',
 ])
 export const logColumns: readonly LogColumn[] = definitions.map(
@@ -235,7 +235,7 @@ export function useLogColumns(admin: boolean) {
     const groups: readonly (readonly LogColumnId[])[] = [
       ['input_tokens', 'output_tokens'],
       ['cache_read_tokens', 'cache_hit_rate'],
-      ['estimated_cost_nano_usd'],
+      ['estimated_cost_nano'],
     ]
     return cells.value.findIndex((_, start) =>
       groups.every((fields, offset) => {

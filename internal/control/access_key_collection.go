@@ -9,6 +9,7 @@ import (
 
 	"gpt-load/internal/platform/epochms"
 	app_errors "gpt-load/internal/platform/errors"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/requestlog"
 	"gpt-load/internal/storage/models"
 )
@@ -34,10 +35,11 @@ type AccessKeyCollectionPagination struct {
 }
 
 type AccessKeyUsageWindow struct {
-	ObservedAtMS int64  `json:"observed_at_ms"`
-	Range        string `json:"range"`
-	FromMS       int64  `json:"from_ms"`
-	ToMS         int64  `json:"to_ms"`
+	ObservedAtMS int64                `json:"observed_at_ms"`
+	Range        string               `json:"range"`
+	FromMS       int64                `json:"from_ms"`
+	ToMS         int64                `json:"to_ms"`
+	Currency     pricing.CurrencyCode `json:"currency"`
 }
 
 type AccessKeyCollectionResponse struct {
@@ -70,9 +72,14 @@ func (s *Service) ListAccessKeyCollection(
 	if err != nil {
 		return AccessKeyCollectionResponse{}, app_errors.ErrInternalServer
 	}
+	currency, err := s.currentCurrency()
+	if err != nil {
+		return AccessKeyCollectionResponse{}, err
+	}
 	usageQuery := requestlog.UsageQuery{
 		FromMS: fromMS, ToMS: toMS,
 		Granularity: requestlog.UsageGranularityHour, BucketWidthMS: 6 * epochms.MillisecondsPerHour,
+		Currency: currency.Code,
 	}
 	records, err := s.captureAccessKeyCollectionRecords(ctx, usageQuery, observedAt)
 	if err != nil {
@@ -89,7 +96,9 @@ func (s *Service) ListAccessKeyCollection(
 		}
 	}
 	result := queryAccessKeyCollectionRecords(records, query)
-	result.UsageWindow = &AccessKeyUsageWindow{ObservedAtMS: observedAtMS, Range: "7d", FromMS: usageQuery.FromMS, ToMS: usageQuery.ToMS}
+	result.UsageWindow = &AccessKeyUsageWindow{
+		ObservedAtMS: observedAtMS, Range: "7d", FromMS: usageQuery.FromMS, ToMS: usageQuery.ToMS, Currency: currency.Code,
+	}
 	return result, nil
 }
 
@@ -155,9 +164,12 @@ func (s *Service) captureAccessKeyCollectionRecords(
 			return nil, err
 		}
 		records = append(records, accessKeyCollectionRecord{
-			usageCost: usageByKey[row.Metadata.ID].EstimatedCostNanoUSD,
+			usageCost: usageByKey[row.Metadata.ID].EstimatedCostNano,
 			AccessKeyCollectionItem: AccessKeyCollectionItem{
-				Usage:             &usageDistributionAggregateResponse{RequestCount: aggregate.RequestCount, TotalTokens: aggregate.TotalTokens, EstimatedCostNanoUSD: aggregate.EstimatedCostNanoUSD},
+				Usage: &usageDistributionAggregateResponse{
+					RequestCount: aggregate.RequestCount, TotalTokens: aggregate.TotalTokens,
+					EstimatedCostNanoUSD: aggregate.EstimatedCostNanoUSD, EstimatedCostNano: aggregate.EstimatedCostNano,
+				},
 				AccessKeyMetadata: metadata,
 				LastRequestAtMS:   row.LastRequestAtMS,
 				Expired: metadata.ExpiresAtMS != nil &&

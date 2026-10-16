@@ -193,6 +193,7 @@ func TestMapEventRejectsInvalidFrozenObservationAtomically(t *testing.T) {
 
 func TestMapEventAllowsUnboundNoModelResourceOnlyAsNotApplicable(t *testing.T) {
 	event := telemetry.RequestEvent{
+		Currency:    pricing.USDCurrency,
 		RequestID:   "resource",
 		CompletedAt: time.Now(),
 		Status:      telemetry.RequestStatusSuccess,

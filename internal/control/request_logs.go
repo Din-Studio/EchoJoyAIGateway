@@ -113,6 +113,9 @@ type requestLogPricingLineResponse struct {
 	Multiplier            requestLogPricingMultiplierResponse `json:"multiplier"`
 	State                 pricing.ReceiptLineState            `json:"state"`
 	AmountNanoUSD         *string                             `json:"amount_nano_usd"`
+	// RateNanoPerMillion/AmountNano 按日志结算时冻结的汇率换算为结算币种。
+	RateNanoPerMillion *string `json:"rate_nano_per_million"`
+	AmountNano         *string `json:"amount_nano"`
 }
 
 type requestLogPricingReceiptResponse struct {
@@ -127,74 +130,90 @@ type requestLogPricingReceiptResponse struct {
 	LineItems              []requestLogPricingLineResponse   `json:"line_items"`
 	BaseTotalNanoUSD       *string                           `json:"base_total_nano_usd,omitempty"`
 	TotalNanoUSD           string                            `json:"total_nano_usd"`
+	// 回执以美元计算；以下字段是按结算汇率换算后的展示值。
+	SettlementCurrency pricing.CurrencyCode `json:"settlement_currency"`
+	ExchangeRate       string               `json:"exchange_rate"`
+	BaseTotalNano      *string              `json:"base_total_nano,omitempty"`
+	TotalNano          string               `json:"total_nano"`
 }
 
 type requestLogItemResponse struct {
-	AutoDecision              *autoDecisionResponse        `json:"auto_decision,omitempty"`
-	TotalEstimatedCostNanoUSD string                       `json:"total_estimated_cost_nano_usd"`
-	TotalCostState            string                       `json:"total_cost_state"`
-	TotalPricingCompleteness  string                       `json:"total_pricing_completeness"`
-	RequestID                 string                       `json:"request_id"`
-	CompletedAtMS             int64                        `json:"completed_at_ms"`
-	AccessKey                 requestLogAccessKeyResponse  `json:"access_key"`
-	Protocol                  string                       `json:"protocol"`
-	Operation                 *execution.Operation         `json:"operation"`
-	UpstreamProtocol          *protocol.Protocol           `json:"upstream_protocol"`
-	ClientModel               *string                      `json:"client_model"`
-	UpstreamModel             *string                      `json:"upstream_model"`
-	UpstreamReportedModel     *string                      `json:"upstream_reported_model"`
-	ModelConsistency          telemetry.ModelConsistency   `json:"model_consistency"`
-	Reasoning                 *requestLogReasoningResponse `json:"reasoning"`
-	Status                    telemetry.RequestStatus      `json:"status"`
-	StatusCode                int                          `json:"status_code"`
-	Stream                    bool                         `json:"stream"`
-	FirstResponseMs           *int64                       `json:"first_response_ms"`
-	DurationMs                int64                        `json:"duration_ms"`
-	AttemptCount              int                          `json:"attempt_count"`
-	ErrorCode                 string                       `json:"error_code"`
-	ErrorSummary              string                       `json:"error_summary"`
-	AffinityHit               bool                         `json:"affinity_hit"`
-	AffinityKind              string                       `json:"affinity_kind"`
-	GroupID                   *uint                        `json:"group_id"`
-	ChannelID                 *channel.ID                  `json:"channel_id"`
-	CredentialID              *uint                        `json:"credential_id"`
-	CredentialName            string                       `json:"credential_name"`
-	RouteMode                 *channel.RouteMode           `json:"route_mode"`
-	UsageState                usage.State                  `json:"usage_state"`
-	CostState                 pricing.CostState            `json:"cost_state"`
-	PricingCompleteness       pricing.Completeness         `json:"pricing_completeness"`
-	PricingMode               *pricing.Mode                `json:"pricing_mode"`
-	ContextThresholdTokens    *string                      `json:"context_threshold_tokens"`
-	InputTokens               string                       `json:"input_tokens"`
-	CacheReadTokens           string                       `json:"cache_read_tokens"`
-	CacheWrite5MTokens        string                       `json:"cache_write_5m_tokens"`
-	CacheWrite1HTokens        string                       `json:"cache_write_1h_tokens"`
-	CacheWriteUnknownTokens   string                       `json:"cache_write_unknown_tokens"`
-	OutputTokens              string                       `json:"output_tokens"`
-	EstimatedCostNanoUSD      string                       `json:"estimated_cost_nano_usd"`
+	AutoDecision              *autoDecisionResponse `json:"auto_decision,omitempty"`
+	TotalEstimatedCostNanoUSD string                `json:"total_estimated_cost_nano_usd"`
+	// Currency/ExchangeRate 是结算时冻结的系统货币与汇率；*_nano 以该币种计，*_nano_usd 以美元计。
+	Currency                 pricing.CurrencyCode         `json:"currency"`
+	ExchangeRate             string                       `json:"exchange_rate"`
+	TotalEstimatedCostNano   string                       `json:"total_estimated_cost_nano"`
+	TotalCostState           string                       `json:"total_cost_state"`
+	TotalPricingCompleteness string                       `json:"total_pricing_completeness"`
+	RequestID                string                       `json:"request_id"`
+	CompletedAtMS            int64                        `json:"completed_at_ms"`
+	AccessKey                requestLogAccessKeyResponse  `json:"access_key"`
+	Protocol                 string                       `json:"protocol"`
+	Operation                *execution.Operation         `json:"operation"`
+	UpstreamProtocol         *protocol.Protocol           `json:"upstream_protocol"`
+	ClientModel              *string                      `json:"client_model"`
+	UpstreamModel            *string                      `json:"upstream_model"`
+	UpstreamReportedModel    *string                      `json:"upstream_reported_model"`
+	ModelConsistency         telemetry.ModelConsistency   `json:"model_consistency"`
+	Reasoning                *requestLogReasoningResponse `json:"reasoning"`
+	Status                   telemetry.RequestStatus      `json:"status"`
+	StatusCode               int                          `json:"status_code"`
+	Stream                   bool                         `json:"stream"`
+	FirstResponseMs          *int64                       `json:"first_response_ms"`
+	DurationMs               int64                        `json:"duration_ms"`
+	AttemptCount             int                          `json:"attempt_count"`
+	ErrorCode                string                       `json:"error_code"`
+	ErrorSummary             string                       `json:"error_summary"`
+	AffinityHit              bool                         `json:"affinity_hit"`
+	AffinityKind             string                       `json:"affinity_kind"`
+	GroupID                  *uint                        `json:"group_id"`
+	ChannelID                *channel.ID                  `json:"channel_id"`
+	CredentialID             *uint                        `json:"credential_id"`
+	CredentialName           string                       `json:"credential_name"`
+	RouteMode                *channel.RouteMode           `json:"route_mode"`
+	UsageState               usage.State                  `json:"usage_state"`
+	CostState                pricing.CostState            `json:"cost_state"`
+	PricingCompleteness      pricing.Completeness         `json:"pricing_completeness"`
+	PricingMode              *pricing.Mode                `json:"pricing_mode"`
+	ContextThresholdTokens   *string                      `json:"context_threshold_tokens"`
+	InputTokens              string                       `json:"input_tokens"`
+	CacheReadTokens          string                       `json:"cache_read_tokens"`
+	CacheWrite5MTokens       string                       `json:"cache_write_5m_tokens"`
+	CacheWrite1HTokens       string                       `json:"cache_write_1h_tokens"`
+	CacheWriteUnknownTokens  string                       `json:"cache_write_unknown_tokens"`
+	OutputTokens             string                       `json:"output_tokens"`
+	EstimatedCostNanoUSD     string                       `json:"estimated_cost_nano_usd"`
+	EstimatedCostNano        string                       `json:"estimated_cost_nano"`
 }
 
 type autoDecisionResponse struct {
 	automodel.Decision
 	PresetReasoning      *requestLogReasoningResponse      `json:"preset_reasoning"`
 	EstimatedCostNanoUSD string                            `json:"estimated_cost_nano_usd"`
+	EstimatedCostNano    string                            `json:"estimated_cost_nano"`
 	InputTokens          *string                           `json:"input_tokens,omitempty"`
 	OutputTokens         *string                           `json:"output_tokens,omitempty"`
 	Receipt              *requestLogPricingReceiptResponse `json:"receipt,omitempty"`
 }
 
-func mapAutoDecisionResponse(value *automodel.Decision) *autoDecisionResponse {
-	if value == nil {
+func mapAutoDecisionResponse(record requestlog.Record) *autoDecisionResponse {
+	if record.AutoDecision == nil {
 		return nil
 	}
-	copy := *value
+	copy := *record.AutoDecision
 	copy.Selection.ParameterOverrides = nil
 	copy.Selection.TaskFingerprint = ""
-	response := &autoDecisionResponse{Decision: copy, PresetReasoning: mapRequestLogReasoningConfig(copy.PresetReasoning), EstimatedCostNanoUSD: strconv.FormatInt(copy.EstimatedCostNanoUSD, 10), InputTokens: nullableInt64String(copy.InputTokens), OutputTokens: nullableInt64String(copy.OutputTokens)}
+	response := &autoDecisionResponse{
+		Decision: copy, PresetReasoning: mapRequestLogReasoningConfig(copy.PresetReasoning),
+		EstimatedCostNanoUSD: strconv.FormatInt(copy.EstimatedCostNanoUSD, 10),
+		EstimatedCostNano:    strconv.FormatInt(record.DecisionCostNano, 10),
+		InputTokens:          nullableInt64String(copy.InputTokens), OutputTokens: nullableInt64String(copy.OutputTokens),
+	}
 	if len(copy.Receipt) > 0 {
 		var receipt pricing.Receipt
 		if json.Unmarshal(copy.Receipt, &receipt) == nil && pricing.ValidateReceipt(receipt) == nil {
-			response.Receipt, _ = mapRequestLogPricingReceipt(&receipt)
+			response.Receipt, _ = mapRequestLogPricingReceipt(&receipt, record.Settlement)
 		}
 	}
 	return response
@@ -293,6 +312,12 @@ func (s *Server) handleListRequestLogs(c *gin.Context) {
 	if accessKeyScoped {
 		query.AccessKeyID = &accessKeyID
 	}
+	currency, err := s.service.currentCurrency()
+	if err != nil {
+		writeServiceError(c, "list_request_logs", err)
+		return
+	}
+	query.CostCurrency = currency.Code
 	page, err := s.service.ListRequestLogs(c.Request.Context(), query)
 	if err != nil {
 		writeServiceError(c, "list_request_logs", err)
@@ -404,7 +429,7 @@ func parseRequestLogQuery(rawQuery string) (requestlog.ListQuery, *app_errors.AP
 		"duration_min_ms": {}, "duration_max_ms": {},
 		"input_tokens_min": {}, "input_tokens_max": {},
 		"output_tokens_min": {}, "output_tokens_max": {},
-		"cost_min_nano_usd": {}, "cost_max_nano_usd": {},
+		"cost_min_nano": {}, "cost_max_nano": {},
 		"limit": {}, "cursor": {}, "page": {}, "page_size": {},
 	}
 	for key, value := range values {
@@ -619,7 +644,7 @@ func parseRequestLogQuery(rawQuery string) (requestlog.ListQuery, *app_errors.AP
 		{"duration_min_ms", "duration_max_ms", &query.DurationMinMS, &query.DurationMaxMS},
 		{"input_tokens_min", "input_tokens_max", &query.InputTokensMin, &query.InputTokensMax},
 		{"output_tokens_min", "output_tokens_max", &query.OutputTokensMin, &query.OutputTokensMax},
-		{"cost_min_nano_usd", "cost_max_nano_usd", &query.CostMinNanoUSD, &query.CostMaxNanoUSD},
+		{"cost_min_nano", "cost_max_nano", &query.CostMinNano, &query.CostMaxNano},
 	} {
 		if apiErr := parseRequestLogInt64Range(
 			values,
@@ -1067,9 +1092,16 @@ func mapRequestLogItemResponse(
 		contextThresholdTokens = &value
 	}
 	total := telemetry.TotalPricing(telemetry.PricingObservation{CostState: string(record.CostState), PricingCompleteness: string(record.PricingCompleteness), EstimatedCostNanoUSD: record.EstimatedCostNanoUSD}, record.AutoDecision)
+	settledTotal, ok := usage.CheckedAdd(record.EstimatedCostNano, record.DecisionCostNano)
+	if !ok {
+		return requestLogItemResponse{}, fmt.Errorf("map request log settled cost: overflow")
+	}
 	return requestLogItemResponse{
-		AutoDecision:              mapAutoDecisionResponse(record.AutoDecision),
+		AutoDecision:              mapAutoDecisionResponse(record),
 		TotalEstimatedCostNanoUSD: strconv.FormatInt(total.EstimatedCostNanoUSD, 10),
+		Currency:                  record.Settlement.Code,
+		ExchangeRate:              pricing.FormatExchangeRate(record.Settlement.RateMicros),
+		TotalEstimatedCostNano:    strconv.FormatInt(int64(settledTotal), 10),
 		TotalCostState:            total.CostState,
 		TotalPricingCompleteness:  total.PricingCompleteness,
 		RequestID:                 record.RequestID,
@@ -1114,6 +1146,7 @@ func mapRequestLogItemResponse(
 		CacheWriteUnknownTokens: strconv.FormatInt(record.CacheWriteUnknownTokens, 10),
 		OutputTokens:            strconv.FormatInt(record.OutputTokens, 10),
 		EstimatedCostNanoUSD:    usageCost.estimatedCostNanoUSD,
+		EstimatedCostNano:       strconv.FormatInt(record.EstimatedCostNano, 10),
 	}, nil
 }
 
@@ -1201,7 +1234,7 @@ func mapRequestLogDetailResponse(
 	}
 	attempts := make([]requestLogAttemptResponse, 0, len(record.Attempts))
 	for _, attempt := range record.Attempts {
-		mapped, err := mapRequestLogAttempt(attempt, credentialLabels)
+		mapped, err := mapRequestLogAttempt(attempt, record.Settlement, credentialLabels)
 		if err != nil {
 			return requestLogDetailResponse{}, err
 		}
@@ -1215,6 +1248,7 @@ func mapRequestLogDetailResponse(
 
 func mapRequestLogAttempt(
 	attempt requestlog.Attempt,
+	settlement pricing.Currency,
 	credentialLabels map[uint]string,
 ) (requestLogAttemptResponse, error) {
 	channelID, err := nullableRequestLogChannelID(attempt.ChannelID)
@@ -1257,7 +1291,7 @@ func mapRequestLogAttempt(
 	if err != nil {
 		return requestLogAttemptResponse{}, fmt.Errorf("map request log attempt: %w", err)
 	}
-	receipt, err := mapRequestLogPricingReceipt(attempt.PricingReceipt)
+	receipt, err := mapRequestLogPricingReceipt(attempt.PricingReceipt, settlement)
 	if err != nil {
 		return requestLogAttemptResponse{}, err
 	}
@@ -1300,6 +1334,7 @@ func requestLogAttemptAction(action telemetry.Action) string {
 
 func mapRequestLogPricingReceipt(
 	receipt *pricing.Receipt,
+	settlement pricing.Currency,
 ) (*requestLogPricingReceiptResponse, error) {
 	if receipt == nil {
 		return nil, nil
@@ -1308,15 +1343,18 @@ func mapRequestLogPricingReceipt(
 		return nil, fmt.Errorf("map request log pricing receipt: %w", err)
 	}
 	result := &requestLogPricingReceiptResponse{
-		SchemaVersion:    receipt.SchemaVersion,
-		Method:           receipt.Method,
-		MethodVersion:    receipt.MethodVersion,
-		Currency:         receipt.Currency,
-		PricingMode:      receipt.PricingMode,
-		PriceMultipliers: receipt.PriceMultipliers,
-		Rule:             requestLogPricingIdentityResponse{ModelID: receipt.Rule.ModelID},
-		LineItems:        make([]requestLogPricingLineResponse, 0, len(receipt.LineItems)),
-		TotalNanoUSD:     strconv.FormatInt(receipt.TotalNanoUSD, 10),
+		SchemaVersion:      receipt.SchemaVersion,
+		Method:             receipt.Method,
+		MethodVersion:      receipt.MethodVersion,
+		Currency:           receipt.Currency,
+		PricingMode:        receipt.PricingMode,
+		PriceMultipliers:   receipt.PriceMultipliers,
+		Rule:               requestLogPricingIdentityResponse{ModelID: receipt.Rule.ModelID},
+		LineItems:          make([]requestLogPricingLineResponse, 0, len(receipt.LineItems)),
+		TotalNanoUSD:       strconv.FormatInt(receipt.TotalNanoUSD, 10),
+		SettlementCurrency: settlement.Code,
+		ExchangeRate:       pricing.FormatExchangeRate(settlement.RateMicros),
+		TotalNano:          settledNanoString(settlement, receipt.TotalNanoUSD),
 	}
 	if receipt.SchemaVersion < 4 {
 		result.PricingMode = pricing.ModeStandard
@@ -1340,6 +1378,8 @@ func mapRequestLogPricingReceipt(
 	if receipt.BaseTotalNanoUSD != nil {
 		value := strconv.FormatInt(*receipt.BaseTotalNanoUSD, 10)
 		result.BaseTotalNanoUSD = &value
+		settled := settledNanoString(settlement, *receipt.BaseTotalNanoUSD)
+		result.BaseTotalNano = &settled
 	}
 	for _, line := range receipt.LineItems {
 		mapped := requestLogPricingLineResponse{
@@ -1354,10 +1394,14 @@ func mapRequestLogPricingReceipt(
 		if line.RateNanoUSDPerMillion != nil {
 			value := strconv.FormatInt(*line.RateNanoUSDPerMillion, 10)
 			mapped.RateNanoUSDPerMillion = &value
+			settled := settledNanoString(settlement, *line.RateNanoUSDPerMillion)
+			mapped.RateNanoPerMillion = &settled
 		}
 		if line.AmountNanoUSD != nil {
 			value := strconv.FormatInt(*line.AmountNanoUSD, 10)
 			mapped.AmountNanoUSD = &value
+			settled := settledNanoString(settlement, *line.AmountNanoUSD)
+			mapped.AmountNano = &settled
 		}
 		result.LineItems = append(result.LineItems, mapped)
 	}

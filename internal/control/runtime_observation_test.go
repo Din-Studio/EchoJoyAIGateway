@@ -270,7 +270,7 @@ func TestRuntimeHealthKeepsAccessQuotaViewWithCapturedConfig(t *testing.T) {
 	created, err := fixture.service.CreateAccessKey(t.Context(), AccessKeyCreateRequest{
 		Name: "health-quota-observation",
 		CostLimitRules: OptionalAccessKeyCostLimitRules{Set: true, Values: []AccessKeyCostLimitRuleRequest{{
-			Kind: accessquota.KindTotal, LimitUSD: "1",
+			Kind: accessquota.KindTotal, Limit: "1",
 		}}},
 	})
 	if err != nil {

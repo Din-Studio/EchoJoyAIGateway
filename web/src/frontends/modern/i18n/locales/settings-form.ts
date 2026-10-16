@@ -14,6 +14,10 @@ export const zhCN = {
   discard: '还原修改',
   discardTitle: '放弃本页未保存的修改？',
   keepEditing: '继续编辑',
+  currencySwitchTitle: '切换系统货币？',
+  currencySwitchDescription:
+    '之后的请求将按 {currency} 结算。所有访问密钥的费用限额会按旧汇率折算为美元、再按新汇率换算为 {currency}，已用额度清零；历史日志和用量保持原币种。',
+  currencySwitchConfirm: '切换并保存',
   default: '默认',
   overridden: '已配置',
   modified: '已修改',
@@ -34,6 +38,7 @@ export const zhCN = {
     browser: '浏览器访问',
     maintenance: '数据维护',
     experimental: '实验性功能',
+    billing: '货币与计费',
     system: '系统信息',
   },
   sectionHelp: {
@@ -42,6 +47,7 @@ export const zhCN = {
     browser: '网关名称与地址、跨域访问与请求头规则',
     maintenance: '日志保留与价格同步',
     experimental: '集中管理默认关闭且可能调整的实验性功能',
+    billing: '新请求结算使用的系统货币与汇率',
     system: '版本与部署信息',
   },
   fields: {
@@ -65,6 +71,8 @@ export const zhCN = {
     cors: '跨域访问（CORS）',
     public_base_url: '网关公开地址',
     gateway_name: '网关名称',
+    currency: '系统货币',
+    exchange_rate: '汇率',
   },
   hints: {
     auto_model: 'Jev 选择预设，现有调度选择分组和凭据。',
@@ -89,7 +97,11 @@ export const zhCN = {
     public_base_url: '首页客户端接入示例和访问密钥分发使用的根地址；留空时使用当前浏览器地址。',
     gateway_name:
       '首页客户端接入示例中的提供方名称；其小写形式同时作为 /v1/models 返回的 owned_by。',
+    currency: '新请求按此货币结算；日志、用量和限额按结算时的币种记录，修改不会改写历史。',
+    exchange_rate: '1 USD 兑换的系统货币数量，最多 6 位小数；只影响之后结算的请求。',
   },
+  currencies: { USD: '美元 USD', CNY: '人民币 CNY' },
+  exchangeRateUnit: '{currency} / 1 USD',
   strategies: { native_first: '原生优先', weighted_mix: '混合权重' },
   timeouts: '请求超时',
   reliability: '重试与凭据健康',
@@ -135,6 +147,7 @@ export const zhCN = {
   errors: {
     publicBaseURL: '请输入不含查询参数和凭据的 http:// 或 https:// 地址。',
     gatewayName: '请输入 1–64 位字母、数字、- 或 _，并以字母或数字开头。',
+    exchangeRate: '请输入大于 0、最多 6 位小数的汇率。',
     number: '请输入 {min}–{max} 之间的整数。',
     autoModel: '请补全自动入口、兜底、预设与合法参数覆盖。',
     proxy: '请输入有效的 http:// 或 socks5:// 代理地址。',
@@ -175,6 +188,10 @@ export const enUS = {
   discard: 'Revert changes',
   discardTitle: 'Discard unsaved changes on this page?',
   keepEditing: 'Keep editing',
+  currencySwitchTitle: 'Switch the system currency?',
+  currencySwitchDescription:
+    'New requests will settle in {currency}. Every access key cost limit is converted to USD at the old rate and then to {currency} at the new rate, and its used amount is reset. Past logs and usage keep their original currency.',
+  currencySwitchConfirm: 'Switch and save',
   default: 'Default',
   overridden: 'Configured',
   modified: 'Modified',
@@ -195,6 +212,7 @@ export const enUS = {
     browser: 'Browser access',
     maintenance: 'Data maintenance',
     experimental: 'Experimental features',
+    billing: 'Currency and billing',
     system: 'System information',
   },
   sectionHelp: {
@@ -203,6 +221,7 @@ export const enUS = {
     browser: 'Gateway name and address, cross-origin access and header rules',
     maintenance: 'Log retention and price sync',
     experimental: 'Manage disabled-by-default features that may change',
+    billing: 'System currency and exchange rate used to settle new requests',
     system: 'Version and deployment',
   },
   fields: {
@@ -226,6 +245,8 @@ export const enUS = {
     cors: 'Cross-origin access (CORS)',
     public_base_url: 'Public gateway URL',
     gateway_name: 'Gateway name',
+    currency: 'System currency',
+    exchange_rate: 'Exchange rate',
   },
   hints: {
     route_strategy:
@@ -254,7 +275,13 @@ export const enUS = {
       'Root URL used by the home client examples and access key handoff. Leave empty to use the current browser address.',
     gateway_name:
       'Provider name in the home client examples. Its lowercase form is also the owned_by value returned by /v1/models.',
+    currency:
+      'New requests settle in this currency. Logs, usage and limits keep the currency they settled in, so changes never rewrite history.',
+    exchange_rate:
+      'Units of the system currency per 1 USD, up to 6 decimals. Applies only to requests settled afterwards.',
   },
+  currencies: { USD: 'US dollar (USD)', CNY: 'Chinese yuan (CNY)' },
+  exchangeRateUnit: '{currency} per 1 USD',
   strategies: { native_first: 'Native first', weighted_mix: 'Weighted mix' },
   timeouts: 'Request timeouts',
   reliability: 'Retries & credential health',
@@ -302,6 +329,7 @@ export const enUS = {
   errors: {
     publicBaseURL: 'Enter an http:// or https:// URL without query parameters or credentials.',
     gatewayName: 'Enter 1–64 letters, digits, - or _, starting with a letter or digit.',
+    exchangeRate: 'Enter a rate greater than 0 with at most 6 decimals.',
     number: 'Enter an integer between {min} and {max}.',
     autoModel: 'Complete automatic entries, fallbacks, presets and valid override rules.',
     proxy: 'Enter a valid http:// or socks5:// proxy URL.',
@@ -343,6 +371,10 @@ export const jaJP = {
   discard: '変更を戻す',
   discardTitle: 'このページの未保存の変更を破棄しますか？',
   keepEditing: '編集を続ける',
+  currencySwitchTitle: 'システム通貨を切り替えますか？',
+  currencySwitchDescription:
+    '以降のリクエストは {currency} で精算されます。すべてのアクセスキーの料金上限は旧レートで米ドルに、新レートで {currency} に換算され、使用済み額はリセットされます。過去のログと使用量は元の通貨のままです。',
+  currencySwitchConfirm: '切り替えて保存',
   default: '既定値',
   overridden: '設定済み',
   modified: '変更済み',
@@ -363,6 +395,7 @@ export const jaJP = {
     browser: 'ブラウザアクセス',
     maintenance: 'データ管理',
     experimental: '実験的機能',
+    billing: '通貨と課金',
     system: 'システム情報',
   },
   sectionHelp: {
@@ -371,6 +404,7 @@ export const jaJP = {
     browser: 'ゲートウェイ名とアドレス、クロスオリジンアクセスとヘッダールール',
     maintenance: 'ログ保持と料金同期',
     experimental: '初期状態で無効かつ変更される可能性がある機能を管理',
+    billing: '新しいリクエストの精算に使うシステム通貨と為替レート',
     system: 'バージョンと配置情報',
   },
   fields: {
@@ -394,6 +428,8 @@ export const jaJP = {
     cors: 'クロスオリジンアクセス（CORS）',
     public_base_url: 'ゲートウェイ公開 URL',
     gateway_name: 'ゲートウェイ名',
+    currency: 'システム通貨',
+    exchange_rate: '為替レート',
   },
   hints: {
     route_strategy:
@@ -422,7 +458,13 @@ export const jaJP = {
       'ホームのクライアント接続例とアクセスキー共有で使うルート URL。空欄の場合は現在のブラウザのアドレスを使います。',
     gateway_name:
       'ホームのクライアント接続例で使うプロバイダー名。小文字形は /v1/models の owned_by にも使われます。',
+    currency:
+      '新しいリクエストはこの通貨で精算されます。ログ、使用量、上限は精算時の通貨で記録され、変更しても履歴は書き換わりません。',
+    exchange_rate:
+      '1 USD あたりのシステム通貨の額（小数 6 桁まで）。以降に精算されるリクエストにのみ適用されます。',
   },
+  currencies: { USD: '米ドル（USD）', CNY: '人民元（CNY）' },
+  exchangeRateUnit: '1 USD あたりの {currency}',
   strategies: { native_first: 'ネイティブ優先', weighted_mix: '重み付き混合' },
   timeouts: 'リクエストのタイムアウト',
   reliability: 'リトライと認証情報の健全性',
@@ -471,6 +513,7 @@ export const jaJP = {
     publicBaseURL:
       'クエリパラメータや認証情報を含まない http:// または https:// の URL を入力してください。',
     gatewayName: '英字・数字で始まる 1～64 文字の英数字、- または _ を入力してください。',
+    exchangeRate: '0 より大きく、小数 6 桁以内の為替レートを入力してください。',
     number: '{min}～{max} の整数を入力してください。',
     autoModel: '自動入口、フォールバック、プリセット、有効な上書きルールを入力してください。',
     proxy: '有効な http:// または socks5:// プロキシ URL を入力してください。',

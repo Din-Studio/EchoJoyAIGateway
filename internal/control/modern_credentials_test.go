@@ -51,7 +51,7 @@ func TestModernCredentialDetailPreservesWindowUsage(t *testing.T) {
 	}
 	window := data.Observation.Snapshot.QuotaWindows[0]
 	usage := window.ObservedUsage
-	if usage == nil || usage.RequestCount != 12 || usage.TotalTokens != 230 || usage.EstimatedReferenceCostNanoUSD != "20000000" || !usage.DataComplete || !usage.UsageComplete || !usage.PricingComplete {
+	if usage == nil || usage.RequestCount != 12 || usage.TotalTokens != 230 || usage.EstimatedReferenceCostNano != "20000000" || !usage.DataComplete || !usage.UsageComplete || !usage.PricingComplete {
 		t.Fatalf("existing window usage is missing or changed: %+v", usage)
 	}
 	if len(reader.queries) != 1 || reader.queries[0].CredentialID != id || reader.queries[0].FromMS != at+3_600_000-18_000_000 || reader.queries[0].ToMS != at+3_600_000 {

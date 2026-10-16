@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  Banknote,
   Cable,
   Database,
   FlaskConical,
@@ -15,7 +16,12 @@ import {
 import { useQuery } from '@tanstack/vue-query'
 import { computed, nextTick, onScopeDispose, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { routeStrategies, type SettingKey, type SettingNumber } from '@modern/api/settings'
+import {
+  routeStrategies,
+  systemCurrencies,
+  type SettingKey,
+  type SettingNumber,
+} from '@modern/api/settings'
 import { autoModelDraft, defaultAutoModel, validAutoDraft } from '@modern/api/auto-model'
 import { getSystemInfo, systemInfoKey } from '@modern/api/system'
 import { usePageRefresh } from '@modern/app/page-refresh'
@@ -71,6 +77,7 @@ const sectionIDs = [
   'connection',
   'browser',
   'maintenance',
+  'billing',
   'experimental',
   'system',
 ] as const
@@ -89,6 +96,7 @@ const sectionFields: Record<SectionID, readonly SettingKey[]> = {
   ],
   browser: ['gateway_name', 'public_base_url', 'cors', 'header_rules', 'response_header_rules'],
   maintenance: ['request_log_retention_days', 'models_dev_auto_sync_enabled'],
+  billing: ['currency', 'exchange_rate'],
   experimental: ['auto_model'],
   system: [],
 }
@@ -97,6 +105,7 @@ const sectionIcons = {
   connection: Cable,
   browser: Globe,
   maintenance: Database,
+  billing: Banknote,
   experimental: FlaskConical,
   system: Server,
 }
@@ -168,6 +177,14 @@ const visibleSections = computed(() =>
 )
 const strategyOptions = computed(() =>
   routeStrategies.map((value) => ({ value, label: t('settingsForm.strategies.' + value) })),
+)
+const currencyOptions = computed(() =>
+  systemCurrencies.map((value) => ({ value, label: t('settingsForm.currencies.' + value) })),
+)
+// 切换币种会换算全部费用限额并清零已用额度，保存前单独确认。
+const currencySwitchOpen = ref(false)
+const switchingCurrency = computed(() =>
+  Boolean(base.value && draft.value && draft.value.currency !== base.value.values.currency),
 )
 const proxyOptions = computed(() =>
   ['inherit', 'direct', 'custom'].map((value) => ({
@@ -274,6 +291,14 @@ watch(
   },
   { immediate: true },
 )
+function requestSubmit(): void {
+  if (switchingCurrency.value && !saving.value) currencySwitchOpen.value = true
+  else void submit()
+}
+function confirmCurrencySwitch(): void {
+  currencySwitchOpen.value = false
+  void submit()
+}
 async function submit(): Promise<void> {
   const result = await save()
   if (result !== 'invalid') return
@@ -359,7 +384,7 @@ onScopeDispose(() => {
         ref="scroller"
         class="modern-settings-body"
         novalidate
-        @submit.prevent="submit"
+        @submit.prevent="requestSubmit"
         @scroll.passive="updateActive"
       >
         <AppCollectionState
@@ -701,6 +726,50 @@ onScopeDispose(() => {
                 />
               </SettingItem>
             </template>
+            <template v-else-if="id === 'billing'">
+              <SettingItem
+                v-if="matches('currency')"
+                v-bind="settingItem('currency')"
+                wrap-control
+                class="modern-settings-block"
+                @reset="restore('currency')"
+                @undo="undoRestore('currency')"
+              >
+                <AppSegmentedControl
+                  id="settings-currency"
+                  :model-value="draft.currency"
+                  :label="t('settingsForm.fields.currency')"
+                  :options="currencyOptions"
+                  appearance="field"
+                  :disabled="disabled('currency')"
+                  @update:model-value="draft.currency = $event === 'CNY' ? 'CNY' : 'USD'"
+                />
+              </SettingItem>
+              <SettingItem
+                v-if="draft.currency !== 'USD' && matches('exchange_rate')"
+                v-bind="settingItem('exchange_rate')"
+                class="modern-settings-block"
+                @reset="restore('exchange_rate')"
+                @undo="undoRestore('exchange_rate')"
+              >
+                <AppTextField
+                  id="settings-exchange_rate"
+                  v-model="draft.exchange_rate"
+                  :label="t('settingsForm.fields.exchange_rate')"
+                  label-hidden
+                  inputmode="decimal"
+                  placeholder="7.1"
+                  :error="fieldErrors.exchange_rate"
+                  :disabled="disabled('exchange_rate')"
+                >
+                  <template #suffix>
+                    <span class="modern-settings-unit">{{
+                      t('settingsForm.exchangeRateUnit', { currency: draft.currency })
+                    }}</span>
+                  </template>
+                </AppTextField>
+              </SettingItem>
+            </template>
             <template v-else-if="id === 'experimental'">
               <SettingItem
                 v-bind="settingItem('auto_model')"
@@ -758,6 +827,18 @@ onScopeDispose(() => {
       </div>
     </footer>
     <AppDraftGuard ref="guard" :dirty="dirty" :pending="saving" />
+    <AppConfirmDialog
+      :open="currencySwitchOpen"
+      :title="t('settingsForm.currencySwitchTitle')"
+      :description="
+        t('settingsForm.currencySwitchDescription', { currency: draft?.currency ?? '' })
+      "
+      :confirm-label="t('settingsForm.currencySwitchConfirm')"
+      :cancel-label="t('settingsForm.keepEditing')"
+      tone="danger"
+      @confirm="confirmCurrencySwitch"
+      @cancel="currencySwitchOpen = false"
+    />
     <AppConfirmDialog
       :open="discardOpen"
       :title="t('settingsForm.discardTitle')"

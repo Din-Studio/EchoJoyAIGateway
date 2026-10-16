@@ -14,6 +14,7 @@ import (
 	"gpt-load/internal/parameteroverride"
 	"gpt-load/internal/platform/config"
 	"gpt-load/internal/platform/httpheader"
+	"gpt-load/internal/pricing"
 )
 
 const (
@@ -36,6 +37,8 @@ const (
 	SettingParameterOverrides        = "parameter_overrides"
 	SettingPublicBaseURL             = "public_base_url"
 	SettingGatewayName               = "gateway_name"
+	SettingCurrency                  = "currency"
+	SettingExchangeRate              = "exchange_rate"
 )
 
 type RouteStrategy string
@@ -79,6 +82,8 @@ type RuntimeSettings struct {
 	PublicBaseURL string
 	// GatewayName 是对外展示的网关名称，用于模型列表 owned_by（小写）和客户端接入示例。
 	GatewayName string
+	// Currency 是新请求结算时记账使用的系统货币及其兑美元汇率。
+	Currency pricing.Currency
 }
 
 type ResolvedGroupSettings struct {
@@ -109,6 +114,7 @@ func DefaultRuntimeSettings() RuntimeSettings {
 		RequestLogRetentionDays:   defaultRequestLogRetentionDays,
 		ModelsDevAutoSyncEnabled:  true,
 		GatewayName:               defaultGatewayName,
+		Currency:                  pricing.USDCurrency,
 	}
 }
 
@@ -131,7 +137,9 @@ func IsRuntimeSettingKey(key string) bool {
 		SettingRequestLogRetentionDays,
 		SettingModelsDevAutoSyncEnabled,
 		SettingPublicBaseURL,
-		SettingGatewayName:
+		SettingGatewayName,
+		SettingCurrency,
+		SettingExchangeRate:
 		return true
 	default:
 		return false
@@ -255,11 +263,53 @@ func ResolveRuntimeSettings(settings config.Settings) (RuntimeSettings, error) {
 				return RuntimeSettings{}, err
 			}
 			resolved.GatewayName = name
+		case SettingCurrency, SettingExchangeRate:
+			// 两项需要组合校验，由循环后的 ResolveCurrency 统一处理。
+			continue
 		default:
 			return RuntimeSettings{}, fmt.Errorf("unknown runtime setting %q", key)
 		}
 	}
+	currency, err := ResolveCurrency(settings)
+	if err != nil {
+		return RuntimeSettings{}, err
+	}
+	resolved.Currency = currency
 	return resolved, nil
+}
+
+// ResolveCurrency 组合系统货币与汇率：USD 不得配置汇率，其他币种必须配置。
+func ResolveCurrency(settings config.Settings) (pricing.Currency, error) {
+	code := pricing.CurrencyUSD
+	if value, exists := settings[SettingCurrency]; exists {
+		parsed, err := parseCurrencySetting(value)
+		if err != nil {
+			return pricing.Currency{}, err
+		}
+		code = parsed
+	}
+	var rate *int64
+	if value, exists := settings[SettingExchangeRate]; exists {
+		parsed, err := parseExchangeRateSetting(value)
+		if err != nil {
+			return pricing.Currency{}, err
+		}
+		rate = &parsed
+	}
+	if code == pricing.CurrencyUSD {
+		if rate != nil {
+			return pricing.Currency{}, fmt.Errorf("%s must be empty when %s is USD", SettingExchangeRate, SettingCurrency)
+		}
+		return pricing.USDCurrency, nil
+	}
+	if rate == nil {
+		return pricing.Currency{}, fmt.Errorf("%s is required when %s is %s", SettingExchangeRate, SettingCurrency, code)
+	}
+	currency, err := pricing.NewCurrency(code, *rate)
+	if err != nil {
+		return pricing.Currency{}, fmt.Errorf("%s %w", SettingExchangeRate, err)
+	}
+	return currency, nil
 }
 
 func ResolveGroupRuntimeSettings(
@@ -386,6 +436,12 @@ func ValidateRuntimeSetting(key string, value any) error {
 	case SettingGatewayName:
 		_, err := parseGatewayName(value)
 		return err
+	case SettingCurrency:
+		_, err := parseCurrencySetting(value)
+		return err
+	case SettingExchangeRate:
+		_, err := parseExchangeRateSetting(value)
+		return err
 	default:
 		return fmt.Errorf("unknown runtime setting %q", key)
 	}
@@ -423,6 +479,30 @@ func parseGatewayName(value any) (string, error) {
 		)
 	}
 	return text, nil
+}
+
+func parseCurrencySetting(value any) (pricing.CurrencyCode, error) {
+	text, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", SettingCurrency)
+	}
+	code, err := pricing.ParseCurrencyCode(text)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", SettingCurrency, err)
+	}
+	return code, nil
+}
+
+func parseExchangeRateSetting(value any) (int64, error) {
+	text, ok := value.(string)
+	if !ok {
+		return 0, fmt.Errorf("%s must be a decimal string", SettingExchangeRate)
+	}
+	rate, err := pricing.ParseExchangeRate(text)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", SettingExchangeRate, err)
+	}
+	return rate, nil
 }
 
 func strictBoolean(path string, value any) (bool, error) {

@@ -196,13 +196,13 @@ func TestBuildContainerHydratesAndEnforcesAccessKeyCostLimits(t *testing.T) {
 		}
 		rule := models.AccessKeyCostLimitRule{
 			AccessKeyID: accessKey.ID, Kind: models.AccessKeyCostLimitKindTotal,
-			LimitNanoUSD: 100, RuleRevision: 1,
+			LimitNano: 100, RuleRevision: 1,
 		}
 		if createErr := db.Create(&rule).Error; createErr != nil {
 			t.Fatalf("create cost limit rule: %v", createErr)
 		}
 		if createErr := db.Create(&models.AccessKeyCostLimitState{
-			RuleID: rule.ID, RuleRevision: 1, UsedNanoUSD: 75, SnapshotVersion: 3,
+			RuleID: rule.ID, RuleRevision: 1, UsedNano: 75, SnapshotVersion: 3,
 		}).Error; createErr != nil {
 			t.Fatalf("create cost limit state: %v", createErr)
 		}
@@ -211,8 +211,8 @@ func TestBuildContainerHydratesAndEnforcesAccessKeyCostLimits(t *testing.T) {
 			t.Fatalf("Load() error = %v", loadErr)
 		}
 		view, viewErr := quota.View(t.Context(), manager.Current(), accessKey.ID, time.Now())
-		if viewErr != nil || len(view.Rules) != 1 || view.Rules[0].UsedNanoUSD != 75 ||
-			view.Rules[0].LimitNanoUSD != 100 {
+		if viewErr != nil || len(view.Rules) != 1 || view.Rules[0].UsedNano != 75 ||
+			view.Rules[0].LimitNano != 100 {
 			t.Fatalf("hydrated view = %#v, %v", view, viewErr)
 		}
 		if startErr := requestLogRuntime.Start(); startErr != nil {
@@ -232,11 +232,11 @@ func TestBuildContainerHydratesAndEnforcesAccessKeyCostLimits(t *testing.T) {
 			if queryErr := db.First(&persisted, rule.ID).Error; queryErr != nil {
 				t.Fatalf("read checkpoint: %v", queryErr)
 			}
-			if persisted.UsedNanoUSD == 80 {
+			if persisted.UsedNano == 80 {
 				break
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("checkpoint used = %d, want 80", persisted.UsedNanoUSD)
+				t.Fatalf("checkpoint used = %d, want 80", persisted.UsedNano)
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
@@ -245,7 +245,7 @@ func TestBuildContainerHydratesAndEnforcesAccessKeyCostLimits(t *testing.T) {
 		if buildErr != nil {
 			t.Fatalf("BuildCompileInput() error = %v", buildErr)
 		}
-		input.AccessKeys[0].CostLimitRules[0].LimitNanoUSD = 50
+		input.AccessKeys[0].CostLimitRules[0].LimitNano = 50
 		if _, publishErr := manager.Publish(input); publishErr != nil {
 			t.Fatalf("Publish() error = %v", publishErr)
 		}

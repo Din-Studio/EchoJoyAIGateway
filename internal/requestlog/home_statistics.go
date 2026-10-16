@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"gpt-load/internal/platform/epochms"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/storage/dbtx"
 	"gpt-load/internal/storage/models"
 )
@@ -28,6 +29,7 @@ type HomeStatisticsQuery struct {
 	Range        HomeStatisticsRange
 	ObservedAtMS int64
 	AccessKeyID  *uint
+	Currency     pricing.CurrencyCode
 }
 
 type HomeStatisticsRef struct {
@@ -62,6 +64,8 @@ type HomeStatisticsReport struct {
 	TopModels     []HomeModelRanking
 	TopGroups     []HomeGroupRanking
 	TopAccessKeys []HomeAccessKeyRanking
+	// OtherCurrencies 是范围内还有费用、但不是查询币种的币种。
+	OtherCurrencies []pricing.CurrencyCode
 }
 
 func (service *Service) QueryHomeStatistics(
@@ -94,6 +98,10 @@ func (service *Service) QueryHomeStatistics(
 		Granularity:   granularity,
 		BucketWidthMS: width,
 		AccessKeyID:   input.AccessKeyID,
+		Currency:      input.Currency,
+	}
+	if _, err := pricing.ParseCurrencyCode(string(input.Currency)); err != nil {
+		return HomeStatisticsReport{}, fmt.Errorf("query home statistics: %w", err)
 	}
 
 	report := HomeStatisticsReport{
@@ -112,7 +120,7 @@ func (service *Service) QueryHomeStatistics(
 		if err := validateUsageStatIntegrity(scope); err != nil {
 			return err
 		}
-		summary, err := queryUsageSummary(usageStatScope(connection, usageInput))
+		summary, err := queryUsageSummary(usageStatScope(connection, usageInput), input.Currency)
 		if err != nil {
 			return err
 		}
@@ -122,6 +130,7 @@ func (service *Service) QueryHomeStatistics(
 		sparseSeries, err := queryUsageSeries(
 			usageStatScope(connection, usageInput),
 			width,
+			input.Currency,
 		)
 		if err != nil {
 			return err
@@ -132,7 +141,7 @@ func (service *Service) QueryHomeStatistics(
 			}
 		}
 		modelRows, err := queryHomeModelRankings(
-			usageStatScope(connection, usageInput),
+			usageStatScope(connection, usageInput), input.Currency,
 		)
 		if err != nil {
 			return err
@@ -143,13 +152,13 @@ func (service *Service) QueryHomeStatistics(
 		accessRefs := map[uint]HomeStatisticsRef{}
 		if input.AccessKeyID == nil {
 			groupRows, err = queryHomeGroupRankings(
-				usageStatScope(connection, usageInput),
+				usageStatScope(connection, usageInput), input.Currency,
 			)
 			if err != nil {
 				return err
 			}
 			accessRows, err = queryHomeAccessKeyRankings(
-				usageStatScope(connection, usageInput),
+				usageStatScope(connection, usageInput), input.Currency,
 			)
 			if err != nil {
 				return err
@@ -164,7 +173,12 @@ func (service *Service) QueryHomeStatistics(
 			}
 		}
 
+		others, err := queryOtherCurrencies(usageStatScope(connection, usageInput), input.Currency)
+		if err != nil {
+			return err
+		}
 		report.Summary = summary
+		report.OtherCurrencies = others
 		report.Series = denseHomeStatisticsSeries(
 			fromMS,
 			toMS,
@@ -235,10 +249,10 @@ type homeAccessKeyRankingRow struct {
 	UsageAggregate
 }
 
-func queryHomeModelRankings(scope *gorm.DB) ([]homeModelRankingRow, error) {
+func queryHomeModelRankings(scope *gorm.DB, currency pricing.CurrencyCode) ([]homeModelRankingRow, error) {
 	var rows []homeModelRankingRow
 	if err := scope.
-		Select("model, " + usageAggregateSelect).
+		Select("model, "+usageAggregateSelect, currency).
 		Group("model").
 		Order("SUM(estimated_cost_nano_usd) DESC").
 		Order("SUM(request_count) DESC").
@@ -255,11 +269,11 @@ func queryHomeModelRankings(scope *gorm.DB) ([]homeModelRankingRow, error) {
 	return rows, nil
 }
 
-func queryHomeGroupRankings(scope *gorm.DB) ([]homeGroupRankingRow, error) {
+func queryHomeGroupRankings(scope *gorm.DB, currency pricing.CurrencyCode) ([]homeGroupRankingRow, error) {
 	scope = scope.Where("group_id > 0")
 	var rows []homeGroupRankingRow
 	if err := scope.
-		Select("group_id, " + usageAggregateSelect).
+		Select("group_id, "+usageAggregateSelect, currency).
 		Group("group_id").
 		Order("SUM(estimated_cost_nano_usd) DESC").
 		Order("SUM(request_count) DESC").
@@ -276,10 +290,10 @@ func queryHomeGroupRankings(scope *gorm.DB) ([]homeGroupRankingRow, error) {
 	return rows, nil
 }
 
-func queryHomeAccessKeyRankings(scope *gorm.DB) ([]homeAccessKeyRankingRow, error) {
+func queryHomeAccessKeyRankings(scope *gorm.DB, currency pricing.CurrencyCode) ([]homeAccessKeyRankingRow, error) {
 	var rows []homeAccessKeyRankingRow
 	if err := scope.
-		Select("access_key_id, " + usageAggregateSelect).
+		Select("access_key_id, "+usageAggregateSelect, currency).
 		Group("access_key_id").
 		Order("SUM(estimated_cost_nano_usd) DESC").
 		Order("SUM(request_count) DESC").

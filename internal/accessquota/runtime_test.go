@@ -13,7 +13,7 @@ func summarizeQuotaRules(rules []RuleView) string {
 	parts := make([]string, 0, len(rules))
 	for _, rule := range rules {
 		parts = append(parts, fmt.Sprintf("%d %s used=%d left=%d gen=%d",
-			rule.ID, rule.Status, rule.UsedNanoUSD, rule.RemainingNanoUSD, rule.WindowGeneration))
+			rule.ID, rule.Status, rule.UsedNano, rule.RemainingNano, rule.WindowGeneration))
 	}
 	return "[" + strings.Join(parts, "; ") + "]"
 }
@@ -28,24 +28,24 @@ func summarizeQuotaNext(next *int64) string {
 func TestDecisionForAndViewForEvaluateRuleStates(t *testing.T) {
 	// Rules are deliberately unsorted: the total rule comes first, then periodic rules by period.
 	rules := []Rule{
-		{ID: 12, Revision: 1, Kind: KindPeriodic, LimitNanoUSD: 30, PeriodSeconds: 24 * 60 * 60},
-		{ID: 11, Revision: 1, Kind: KindPeriodic, LimitNanoUSD: 20, PeriodSeconds: 5 * 60 * 60},
-		{ID: 10, Revision: 1, Kind: KindTotal, LimitNanoUSD: 100},
+		{ID: 12, Revision: 1, Kind: KindPeriodic, Currency: "USD", LimitNano: 30, PeriodSeconds: 24 * 60 * 60},
+		{ID: 11, Revision: 1, Kind: KindPeriodic, Currency: "USD", LimitNano: 20, PeriodSeconds: 5 * 60 * 60},
+		{ID: 10, Revision: 1, Kind: KindTotal, Currency: "USD", LimitNano: 100},
 	}
 	started := time.Date(2026, time.August, 20, 10, 37, 0, 0, time.UTC)
 	at := func(offset time.Duration) *int64 { return ptrInt64(started.Add(offset).UnixMilli()) }
 	firstWindows := map[uint]RestoredState{
-		10: {AccessKeyID: 1, RuleID: 10, RuleRevision: 1, UsedNanoUSD: 25, SnapshotVersion: 2},
-		11: {AccessKeyID: 1, RuleID: 11, RuleRevision: 1, UsedNanoUSD: 25, WindowStartedAtMS: at(0),
+		10: {AccessKeyID: 1, RuleID: 10, RuleRevision: 1, UsedNano: 25, SnapshotVersion: 2},
+		11: {AccessKeyID: 1, RuleID: 11, RuleRevision: 1, UsedNano: 25, WindowStartedAtMS: at(0),
 			WindowEndsAtMS: at(5 * time.Hour), WindowGeneration: 1, SnapshotVersion: 3},
-		12: {AccessKeyID: 1, RuleID: 12, RuleRevision: 1, UsedNanoUSD: 25, WindowStartedAtMS: at(0),
+		12: {AccessKeyID: 1, RuleID: 12, RuleRevision: 1, UsedNano: 25, WindowStartedAtMS: at(0),
 			WindowEndsAtMS: at(24 * time.Hour), WindowGeneration: 1, SnapshotVersion: 3},
 	}
 	exhausted := map[uint]RestoredState{
-		10: {AccessKeyID: 1, RuleID: 10, RuleRevision: 1, UsedNanoUSD: 125, SnapshotVersion: 3},
-		11: {AccessKeyID: 1, RuleID: 11, RuleRevision: 1, UsedNanoUSD: 100, WindowStartedAtMS: at(25 * time.Hour),
+		10: {AccessKeyID: 1, RuleID: 10, RuleRevision: 1, UsedNano: 125, SnapshotVersion: 3},
+		11: {AccessKeyID: 1, RuleID: 11, RuleRevision: 1, UsedNano: 100, WindowStartedAtMS: at(25 * time.Hour),
 			WindowEndsAtMS: at(30 * time.Hour), WindowGeneration: 2, SnapshotVersion: 5},
-		12: {AccessKeyID: 1, RuleID: 12, RuleRevision: 1, UsedNanoUSD: 100, WindowStartedAtMS: at(25 * time.Hour),
+		12: {AccessKeyID: 1, RuleID: 12, RuleRevision: 1, UsedNano: 100, WindowStartedAtMS: at(25 * time.Hour),
 			WindowEndsAtMS: at(49 * time.Hour), WindowGeneration: 2, SnapshotVersion: 5},
 	}
 	for _, test := range []struct {
@@ -112,10 +112,10 @@ func TestDecisionForAndViewForEvaluateRuleStates(t *testing.T) {
 }
 
 func TestValidateRestoredStateRejectsImpossibleStates(t *testing.T) {
-	periodic := Rule{ID: 11, Revision: 2, Kind: KindPeriodic, LimitNanoUSD: 20, PeriodSeconds: 60}
+	periodic := Rule{ID: 11, Revision: 2, Kind: KindPeriodic, Currency: "USD", LimitNano: 20, PeriodSeconds: 60}
 	start, end, wrongEnd := int64(1000), int64(61000), int64(2000)
 	valid := RestoredState{
-		AccessKeyID: 1, RuleID: 11, RuleRevision: 2, UsedNanoUSD: 5,
+		AccessKeyID: 1, RuleID: 11, RuleRevision: 2, UsedNano: 5,
 		WindowStartedAtMS: &start, WindowEndsAtMS: &end, WindowGeneration: 1, SnapshotVersion: 3,
 	}
 	if err := ValidateRestoredState(periodic, valid); err != nil {
@@ -138,7 +138,7 @@ func TestValidateRestoredStateRejectsImpossibleStates(t *testing.T) {
 			t.Fatalf("ValidateRestoredState(%s) error = nil", name)
 		}
 	}
-	total := Rule{ID: 10, Revision: 1, Kind: KindTotal, LimitNanoUSD: 100}
+	total := Rule{ID: 10, Revision: 1, Kind: KindTotal, Currency: "USD", LimitNano: 100}
 	windowed := RestoredState{AccessKeyID: 1, RuleID: 10, RuleRevision: 1, SnapshotVersion: 1, WindowStartedAtMS: &start, WindowEndsAtMS: &end}
 	if err := ValidateRestoredState(total, windowed); err == nil {
 		t.Fatal("ValidateRestoredState(total with window) error = nil")

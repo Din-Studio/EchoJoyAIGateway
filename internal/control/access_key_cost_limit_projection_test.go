@@ -16,8 +16,8 @@ func TestAccessKeyCostLimitRuntimeProjectionIsSharedByCollectionHomeAndHealth(t 
 	created, err := fixture.service.CreateAccessKey(t.Context(), AccessKeyCreateRequest{
 		Name: "limited",
 		CostLimitRules: OptionalAccessKeyCostLimitRules{Set: true, Values: []AccessKeyCostLimitRuleRequest{
-			{Kind: accessquota.KindTotal, LimitUSD: "100"},
-			{Kind: accessquota.KindPeriodic, LimitUSD: "20", PeriodSeconds: 300},
+			{Kind: accessquota.KindTotal, Limit: "100"},
+			{Kind: accessquota.KindPeriodic, Limit: "20", PeriodSeconds: 300},
 		}},
 	})
 	if err != nil {
@@ -72,7 +72,7 @@ func TestAccessKeyCostLimitProjectionReadsSharedClusterState(t *testing.T) {
 	created, err := fixture.service.CreateAccessKey(t.Context(), AccessKeyCreateRequest{
 		Name: "limited",
 		CostLimitRules: OptionalAccessKeyCostLimitRules{Set: true, Values: []AccessKeyCostLimitRuleRequest{
-			{Kind: accessquota.KindTotal, LimitUSD: "100"},
+			{Kind: accessquota.KindTotal, Limit: "100"},
 		}},
 	})
 	if err != nil {

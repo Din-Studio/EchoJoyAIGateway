@@ -5,7 +5,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AccessKey, CostRule, CostWindow } from '@modern/api/access-keys'
 import { AppProgressBar, AppTag, AppTooltip, type SemanticTone } from '@modern/components/ui'
-import { accessNanoUSD, accessTime } from './access-key-display'
+import { accessMoney, accessNano, accessTime } from './access-key-display'
 import { periodUnits } from './access-key-draft'
 
 const props = defineProps<{ row: AccessKey; groups: ReadonlyMap<string, { name: string }> }>()
@@ -66,16 +66,16 @@ const entries = computed<QuotaEntry[]>(() => {
   const windows = new Map(props.row.cost_limit_status?.rules.map((rule) => [rule.id, rule]))
   return props.row.cost_limit_rules.map((rule) => {
     const window = rule.id === undefined ? undefined : windows.get(rule.id)
-    const limit = accessNanoUSD(rule.limit_usd)
+    const limit = accessNano(rule.limit)
     if (
       !window ||
       limit <= 0n ||
       window.kind !== rule.kind ||
       (window.period_seconds ?? 0) !== (rule.period_seconds ?? 0) ||
-      accessNanoUSD(window.limit_usd) !== limit
+      accessNano(window.limit) !== limit
     )
       return { rule }
-    return { rule, window, limit, remaining: accessNanoUSD(window.remaining_usd) }
+    return { rule, window, limit, remaining: accessNano(window.remaining) }
   })
 })
 const lowest = computed(() => {
@@ -120,10 +120,10 @@ const quotaLabel = computed(() => {
     ? t('accessKeys.quotaMinimum', { value: percentText(lowest.value) })
     : t('accessKeys.quotaUnavailable')
   const details = entries.value.map((entry) => {
-    const title = `${ruleName(entry.rule)} · $${entry.rule.limit_usd}`
+    const title = `${ruleName(entry.rule)} · ${accessMoney(entry.rule.limit, entry.rule.currency ?? 'USD', locale.value)}`
     if (!entry.window) return `${title}\n${t('accessKeys.quotaUnavailable')}`
-    const remaining = `${t('accessKeys.remaining')} $${entry.window.remaining_usd} · ${percentText(entry)}`
-    const used = `${t('accessKeys.used')} $${entry.window.used_usd}`
+    const remaining = `${t('accessKeys.remaining')} ${accessMoney(entry.window.remaining, entry.window.currency, locale.value)} · ${percentText(entry)}`
+    const used = `${t('accessKeys.used')} ${accessMoney(entry.window.used, entry.window.currency, locale.value)}`
     const recovery =
       entry.window.status === 'inactive'
         ? t('accessKeys.inactive')

@@ -10,6 +10,7 @@ import (
 	"gpt-load/internal/platform/epochms"
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/platform/response"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/requestlog"
 )
 
@@ -31,6 +32,7 @@ type homeStatisticsAggregateResponse struct {
 	CacheReadTokens         int64  `json:"cache_read_tokens"`
 	CacheWriteUnknownTokens int64  `json:"cache_write_unknown_tokens"`
 	EstimatedCostNanoUSD    string `json:"estimated_cost_nano_usd"`
+	EstimatedCostNano       string `json:"estimated_cost_nano"`
 	UsageMissingCount       int64  `json:"usage_missing_count"`
 	PartialCount            int64  `json:"partial_count"`
 	UnpricedRequestCount    int64  `json:"unpriced_request_count"`
@@ -55,6 +57,7 @@ type homeModelRankingResponse struct {
 	RequestCount         int64  `json:"request_count"`
 	TotalTokens          int64  `json:"total_tokens"`
 	EstimatedCostNanoUSD string `json:"estimated_cost_nano_usd"`
+	EstimatedCostNano    string `json:"estimated_cost_nano"`
 }
 
 type homeGroupRankingResponse struct {
@@ -62,6 +65,7 @@ type homeGroupRankingResponse struct {
 	RequestCount         int64                     `json:"request_count"`
 	TotalTokens          int64                     `json:"total_tokens"`
 	EstimatedCostNanoUSD string                    `json:"estimated_cost_nano_usd"`
+	EstimatedCostNano    string                    `json:"estimated_cost_nano"`
 }
 
 type homeAccessKeyRankingResponse struct {
@@ -69,6 +73,7 @@ type homeAccessKeyRankingResponse struct {
 	RequestCount         int64                     `json:"request_count"`
 	TotalTokens          int64                     `json:"total_tokens"`
 	EstimatedCostNanoUSD string                    `json:"estimated_cost_nano_usd"`
+	EstimatedCostNano    string                    `json:"estimated_cost_nano"`
 }
 
 type homeStatisticsRankingsResponse struct {
@@ -78,14 +83,17 @@ type homeStatisticsRankingsResponse struct {
 }
 
 type homeStatisticsResponse struct {
-	Range        requestlog.HomeStatisticsRange  `json:"range"`
-	Granularity  requestlog.UsageGranularity     `json:"granularity"`
-	FromMS       int64                           `json:"from_ms"`
-	ToMS         int64                           `json:"to_ms"`
-	ObservedAtMS int64                           `json:"observed_at_ms"`
-	Summary      homeStatisticsAggregateResponse `json:"summary"`
-	Series       []homeStatisticsSeriesResponse  `json:"series"`
-	Rankings     homeStatisticsRankingsResponse  `json:"rankings"`
+	Range        requestlog.HomeStatisticsRange `json:"range"`
+	Granularity  requestlog.UsageGranularity    `json:"granularity"`
+	FromMS       int64                          `json:"from_ms"`
+	ToMS         int64                          `json:"to_ms"`
+	ObservedAtMS int64                          `json:"observed_at_ms"`
+	Currency     pricing.CurrencyCode           `json:"currency"`
+	// OtherCurrencies 是范围内还有费用、但不是当前系统货币的币种。
+	OtherCurrencies []pricing.CurrencyCode          `json:"other_currencies"`
+	Summary         homeStatisticsAggregateResponse `json:"summary"`
+	Series          []homeStatisticsSeriesResponse  `json:"series"`
+	Rankings        homeStatisticsRankingsResponse  `json:"rankings"`
 }
 
 func (s *Service) QueryHomeStatistics(
@@ -120,6 +128,12 @@ func (s *Server) handleHomeStatistics(c *gin.Context) {
 	if accessKeyScoped {
 		query.AccessKeyID = &accessKeyID
 	}
+	currency, err := s.service.currentCurrency()
+	if err != nil {
+		writeServiceError(c, "home_statistics", err)
+		return
+	}
+	query.Currency = currency.Code
 	report, err := s.service.QueryHomeStatistics(
 		c.Request.Context(),
 		query,
@@ -240,13 +254,15 @@ func mapHomeStatisticsResponse(
 	}
 
 	result := homeStatisticsResponse{
-		Range:        report.Range,
-		Granularity:  report.Granularity,
-		FromMS:       report.FromMS,
-		ToMS:         report.ToMS,
-		ObservedAtMS: report.ObservedAtMS,
-		Summary:      summary,
-		Series:       make([]homeStatisticsSeriesResponse, 0, count),
+		Range:           report.Range,
+		Granularity:     report.Granularity,
+		FromMS:          report.FromMS,
+		ToMS:            report.ToMS,
+		ObservedAtMS:    report.ObservedAtMS,
+		Currency:        query.Currency,
+		OtherCurrencies: append([]pricing.CurrencyCode{}, report.OtherCurrencies...),
+		Summary:         summary,
+		Series:          make([]homeStatisticsSeriesResponse, 0, count),
 		Rankings: homeStatisticsRankingsResponse{
 			Models: make([]homeModelRankingResponse, 0, len(report.TopModels)),
 			Groups: make([]homeGroupRankingResponse, 0, len(report.TopGroups)),
@@ -287,6 +303,7 @@ func mapHomeStatisticsResponse(
 				RequestCount:         aggregate.RequestCount,
 				TotalTokens:          aggregate.TotalTokens,
 				EstimatedCostNanoUSD: aggregate.EstimatedCostNanoUSD,
+				EstimatedCostNano:    aggregate.EstimatedCostNano,
 			},
 		)
 	}
@@ -305,6 +322,7 @@ func mapHomeStatisticsResponse(
 				Group: group, RequestCount: aggregate.RequestCount,
 				TotalTokens:          aggregate.TotalTokens,
 				EstimatedCostNanoUSD: aggregate.EstimatedCostNanoUSD,
+				EstimatedCostNano:    aggregate.EstimatedCostNano,
 			},
 		)
 	}
@@ -324,6 +342,7 @@ func mapHomeStatisticsResponse(
 				RequestCount:         aggregate.RequestCount,
 				TotalTokens:          aggregate.TotalTokens,
 				EstimatedCostNanoUSD: aggregate.EstimatedCostNanoUSD,
+				EstimatedCostNano:    aggregate.EstimatedCostNano,
 			},
 		)
 	}
@@ -381,6 +400,7 @@ func mapHomeStatisticsAggregate(
 		CacheReadTokens:         mapped.CacheReadTokens,
 		CacheWriteUnknownTokens: mapped.CacheWriteUnknownTokens,
 		EstimatedCostNanoUSD:    mapped.EstimatedCostNanoUSD,
+		EstimatedCostNano:       mapped.EstimatedCostNano,
 		UsageMissingCount:       mapped.UsageMissingCount,
 		PartialCount:            mapped.PartialCount,
 		UnpricedRequestCount:    mapped.UnpricedRequestCount,

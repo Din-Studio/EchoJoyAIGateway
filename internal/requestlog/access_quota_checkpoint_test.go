@@ -27,7 +27,7 @@ func TestAccessQuotaCheckpointWriterAppliesAndRetriesAbsoluteSnapshot(t *testing
 	endsAt := startedAt + 300_000
 	snapshot := accessquota.RestoredState{
 		AccessKeyID: accessKey.ID, RuleID: rule.ID, RuleRevision: 1,
-		UsedNanoUSD: 75, WindowStartedAtMS: &startedAt, WindowEndsAtMS: &endsAt,
+		UsedNano: 75, WindowStartedAtMS: &startedAt, WindowEndsAtMS: &endsAt,
 		WindowGeneration: 2, SnapshotVersion: 4,
 	}
 	if err := writer.WriteSnapshots(t.Context(), []accessquota.RestoredState{snapshot}); err != nil {
@@ -40,7 +40,7 @@ func TestAccessQuotaCheckpointWriterAppliesAndRetriesAbsoluteSnapshot(t *testing
 	if err := db.First(&persisted, rule.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if persisted.UsedNanoUSD != 75 || persisted.SnapshotVersion != 4 ||
+	if persisted.UsedNano != 75 || persisted.SnapshotVersion != 4 ||
 		persisted.WindowGeneration != 2 || persisted.WindowStartedAtMS == nil ||
 		*persisted.WindowStartedAtMS != startedAt {
 		t.Fatalf("persisted checkpoint = %#v", persisted)
@@ -62,7 +62,7 @@ func TestAccessQuotaCheckpointWriterClassifiesStaleDeletedAndMissingState(t *tes
 		writer := &gormAccessQuotaCheckpointWriter{db: db}
 		err := writer.WriteSnapshots(t.Context(), []accessquota.RestoredState{{
 			AccessKeyID: accessKey.ID, RuleID: rule.ID, RuleRevision: 1,
-			UsedNanoUSD: 99, SnapshotVersion: 5,
+			UsedNano: 99, SnapshotVersion: 5,
 		}})
 		if err != nil {
 			t.Fatalf("stale WriteSnapshots() error = %v", err)
@@ -71,7 +71,7 @@ func TestAccessQuotaCheckpointWriterClassifiesStaleDeletedAndMissingState(t *tes
 		if err := db.First(&persisted, rule.ID).Error; err != nil {
 			t.Fatal(err)
 		}
-		if persisted.RuleRevision != 2 || persisted.UsedNanoUSD != 0 {
+		if persisted.RuleRevision != 2 || persisted.UsedNano != 0 {
 			t.Fatalf("stale snapshot changed state = %#v", persisted)
 		}
 	})
@@ -85,7 +85,7 @@ func TestAccessQuotaCheckpointWriterClassifiesStaleDeletedAndMissingState(t *tes
 		writer := &gormAccessQuotaCheckpointWriter{db: db}
 		if err := writer.WriteSnapshots(t.Context(), []accessquota.RestoredState{{
 			AccessKeyID: accessKey.ID, RuleID: rule.ID, RuleRevision: 1,
-			UsedNanoUSD: 99, SnapshotVersion: 5,
+			UsedNano: 99, SnapshotVersion: 5,
 		}}); err != nil {
 			t.Fatalf("deleted WriteSnapshots() error = %v", err)
 		}
@@ -100,7 +100,7 @@ func TestAccessQuotaCheckpointWriterClassifiesStaleDeletedAndMissingState(t *tes
 		writer := &gormAccessQuotaCheckpointWriter{db: db}
 		if err := writer.WriteSnapshots(t.Context(), []accessquota.RestoredState{{
 			AccessKeyID: accessKey.ID, RuleID: rule.ID, RuleRevision: 1,
-			UsedNanoUSD: 99, SnapshotVersion: 5,
+			UsedNano: 99, SnapshotVersion: 5,
 		}}); err == nil {
 			t.Fatal("WriteSnapshots() error = nil, want missing state failure")
 		}
@@ -123,7 +123,7 @@ func TestRequestLogServiceFlushesAndAcknowledgesQuotaDirtyStateWithoutLogEvent(t
 	if err := db.First(&persisted, rule.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if persisted.UsedNanoUSD != 75 || persisted.SnapshotVersion <= 1 {
+	if persisted.UsedNano != 75 || persisted.SnapshotVersion <= 1 {
 		t.Fatalf("persisted checkpoint = %#v", persisted)
 	}
 	if quota.HasDirty() {
@@ -265,7 +265,7 @@ func TestRequestLogWorkerRetriesQuotaCheckpointWithoutClearingDirtyVersion(t *te
 	second := receiveValue(t, writes)
 	if len(first) != 1 || len(second) != 1 ||
 		first[0].SnapshotVersion != second[0].SnapshotVersion ||
-		first[0].UsedNanoUSD != second[0].UsedNanoUSD {
+		first[0].UsedNano != second[0].UsedNano {
 		t.Fatalf("checkpoint retries = %#v / %#v", first, second)
 	}
 	deadline := time.Now().Add(time.Second)
@@ -311,7 +311,7 @@ func spendSharedQuota(t *testing.T, quota *cluster.AccessQuota, snapshot *state.
 func periodicCheckpointSnapshot(accessKeyID, ruleID uint) *state.ConfigSnapshot {
 	return &state.ConfigSnapshot{AccessKeysByID: map[uint]state.AccessKeyView{accessKeyID: {
 		ID: accessKeyID, CostLimitRules: []accessquota.Rule{{
-			ID: ruleID, Revision: 1, Kind: accessquota.KindPeriodic, LimitNanoUSD: 100, PeriodSeconds: 300,
+			ID: ruleID, Revision: 1, Kind: accessquota.KindPeriodic, Currency: "USD", LimitNano: 100, PeriodSeconds: 300,
 		}},
 	}}}
 }
@@ -341,7 +341,7 @@ func (owners initialQuotaStates) snapshot() *state.ConfigSnapshot {
 	for ruleID, accessKeyID := range owners {
 		snapshot.AccessKeysByID[accessKeyID] = state.AccessKeyView{
 			ID: accessKeyID, CostLimitRules: []accessquota.Rule{{
-				ID: ruleID, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 1_000,
+				ID: ruleID, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 1_000,
 			}},
 		}
 	}
@@ -368,7 +368,7 @@ func createCheckpointRule(t *testing.T, db *gorm.DB) (models.AccessKey, models.A
 	}
 	rule := models.AccessKeyCostLimitRule{
 		AccessKeyID: accessKey.ID, Kind: models.AccessKeyCostLimitKindPeriodic,
-		LimitNanoUSD: 100, PeriodSeconds: 300, RuleRevision: 1,
+		LimitNano: 100, PeriodSeconds: 300, RuleRevision: 1,
 	}
 	if err := db.Create(&rule).Error; err != nil {
 		t.Fatal(err)
@@ -389,11 +389,11 @@ func waitForCheckpointCost(t *testing.T, db *gorm.DB, ruleID uint, want int64) {
 		if err := db.First(&state, ruleID).Error; err != nil {
 			t.Fatal(err)
 		}
-		if state.UsedNanoUSD == want {
+		if state.UsedNano == want {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("checkpoint cost = %d, want %d", state.UsedNanoUSD, want)
+			t.Fatalf("checkpoint cost = %d, want %d", state.UsedNano, want)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -406,7 +406,7 @@ func TestAccessQuotaStateReaderReturnsCheckpointsWithAccessKey(t *testing.T) {
 	endsAt := startedAt + 300_000
 	written := accessquota.RestoredState{
 		AccessKeyID: accessKey.ID, RuleID: rule.ID, RuleRevision: 1,
-		UsedNanoUSD: 42, WindowStartedAtMS: &startedAt, WindowEndsAtMS: &endsAt,
+		UsedNano: 42, WindowStartedAtMS: &startedAt, WindowEndsAtMS: &endsAt,
 		WindowGeneration: 3, SnapshotVersion: 7,
 	}
 	if err := (&gormAccessQuotaCheckpointWriter{db: db}).WriteSnapshots(t.Context(), []accessquota.RestoredState{written}); err != nil {
@@ -470,7 +470,7 @@ func TestRequestLogServiceCheckpointsSharedQuotaSource(t *testing.T) {
 	service := NewService(db, redact.New(), staticRetentionPolicy{days: 7})
 	source := &scriptedCheckpointSource{
 		pending: []accessquota.RestoredState{{
-			AccessKeyID: accessKey.ID, RuleID: rule.ID, RuleRevision: 1, UsedNanoUSD: 33, SnapshotVersion: 5,
+			AccessKeyID: accessKey.ID, RuleID: rule.ID, RuleRevision: 1, UsedNano: 33, SnapshotVersion: 5,
 		}},
 		readErr: errors.New("redis: connection refused"),
 	}

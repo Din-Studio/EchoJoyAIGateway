@@ -137,6 +137,7 @@ type usageStatKey struct {
 	GroupID       uint
 	CredentialID  uint
 	Model         string
+	Currency      string
 }
 
 type usageStatDelta struct {
@@ -150,6 +151,7 @@ type usageStatDelta struct {
 	CacheWrite1HTokens      int64
 	CacheWriteUnknownTokens int64
 	EstimatedCostNanoUSD    int64
+	EstimatedCostNano       int64
 	UsageMissingCount       int64
 	PartialCount            int64
 	UnpricedRequestCount    int64
@@ -303,6 +305,7 @@ func newUsageStat(key usageStatKey, delta usageStatDelta) models.UsageStat {
 		GroupID:                 key.GroupID,
 		CredentialID:            key.CredentialID,
 		Model:                   key.Model,
+		Currency:                key.Currency,
 		RequestCount:            delta.RequestCount,
 		SuccessCount:            delta.SuccessCount,
 		FailureCount:            delta.FailureCount,
@@ -313,6 +316,7 @@ func newUsageStat(key usageStatKey, delta usageStatDelta) models.UsageStat {
 		CacheWrite1HTokens:      delta.CacheWrite1HTokens,
 		CacheWriteUnknownTokens: delta.CacheWriteUnknownTokens,
 		EstimatedCostNanoUSD:    delta.EstimatedCostNanoUSD,
+		EstimatedCostNano:       delta.EstimatedCostNano,
 		UsageMissingCount:       delta.UsageMissingCount,
 		PartialCount:            delta.PartialCount,
 		UnpricedRequestCount:    delta.UnpricedRequestCount,
@@ -332,6 +336,7 @@ func (delta usageStatDelta) columnAmounts() map[string]int64 {
 		"cache_write_1h_tokens":      delta.CacheWrite1HTokens,
 		"cache_write_unknown_tokens": delta.CacheWriteUnknownTokens,
 		"estimated_cost_nano_usd":    delta.EstimatedCostNanoUSD,
+		"estimated_cost_nano":        delta.EstimatedCostNano,
 		"usage_missing_count":        delta.UsageMissingCount,
 		"partial_count":              delta.PartialCount,
 		"unpriced_request_count":     delta.UnpricedRequestCount,
@@ -348,6 +353,7 @@ func usageStatUpsertClause(delta usageStatDelta) clause.OnConflict {
 			{Name: "group_id"},
 			{Name: "credential_id"},
 			{Name: "model"},
+			{Name: "currency"},
 		},
 		DoUpdates: clause.Assignments(incrementAssignments(delta.columnAmounts())),
 	}
@@ -370,6 +376,7 @@ func buildUsageStatDeltas(rows []models.RequestLog) (map[usageStatKey]usageStatD
 			GroupID:       row.GroupID,
 			CredentialID:  row.CredentialID,
 			Model:         row.UpstreamModel,
+			Currency:      row.Currency,
 		}
 		delta := deltas[key]
 		if err := delta.addRow(row); err != nil {
@@ -460,6 +467,11 @@ func (delta *usageStatDelta) addRow(row models.RequestLog) error {
 		return fmt.Errorf("aggregate usage stat estimated_cost_nano_usd: checked addition failed")
 	}
 	delta.EstimatedCostNanoUSD = int64(cost)
+	settled, ok := usage.CheckedAdd(delta.EstimatedCostNano, row.EstimatedCostNano)
+	if !ok {
+		return fmt.Errorf("aggregate usage stat estimated_cost_nano: checked addition failed")
+	}
+	delta.EstimatedCostNano = settled
 	return nil
 }
 
@@ -524,7 +536,10 @@ func sortedUsageStatKeys(deltas map[usageStatKey]usageStatDelta) []usageStatKey 
 		if keys[left].CredentialID != keys[right].CredentialID {
 			return keys[left].CredentialID < keys[right].CredentialID
 		}
-		return keys[left].Model < keys[right].Model
+		if keys[left].Model != keys[right].Model {
+			return keys[left].Model < keys[right].Model
+		}
+		return keys[left].Currency < keys[right].Currency
 	})
 	return keys
 }

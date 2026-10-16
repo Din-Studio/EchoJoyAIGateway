@@ -162,7 +162,7 @@ function formatted(value: number | null): string {
   if (props.metric === 'cost')
     return numberFormatter(locale.value, {
       style: 'currency',
-      currency: 'USD',
+      currency: props.report.currency,
       currencyDisplay: 'narrowSymbol',
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
@@ -176,7 +176,7 @@ const pointLabels = computed(() => {
     const endDay = day.format(point.from) === day.format(point.to) ? '' : day.format(point.to) + ' '
     const metricValue =
       props.metric === 'cost' && point.summary && point.value !== null
-        ? formatUsageCost(point.summary.estimated_cost_nano_usd, locale.value)
+        ? formatUsageCost(point.summary.estimated_cost_nano, props.report.currency, locale.value)
         : formatted(point.value)
     const lines = [
       `${day.format(point.from)} ${time.format(point.from)} – ${endDay}${time.format(point.to)}`,

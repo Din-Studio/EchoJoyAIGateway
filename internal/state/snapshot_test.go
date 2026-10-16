@@ -11,6 +11,7 @@ import (
 	"gpt-load/internal/channel"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/platform/config"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/protocol"
 )
 
@@ -242,7 +243,7 @@ func TestCompileOwnsInputData(t *testing.T) {
 				netip.MustParsePrefix("192.0.2.0/24"),
 			},
 			CostLimitRules: []accessquota.Rule{{
-				ID: 7, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 100,
+				ID: 7, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 100,
 			}},
 		}},
 	}
@@ -257,7 +258,7 @@ func TestCompileOwnsInputData(t *testing.T) {
 	filters.Models["changed"] = struct{}{}
 	expiresAtMS = 1
 	input.AccessKeys[0].AllowedPeerCIDRs[0] = netip.MustParsePrefix("198.51.100.0/24")
-	input.AccessKeys[0].CostLimitRules[0].LimitNanoUSD = 1
+	input.AccessKeys[0].CostLimitRules[0].LimitNano = 1
 
 	view := snapshot.Groups[1]
 	if !reflect.DeepEqual(view.Models, []ModelConfig{{ID: "upstream", Alias: "public"}}) || view.WeightManual == nil || *view.WeightManual != 25 {
@@ -273,7 +274,7 @@ func TestCompileOwnsInputData(t *testing.T) {
 	if _, ok := gotFilters.Models["changed"]; ok {
 		t.Fatal("model filter retained caller mutation")
 	}
-	if got := snapshot.AccessKeysByID[1].CostLimitRules; len(got) != 1 || got[0].LimitNanoUSD != 100 {
+	if got := snapshot.AccessKeysByID[1].CostLimitRules; len(got) != 1 || got[0].LimitNano != 100 {
 		t.Fatalf("cost limit rules changed with input = %#v", got)
 	}
 	accessKey := snapshot.AccessKeysByID[1]
@@ -319,8 +320,8 @@ func TestCompileRejectsInvalidCoreConfiguration(t *testing.T) {
 			input: CompileInput{AccessKeys: []AccessKeyConfig{{
 				ID: 1, KeyHash: "hash", Status: AccessKeyStatusActive,
 				CostLimitRules: []accessquota.Rule{
-					{ID: 1, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 100},
-					{ID: 2, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 200},
+					{ID: 1, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 100},
+					{ID: 2, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 200},
 				},
 			}}},
 			wantErr: "cost limit",
@@ -370,3 +371,21 @@ func TestCompileRejectsInvalidCoreConfiguration(t *testing.T) {
 }
 
 func int64Pointer(value int64) *int64 { return &value }
+
+func TestCompileRejectsCostLimitRuleOutsideSystemCurrency(t *testing.T) {
+	input := CompileInput{
+		ChannelRegistry: channel.NewRegistry(),
+		SystemSettings:  config.Settings{SettingCurrency: "CNY", SettingExchangeRate: "7.1"},
+		AccessKeys: []AccessKeyConfig{{
+			ID: 1, KeyHash: "hash", Status: AccessKeyStatusActive,
+			CostLimitRules: []accessquota.Rule{{ID: 7, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 100}},
+		}},
+	}
+	if _, err := Compile(input); err == nil || !strings.Contains(err.Error(), "want system currency CNY") {
+		t.Fatalf("Compile() error = %v, want rule currency mismatch", err)
+	}
+	input.AccessKeys[0].CostLimitRules[0].Currency = pricing.CurrencyCNY
+	if _, err := Compile(input); err != nil {
+		t.Fatalf("Compile() with CNY rule error = %v", err)
+	}
+}

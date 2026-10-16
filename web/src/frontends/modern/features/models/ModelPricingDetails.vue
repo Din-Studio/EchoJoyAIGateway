@@ -36,13 +36,15 @@ const rows = computed(() => {
   ])
 })
 const value = (prices: PriceSlots, field: (typeof priceFields)[number]) =>
-  modelUnitPrice(prices[field], locale.value)
+  modelUnitPrice(prices[field], props.price.currency, locale.value)
 </script>
 
 <template>
   <div class="modern-model-price-table">
     <div class="modern-model-price-row modern-model-price-row--head">
-      <span class="modern-model-price-unit">{{ t('modelManager.unit') }}</span>
+      <span class="modern-model-price-unit">{{
+        t('modelManager.unit', { currency: price.currency })
+      }}</span>
       <span v-for="field in priceFields" :key="field">{{ t('modelManager.slots.' + field) }}</span>
     </div>
     <div

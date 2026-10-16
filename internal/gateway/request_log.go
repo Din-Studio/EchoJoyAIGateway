@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"sort"
 	"strings"
@@ -59,6 +60,7 @@ type requestRecorder struct {
 	startedAt            time.Time
 	accessKeyID          uint
 	accessKeyMultiplier  pricing.PriceMultiplier
+	currency             pricing.Currency
 	protocol             protocol.Protocol
 	operation            execution.Operation
 	clientModel          string
@@ -104,6 +106,7 @@ func newRequestRecorder(
 		sink: sink, requestID: requestID, startedAt: startedAt,
 		accessKeyID: accessKeyID, protocol: value, now: now,
 		accessKeyMultiplier: pricing.DefaultPriceMultiplier,
+		currency:            pricing.USDCurrency,
 		pendingRetry:        -1,
 		redactor:            redact.New(),
 		usageApplicable:     true,
@@ -157,6 +160,7 @@ func (recorder *requestRecorder) emit() {
 		Operation:             recorder.operation,
 		Attempts:              append([]telemetry.Attempt(nil), recorder.attempts...),
 		Usage:                 recorder.usage,
+		Currency:              recorder.currency,
 	})
 }
 
@@ -178,11 +182,22 @@ func (recorder *requestRecorder) freezeSensitiveInputErrorSummaries() {
 	}
 }
 
-func (recorder *requestRecorder) estimatedCostNanoUSD() int64 {
+// estimatedCostNano 是以结算币种计的本次费用。答复与决策费用分别换算，
+// 与请求日志中 estimated_cost_nano 和 decision_cost_nano 两列之和一致。
+func (recorder *requestRecorder) estimatedCostNano() int64 {
 	if recorder == nil {
 		return 0
 	}
-	return addDecisionCost(recorder.usage.Pricing.EstimatedCostNanoUSD, recorder.autoDecision)
+	answer := recorder.currency.Settle(recorder.usage.Pricing.EstimatedCostNanoUSD)
+	decision := int64(0)
+	if recorder.autoDecision != nil {
+		decision = recorder.currency.Settle(recorder.autoDecision.EstimatedCostNanoUSD)
+	}
+	total, ok := usage.CheckedAdd(answer, decision)
+	if !ok {
+		return math.MaxInt64
+	}
+	return total
 }
 
 func (recorder *requestRecorder) setAffinityHit(hit bool, kind string) {

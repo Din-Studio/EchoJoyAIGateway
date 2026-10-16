@@ -89,7 +89,7 @@ const tokenFields = computed<LogColumnId[]>(() => [
   'usage_state',
 ])
 const costFields = computed<LogColumnId[]>(() => [
-  'estimated_cost_nano_usd',
+  'estimated_cost_nano',
   'cost_state',
   'pricing_completeness',
   'pricing_mode',
@@ -99,7 +99,7 @@ const primaryFields = [
   { field: 'duration_ms', icon: Clock3 },
   { field: 'first_response_ms', icon: Activity },
   { field: 'input_tokens', icon: ArrowDownToLine },
-  { field: 'estimated_cost_nano_usd', icon: Coins },
+  { field: 'estimated_cost_nano', icon: Coins },
 ] as const
 const receipt = computed(
   () =>
@@ -300,7 +300,7 @@ function resolveRedactedLog(): Promise<string> {
               <div>
                 <dt>{{ t('autoModel.decisionCost') }}</dt>
                 <dd>
-                  {{ exactLogMoney(log.auto_decision.estimated_cost_nano_usd) }}
+                  {{ exactLogMoney(log.auto_decision.estimated_cost_nano, log.currency, locale) }}
                 </dd>
               </div>
             </dl>
@@ -333,6 +333,16 @@ function resolveRedactedLog(): Promise<string> {
                   <LogValue :row="log" :column="field" :groups="groups" :channels="channels" />
                 </dd>
               </div>
+              <template v-if="log.currency !== 'USD'">
+                <div>
+                  <dt>{{ t('logs.usdCost') }}</dt>
+                  <dd>{{ exactLogMoney(log.estimated_cost_nano_usd, 'USD', locale) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('logs.settlementRate') }}</dt>
+                  <dd>1 USD = {{ log.exchange_rate }} {{ log.currency }}</dd>
+                </div>
+              </template>
             </dl>
           </AppFormSection>
           <AppFormSection
@@ -343,7 +353,9 @@ function resolveRedactedLog(): Promise<string> {
             ><LogPricingReceipt
               :receipt="receipt"
               :decision="log.auto_decision"
-              :total-cost="log.estimated_cost_nano_usd"
+              :total-cost="log.estimated_cost_nano"
+              :currency="log.currency"
+              :exchange-rate="log.exchange_rate"
           /></AppFormSection>
           <AppFormSection v-if="admin && log.attempts.length" :title="t('logs.attempts')" compact>
             <template #actions

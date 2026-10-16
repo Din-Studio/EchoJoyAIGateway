@@ -94,12 +94,14 @@ func (c adminClient) createGroup(ctx context.Context, name, baseURL string, mode
 		GroupID uint `json:"group_id"`
 	}
 	err := c.do(ctx, http.MethodPost, "/api/groups", map[string]any{
-		"name":                name,
-		"channel_id":          "openai",
-		"connection_type":     "api_key",
-		"params":              map[string]string{"base_url": baseURL},
-		"models":              groupModels,
-		"credentials":         "sk-clusterbench-" + name,
+		"name":            name,
+		"channel_id":      "openai",
+		"connection_type": "api_key",
+		"params":          map[string]string{"base_url": baseURL},
+		"models":          groupModels,
+		"credentials": []map[string]any{{
+			"fields": map[string]string{"api_key": "sk-clusterbench-" + name}, "concurrency_limit": 0,
+		}},
 		"confirm_same_target": true,
 	}, &result)
 	return result.GroupID, err
@@ -159,7 +161,8 @@ func (c adminClient) createAccessKey(ctx context.Context, spec accessKeySpec) (a
 		body["rpm_limit"] = spec.RPMLimit
 	}
 	if spec.TotalLimitUSD != "" {
-		body["cost_limit_rules"] = []map[string]string{{"kind": "total", "limit_usd": spec.TotalLimitUSD}}
+		// 集群样例使用默认系统货币 USD，限额与已用额度都以美元计。
+		body["cost_limit_rules"] = []map[string]string{{"kind": "total", "limit": spec.TotalLimitUSD}}
 	}
 	var result struct {
 		ID  uint   `json:"id"`
@@ -182,7 +185,7 @@ func (c adminClient) costUsedUSD(ctx context.Context, id uint) (float64, error) 
 			ID              uint `json:"id"`
 			CostLimitStatus *struct {
 				Rules []struct {
-					UsedUSD string `json:"used_usd"`
+					UsedUSD string `json:"used"`
 				} `json:"rules"`
 			} `json:"cost_limit_status"`
 		} `json:"items"`

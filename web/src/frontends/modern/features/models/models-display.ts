@@ -9,12 +9,12 @@ export function priceStatus(price: ModelPrice): 'pending' | 'manual' | 'automati
   if (price.status === 'pending') return 'pending'
   return price.method === 'auto_sync' ? 'automatic' : 'manual'
 }
-export function modelUnitPrice(value: string | null, locale: string): string {
+export function modelUnitPrice(value: string | null, currency: string, locale: string): string {
   return value === null
     ? '—'
     : numberFormatter(locale, {
         style: 'currency',
-        currency: 'USD',
+        currency,
         currencyDisplay: 'narrowSymbol',
         minimumFractionDigits: 0,
         maximumFractionDigits: 9,

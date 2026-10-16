@@ -16,6 +16,12 @@ import {
   AppTextField,
 } from '@modern/components/ui'
 import { useApiClient } from '@shared/http/client-context'
+import { useSystemCurrency } from '@modern/app/currency'
+import { convertUSDDecimal } from '@modern/components/ui/format'
+
+// 两个决策渠道的美元参考价（2026-09-18 核对），切换渠道时按系统货币汇率换算后填入。
+const referenceInputPriceUSD = '0.042'
+const referenceOutputPriceUSD = '0'
 
 const props = defineProps<{
   modelValue: AutoModelDraft
@@ -26,6 +32,10 @@ const props = defineProps<{
 const emit = defineEmits<{ 'update:modelValue': [value: AutoModelDraft] }>()
 const { t } = useI18n()
 const client = useApiClient()
+const systemCurrency = useSystemCurrency()
+const currencyCode = computed(() => systemCurrency.value?.currency ?? 'USD')
+const referencePrice = (usd: string) =>
+  convertUSDDecimal(usd, systemCurrency.value?.exchangeRate ?? '1')
 const groups = useQuery({
   queryKey: groupQueryKey,
   queryFn: ({ signal }) => getGroupWorkspace(client, signal),
@@ -51,8 +61,8 @@ function provider(value: string) {
     draft.model = draft.provider === 'openrouter' ? '~typesafe/jev-latest' : 'jev-latest'
     draft.api_key = ''
     draft.api_key_configured = false
-    draft.input_price = '0.042'
-    draft.output_price = '0'
+    draft.input_price = referencePrice(referenceInputPriceUSD)
+    draft.output_price = referencePrice(referenceOutputPriceUSD)
   })
 }
 function addEntry() {
@@ -134,7 +144,10 @@ function validRules(value: string): boolean {
         @update:model-value="update((draft) => (draft.timeout_seconds = $event))"
       />
     </div>
-    <AppFormSection :title="t('autoModel.pricing')" :description="t('autoModel.pricingHint')">
+    <AppFormSection
+      :title="t('autoModel.pricing')"
+      :description="t('autoModel.pricingHint', { currency: currencyCode })"
+    >
       <div class="modern-auto-model-grid">
         <AppTextField
           :model-value="modelValue.input_price"

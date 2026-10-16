@@ -112,6 +112,12 @@ func schemaDefinitions0002(db *gorm.DB) ([]schemaDefinition0002, error) {
 
 // Validate0002 verifies the tables, columns, indexes, and constraints owned by 0002.
 func Validate0002(db *gorm.DB) error {
+	return validateSchema0002(db, nil)
+}
+
+// validateSchema0002 validates the 0002 schema, skipping columns a later
+// migration renamed (keyed by table, then column).
+func validateSchema0002(db *gorm.DB, renamed map[string]string) error {
 	definitions, err := schemaDefinitions0002(db)
 	if err != nil {
 		return err
@@ -121,6 +127,9 @@ func Validate0002(db *gorm.DB) error {
 			return fmt.Errorf("validate access key cost limit schema: table %q is missing", definition.table)
 		}
 		for column := range definition.columns {
+			if renamed[definition.table] == column {
+				continue
+			}
 			if !db.Migrator().HasColumn(definition.model, column) {
 				return fmt.Errorf(
 					"validate access key cost limit schema: column %q.%q is missing",

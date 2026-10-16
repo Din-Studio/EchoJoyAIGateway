@@ -10,6 +10,7 @@ import (
 
 	"gpt-load/internal/accessquota"
 	"gpt-load/internal/platform/redact"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/storage"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/telemetry"
@@ -46,7 +47,7 @@ func TestExternalDatabaseRequestLogLifecycle(t *testing.T) {
 	t.Cleanup(func() { _ = db.Delete(&accessKey).Error })
 	quotaRule := models.AccessKeyCostLimitRule{
 		AccessKeyID: accessKey.ID, Kind: models.AccessKeyCostLimitKindPeriodic,
-		LimitNanoUSD: 100, PeriodSeconds: 300, RuleRevision: 1,
+		LimitNano: 100, PeriodSeconds: 300, RuleRevision: 1,
 	}
 	if err := db.Create(&quotaRule).Error; err != nil {
 		t.Fatalf("create external quota rule: %v", err)
@@ -60,7 +61,7 @@ func TestExternalDatabaseRequestLogLifecycle(t *testing.T) {
 	endsAtMS := startedAtMS + 300_000
 	quotaSnapshot := accessquota.RestoredState{
 		AccessKeyID: accessKey.ID, RuleID: quotaRule.ID, RuleRevision: 1,
-		UsedNanoUSD: 75, WindowStartedAtMS: &startedAtMS, WindowEndsAtMS: &endsAtMS,
+		UsedNano: 75, WindowStartedAtMS: &startedAtMS, WindowEndsAtMS: &endsAtMS,
 		WindowGeneration: 1, SnapshotVersion: 2,
 	}
 	quotaWriter := &gormAccessQuotaCheckpointWriter{db: db}
@@ -74,7 +75,7 @@ func TestExternalDatabaseRequestLogLifecycle(t *testing.T) {
 	if err := db.First(&persistedQuota, quotaRule.ID).Error; err != nil {
 		t.Fatalf("read external quota checkpoint: %v", err)
 	}
-	if persistedQuota.UsedNanoUSD != 75 || persistedQuota.SnapshotVersion != 2 {
+	if persistedQuota.UsedNano != 75 || persistedQuota.SnapshotVersion != 2 {
 		t.Fatalf("external quota checkpoint = %#v", persistedQuota)
 	}
 
@@ -133,7 +134,7 @@ func TestExternalDatabaseRequestLogLifecycle(t *testing.T) {
 		*credentialActivity.LastUsedAtMS != row.CompletedAtMS {
 		t.Fatalf("credential activity = %+v, want one exact successful attempt", credentialActivity)
 	}
-	usageQuery := UsageQuery{
+	usageQuery := UsageQuery{Currency: pricing.CurrencyUSD,
 		FromMS:        row.CompletedAtMS + 1234 - time.Hour.Milliseconds(),
 		ToMS:          row.CompletedAtMS + 1234,
 		Granularity:   UsageGranularityMinute,

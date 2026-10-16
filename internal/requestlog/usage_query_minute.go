@@ -53,7 +53,7 @@ const usageRequestLogProjection = `
 	CASE WHEN usage_state IN ('complete', 'partial') THEN cache_write_1h_tokens ELSE 0 END AS cache_write_1h_tokens,
 	CASE WHEN usage_state IN ('complete', 'partial') THEN cache_write_unknown_tokens ELSE 0 END AS cache_write_unknown_tokens,
 	CASE WHEN usage_state IN ('complete', 'partial') THEN output_tokens ELSE 0 END AS output_tokens,
-	estimated_cost_nano_usd,
+	estimated_cost_nano_usd, currency, estimated_cost_nano,
 	CASE WHEN usage_state = 'missing' THEN 1 ELSE 0 END AS usage_missing_count,
 	CASE WHEN usage_state = 'partial' THEN 1 ELSE 0 END AS partial_count,
 	CASE WHEN usage_state IN ('complete', 'partial') AND cost_state = 'unpriced' THEN 1 ELSE 0 END AS unpriced_request_count,

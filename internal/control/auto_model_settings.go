@@ -8,6 +8,7 @@ import (
 
 	"gpt-load/internal/automodel"
 	app_errors "gpt-load/internal/platform/errors"
+	"gpt-load/internal/pricing"
 	"gpt-load/internal/storage/models"
 )
 
@@ -16,14 +17,27 @@ type AutoModelSettingsView struct {
 	APIKeyConfigured bool `json:"api_key_configured"`
 }
 
-func newAutoModelSettingsView(compiled *automodel.Compiled) AutoModelSettingsView {
+// newAutoModelSettingsView shows the decision prices, stored in USD, in the system currency.
+func newAutoModelSettingsView(compiled *automodel.Compiled, currency pricing.Currency) (AutoModelSettingsView, error) {
 	config := compiled.Config()
 	configured := config.APIKey != ""
 	config.APIKey = ""
-	return AutoModelSettingsView{Config: config, APIKeyConfigured: configured}
+	var err error
+	if config.InputPrice, err = usdDecimalToCurrency(currency, config.InputPrice); err != nil {
+		return AutoModelSettingsView{}, err
+	}
+	if config.OutputPrice, err = usdDecimalToCurrency(currency, config.OutputPrice); err != nil {
+		return AutoModelSettingsView{}, err
+	}
+	return AutoModelSettingsView{Config: config, APIKeyConfigured: configured}, nil
 }
 
-func (s *Service) normalizeAutoModelUpdate(tx *gorm.DB, raw json.RawMessage) (persistedSettingUpdate, error) {
+// normalizeAutoModelUpdate accepts decision prices in the system currency and stores them in USD.
+func (s *Service) normalizeAutoModelUpdate(
+	tx *gorm.DB,
+	raw json.RawMessage,
+	currency pricing.Currency,
+) (persistedSettingUpdate, error) {
 	update := persistedSettingUpdate{key: automodel.SettingKey}
 	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return update, nil
@@ -43,6 +57,12 @@ func (s *Service) normalizeAutoModelUpdate(tx *gorm.DB, raw json.RawMessage) (pe
 	encoded, _ := json.Marshal(object)
 	config, err := automodel.Decode(encoded)
 	if err != nil {
+		return update, app_errors.ErrValidation
+	}
+	if config.InputPrice, err = currencyDecimalToUSD(currency, config.InputPrice); err != nil {
+		return update, app_errors.ErrValidation
+	}
+	if config.OutputPrice, err = currencyDecimalToUSD(currency, config.OutputPrice); err != nil {
 		return update, app_errors.ErrValidation
 	}
 	if config.APIKey == "" {

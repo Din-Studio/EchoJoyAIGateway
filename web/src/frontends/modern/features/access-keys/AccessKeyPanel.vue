@@ -38,7 +38,7 @@ import {
   AppTextField,
 } from '@modern/components/ui'
 import { formatLocalDateTime } from '@modern/components/ui/date-time'
-import { formatCompactNumber, formatNanoUSD } from '@modern/components/ui/format'
+import { formatCompactNumber, formatMoneyNano } from '@modern/components/ui/format'
 import { useLoadingActivity } from '@modern/components/ui/loading'
 import { useApiClient } from '@shared/http/client-context'
 import { ApiError } from '@shared/http/errors'
@@ -421,8 +421,9 @@ onScopeDispose(() => {
                 <dd>
                   {{
                     usageRow.usage
-                      ? formatNanoUSD(
-                          usageRow.usage.estimated_cost_nano_usd,
+                      ? formatMoneyNano(
+                          usageRow.usage.estimated_cost_nano,
+                          usageRow.usage.currency,
                           locale,
                           'narrowSymbol',
                         )

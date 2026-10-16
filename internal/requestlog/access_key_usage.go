@@ -23,7 +23,7 @@ func ReadAccessKeyUsage(db *gorm.DB, query UsageQuery) (map[uint]UsageAggregate,
 		AccessKeyID uint
 		UsageAggregate
 	}
-	if err := usageStatScope(db, query).Select("access_key_id, " + usageAggregateSelect).Group("access_key_id").Scan(&rows).Error; err != nil {
+	if err := usageStatScope(db, query).Select("access_key_id, "+usageAggregateSelect, query.Currency).Group("access_key_id").Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	result := make(map[uint]UsageAggregate, len(rows))

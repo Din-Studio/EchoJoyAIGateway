@@ -199,7 +199,7 @@ function usageTooltipAt(at: number, metric: UsageMetric): string {
       )
     else
       lines.push(
-        `${t('usage.cost')} ${point.cost === null ? '—' : formatUsageCost(point.row?.estimated_cost_nano_usd ?? '0', locale.value)}`,
+        `${t('usage.cost')} ${point.cost === null ? '—' : formatUsageCost(point.row?.estimated_cost_nano ?? '0', data.usage?.currency ?? 'USD', locale.value)}`,
       )
     if (
       metric !== 'tokens' &&

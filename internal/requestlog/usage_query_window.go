@@ -68,7 +68,7 @@ func queryUsageWindowSeries(scope *gorm.DB, input UsageQuery, widthMS int64) ([]
 		UsageAggregate
 	}
 	// 直接按最终自然桶聚合，年度等长区间不会把每个小时传回进程再合并。
-	if err := scope.Select("bucket_start_ms - bucket_start_ms % ? AS series_bucket_ms, "+usageAggregateSelect, widthMS).
+	if err := scope.Select("bucket_start_ms - bucket_start_ms % ? AS series_bucket_ms, "+usageAggregateSelect, widthMS, input.Currency).
 		Group("series_bucket_ms").Order("series_bucket_ms ASC").
 		Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("query usage window series: %w", err)
@@ -93,5 +93,5 @@ func queryUsageWindowSeries(scope *gorm.DB, input UsageQuery, widthMS int64) ([]
 const usageWindowColumns = `bucket_start_ms, group_id, access_key_id, model,
 	request_count, success_count, failure_count,
 	uncached_input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens,
-	cache_write_unknown_tokens, output_tokens, estimated_cost_nano_usd,
+	cache_write_unknown_tokens, output_tokens, estimated_cost_nano_usd, currency, estimated_cost_nano,
 	usage_missing_count, partial_count, unpriced_request_count, pricing_partial_count`

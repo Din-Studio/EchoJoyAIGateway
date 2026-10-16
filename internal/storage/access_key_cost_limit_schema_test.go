@@ -19,22 +19,22 @@ func TestAccessKeyCostLimitSchemaEnforcesRuleIdentityAndCascade(t *testing.T) {
 	}
 
 	if err := db.Exec(`INSERT INTO access_key_cost_limit_rules
-		(access_key_id, kind, limit_nano_usd, period_seconds, rule_revision, created_at_ms, updated_at_ms)
+		(access_key_id, kind, limit_nano, period_seconds, rule_revision, created_at_ms, updated_at_ms)
 		VALUES (?, 'total', 1000000000, 0, 1, 0, 0)`, accessKey.ID).Error; err != nil {
 		t.Fatalf("create total rule: %v", err)
 	}
 	if err := db.Exec(`INSERT INTO access_key_cost_limit_rules
-		(access_key_id, kind, limit_nano_usd, period_seconds, rule_revision, created_at_ms, updated_at_ms)
+		(access_key_id, kind, limit_nano, period_seconds, rule_revision, created_at_ms, updated_at_ms)
 		VALUES (?, 'total', 2000000000, 0, 1, 0, 0)`, accessKey.ID).Error; err == nil {
 		t.Fatal("create duplicate total rule error = nil, want unique constraint error")
 	}
 	if err := db.Exec(`INSERT INTO access_key_cost_limit_rules
-		(access_key_id, kind, limit_nano_usd, period_seconds, rule_revision, created_at_ms, updated_at_ms)
+		(access_key_id, kind, limit_nano, period_seconds, rule_revision, created_at_ms, updated_at_ms)
 		VALUES (?, 'periodic', 500000000, 18000, 1, 0, 0)`, accessKey.ID).Error; err != nil {
 		t.Fatalf("create periodic rule: %v", err)
 	}
 	if err := db.Exec(`INSERT INTO access_key_cost_limit_rules
-		(access_key_id, kind, limit_nano_usd, period_seconds, rule_revision, created_at_ms, updated_at_ms)
+		(access_key_id, kind, limit_nano, period_seconds, rule_revision, created_at_ms, updated_at_ms)
 		VALUES (?, 'periodic', 600000000, 18000, 1, 0, 0)`, accessKey.ID).Error; err == nil {
 		t.Fatal("create duplicate periodic duration error = nil, want unique constraint error")
 	}
@@ -48,7 +48,7 @@ func TestAccessKeyCostLimitSchemaEnforcesRuleIdentityAndCascade(t *testing.T) {
 		t.Fatal("periodic rule ID = 0")
 	}
 	if err := db.Exec(`INSERT INTO access_key_cost_limit_states
-		(rule_id, rule_revision, used_nano_usd, window_started_at_ms, window_ends_at_ms,
+		(rule_id, rule_revision, used_nano, window_started_at_ms, window_ends_at_ms,
 		 window_generation, snapshot_version, updated_at_ms)
 		VALUES (?, 1, 0, NULL, NULL, 0, 1, 0)`, ruleID).Error; err != nil {
 		t.Fatalf("create periodic state: %v", err)
@@ -89,14 +89,14 @@ func TestAccessKeyCostLimitSchemaRejectsInvalidRuleAndWindowState(t *testing.T) 
 	}
 	for _, values := range invalidRules {
 		query := `INSERT INTO access_key_cost_limit_rules
-			(access_key_id, kind, limit_nano_usd, period_seconds, rule_revision, created_at_ms, updated_at_ms) ` + values
+			(access_key_id, kind, limit_nano, period_seconds, rule_revision, created_at_ms, updated_at_ms) ` + values
 		if err := db.Exec(query, accessKey.ID).Error; err == nil {
 			t.Fatalf("invalid rule %q error = nil", values)
 		}
 	}
 
 	if err := db.Exec(`INSERT INTO access_key_cost_limit_rules
-		(access_key_id, kind, limit_nano_usd, period_seconds, rule_revision, created_at_ms, updated_at_ms)
+		(access_key_id, kind, limit_nano, period_seconds, rule_revision, created_at_ms, updated_at_ms)
 		VALUES (?, 'periodic', 1, 300, 1, 0, 0)`, accessKey.ID).Error; err != nil {
 		t.Fatalf("create valid rule: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestAccessKeyCostLimitSchemaRejectsInvalidRuleAndWindowState(t *testing.T) 
 	}
 	for _, values := range invalidStates {
 		query := `INSERT INTO access_key_cost_limit_states
-			(rule_id, rule_revision, used_nano_usd, window_started_at_ms, window_ends_at_ms,
+			(rule_id, rule_revision, used_nano, window_started_at_ms, window_ends_at_ms,
 			 window_generation, snapshot_version, updated_at_ms) ` + values
 		if err := db.Exec(query, ruleID).Error; err == nil {
 			t.Fatalf("invalid state %q error = nil", values)

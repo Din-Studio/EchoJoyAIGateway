@@ -34,7 +34,7 @@ func TestAutoModelDecisionCostSettlesWhenAnswerFails(t *testing.T) {
 	forwarder := &scriptedForwarder{results: []UpstreamResult{{StatusCode: 400, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"error":{"message":"invalid task"}}`)}}}
 	handler, manager, _ := newHandlerForTest(t, forwarder, "key-a", "key-b")
 	configureAutoModelTest(t, handler, manager, state.FilterSet{},
-		accessquota.Rule{ID: 1, Revision: 1, Kind: accessquota.KindTotal, LimitNanoUSD: 84000})
+		accessquota.Rule{ID: 1, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 84000})
 	useSharedAccessQuota(t, handler)
 	calls := 0
 	handler.decisionClient = autoDecisionClient(func(*http.Request) (*http.Response, error) {
