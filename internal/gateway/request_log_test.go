@@ -103,8 +103,37 @@ func TestRequestRecorderCapturesFirstResponseAfterDownstreamCommit(t *testing.T)
 }
 
 func withoutPricingReceipt(value telemetry.PricingObservation) telemetry.PricingObservation {
-	value.ReceiptJSON = ""
+	value.ReceiptJSON, value.UpstreamReceiptJSON = "", ""
 	return value
+}
+
+// notApplicablePricing is the frozen observation of a request without
+// billable usage; both the charge and the upstream cost are not applicable.
+func notApplicablePricing(clientModel, upstreamModel string) telemetry.PricingObservation {
+	return telemetry.PricingObservation{
+		ClientModel: clientModel, UpstreamModel: upstreamModel,
+		CostState: "not_applicable", PricingCompleteness: "not_applicable",
+		UpstreamCostState: "not_applicable", UpstreamPricingCompleteness: "not_applicable",
+	}
+}
+
+// mustGatewayTableWithClientPrices prices each client model like the first
+// upstream rule, so a scenario's charge equals its upstream cost before any
+// multiplier is applied.
+func mustGatewayTableWithClientPrices(t *testing.T, rules []pricing.Rule, clientModels ...string) *pricing.Table {
+	t.Helper()
+	clientRules := make([]pricing.ClientRule, 0, len(clientModels))
+	for _, model := range clientModels {
+		clientRules = append(clientRules, pricing.ClientRule{
+			ClientModel: model, Prices: rules[0].Prices,
+			ContextTiers: rules[0].ContextTiers, ModeSchedules: rules[0].ModeSchedules,
+		})
+	}
+	table, err := pricing.NewTableWithClientRules(rules, clientRules)
+	if err != nil {
+		t.Fatalf("NewTableWithClientRules() error = %v", err)
+	}
+	return table
 }
 
 const fixedRequestID = "11111111-2222-4333-8444-555555555555"
@@ -385,9 +414,7 @@ func TestHandlerRecordsProtocolOnlyResponsesResourceWithoutFabricatingModels(t *
 		len(event.Attempts) != 1 ||
 		event.Attempts[0].UpstreamModel != "" ||
 		event.Usage.Result.State != usage.StateNotApplicable ||
-		withoutPricingReceipt(event.Usage.Pricing) != (telemetry.PricingObservation{
-			CostState: "not_applicable", PricingCompleteness: "not_applicable",
-		}) {
+		withoutPricingReceipt(event.Usage.Pricing) != notApplicablePricing("", "") {
 		t.Fatalf("event = %#v", event)
 	}
 }
@@ -565,7 +592,8 @@ func TestHandlerBillableResponsesUsageWithoutPriceIsUnpriced(t *testing.T) {
 
 	events := sink.snapshot()
 	if len(events) != 1 || withoutPricingReceipt(events[0].Usage.Pricing) != (telemetry.PricingObservation{
-		UpstreamModel: "unpriced-model", CostState: "unpriced", PricingCompleteness: "unavailable",
+		ClientModel: "unpriced-model", UpstreamModel: "unpriced-model", CostState: "unpriced", PricingCompleteness: "unavailable",
+		UpstreamCostState: "unpriced", UpstreamPricingCompleteness: "unavailable",
 	}) {
 		t.Fatalf("events = %#v", events)
 	}
@@ -608,10 +636,14 @@ func TestHandlerRecordsEmbeddingsUsageAndPricing(t *testing.T) {
 	}
 	event := events[0]
 	wantPricing := telemetry.PricingObservation{
-		UpstreamModel:        "gpt-4o",
-		CostState:            string(pricing.CostStatePriced),
-		PricingCompleteness:  string(pricing.CompletenessComplete),
-		EstimatedCostNanoUSD: 2_000_000_000,
+		UpstreamModel:               "gpt-4o",
+		CostState:                   string(pricing.CostStatePriced),
+		PricingCompleteness:         string(pricing.CompletenessComplete),
+		EstimatedCostNanoUSD:        2_000_000_000,
+		ClientModel:                 "gpt-4o",
+		UpstreamCostState:           string(pricing.CostStatePriced),
+		UpstreamPricingCompleteness: string(pricing.CompletenessComplete),
+		UpstreamCostNanoUSD:         2_000_000_000,
 	}
 	if event.Protocol != protocol.OpenAIEmbeddings ||
 		event.Operation != execution.OperationEmbeddingsCreate ||
@@ -676,7 +708,10 @@ func TestHandlerRecordsMissingEmbeddingsUsageAsUnpriced(t *testing.T) {
 		events[0].Usage.Result.State != usage.StateMissing ||
 		withoutPricingReceipt(events[0].Usage.Pricing) != (telemetry.PricingObservation{
 			UpstreamModel: "gpt-4o", CostState: string(pricing.CostStateUnpriced),
-			PricingCompleteness: string(pricing.CompletenessUnavailable),
+			PricingCompleteness:         string(pricing.CompletenessUnavailable),
+			ClientModel:                 "gpt-4o",
+			UpstreamCostState:           string(pricing.CostStateUnpriced),
+			UpstreamPricingCompleteness: string(pricing.CompletenessUnavailable),
 		}) {
 		t.Fatalf("response/events = %d/%#v", response.Code, events)
 	}
@@ -883,8 +918,10 @@ func TestRequestRecorderInvalidAttemptIndexDoesNotForgeUsageAttribution(t *testi
 			if got := sink.events[0].Usage; got != (telemetry.UsageObservation{
 				Result: usage.Result{State: usage.StateNotApplicable},
 				Pricing: telemetry.PricingObservation{
-					CostState:           "not_applicable",
-					PricingCompleteness: "not_applicable",
+					CostState:                   "not_applicable",
+					PricingCompleteness:         "not_applicable",
+					UpstreamCostState:           "not_applicable",
+					UpstreamPricingCompleteness: "not_applicable",
 				},
 			}) {
 				t.Fatalf("Usage = %#v", got)
@@ -925,8 +962,10 @@ func TestRequestRecorderLocalAttemptDoesNotBindCredentialUsage(t *testing.T) {
 	wantUsage := telemetry.UsageObservation{
 		Result: usage.Result{State: usage.StateNotApplicable},
 		Pricing: telemetry.PricingObservation{
-			CostState:           string(pricing.CostStateNotApplicable),
-			PricingCompleteness: string(pricing.CompletenessNotApplicable),
+			CostState:                   string(pricing.CostStateNotApplicable),
+			PricingCompleteness:         string(pricing.CompletenessNotApplicable),
+			UpstreamCostState:           string(pricing.CostStateNotApplicable),
+			UpstreamPricingCompleteness: string(pricing.CompletenessNotApplicable),
 		},
 	}
 	if event.Usage != wantUsage || len(event.Attempts) != 1 ||
@@ -1002,10 +1041,14 @@ func TestHandlerFreezesAttemptPriceBeforeForward(t *testing.T) {
 		t.Fatalf("events = %#v", events)
 	}
 	want := telemetry.PricingObservation{
-		UpstreamModel:        "gpt-4o",
-		CostState:            string(pricing.CostStatePriced),
-		PricingCompleteness:  string(pricing.CompletenessComplete),
-		EstimatedCostNanoUSD: 2_000_000_000,
+		UpstreamModel:               "gpt-4o",
+		CostState:                   string(pricing.CostStatePriced),
+		PricingCompleteness:         string(pricing.CompletenessComplete),
+		EstimatedCostNanoUSD:        2_000_000_000,
+		ClientModel:                 "gpt-4o",
+		UpstreamCostState:           string(pricing.CostStatePriced),
+		UpstreamPricingCompleteness: string(pricing.CompletenessComplete),
+		UpstreamCostNanoUSD:         2_000_000_000,
 	}
 	if withoutPricingReceipt(events[0].Usage.Pricing) != want {
 		t.Fatalf("frozen pricing = %#v, want %#v", events[0].Usage.Pricing, want)
@@ -1021,6 +1064,7 @@ func TestRequestRecorderPreservesKnownCostWhenUsedOutputPriceIsUnavailable(t *te
 		&recordingRequestLogSink{}, "partial-price", time.Unix(100, 0), 1,
 		protocol.OpenAICompletions, func() time.Time { return time.Unix(101, 0) },
 	)
+	recorder.setClientModel("gpt-4o")
 	model := "gpt-4o"
 	recorder.freezeNextAttemptPricing(frozenAttemptPricing{
 		channelID: string(channel.OpenAI), groupID: 1,
@@ -1046,7 +1090,11 @@ func TestRequestRecorderPreservesKnownCostWhenUsedOutputPriceIsUnavailable(t *te
 	if got := withoutPricingReceipt(recorder.usage.Pricing); got != (telemetry.PricingObservation{
 		UpstreamModel: model,
 		CostState:     "priced", PricingCompleteness: "partial",
-		EstimatedCostNanoUSD: 2_000_000_000,
+		EstimatedCostNanoUSD:        2_000_000_000,
+		ClientModel:                 model,
+		UpstreamCostState:           "priced",
+		UpstreamPricingCompleteness: "partial",
+		UpstreamCostNanoUSD:         2_000_000_000,
 	}) {
 		t.Fatalf("partial pricing = %#v", got)
 	}
@@ -1058,6 +1106,7 @@ func TestRequestRecorderMergesRequestPricingDiagnosticsIntoKnownCost(t *testing.
 		&recordingRequestLogSink{}, "unsupported-mode", time.Unix(100, 0), 1,
 		protocol.OpenAICompletions, func() time.Time { return time.Unix(101, 0) },
 	)
+	recorder.setClientModel("gpt-4o")
 	diagnostics := usage.Diagnostics{}
 	diagnostics.Add(usage.DiagnosticUnsupportedBillableDetail)
 	recorder.setUsageDiagnostics(diagnostics)
@@ -1089,7 +1138,11 @@ func TestRequestRecorderMergesRequestPricingDiagnosticsIntoKnownCost(t *testing.
 	if got := withoutPricingReceipt(recorder.usage.Pricing); got != (telemetry.PricingObservation{
 		UpstreamModel: model,
 		CostState:     "priced", PricingCompleteness: "complete",
-		EstimatedCostNanoUSD: 4_000_000_000,
+		EstimatedCostNanoUSD:        4_000_000_000,
+		ClientModel:                 model,
+		UpstreamCostState:           "priced",
+		UpstreamPricingCompleteness: "complete",
+		UpstreamCostNanoUSD:         4_000_000_000,
 	}) {
 		t.Fatalf("unsupported mode pricing = %#v", got)
 	}
@@ -1100,6 +1153,7 @@ func TestRequestRecorderUsesFrozenAttemptMetadata(t *testing.T) {
 		&recordingRequestLogSink{}, "attempt-metadata", time.Unix(100, 0), 1,
 		protocol.OpenAICompletions, func() time.Time { return time.Unix(101, 0) },
 	)
+	recorder.setClientModel("gpt-4o")
 	originalDiagnostics := usage.Diagnostics{}
 	originalDiagnostics.Add(usage.DiagnosticUnsupportedBillableDetail)
 	recorder.setUsageDiagnostics(originalDiagnostics)
@@ -1148,6 +1202,7 @@ func TestRequestRecorderDoesNotReuseClientMetadataWhenAttemptObservationIsUnavai
 		&recordingRequestLogSink{}, "attempt-metadata-unavailable", time.Unix(100, 0), 1,
 		protocol.OpenAICompletions, func() time.Time { return time.Unix(101, 0) },
 	)
+	recorder.setClientModel("gpt-4o")
 	recorder.setPricingMode(pricing.ModeFast)
 	recorder.setReasoning(reasoning.Config{Effort: "low"})
 	model := "gpt-4o"
@@ -1187,6 +1242,9 @@ func TestRequestRecorderDoesNotReuseClientMetadataWhenAttemptObservationIsUnavai
 	if got := withoutPricingReceipt(recorder.usage.Pricing); got != (telemetry.PricingObservation{
 		UpstreamModel: model,
 		CostState:     string(pricing.CostStateUnpriced), PricingCompleteness: string(pricing.CompletenessUnavailable),
+		ClientModel:                 model,
+		UpstreamCostState:           string(pricing.CostStateUnpriced),
+		UpstreamPricingCompleteness: string(pricing.CompletenessUnavailable),
 	}) {
 		t.Fatalf("attempt pricing = %#v", got)
 	}
@@ -1195,14 +1253,19 @@ func TestRequestRecorderDoesNotReuseClientMetadataWhenAttemptObservationIsUnavai
 	}
 }
 
-func TestHandlerUsesSelectedProviderModelForPricingInsteadOfAliasOrBodyModel(t *testing.T) {
+// 费用按客户端请求的别名计价，上游费用按选中的上游模型计价，都不看响应体里的模型。
+func TestHandlerChargesClientAliasAndCostsSelectedProviderModel(t *testing.T) {
 	model := "provider-model"
-	table, err := pricing.NewTable([]pricing.Rule{{
+	table, err := pricing.NewTableWithClientRules([]pricing.Rule{{
 		Identity: pricing.Identity{ChannelID: string(channel.OpenAI), ModelID: model},
 		Prices: pricing.Prices{Input: pricing.Price{
 			NanoUSDPerMillion: 3_000_000_000, Set: true,
 		}},
-	}})
+	}}, []pricing.ClientRule{
+		{ClientModel: "client-alias", Prices: pricing.Prices{Input: pricing.Price{NanoUSDPerMillion: 5_000_000_000, Set: true}}},
+		{ClientModel: model, Prices: pricing.Prices{Input: pricing.Price{NanoUSDPerMillion: 7_000_000_000, Set: true}}},
+		{ClientModel: "body-model", Prices: pricing.Prices{Input: pricing.Price{NanoUSDPerMillion: 9_000_000_000, Set: true}}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1240,9 +1303,9 @@ func TestHandlerUsesSelectedProviderModelForPricingInsteadOfAliasOrBodyModel(t *
 	events := sink.snapshot()
 	if len(events) != 1 || events[0].ClientModel != "client-alias" ||
 		events[0].UpstreamModel != model || withoutPricingReceipt(events[0].Usage.Pricing) != (telemetry.PricingObservation{
-		UpstreamModel: model,
-		CostState:     "priced", PricingCompleteness: "complete",
-		EstimatedCostNanoUSD: 3_000_000_000,
+		ClientModel: "client-alias", UpstreamModel: model,
+		CostState: "priced", PricingCompleteness: "complete", EstimatedCostNanoUSD: 5_000_000_000,
+		UpstreamCostState: "priced", UpstreamPricingCompleteness: "complete", UpstreamCostNanoUSD: 3_000_000_000,
 	}) {
 		t.Fatalf("events = %#v", events)
 	}
@@ -1281,7 +1344,11 @@ func TestHandlerUsesRequestedFastModeWhenResponseOmitsEffectiveMode(t *testing.T
 		withoutPricingReceipt(events[0].Usage.Pricing) != (telemetry.PricingObservation{
 			UpstreamModel: "gpt-4o",
 			CostState:     "priced", PricingCompleteness: "complete",
-			EstimatedCostNanoUSD: 10_000_000_000,
+			EstimatedCostNanoUSD:        10_000_000_000,
+			ClientModel:                 "gpt-4o",
+			UpstreamCostState:           "priced",
+			UpstreamPricingCompleteness: "complete",
+			UpstreamCostNanoUSD:         10_000_000_000,
 		}) {
 		t.Fatalf("fast mode event = %#v", events[0])
 	}
@@ -1416,19 +1483,15 @@ func mustGatewayPriceTable(t *testing.T, input int64, outputSet bool) *pricing.T
 	if outputSet {
 		prices.Output = pricing.Price{NanoUSDPerMillion: pricing.NanoUSD(input), Set: true}
 	}
-	table, err := pricing.NewTable([]pricing.Rule{{
+	return mustGatewayTableWithClientPrices(t, []pricing.Rule{{
 		Identity: pricing.Identity{ChannelID: string(channel.OpenAI), ModelID: "gpt-4o"},
 		Prices:   prices,
-	}})
-	if err != nil {
-		t.Fatalf("NewTable() error = %v", err)
-	}
-	return table
+	}}, "gpt-4o")
 }
 
 func mustGatewayPriceTableWithFast(t *testing.T, standard, fast int64) *pricing.Table {
 	t.Helper()
-	table, err := pricing.NewTable([]pricing.Rule{{
+	return mustGatewayTableWithClientPrices(t, []pricing.Rule{{
 		Identity: pricing.Identity{ChannelID: string(channel.OpenAI), ModelID: "gpt-4o"},
 		Prices: pricing.Prices{
 			Input:  pricing.Price{NanoUSDPerMillion: pricing.NanoUSD(standard), Set: true},
@@ -1442,11 +1505,7 @@ func mustGatewayPriceTableWithFast(t *testing.T, standard, fast int64) *pricing.
 				},
 			},
 		},
-	}})
-	if err != nil {
-		t.Fatalf("NewTable() error = %v", err)
-	}
-	return table
+	}}, "gpt-4o")
 }
 
 func TestHandlerDiscardsPreCommitStreamUsageOnRetry(t *testing.T) {
@@ -1752,10 +1811,14 @@ func TestHandlerRetryExhaustionUsesProviderErrorAttemptAndItsFrozenPrice(t *test
 	event := events[0]
 	if event.Usage.GroupID != 1 || event.Usage.CredentialID != 1 ||
 		event.Usage.AttemptSequence != 1 || withoutPricingReceipt(event.Usage.Pricing) != (telemetry.PricingObservation{
-		UpstreamModel:        "gpt-4o",
-		CostState:            string(pricing.CostStatePriced),
-		PricingCompleteness:  string(pricing.CompletenessComplete),
-		EstimatedCostNanoUSD: 2_000_000_000,
+		UpstreamModel:               "gpt-4o",
+		CostState:                   string(pricing.CostStatePriced),
+		PricingCompleteness:         string(pricing.CompletenessComplete),
+		EstimatedCostNanoUSD:        2_000_000_000,
+		ClientModel:                 "gpt-4o",
+		UpstreamCostState:           string(pricing.CostStatePriced),
+		UpstreamPricingCompleteness: string(pricing.CompletenessComplete),
+		UpstreamCostNanoUSD:         2_000_000_000,
 	}) {
 		t.Fatalf("selected usage/pricing = %#v, want first provider-error attempt", event.Usage)
 	}
@@ -1864,11 +1927,13 @@ func TestHandlerTerminalAttemptUsageKeepsRouteAttribution(t *testing.T) {
 				wantChannelID = channel.OpenAI
 			}
 			wantPricing := telemetry.PricingObservation{
-				CostState:           "not_applicable",
-				PricingCompleteness: "not_applicable",
+				CostState:                   "not_applicable",
+				PricingCompleteness:         "not_applicable",
+				UpstreamCostState:           "not_applicable",
+				UpstreamPricingCompleteness: "not_applicable",
 			}
 			if test.wantGroupID != 0 {
-				wantPricing.UpstreamModel = "gpt-4o"
+				wantPricing.ClientModel, wantPricing.UpstreamModel = "gpt-4o", "gpt-4o"
 			}
 			if len(events) != 1 || events[0].Status != test.wantStatus ||
 				events[0].UpstreamModel != test.wantUpstreamModel ||

@@ -48,6 +48,12 @@ type RequestLog struct {
 	CostState               string              `gorm:"type:varchar(32);not null;default:'not_applicable';check:chk_request_log_cost_state,cost_state IN ('priced','unpriced','not_applicable')"`
 	PricingCompleteness     string              `gorm:"type:varchar(32);not null;default:'not_applicable';check:chk_request_log_pricing_completeness,pricing_completeness IN ('complete','partial','unavailable','not_applicable');check:chk_request_log_usage_pricing_state,(usage_state = 'not_applicable' AND cost_state = 'not_applicable' AND pricing_completeness = 'not_applicable' AND estimated_cost_nano_usd = 0) OR (usage_state = 'missing' AND cost_state = 'unpriced' AND pricing_completeness = 'unavailable' AND estimated_cost_nano_usd = 0) OR (usage_state IN ('complete','partial') AND ((cost_state = 'unpriced' AND pricing_completeness = 'unavailable' AND estimated_cost_nano_usd = 0) OR (cost_state = 'priced' AND pricing_completeness IN ('complete','partial'))))"`
 	AttemptRows             []RequestLogAttempt `gorm:"-"`
+
+	// Upstream* 是同一请求按上游价格与分组倍率计算的上游费用，只记美元；
+	// 上面的 EstimatedCost* 是按客户端模型统一价与密钥倍率计算的费用。
+	UpstreamCostNanoUSD         int64  `gorm:"column:upstream_cost_nano_usd;not null;default:0"`
+	UpstreamCostState           string `gorm:"type:varchar(32);not null;default:'not_applicable'"`
+	UpstreamPricingCompleteness string `gorm:"type:varchar(32);not null;default:'not_applicable'"`
 }
 
 // RequestLogAttempt is one durable upstream attempt belonging to a client
@@ -87,6 +93,9 @@ type RequestLogAttempt struct {
 	Committed             bool        `gorm:"not null;default:false"`
 	PricingReceipt        JSON        `gorm:"type:json"`
 	RequestLog            *RequestLog `gorm:"foreignKey:RequestID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
+
+	// UpstreamPricingReceipt 解释上游费用；PricingReceipt 解释费用。
+	UpstreamPricingReceipt JSON `gorm:"type:json"`
 }
 
 // CredentialAttemptStat is the hourly account-level outcome aggregate used by

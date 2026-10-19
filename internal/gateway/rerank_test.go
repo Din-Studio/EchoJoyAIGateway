@@ -70,10 +70,7 @@ func TestRerankGatewayRoutesObservesAndProtectsAccess(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			table, err := pricing.NewTable([]pricing.Rule{{Identity: pricing.Identity{ChannelID: string(channel.NewAPI), ModelID: "provider-model"}, Prices: pricing.Prices{Input: pricing.Price{NanoUSDPerMillion: 2_000_000_000, Set: true}}}})
-			if err != nil {
-				t.Fatal(err)
-			}
+			table := mustGatewayTableWithClientPrices(t, []pricing.Rule{{Identity: pricing.Identity{ChannelID: string(channel.NewAPI), ModelID: "provider-model"}, Prices: pricing.Prices{Input: pricing.Price{NanoUSDPerMillion: 2_000_000_000, Set: true}}}}, "public")
 			handler.priceTables = &mutableGatewayPriceTableProvider{table: table}
 			request := httptest.NewRequest(http.MethodPost, "/v1/rerank", strings.NewReader(`{"model":"public","query":"query-sentinel","documents":["first","document-sentinel"]}`))
 			request.Header.Set("Authorization", "Bearer gl-client")

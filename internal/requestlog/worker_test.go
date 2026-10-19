@@ -716,14 +716,14 @@ func TestWriteBatchAggregatesStatusQualityAndCompletePricedTotals(t *testing.T) 
 
 	if err := (&gormBatchWriter{db: db}).WriteBatch(
 		context.Background(),
-		[]models.RequestLog{
+		withMirroredUpstreamCost(
 			complete,
 			completeUnpriced,
 			missing,
 			partialPriced,
 			partialUnpriced,
 			notApplicable,
-		},
+		),
 	); err != nil {
 		t.Fatalf("WriteBatch() error = %v", err)
 	}
@@ -842,19 +842,21 @@ func TestWriteBatchPersistsZeroAttemptRequestWithoutUsageAggregation(t *testing.
 	db := openRequestLogQueryDB(t)
 	completedAt := time.Date(2026, time.August, 8, 14, 1, 37, 0, time.Local)
 	zeroAttempt := models.RequestLog{
-		ID:                  aggregationRequestID(28),
-		CompletedAtMS:       completedAt.UTC().UnixMilli(),
-		AccessKeyID:         1,
-		Protocol:            "openai-responses",
-		ClientModel:         "luna",
-		ModelConsistency:    string(telemetry.ModelConsistencyNotApplicable),
-		Status:              string(telemetry.RequestStatusError),
-		StatusCode:          503,
-		ErrorCode:           "no_available_candidate",
-		ErrorSummary:        "No available upstream candidate.",
-		UsageState:          string(usage.StateNotApplicable),
-		CostState:           string(pricing.CostStateNotApplicable),
-		PricingCompleteness: string(pricing.CompletenessNotApplicable),
+		ID:                          aggregationRequestID(28),
+		CompletedAtMS:               completedAt.UTC().UnixMilli(),
+		AccessKeyID:                 1,
+		Protocol:                    "openai-responses",
+		ClientModel:                 "luna",
+		ModelConsistency:            string(telemetry.ModelConsistencyNotApplicable),
+		Status:                      string(telemetry.RequestStatusError),
+		StatusCode:                  503,
+		ErrorCode:                   "no_available_candidate",
+		ErrorSummary:                "No available upstream candidate.",
+		UsageState:                  string(usage.StateNotApplicable),
+		CostState:                   string(pricing.CostStateNotApplicable),
+		PricingCompleteness:         string(pricing.CompletenessNotApplicable),
+		UpstreamCostState:           string(pricing.CostStateNotApplicable),
+		UpstreamPricingCompleteness: string(pricing.CompletenessNotApplicable),
 	}
 	attempted := aggregationRow(
 		aggregationRequestID(29),
@@ -1157,6 +1159,9 @@ func TestWorkerCountsDuplicateReplayAsSuccessfulDeliveryWithoutReaggregation(t *
 		Pricing: telemetry.PricingObservation{
 			UpstreamModel: "gpt-4o",
 			CostState:     string(pricing.CostStateUnpriced), PricingCompleteness: string(pricing.CompletenessUnavailable),
+			ClientModel:                 "gpt-4o",
+			UpstreamCostState:           string(pricing.CostStateUnpriced),
+			UpstreamPricingCompleteness: string(pricing.CompletenessUnavailable),
 		},
 	}
 	event.Attempts[0].GroupID = 14

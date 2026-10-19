@@ -132,6 +132,13 @@ export interface LogEntry {
   exchange_rate: string
   estimated_cost_nano: string
   estimated_cost_nano_usd: string
+  // 上游费用是网关付给上游的成本，只返回给管理员；cost_nano 按该请求冻结的汇率换算。
+  upstream_cost: LogCost | null
+}
+export interface LogCost {
+  cost_state: LogEntry['cost_state']
+  pricing_completeness: LogEntry['pricing_completeness']
+  cost_nano: string
 }
 
 export interface LogAutoDecision {
@@ -170,7 +177,13 @@ export interface LogReceipt {
   method_version: number
   pricing_mode: string
   price_multipliers: { group: string; access_key: string } | null
-  rule: { scope_key: string | null; channel_id: string | null; model_id: string }
+  // 费用明细按客户端模型计价（client_model），上游明细按渠道模型计价（channel_id + model_id）。
+  rule: {
+    scope_key: string | null
+    channel_id: string | null
+    model_id: string | null
+    client_model: string | null
+  }
   context_threshold_tokens: string | null
   line_items: LogPricingLine[]
   base_total_nano: string | null
@@ -208,6 +221,7 @@ export interface LogAttempt {
   error_summary: string
   committed: boolean
   pricing_receipt: LogReceipt | null
+  upstream_pricing_receipt: LogReceipt | null
 }
 export interface LogDetail extends LogEntry {
   attempts: LogAttempt[]
@@ -255,7 +269,8 @@ function receipt(value: unknown): LogReceipt | null {
     rule: {
       scope_key: optionalText(rule.scope_key),
       channel_id: optionalText(rule.channel_id),
-      model_id: text(rule.model_id),
+      model_id: optionalText(rule.model_id),
+      client_model: optionalText(rule.client_model),
     },
     context_threshold_tokens: optionalCount(row.context_threshold_tokens),
     base_total_nano: optionalCount(row.base_total_nano),
@@ -343,6 +358,22 @@ function entry(value: unknown): LogEntry {
     exchange_rate: text(row.exchange_rate),
     estimated_cost_nano: count(row.total_estimated_cost_nano),
     estimated_cost_nano_usd: count(row.total_estimated_cost_nano_usd),
+    upstream_cost: upstreamCost(row.upstream_cost),
+  }
+}
+
+function upstreamCost(value: unknown): LogCost | null {
+  if (value == null) return null
+  const row = record(value)
+  return {
+    cost_state: oneOf(row.cost_state, ['priced', 'unpriced', 'not_applicable'] as const),
+    pricing_completeness: oneOf(row.pricing_completeness, [
+      'complete',
+      'partial',
+      'unavailable',
+      'not_applicable',
+    ] as const),
+    cost_nano: count(row.cost_nano),
   }
 }
 
@@ -457,6 +488,7 @@ export async function getLogDetail(
         error_summary: text(item.error_summary),
         committed: boolean(item.committed),
         pricing_receipt: receipt(item.pricing_receipt),
+        upstream_pricing_receipt: receipt(item.upstream_pricing_receipt),
       }
     }),
   }

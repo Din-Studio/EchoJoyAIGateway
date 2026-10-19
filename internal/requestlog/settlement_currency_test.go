@@ -18,6 +18,10 @@ func pricedTestEvent(id string, currency pricing.Currency, costNanoUSD, decision
 	event.Usage.Pricing.CostState = string(pricing.CostStatePriced)
 	event.Usage.Pricing.PricingCompleteness = string(pricing.CompletenessComplete)
 	event.Usage.Pricing.EstimatedCostNanoUSD = costNanoUSD
+	event.Usage.Pricing.ClientModel = "client-model"
+	event.Usage.Pricing.UpstreamCostState = string(pricing.CostStatePriced)
+	event.Usage.Pricing.UpstreamPricingCompleteness = string(pricing.CompletenessComplete)
+	event.Usage.Pricing.UpstreamCostNanoUSD = costNanoUSD
 	if decisionNanoUSD > 0 {
 		event.AutoDecision = &automodel.Decision{
 			Selection: automodel.Selection{EntryID: "auto", EntryName: "auto", PresetID: "medium", TargetModel: "upstream-model"},

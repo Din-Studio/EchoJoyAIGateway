@@ -39,7 +39,15 @@ info:
       `*_nano_usd` 始终是 1e-9 美元。
     - 存储与计费以美元为准：上游价格恒为美元；每笔请求结算时按当时的系统货币与汇率同时记录美元与本币金额，
       之后修改汇率或切换币种不会改写已发生的费用。系统货币见 `GET /api/currency`。
-    - 价格类金额（模型价格）以美元保存，接口按当前汇率换算为系统货币返回，提交时也以系统货币计。
+    - 价格类金额（上游价格、统一价、auto 模型价格）以美元保存，接口按当前汇率换算为系统货币返回，提交时也以系统货币计。
+      返回值取「能换算回同一美元存储值的系统货币金额」中小数位最少的一个，因此以系统货币提交的价格读回时与提交值一致，
+      原样再提交不会改变存储值。费用金额（`*_nano`）按结算汇率精确换算，不做此处理。
+    - 每笔请求计算两笔钱：**费用**（`estimated_cost_*`）= 客户端模型统一价 × AccessKey 倍率，
+      用于成本额度与用量统计；**上游费用** = 渠道上游模型价格 × 分组倍率，是网关付给上游的成本，只返回给 admin。
+      客户端模型没有统一价时费用按未定价处理，不回退到上游价格；auto 模型按选中的目标模型收费。
+      请求日志接口（`/api/logs`，本文档未收录）中，上游费用为条目的 `upstream_cost` 对象；
+      日志详情的 `attempts[].pricing_receipt` 是费用明细（规则为 `client_model`），
+      `attempts[].upstream_pricing_receipt` 是上游费用明细（规则为 `channel_id` + `model_id`）。AccessKey 身份下两者都不返回。
 servers:
   - url: http://localhost:3001
     description: 本地默认端口（`PORT`，默认 3001）
@@ -51,7 +59,7 @@ tags:
   - name: Models
     description: 模型总览（admin 与 AccessKey 均可调用）
   - name: ModelPrices
-    description: 模型价格与 models.dev 目录同步（仅 admin）
+    description: 上游价格、客户端模型统一价与 models.dev 目录同步（仅 admin）
   - name: GroupModels
     description: 分组的模型列表与别名（仅 admin）
   - name: ModelDiscovery
@@ -448,13 +456,16 @@ paths:
       summary: 分页查询模型总览
       description: |
         以客户端模型名（启用别名时为别名，否则为上游模型 ID）为根聚合全部分组模型，
-        每个客户端模型下列出它能路由到的上游模型及其价格、路由分组和目录参考信息。
+        每个客户端模型给出它的统一价（`price`，未设置时为 `null`），并列出它能路由到的上游模型及其上游价格、
+        路由分组和目录参考信息。
         条目按 `client_model` 升序。只接受下列查询参数，出现其他参数或同一参数重复时返回 `400 BAD_REQUEST`。
 
         **允许 `access_key` 身份调用**，此时：
         - `group_status` 固定为 `enabled`，传入值被忽略；
         - 只包含该密钥 `filters` 允许访问的分组、协议与模型，`protocols` 也按密钥过滤；
-        - `route_groups`、`affected_groups` 恒为空数组，只返回被分组引用的价格。
+        - `route_groups`、`affected_groups` 恒为空数组，只返回被分组引用的价格；
+        - 上游价格是网关成本：`upstream_models[].price` 只保留渠道与定价状态，`prices` 各项为 `null`，
+          `context_tiers` 为 `[]`，`mode_schedules` 为 `{}`，`method`、`matched_provider_id`、`match_source` 为 `null`。
       security:
         - adminBearer: []
         - accessKeyBearer: []
@@ -495,6 +506,52 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/AuthLocked' }
         '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/client-model-prices:
+    put:
+      tags: [ModelPrices]
+      operationId: putClientModelPrice
+      summary: 设置客户端模型的统一价（新建或整体替换）
+      description: |
+        统一价是调用方被收取的价格，按客户端模型名生效，与路由到哪个分组、渠道、上游模型无关。
+        客户端模型名可能含 `/`，所以放在请求体里。保存后立即发布价格表，其他实例经集群配置同步重新加载。
+
+        - 字段规则与 `PUT /api/model-prices/{id}` 相同，但统一价没有「标记为不计费」：
+          四个基础价格至少要有一项非 `null`，`confirm_unpriced` 只能为 `false`。
+        - `mode_schedules` 可配置任意合法模式（不与目录比对），`fast` 不支持阶梯。
+        - 不提供删除接口：未设置统一价即为待定价。不接受查询参数。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClientModelPriceRequest' }
+            example:
+              client_model: claude-sonnet
+              input: '3'
+              output: '15'
+              cache_read: '0.3'
+              cache_write: '3.75'
+              context_tiers: []
+              mode_schedules: {}
+      responses:
+        '200':
+          description: 保存后的统一价
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/ClientModelPrice' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/RecoveryPending' }
 
   /api/models/discover:
     post:
@@ -572,8 +629,9 @@ paths:
     get:
       tags: [ModelPrices]
       operationId: listModelPrices
-      summary: 分页查询模型价格
+      summary: 分页查询上游价格
       description: |
+        上游价格只用于计算上游费用（网关成本）；调用方被收取的费用由客户端模型统一价决定，见 `PUT /api/client-model-prices`。
         价格按「渠道 + 上游模型 ID」唯一。排序：待定价优先，其次被引用优先，再按 `model_id`、`channel_id`、`id` 升序。
         只接受下列查询参数，出现其他参数或同一参数重复时返回 `400 BAD_REQUEST`。
       parameters:
@@ -1120,7 +1178,9 @@ components:
 
     PriceMultiplier:
       type: string
-      description: 计费倍率，非负十进制字符串，最多 6 位小数，范围 0–1000。
+      description: |
+        计费倍率，非负十进制字符串，最多 6 位小数，范围 0–1000。
+        AccessKey 的倍率只乘费用（统一价的计价结果），不影响上游费用；分组倍率只乘上游费用。
       pattern: '^[0-9]+(\.[0-9]{1,6})?$'
       examples: ['1', '0.8']
 
@@ -1443,7 +1503,7 @@ components:
       type: [string, 'null']
       description: |
         每百万 token 的价格，以所属对象的 `currency`（系统货币）计，非负十进制字符串，最多 9 位小数；
-        `null` 表示该项不计费。价格以美元保存，读写时按当前汇率换算。
+        `null` 表示该项不计费。价格以美元保存，读写时按当前汇率换算；读回规则见文首「约定」。
       pattern: '^[0-9]+(\.[0-9]{1,9})?$'
       examples: ['3', '0.075']
 
@@ -1480,6 +1540,7 @@ components:
 
     ModelPrice:
       type: object
+      description: 上游价格：某渠道上游模型的价格，用于计算上游费用，不决定向调用方收取的费用。
       required:
         - id
         - channel_id
@@ -1624,6 +1685,49 @@ components:
           default: false
           description: 确认将该模型标记为不计费；仅在所有价格都为 `null` 时需要。
 
+    ClientModelPriceRequest:
+      type: object
+      additionalProperties: false
+      description: 价格字段与 `ModelPriceUpdateRequest` 相同；四个基础价格至少一项非 `null`。
+      required: [client_model, input, output, cache_read, cache_write, context_tiers, mode_schedules]
+      properties:
+        client_model:
+          type: string
+          description: 客户端模型名，1–255 字节，不能有首尾空白或控制字符。
+        input: { $ref: '#/components/schemas/PricePerMillion' }
+        output: { $ref: '#/components/schemas/PricePerMillion' }
+        cache_read: { $ref: '#/components/schemas/PricePerMillion' }
+        cache_write: { $ref: '#/components/schemas/PricePerMillion' }
+        context_tiers:
+          type: array
+          items: { $ref: '#/components/schemas/ContextTierInput' }
+        mode_schedules:
+          type: object
+          propertyNames: { $ref: '#/components/schemas/PricingMode' }
+          additionalProperties: { $ref: '#/components/schemas/ModeScheduleInput' }
+        confirm_unpriced:
+          type: boolean
+          enum: [false]
+          default: false
+          description: 统一价不能标记为不计费，只接受 `false`。
+
+    ClientModelPrice:
+      type: object
+      description: 统一价：调用方被收取的价格，按客户端模型名对所有分组和渠道生效。
+      required: [client_model, currency, prices, context_tiers, mode_schedules, updated_at_ms]
+      properties:
+        client_model: { type: string }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        prices: { $ref: '#/components/schemas/PriceSlots' }
+        context_tiers:
+          type: array
+          items: { $ref: '#/components/schemas/ContextTier' }
+        mode_schedules:
+          type: object
+          propertyNames: { $ref: '#/components/schemas/PricingMode' }
+          additionalProperties: { $ref: '#/components/schemas/ModeSchedule' }
+        updated_at_ms: { type: integer }
+
     CatalogSyncStatus:
       type: object
       required: [trigger, checked_at_ms, successful_fetch_at_ms, not_modified, skipped]
@@ -1731,11 +1835,16 @@ components:
 
     ProjectModel:
       type: object
-      required: [client_model, protocols, upstream_models]
+      required: [client_model, price, protocols, upstream_models]
       properties:
         client_model:
           type: string
           description: 客户端请求时使用的模型名。
+        price:
+          oneOf:
+            - $ref: '#/components/schemas/ClientModelPrice'
+            - type: 'null'
+          description: 统一价；未设置时为 `null`，该模型的请求费用按未定价处理。
         protocols:
           type: array
           description: 可用的入口协议，按固定协议顺序排列。

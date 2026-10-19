@@ -24,7 +24,7 @@ func TestCodexSearchLogsDoNotContributeToModelUsage(t *testing.T) {
 	row.AttemptRows = []models.RequestLogAttempt{
 		credentialAttemptRow(row.ID, 1, completed, row.CredentialID, telemetry.FailureCategoryOK),
 	}
-	if err := (&gormBatchWriter{db: db}).WriteBatch(t.Context(), []models.RequestLog{row}); err != nil {
+	if err := (&gormBatchWriter{db: db}).WriteBatch(t.Context(), withMirroredUpstreamCost(row)); err != nil {
 		t.Fatal(err)
 	}
 	assertRequestLogAndUsageStatCounts(t, db, 1, 0)

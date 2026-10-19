@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { ModelPrice, PriceSlots } from '@modern/api/models'
+import type { PriceSchedules, PriceSlots } from '@modern/api/models'
 import { priceFields } from '@modern/api/models'
 import { formatCompactNumber } from '@modern/components/ui/format'
 import { modelUnitPrice } from './models-display'
 
-const props = defineProps<{ price: ModelPrice }>()
+const props = defineProps<{ price: PriceSchedules }>()
 const { t, locale } = useI18n()
 const modeLabel = (mode: string) =>
   ['standard', 'fast', 'ultrafast'].includes(mode) ? t('modelManager.' + mode) : mode

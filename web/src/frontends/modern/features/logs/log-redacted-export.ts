@@ -166,6 +166,7 @@ export async function createRedactedLogExport(log: LogDetail): Promise<string> {
         rule_id: attempt.rule_id ? await anonymousReference('rule', attempt.rule_id) : null,
         error_summary: await redactDiagnosticText(attempt.error_summary),
         pricing_receipt: await redactReceipt(attempt.pricing_receipt),
+        upstream_pricing_receipt: await redactReceipt(attempt.upstream_pricing_receipt),
       }
     }),
   )

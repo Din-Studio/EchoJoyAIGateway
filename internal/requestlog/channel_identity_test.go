@@ -42,21 +42,39 @@ func TestMapEventFreezesChannelCredentialAndExecutionAttempt(t *testing.T) {
 
 func TestMapEventCurrentReceiptMustMatchChannelAndModel(t *testing.T) {
 	event := channelScopedEvent(t, "00000000-0000-4000-8000-000000007002")
-	receipt := decodeReceiptJSON(t, event.Usage.Pricing.ReceiptJSON)
+	receipt := decodeReceiptJSON(t, event.Usage.Pricing.UpstreamReceiptJSON)
 	receipt.Rule.ChannelID = string(channel.Anthropic)
-	event.Usage.Pricing.ReceiptJSON = encodeReceiptJSON(t, receipt)
+	event.Usage.Pricing.UpstreamReceiptJSON = encodeReceiptJSON(t, receipt)
 	if _, err := mapEvent(redact.New(), event); err == nil ||
 		!strings.Contains(err.Error(), "frozen pricing observation") {
 		t.Fatalf("mapEvent() error = %v, want current channel/model mismatch", err)
 	}
 
 	event = channelScopedEvent(t, "00000000-0000-4000-8000-000000007003")
-	receipt = decodeReceiptJSON(t, event.Usage.Pricing.ReceiptJSON)
+	receipt = decodeReceiptJSON(t, event.Usage.Pricing.UpstreamReceiptJSON)
 	receipt.Rule.ModelID = "other-model"
-	event.Usage.Pricing.ReceiptJSON = encodeReceiptJSON(t, receipt)
+	event.Usage.Pricing.UpstreamReceiptJSON = encodeReceiptJSON(t, receipt)
 	if _, err := mapEvent(redact.New(), event); err == nil ||
 		!strings.Contains(err.Error(), "frozen pricing observation") {
 		t.Fatalf("mapEvent() error = %v, want current channel/model mismatch", err)
+	}
+}
+
+func TestMapEventChargeReceiptMustMatchClientModel(t *testing.T) {
+	event := channelScopedEvent(t, "00000000-0000-4000-8000-000000007006")
+	receipt := decodeReceiptJSON(t, event.Usage.Pricing.ReceiptJSON)
+	receipt.Rule.ClientModel = "other-model"
+	event.Usage.Pricing.ReceiptJSON = encodeReceiptJSON(t, receipt)
+	if _, err := mapEvent(redact.New(), event); err == nil ||
+		!strings.Contains(err.Error(), "frozen pricing observation") {
+		t.Fatalf("mapEvent() error = %v, want client model mismatch", err)
+	}
+
+	// 费用明细不能沿用按上游模型计价的旧契约。
+	event = channelScopedEvent(t, "00000000-0000-4000-8000-000000007007")
+	event.Usage.Pricing.ReceiptJSON = event.Usage.Pricing.UpstreamReceiptJSON
+	if _, err := mapEvent(redact.New(), event); err == nil {
+		t.Fatal("mapEvent() accepted an upstream receipt as the charge receipt")
 	}
 }
 
@@ -320,11 +338,18 @@ func channelScopedEvent(t *testing.T, requestID string) telemetry.RequestEvent {
 	event.Usage.CredentialID = 8
 	event.Usage.Result = usage.Result{State: usage.StateComplete}
 	event.Usage.Pricing = telemetry.PricingObservation{
+		ClientModel:          event.ClientModel,
 		UpstreamModel:        event.UpstreamModel,
 		CostState:            string(pricing.CostStatePriced),
 		PricingCompleteness:  string(pricing.CompletenessComplete),
 		EstimatedCostNanoUSD: 0,
-		ReceiptJSON: encodeReceiptJSON(t, emptyReceipt(4, pricing.ReceiptRule{
+		ReceiptJSON: encodeReceiptJSON(t, emptyReceipt(pricing.ClientModelReceiptSchemaVersion, pricing.ReceiptRule{
+			ClientModel: event.ClientModel,
+		})),
+		UpstreamCostState:           string(pricing.CostStatePriced),
+		UpstreamPricingCompleteness: string(pricing.CompletenessComplete),
+		UpstreamCostNanoUSD:         0,
+		UpstreamReceiptJSON: encodeReceiptJSON(t, emptyReceipt(pricing.UpstreamReceiptSchemaVersion, pricing.ReceiptRule{
 			ChannelID: string(channel.OpenAI),
 			ModelID:   event.UpstreamModel,
 		})),
@@ -341,8 +366,14 @@ func emptyReceipt(schemaVersion int, rule pricing.ReceiptRule) pricing.Receipt {
 		Rule:          rule,
 		LineItems:     []pricing.ReceiptLine{},
 	}
-	if schemaVersion == 4 {
+	if schemaVersion >= 4 {
 		receipt.PricingMode = pricing.ModeStandard
+	}
+	if schemaVersion >= 5 {
+		receipt.PriceMultipliers = &pricing.PriceMultipliers{Group: pricing.DefaultPriceMultiplier, AccessKey: pricing.DefaultPriceMultiplier}
+	}
+	if schemaVersion >= 6 {
+		receipt.BaseTotalNanoUSD = new(int64)
 	}
 	return receipt
 }

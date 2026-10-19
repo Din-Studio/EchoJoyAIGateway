@@ -25,26 +25,23 @@ type PriceSlotsDTO struct {
 }
 
 type ModelPriceDTO struct {
-	ID                  uint                                   `json:"id"`
-	ChannelID           string                                 `json:"channel_id"`
-	ChannelName         string                                 `json:"channel_name"`
-	ChannelMark         string                                 `json:"channel_mark"`
-	ChannelIcon         string                                 `json:"channel_icon"`
-	ModelID             string                                 `json:"model_id"`
-	Currency            pricing.CurrencyCode                   `json:"currency"`
-	Prices              PriceSlotsDTO                          `json:"prices"`
-	ModeSchedules       map[pricing.Mode]ModelPriceScheduleDTO `json:"mode_schedules"`
-	PricingStatus       PricingStatus                          `json:"pricing_status"`
-	Method              *string                                `json:"method"`
-	MatchedProviderID   *string                                `json:"matched_provider_id"`
-	MatchSource         *ModelPriceMatchSource                 `json:"match_source"`
-	Referenced          bool                                   `json:"referenced"`
-	ReferenceCount      int                                    `json:"reference_count"`
-	ReferenceGroupCount int                                    `json:"reference_group_count"`
-	ContextTiers        []ModelPriceContextTierDTO             `json:"context_tiers"`
-	UpdatedAtMS         int64                                  `json:"updated_at_ms"`
-	CanReset            bool                                   `json:"can_reset"`
-	CanDelete           bool                                   `json:"can_delete"`
+	ID          uint   `json:"id"`
+	ChannelID   string `json:"channel_id"`
+	ChannelName string `json:"channel_name"`
+	ChannelMark string `json:"channel_mark"`
+	ChannelIcon string `json:"channel_icon"`
+	ModelID     string `json:"model_id"`
+	PriceSchedulesDTO
+	PricingStatus       PricingStatus          `json:"pricing_status"`
+	Method              *string                `json:"method"`
+	MatchedProviderID   *string                `json:"matched_provider_id"`
+	MatchSource         *ModelPriceMatchSource `json:"match_source"`
+	Referenced          bool                   `json:"referenced"`
+	ReferenceCount      int                    `json:"reference_count"`
+	ReferenceGroupCount int                    `json:"reference_group_count"`
+	UpdatedAtMS         int64                  `json:"updated_at_ms"`
+	CanReset            bool                   `json:"can_reset"`
+	CanDelete           bool                   `json:"can_delete"`
 }
 
 type ModelPriceScheduleDTO struct {
@@ -597,8 +594,11 @@ func projectModelPriceRow(
 	dto := ModelPriceDTO{
 		ID: row.ID, ChannelID: row.ChannelID, ChannelName: descriptor.Name,
 		ChannelMark: descriptor.Mark, ChannelIcon: descriptor.Icon, ModelID: row.ModelID,
-		Prices:              prices,
-		ModeSchedules:       projectModeSchedules(rule.ModeSchedules),
+		PriceSchedulesDTO: PriceSchedulesDTO{
+			Prices:        prices,
+			ContextTiers:  projectContextPriceTiers(rule.ContextTiers),
+			ModeSchedules: projectModeSchedules(rule.ModeSchedules),
+		},
 		PricingStatus:       status,
 		Method:              modelPriceMethod(row, configured, matchedAutomaticPrice),
 		MatchedProviderID:   matchedProviderID,
@@ -606,7 +606,6 @@ func projectModelPriceRow(
 		Referenced:          reference.referenceCount > 0,
 		ReferenceCount:      reference.referenceCount,
 		ReferenceGroupCount: reference.referenceGroupCount(),
-		ContextTiers:        projectContextPriceTiers(rule.ContextTiers),
 		UpdatedAtMS:         row.UpdatedAtMS,
 		CanReset:            row.IsManual,
 		CanDelete:           row.IsManual && reference.referenceCount == 0,

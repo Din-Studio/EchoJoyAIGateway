@@ -90,6 +90,7 @@ const tokenFields = computed<LogColumnId[]>(() => [
 ])
 const costFields = computed<LogColumnId[]>(() => [
   'estimated_cost_nano',
+  ...(log.value?.upstream_cost ? (['upstream_cost_nano'] as const) : []),
   'cost_state',
   'pricing_completeness',
   'pricing_mode',
@@ -101,12 +102,16 @@ const primaryFields = [
   { field: 'input_tokens', icon: ArrowDownToLine },
   { field: 'estimated_cost_nano', icon: Coins },
 ] as const
-const receipt = computed(
-  () =>
-    log.value?.attempts.find((attempt) => attempt.committed && attempt.pricing_receipt)
-      ?.pricing_receipt ??
-    log.value?.attempts.find((attempt) => attempt.pricing_receipt)?.pricing_receipt,
-)
+// 两份明细出自同一次计价尝试：优先取已提交的尝试。上游明细只返回给管理员。
+function attemptReceipt(key: 'pricing_receipt' | 'upstream_pricing_receipt') {
+  const attempts = log.value?.attempts ?? []
+  return (
+    attempts.find((attempt) => attempt.committed && attempt[key])?.[key] ??
+    attempts.find((attempt) => attempt[key])?.[key]
+  )
+}
+const receipt = computed(() => attemptReceipt('pricing_receipt'))
+const upstreamReceipt = computed(() => attemptReceipt('upstream_pricing_receipt'))
 function valueName(value: string | null | undefined): string {
   return !value ? '—' : te('logs.values.' + value) ? t('logs.values.' + value) : value
 }
@@ -354,6 +359,17 @@ function resolveRedactedLog(): Promise<string> {
               :receipt="receipt"
               :decision="log.auto_decision"
               :total-cost="log.estimated_cost_nano"
+              :currency="log.currency"
+              :exchange-rate="log.exchange_rate"
+          /></AppFormSection>
+          <AppFormSection
+            v-if="admin && upstreamReceipt && log.upstream_cost"
+            :title="t('logs.upstreamPricingInfo')"
+            :description="t('logs.upstreamPricingNote')"
+            compact
+            ><LogPricingReceipt
+              :receipt="upstreamReceipt"
+              :total-cost="log.upstream_cost.cost_nano"
               :currency="log.currency"
               :exchange-rate="log.exchange_rate"
           /></AppFormSection>

@@ -80,6 +80,30 @@ func (currency Currency) Settle(nanoUSD int64) int64 {
 	return converted
 }
 
+// PriceFromNanoUSD converts a stored nano USD price to nano units of the
+// currency for display. Of the values that convert back to the same nano USD
+// it keeps the one with the fewest decimal places, so a price entered in the
+// currency reads back as entered and saving it again changes nothing. When no
+// shorter value converts back, the exact conversion is returned.
+func (currency Currency) PriceFromNanoUSD(value NanoUSD) (int64, bool) {
+	exact, ok := currency.FromNanoUSD(value)
+	if !ok {
+		return 0, false
+	}
+	for step := int64(1_000_000_000); step > 1; step /= 10 {
+		floor := exact / step * step
+		for _, candidate := range []int64{floor, floor + step} {
+			if candidate < floor {
+				continue // floor + step overflowed
+			}
+			if back, ok := currency.ToNanoUSD(candidate); ok && back == value {
+				return candidate, true
+			}
+		}
+	}
+	return exact, true
+}
+
 // ToNanoUSD converts nano units of the currency to nano USD, rounding half up.
 func (currency Currency) ToNanoUSD(value int64) (NanoUSD, bool) {
 	converted, ok := scaleRoundHalfUp(value, ExchangeRateScale, currency.RateMicros)

@@ -26,12 +26,12 @@ func testModelCooldownMigration(t *testing.T, open func(*testing.T) *gorm.DB) {
 				Protocol: "openai-completions", ClientModel: "model", UpstreamModel: "model", ModelConsistency: "not_applicable",
 				Status: "error", StatusCode: 429, DurationMs: 1, UsageState: "not_applicable", CostState: "not_applicable", PricingCompleteness: "not_applicable"}
 			if scenario != "fresh" {
-				if err := db.Omit("AffinityKind", "AutoDecision", "DecisionModel", "DecisionCostNanoUSD", "DecisionPricingCompleteness", "Currency", "ExchangeRateMicros", "EstimatedCostNano", "DecisionCostNano").Create(&legacyRequest).Error; err != nil {
+				if err := db.Omit("AffinityKind", "AutoDecision", "DecisionModel", "DecisionCostNanoUSD", "DecisionPricingCompleteness", "Currency", "ExchangeRateMicros", "EstimatedCostNano", "DecisionCostNano", "UpstreamCostNanoUSD", "UpstreamCostState", "UpstreamPricingCompleteness").Create(&legacyRequest).Error; err != nil {
 					t.Fatal(err)
 				}
 				legacy := models.RequestLogAttempt{RequestID: legacyRequest.ID, Sequence: 1, GroupID: 1, CredentialID: 1,
 					FailureCategory: "rate_limited", Action: "cooldown_credential", Effect: "cooldown_credential", ErrorSummary: "legacy limited"}
-				if err := db.Omit("CooldownUntilMS").Create(&legacy).Error; err != nil {
+				if err := db.Omit("CooldownUntilMS", "UpstreamPricingReceipt").Create(&legacy).Error; err != nil {
 					t.Fatal(err)
 				}
 			}

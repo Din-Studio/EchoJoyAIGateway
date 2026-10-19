@@ -21,7 +21,7 @@ func TestErrorDecisionMigrationPreservesAttemptsAndAddsDecisionContract(t *testi
 		UsageState: "not_applicable", CostState: "not_applicable",
 		PricingCompleteness: "not_applicable",
 	}
-	if err := db.Omit("AffinityKind", "AutoDecision", "DecisionModel", "DecisionCostNanoUSD", "DecisionPricingCompleteness", "Currency", "ExchangeRateMicros", "EstimatedCostNano", "DecisionCostNano").Create(&request).Error; err != nil {
+	if err := db.Omit("AffinityKind", "AutoDecision", "DecisionModel", "DecisionCostNanoUSD", "DecisionPricingCompleteness", "Currency", "ExchangeRateMicros", "EstimatedCostNano", "DecisionCostNano", "UpstreamCostNanoUSD", "UpstreamCostState", "UpstreamPricingCompleteness").Create(&request).Error; err != nil {
 		t.Fatalf("create request log: %v", err)
 	}
 	attempt := models.RequestLogAttempt{
@@ -32,7 +32,7 @@ func TestErrorDecisionMigrationPreservesAttemptsAndAddsDecisionContract(t *testi
 	}
 	if err := db.Omit(
 		"FailureOrigin", "FailureScope", "RetryDirective", "Effect", "RuleID",
-		"CooldownUntilMS",
+		"CooldownUntilMS", "UpstreamPricingReceipt",
 	).Create(&attempt).Error; err != nil {
 		t.Fatalf("create legacy attempt: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestErrorDecisionMigrationPreservesAttemptsAndAddsDecisionContract(t *testi
 		RetryDirective: "refresh_credential", Effect: "none", RuleID: "auth.refresh_required",
 		Action: "retry", ErrorSummary: "refresh required",
 	}
-	if err := db.Omit("CooldownUntilMS").Create(&newAttempt).Error; err != nil {
+	if err := db.Omit("CooldownUntilMS", "UpstreamPricingReceipt").Create(&newAttempt).Error; err != nil {
 		t.Fatalf("create decision attempt: %v", err)
 	}
 	invalid := newAttempt

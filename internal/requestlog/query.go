@@ -289,6 +289,10 @@ func decodeAttemptRows(rows []models.RequestLogAttempt) ([]Attempt, error) {
 		if err != nil {
 			return nil, err
 		}
+		upstreamReceipt, err := decodeAttemptUpstreamPricingReceipt(row)
+		if err != nil {
+			return nil, err
+		}
 		attempts = append(attempts, Attempt{
 			Sequence:          row.Sequence,
 			GroupID:           row.GroupID,
@@ -307,42 +311,64 @@ func decodeAttemptRows(rows []models.RequestLogAttempt) ([]Attempt, error) {
 				Effort:       row.ReasoningEffort,
 				BudgetTokens: row.ReasoningBudgetTokens,
 			},
-			StatusCode:      row.StatusCode,
-			DurationMs:      row.DurationMs,
-			FailureCategory: telemetry.FailureCategory(row.FailureCategory),
-			FailureOrigin:   execution.ErrorOrigin(row.FailureOrigin),
-			FailureScope:    execution.ErrorScope(row.FailureScope),
-			RetryDirective:  telemetry.RetryDirective(row.RetryDirective),
-			Effect:          telemetry.Effect(row.Effect),
-			CooldownUntilMS: row.CooldownUntilMS,
-			RuleID:          row.RuleID,
-			Action:          telemetry.Action(row.Action),
-			WillRetry:       row.WillRetry,
-			ErrorCode:       row.ErrorCode,
-			ErrorSummary:    row.ErrorSummary,
-			Committed:       row.Committed,
-			PricingReceipt:  receipt,
+			StatusCode:             row.StatusCode,
+			DurationMs:             row.DurationMs,
+			FailureCategory:        telemetry.FailureCategory(row.FailureCategory),
+			FailureOrigin:          execution.ErrorOrigin(row.FailureOrigin),
+			FailureScope:           execution.ErrorScope(row.FailureScope),
+			RetryDirective:         telemetry.RetryDirective(row.RetryDirective),
+			Effect:                 telemetry.Effect(row.Effect),
+			CooldownUntilMS:        row.CooldownUntilMS,
+			RuleID:                 row.RuleID,
+			Action:                 telemetry.Action(row.Action),
+			WillRetry:              row.WillRetry,
+			ErrorCode:              row.ErrorCode,
+			ErrorSummary:           row.ErrorSummary,
+			Committed:              row.Committed,
+			PricingReceipt:         receipt,
+			UpstreamPricingReceipt: upstreamReceipt,
 		})
 	}
 	return attempts, nil
 }
 
+// decodeAttemptPricingReceipt decodes the charge receipt. A receipt priced by
+// the client model carries no channel; v3 and later receipts from before
+// unified pricing were priced by the attempt's channel model.
 func decodeAttemptPricingReceipt(row models.RequestLogAttempt) (*pricing.Receipt, error) {
-	if len(row.PricingReceipt) == 0 || string(row.PricingReceipt) == "null" {
+	decoded, err := decodeStoredReceipt(row.PricingReceipt)
+	if err != nil || decoded == nil {
+		return nil, err
+	}
+	if decoded.SchemaVersion >= 3 && decoded.Rule.ClientModel == "" &&
+		decoded.Rule != (pricing.ReceiptRule{ChannelID: row.ChannelID, ModelID: row.UpstreamModel}) {
+		return nil, fmt.Errorf("decode request log pricing receipt: channel identity does not match attempt")
+	}
+	return decoded, nil
+}
+
+func decodeAttemptUpstreamPricingReceipt(row models.RequestLogAttempt) (*pricing.Receipt, error) {
+	decoded, err := decodeStoredReceipt(row.UpstreamPricingReceipt)
+	if err != nil || decoded == nil {
+		return nil, err
+	}
+	if decoded.SchemaVersion != pricing.UpstreamReceiptSchemaVersion ||
+		decoded.Rule != (pricing.ReceiptRule{ChannelID: row.ChannelID, ModelID: row.UpstreamModel}) {
+		return nil, fmt.Errorf("decode request log upstream pricing receipt: channel identity does not match attempt")
+	}
+	return decoded, nil
+}
+
+func decodeStoredReceipt(raw models.JSON) (*pricing.Receipt, error) {
+	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
 	}
 	var decoded pricing.Receipt
-	if err := json.Unmarshal(row.PricingReceipt, &decoded); err != nil {
+	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return nil, fmt.Errorf("decode request log pricing receipt: %w", err)
 	}
 	if err := pricing.ValidateReceipt(decoded); err != nil {
 		return nil, fmt.Errorf("decode request log pricing receipt: %w", err)
-	}
-	if decoded.SchemaVersion >= 3 && decoded.Rule != (pricing.ReceiptRule{
-		ChannelID: row.ChannelID,
-		ModelID:   row.UpstreamModel,
-	}) {
-		return nil, fmt.Errorf("decode request log pricing receipt: channel identity does not match attempt")
 	}
 	return &decoded, nil
 }
@@ -395,23 +421,26 @@ func decodeRequestLogRows(rows []models.RequestLog) ([]Record, error) {
 				Effort:       row.ReasoningEffort,
 				BudgetTokens: row.ReasoningBudgetTokens,
 			},
-			Attempts:                nil,
-			GroupID:                 row.GroupID,
-			ChannelID:               channel.ID(row.ChannelID),
-			CredentialID:            row.CredentialID,
-			UsageState:              usage.State(row.UsageState),
-			CostState:               pricing.CostState(row.CostState),
-			PricingCompleteness:     pricing.Completeness(row.PricingCompleteness),
-			UncachedInputTokens:     row.UncachedInputTokens,
-			CacheReadTokens:         row.CacheReadTokens,
-			CacheWrite5MTokens:      row.CacheWrite5MTokens,
-			CacheWrite1HTokens:      row.CacheWrite1HTokens,
-			CacheWriteUnknownTokens: row.CacheWriteUnknownTokens,
-			OutputTokens:            row.OutputTokens,
-			EstimatedCostNanoUSD:    row.EstimatedCostNanoUSD,
-			Settlement:              settlement,
-			EstimatedCostNano:       row.EstimatedCostNano,
-			DecisionCostNano:        row.DecisionCostNano,
+			Attempts:                    nil,
+			GroupID:                     row.GroupID,
+			ChannelID:                   channel.ID(row.ChannelID),
+			CredentialID:                row.CredentialID,
+			UsageState:                  usage.State(row.UsageState),
+			CostState:                   pricing.CostState(row.CostState),
+			PricingCompleteness:         pricing.Completeness(row.PricingCompleteness),
+			UncachedInputTokens:         row.UncachedInputTokens,
+			CacheReadTokens:             row.CacheReadTokens,
+			CacheWrite5MTokens:          row.CacheWrite5MTokens,
+			CacheWrite1HTokens:          row.CacheWrite1HTokens,
+			CacheWriteUnknownTokens:     row.CacheWriteUnknownTokens,
+			OutputTokens:                row.OutputTokens,
+			EstimatedCostNanoUSD:        row.EstimatedCostNanoUSD,
+			UpstreamCostState:           pricing.CostState(row.UpstreamCostState),
+			UpstreamPricingCompleteness: pricing.Completeness(row.UpstreamPricingCompleteness),
+			UpstreamCostNanoUSD:         row.UpstreamCostNanoUSD,
+			Settlement:                  settlement,
+			EstimatedCostNano:           row.EstimatedCostNano,
+			DecisionCostNano:            row.DecisionCostNano,
 		})
 	}
 	return records, nil
@@ -452,6 +481,14 @@ func validateRequestLogUsageCost(row models.RequestLog) error {
 		row.EstimatedCostNanoUSD,
 	); err != nil {
 		return fmt.Errorf("decode request log usage/cost: %w", err)
+	}
+	if err := validateFrozenPricingState(
+		usage.State(row.UsageState),
+		pricing.CostState(row.UpstreamCostState),
+		pricing.Completeness(row.UpstreamPricingCompleteness),
+		row.UpstreamCostNanoUSD,
+	); err != nil {
+		return fmt.Errorf("decode request log upstream cost: %w", err)
 	}
 	for _, value := range []int64{
 		row.UncachedInputTokens,

@@ -1173,6 +1173,10 @@ func TestRequestLogEndpointsBindAccessKeyScopeAndRedactRoutingInternals(t *testi
 		UncachedInputTokens:   10,
 		OutputTokens:          2,
 		EstimatedCostNanoUSD:  50,
+		// 上游费用是网关成本，访问密钥范围必须整组不返回。
+		UpstreamCostState:           pricing.CostStatePriced,
+		UpstreamPricingCompleteness: pricing.CompletenessComplete,
+		UpstreamCostNanoUSD:         20,
 		Attempts: []requestlog.Attempt{{
 			Sequence: 1, GroupID: 99, GroupName: "private group",
 			ChannelID: channel.OpenAI, CredentialID: 101,
@@ -1283,6 +1287,9 @@ func assertAccessKeyLogRedaction(t *testing.T, body []byte, detail bool) {
 		if string(item[field]) != want {
 			t.Fatalf("AccessKey log %s = %s, want %s; body=%s", field, item[field], want, body)
 		}
+	}
+	if _, exposed := item["upstream_cost"]; exposed {
+		t.Fatalf("AccessKey log exposes the upstream cost: %s", body)
 	}
 	if detail && string(item["attempts"]) != "[]" {
 		t.Fatalf("AccessKey attempts = %s, want []; body=%s", item["attempts"], body)

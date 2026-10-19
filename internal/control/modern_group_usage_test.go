@@ -32,6 +32,9 @@ func TestModernGroupUsageBatchesExactRollingWindow(t *testing.T) {
 				Status: "success", StatusCode: 200, AttemptCount: 3,
 				UsageState: "complete", CostState: "priced", PricingCompleteness: "complete",
 				UncachedInputTokens: 3, OutputTokens: 5, EstimatedCostNanoUSD: 700,
+				UpstreamCostState:           "priced",
+				UpstreamPricingCompleteness: "complete",
+				UpstreamCostNanoUSD:         700,
 			}
 			if err := fixture.db.Create(&row).Error; err != nil {
 				t.Fatal(err)

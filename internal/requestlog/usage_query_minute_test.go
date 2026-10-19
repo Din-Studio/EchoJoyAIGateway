@@ -72,7 +72,8 @@ func TestQueryUsageMinuteExcludesAttemptWithoutFinalAttribution(t *testing.T) {
 	unattributed.UsageState = "not_applicable"
 	unattributed.CostState = "not_applicable"
 	unattributed.PricingCompleteness = "not_applicable"
-	if err := db.Create(&[]models.RequestLog{attributed, unattributed}).Error; err != nil {
+	rows := withMirroredUpstreamCost(attributed, unattributed)
+	if err := db.Create(&rows).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -154,7 +155,7 @@ func TestQueryUsageMinuteMatchesFrozenHourlyAccounting(t *testing.T) {
 	rows[5].UsageState, rows[5].CostState, rows[5].PricingCompleteness = "not_applicable", "not_applicable", "not_applicable"
 	rows[5].EstimatedCostNanoUSD = 0
 	rows[6].AttemptCount = 0
-	if err := (&gormBatchWriter{db: db}).WriteBatch(context.Background(), rows); err != nil {
+	if err := (&gormBatchWriter{db: db}).WriteBatch(context.Background(), withMirroredUpstreamCost(rows...)); err != nil {
 		t.Fatal(err)
 	}
 	service := newRequestLogTestService(db)

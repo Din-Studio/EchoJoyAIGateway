@@ -203,7 +203,8 @@ func TestHandlerAccountsFinalEstimateWhenRequestIDGenerationFails(t *testing.T) 
 		t.Fatalf("response = %d %s", response.Code, response.Body.String())
 	}
 	view, err := quota.View(t.Context(), manager.Current(), 1, time.Unix(3_001, 0))
-	if err != nil || len(view.Rules) != 1 || view.Rules[0].UsedNano != 2_400_000_000 {
+	// 额度只扣费用：统一价 2e9 × 密钥倍率 1.5，分组倍率只影响上游费用。
+	if err != nil || len(view.Rules) != 1 || view.Rules[0].UsedNano != 3_000_000_000 {
 		t.Fatalf("quota view = %#v", view)
 	}
 	if events := sink.snapshot(); len(events) != 0 {

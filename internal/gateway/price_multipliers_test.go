@@ -37,19 +37,16 @@ func TestHandlerFreezesPriceMultipliersAndAccountsTheSameEstimate(t *testing.T) 
 			)
 			rules := []accessquota.Rule{{ID: 901, Revision: 1, Kind: accessquota.KindTotal, Currency: "USD", LimitNano: 10_000_000}}
 			quota := useSharedAccessQuota(t, handler)
-			table, err := pricing.NewTable([]pricing.Rule{{
+			table := mustGatewayTableWithClientPrices(t, []pricing.Rule{{
 				Identity: pricing.Identity{ChannelID: "openai", ModelID: "gpt-4o"},
 				Prices: pricing.Prices{
 					Input:  pricing.Price{NanoUSDPerMillion: 600_000, Set: true},
 					Output: pricing.Price{NanoUSDPerMillion: 600_000, Set: true},
 				},
-			}})
-			if err != nil {
-				t.Fatal(err)
-			}
+			}}, "gpt-4o")
 			handler.priceTables = &mutableGatewayPriceTableProvider{table: table}
 			input := gatewayAccessQuotaCompileInput(handler, rules)
-			setGatewayPriceMultipliers(t, &input, "2", "1")
+			setGatewayPriceMultipliers(t, &input, "2", "3")
 			if _, err := manager.Publish(input); err != nil {
 				t.Fatal(err)
 			}
@@ -71,11 +68,12 @@ func TestHandlerFreezesPriceMultipliersAndAccountsTheSameEstimate(t *testing.T) 
 			if response.Code != http.StatusOK {
 				t.Fatalf("response = %d %s", response.Code, response.Body.String())
 			}
+			// 费用只乘密钥倍率，上游费用只乘分组倍率，两者都用转发前冻结的倍率。
 			events := sink.snapshot()
-			if len(events) != 1 || events[0].Usage.Pricing.EstimatedCostNanoUSD != 4 {
-				t.Fatalf("frozen multiplier estimate = %#v, want original base 2 adjusted to 4", events)
+			if len(events) != 1 || events[0].Usage.Pricing.EstimatedCostNanoUSD != 6 || events[0].Usage.Pricing.UpstreamCostNanoUSD != 4 {
+				t.Fatalf("frozen multiplier estimate = %#v, want base 2 charged 6 and costed 4", events)
 			}
-			var receipt struct {
+			type frozenReceipt struct {
 				SchemaVersion    int    `json:"schema_version"`
 				BaseTotalNanoUSD *int64 `json:"base_total_nano_usd"`
 				PriceMultipliers struct {
@@ -83,15 +81,22 @@ func TestHandlerFreezesPriceMultipliersAndAccountsTheSameEstimate(t *testing.T) 
 					AccessKey string `json:"access_key"`
 				} `json:"price_multipliers"`
 			}
-			if err := json.Unmarshal([]byte(events[0].Usage.Pricing.ReceiptJSON), &receipt); err != nil {
+			var charge, upstream frozenReceipt
+			if err := json.Unmarshal([]byte(events[0].Usage.Pricing.ReceiptJSON), &charge); err != nil {
 				t.Fatal(err)
 			}
-			if receipt.SchemaVersion != 6 || receipt.PriceMultipliers.Group != "2" || receipt.PriceMultipliers.AccessKey != "1" || receipt.BaseTotalNanoUSD == nil || *receipt.BaseTotalNanoUSD != 2 {
-				t.Fatalf("frozen receipt = %#v", receipt)
+			if err := json.Unmarshal([]byte(events[0].Usage.Pricing.UpstreamReceiptJSON), &upstream); err != nil {
+				t.Fatal(err)
+			}
+			if charge.SchemaVersion != 7 || charge.PriceMultipliers.Group != "1" || charge.PriceMultipliers.AccessKey != "3" || charge.BaseTotalNanoUSD == nil || *charge.BaseTotalNanoUSD != 2 {
+				t.Fatalf("frozen charge receipt = %#v", charge)
+			}
+			if upstream.SchemaVersion != 6 || upstream.PriceMultipliers.Group != "2" || upstream.PriceMultipliers.AccessKey != "1" || upstream.BaseTotalNanoUSD == nil || *upstream.BaseTotalNanoUSD != 2 {
+				t.Fatalf("frozen upstream receipt = %#v", upstream)
 			}
 			view, err := quota.View(t.Context(), manager.Current(), 1, time.Now())
-			if err != nil || len(view.Rules) != 1 || view.Rules[0].UsedNano != 4 {
-				t.Fatalf("quota = %#v, want the same adjusted estimate", view)
+			if err != nil || len(view.Rules) != 1 || view.Rules[0].UsedNano != 6 {
+				t.Fatalf("quota = %#v, want the charge, not the upstream cost", view)
 			}
 		})
 	}
@@ -111,7 +116,8 @@ func setGatewayPriceMultipliers(t *testing.T, input *state.CompileInput, group, 
 	input.AccessKeys[0].PriceMultiplier = &keyMultiplier
 }
 
-func TestHandlerCrossGroupRetryUsesFinalUsageGroupMultiplier(t *testing.T) {
+// 跨分组重试后，费用与路由到哪个分组无关；上游费用使用最终计量分组的倍率。
+func TestHandlerCrossGroupRetryChargesByKeyAndCostsByFinalGroup(t *testing.T) {
 	forwarder := &scriptedForwarder{results: []UpstreamResult{
 		{
 			StatusCode: http.StatusTooManyRequests, Header: make(http.Header), RequestWritten: true,
@@ -157,7 +163,8 @@ func TestHandlerCrossGroupRetryUsesFinalUsageGroupMultiplier(t *testing.T) {
 	engine.ServeHTTP(response, request)
 	events := sink.snapshot()
 	if response.Code != http.StatusOK || len(events) != 1 || len(events[0].Attempts) != 2 ||
-		events[0].Usage.GroupID != 2 || events[0].Usage.AttemptSequence != 2 || events[0].Usage.Pricing.EstimatedCostNanoUSD != 2_400_000 {
+		events[0].Usage.GroupID != 2 || events[0].Usage.AttemptSequence != 2 ||
+		events[0].Usage.Pricing.EstimatedCostNanoUSD != 3_000_000 || events[0].Usage.Pricing.UpstreamCostNanoUSD != 1_600_000 {
 		t.Fatalf("retry response = %d; events = %#v", response.Code, events)
 	}
 }

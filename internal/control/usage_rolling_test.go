@@ -44,6 +44,9 @@ func TestUsageAPIRollingHourReadsLogsAndScopesAccessKey(t *testing.T) {
 			Status: "success", StatusCode: 200, AttemptCount: item.attempts,
 			UsageState: "complete", CostState: "priced", PricingCompleteness: "complete",
 			UncachedInputTokens: 3, OutputTokens: 5, EstimatedCostNanoUSD: 700,
+			UpstreamCostState:           "priced",
+			UpstreamPricingCompleteness: "complete",
+			UpstreamCostNanoUSD:         700,
 		}
 		if err := fixture.db.Create(&row).Error; err != nil {
 			t.Fatalf("create usage request log: %v", err)

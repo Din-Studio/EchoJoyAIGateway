@@ -75,14 +75,16 @@ func newAntigravityImagesRuntime(t *testing.T) (*gin.Engine, *Adapter, *antigrav
 	}); err != nil {
 		t.Fatal(err)
 	}
-	table, err := pricing.NewTable([]pricing.Rule{{
+	prices := pricing.Prices{
+		Input:     pricing.Price{NanoUSDPerMillion: 1_000_000, Set: true},
+		CacheRead: pricing.Price{NanoUSDPerMillion: 500_000, Set: true},
+		Output:    pricing.Price{NanoUSDPerMillion: 2_000_000, Set: true},
+	}
+	// 费用按对外模型 public-image 的统一价计算，上游费用按渠道模型价格计算。
+	table, err := pricing.NewTableWithClientRules([]pricing.Rule{{
 		Identity: pricing.Identity{ChannelID: string(channel.Antigravity), ModelID: "gemini-3.1-flash-image"},
-		Prices: pricing.Prices{
-			Input:     pricing.Price{NanoUSDPerMillion: 1_000_000, Set: true},
-			CacheRead: pricing.Price{NanoUSDPerMillion: 500_000, Set: true},
-			Output:    pricing.Price{NanoUSDPerMillion: 2_000_000, Set: true},
-		},
-	}})
+		Prices:   prices,
+	}}, []pricing.ClientRule{{ClientModel: "public-image", Prices: prices}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,6 +187,7 @@ func TestAntigravityImagesHTTPGenerationReachesGeminiAndUsesExistingPricing(t *t
 	event := observations.events[0]
 	if event.Usage.Result.Tokens != (usage.Tokens{UncachedInput: 60, CacheRead: 40, Output: 25}) ||
 		event.Usage.Pricing.CostState != "priced" || event.Usage.Pricing.EstimatedCostNanoUSD != 130 ||
+		event.Usage.Pricing.UpstreamCostState != "priced" || event.Usage.Pricing.UpstreamCostNanoUSD != 130 ||
 		event.Protocol != protocol.OpenAIImages || event.Operation != execution.OperationImagesGenerate ||
 		event.ClientModel != "public-image" || event.UpstreamModel != "gemini-3.1-flash-image" {
 		t.Fatalf("request observation = %+v", event)

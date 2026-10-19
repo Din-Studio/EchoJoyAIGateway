@@ -93,12 +93,18 @@ type requestLogAttemptResponse struct {
 	ErrorSummary      string                            `json:"error_summary"`
 	Committed         bool                              `json:"committed"`
 	PricingReceipt    *requestLogPricingReceiptResponse `json:"pricing_receipt"`
+
+	// UpstreamPricingReceipt 解释上游费用；PricingReceipt 解释费用。
+	UpstreamPricingReceipt *requestLogPricingReceiptResponse `json:"upstream_pricing_receipt"`
 }
 
+// requestLogPricingIdentityResponse names what a receipt was priced by: a
+// client model for a charge receipt, otherwise a channel model.
 type requestLogPricingIdentityResponse struct {
-	ScopeKey  *string `json:"scope_key,omitempty"`
-	ChannelID *string `json:"channel_id,omitempty"`
-	ModelID   string  `json:"model_id"`
+	ScopeKey    *string `json:"scope_key,omitempty"`
+	ChannelID   *string `json:"channel_id,omitempty"`
+	ModelID     string  `json:"model_id,omitempty"`
+	ClientModel string  `json:"client_model,omitempty"`
 }
 
 type requestLogPricingMultiplierResponse struct {
@@ -185,6 +191,19 @@ type requestLogItemResponse struct {
 	OutputTokens             string                       `json:"output_tokens"`
 	EstimatedCostNanoUSD     string                       `json:"estimated_cost_nano_usd"`
 	EstimatedCostNano        string                       `json:"estimated_cost_nano"`
+
+	// UpstreamCost 是网关付给上游的成本，只返回给管理员。
+	UpstreamCost *requestLogUpstreamCostResponse `json:"upstream_cost,omitempty"`
+}
+
+// requestLogUpstreamCostResponse prices the attributed attempt by its channel
+// model and the group multiplier. CostNano is CostNanoUSD settled at the
+// request's frozen exchange rate.
+type requestLogUpstreamCostResponse struct {
+	CostState           pricing.CostState    `json:"cost_state"`
+	PricingCompleteness pricing.Completeness `json:"pricing_completeness"`
+	CostNanoUSD         string               `json:"cost_nano_usd"`
+	CostNano            string               `json:"cost_nano"`
 }
 
 type autoDecisionResponse struct {
@@ -410,6 +429,7 @@ func sanitizeAccessKeyRequestLog(record requestlog.Record) requestlog.Record {
 	record.RouteMode = ""
 	record.UpstreamProtocol = ""
 	record.Attempts = []requestlog.Attempt{}
+	record.UpstreamCostState, record.UpstreamPricingCompleteness, record.UpstreamCostNanoUSD = "", "", 0
 	return record
 }
 
@@ -1096,7 +1116,7 @@ func mapRequestLogItemResponse(
 	if !ok {
 		return requestLogItemResponse{}, fmt.Errorf("map request log settled cost: overflow")
 	}
-	return requestLogItemResponse{
+	item := requestLogItemResponse{
 		AutoDecision:              mapAutoDecisionResponse(record),
 		TotalEstimatedCostNanoUSD: strconv.FormatInt(total.EstimatedCostNanoUSD, 10),
 		Currency:                  record.Settlement.Code,
@@ -1147,7 +1167,16 @@ func mapRequestLogItemResponse(
 		OutputTokens:            strconv.FormatInt(record.OutputTokens, 10),
 		EstimatedCostNanoUSD:    usageCost.estimatedCostNanoUSD,
 		EstimatedCostNano:       strconv.FormatInt(record.EstimatedCostNano, 10),
-	}, nil
+	}
+	if record.UpstreamCostState != "" {
+		item.UpstreamCost = &requestLogUpstreamCostResponse{
+			CostState:           record.UpstreamCostState,
+			PricingCompleteness: record.UpstreamPricingCompleteness,
+			CostNanoUSD:         strconv.FormatInt(record.UpstreamCostNanoUSD, 10),
+			CostNano:            settledNanoString(record.Settlement, record.UpstreamCostNanoUSD),
+		}
+	}
+	return item, nil
 }
 
 func nullableRequestLogPricingMode(record requestlog.Record) (*pricing.Mode, error) {
@@ -1295,6 +1324,10 @@ func mapRequestLogAttempt(
 	if err != nil {
 		return requestLogAttemptResponse{}, err
 	}
+	upstreamReceipt, err := mapRequestLogPricingReceipt(attempt.UpstreamPricingReceipt, settlement)
+	if err != nil {
+		return requestLogAttemptResponse{}, err
+	}
 	return requestLogAttemptResponse{
 		Sequence:          attempt.Sequence,
 		GroupID:           attempt.GroupID,
@@ -1325,6 +1358,8 @@ func mapRequestLogAttempt(
 		ErrorSummary:      attempt.ErrorSummary,
 		Committed:         attempt.Committed,
 		PricingReceipt:    receipt,
+
+		UpstreamPricingReceipt: upstreamReceipt,
 	}, nil
 }
 
@@ -1349,7 +1384,7 @@ func mapRequestLogPricingReceipt(
 		Currency:           receipt.Currency,
 		PricingMode:        receipt.PricingMode,
 		PriceMultipliers:   receipt.PriceMultipliers,
-		Rule:               requestLogPricingIdentityResponse{ModelID: receipt.Rule.ModelID},
+		Rule:               requestLogPricingIdentityResponse{ModelID: receipt.Rule.ModelID, ClientModel: receipt.Rule.ClientModel},
 		LineItems:          make([]requestLogPricingLineResponse, 0, len(receipt.LineItems)),
 		TotalNanoUSD:       strconv.FormatInt(receipt.TotalNanoUSD, 10),
 		SettlementCurrency: settlement.Code,
@@ -1363,7 +1398,7 @@ func mapRequestLogPricingReceipt(
 		scopeKey := receipt.Rule.ScopeKey
 		result.Rule.ScopeKey = &scopeKey
 	}
-	if receipt.SchemaVersion >= 3 {
+	if receipt.SchemaVersion >= 3 && receipt.Rule.ClientModel == "" {
 		channelID := channel.ID(receipt.Rule.ChannelID)
 		if _, ok := requestLogChannelRegistry.Get(channelID); !ok {
 			return nil, fmt.Errorf("map request log pricing receipt: unknown channel ID")
@@ -1394,7 +1429,7 @@ func mapRequestLogPricingReceipt(
 		if line.RateNanoUSDPerMillion != nil {
 			value := strconv.FormatInt(*line.RateNanoUSDPerMillion, 10)
 			mapped.RateNanoUSDPerMillion = &value
-			settled := settledNanoString(settlement, *line.RateNanoUSDPerMillion)
+			settled := settledPriceString(settlement, *line.RateNanoUSDPerMillion)
 			mapped.RateNanoPerMillion = &settled
 		}
 		if line.AmountNanoUSD != nil {

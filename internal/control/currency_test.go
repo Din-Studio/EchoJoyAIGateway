@@ -165,3 +165,26 @@ func TestModelPriceHTTPShowsAndAcceptsPricesInSystemCurrency(t *testing.T) {
 		t.Fatalf("updated price = %v, stored = %v; want ¥7 shown and $1 stored", updated, stored.InputPriceNanoUSDPerMillionTokens)
 	}
 }
+
+// ¥30000 ÷ 7.3 不能整除成 nano USD；读回时仍应显示为输入的 30000，而不是带舍入尾数。
+func TestModelPriceHTTPReadsBackPricesEnteredInSystemCurrency(t *testing.T) {
+	t.Parallel()
+	fixture, engine, row := newModelPriceHTTPFixture(t, true)
+	if _, err := updateCurrencySettings(t, fixture, `{"currency":"CNY","exchange_rate":"7.3"}`); err != nil {
+		t.Fatal(err)
+	}
+	update := serveModelPriceHTTPRequest(engine, http.MethodPut,
+		fmt.Sprintf("/api/model-prices/%d", row.ID), modelPriceHTTPUpdateBody(`"30000"`, "false"), authTestKey)
+	if update.Code != http.StatusOK {
+		t.Fatalf("PUT /api/model-prices/:id status = %d: %s", update.Code, update.Body.String())
+	}
+	updated, _ := decodeModelPriceHTTPData(t, update)["prices"].(map[string]any)
+	var stored models.ModelPrice
+	if err := fixture.db.Take(&stored, row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updated["input"] != "30000" || stored.InputPriceNanoUSDPerMillionTokens == nil ||
+		*stored.InputPriceNanoUSDPerMillionTokens != 4_109_589_041_096 {
+		t.Fatalf("updated price = %v, stored = %v; want ¥30000 shown", updated, stored.InputPriceNanoUSDPerMillionTokens)
+	}
+}

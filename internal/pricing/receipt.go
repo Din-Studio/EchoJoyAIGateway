@@ -37,7 +37,8 @@ func (receipt *Receipt) UnmarshalJSON(data []byte) error {
 // the mutable current pricing table.
 func ValidateReceipt(receipt Receipt) error {
 	if (receipt.SchemaVersion != 1 && receipt.SchemaVersion != 2 &&
-		receipt.SchemaVersion != 3 && receipt.SchemaVersion != 4 && receipt.SchemaVersion != 5 && receipt.SchemaVersion != 6) ||
+		receipt.SchemaVersion != 3 && receipt.SchemaVersion != 4 && receipt.SchemaVersion != 5 &&
+		receipt.SchemaVersion != UpstreamReceiptSchemaVersion && receipt.SchemaVersion != ClientModelReceiptSchemaVersion) ||
 		receipt.Method != ReceiptMethodUnitRateSum || receipt.MethodVersion != 1 || receipt.Currency != "USD" {
 		return fmt.Errorf("unsupported pricing receipt contract")
 	}
@@ -123,7 +124,7 @@ func ValidateReceipt(receipt Receipt) error {
 			return fmt.Errorf("invalid pricing receipt line state")
 		}
 	}
-	if receipt.SchemaVersion == 6 {
+	if receipt.SchemaVersion >= 6 {
 		if int64(total) != *receipt.BaseTotalNanoUSD {
 			return fmt.Errorf("pricing receipt base total mismatch")
 		}

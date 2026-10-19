@@ -38,9 +38,16 @@ func mapEvent(
 		return models.RequestLog{}, fmt.Errorf("map request event usage/pricing: %w", err)
 	}
 
-	receipt, err := canonicalPricingReceipt(event.Usage.Pricing, string(event.Usage.ChannelID))
+	observation := event.Usage.Pricing
+	receipt, err := canonicalPricingReceipt(observation.ReceiptJSON, pricing.ClientModelReceiptSchemaVersion,
+		pricing.ReceiptRule{ClientModel: observation.ClientModel}, observation.EstimatedCostNanoUSD)
 	if err != nil {
 		return models.RequestLog{}, fmt.Errorf("map request event pricing receipt: %w", err)
+	}
+	upstreamReceipt, err := canonicalPricingReceipt(observation.UpstreamReceiptJSON, pricing.UpstreamReceiptSchemaVersion,
+		pricing.ReceiptRule{ChannelID: string(event.Usage.ChannelID), ModelID: observation.UpstreamModel}, observation.UpstreamCostNanoUSD)
+	if err != nil {
+		return models.RequestLog{}, fmt.Errorf("map request event upstream pricing receipt: %w", err)
 	}
 	attempts := make([]models.RequestLogAttempt, 0, len(event.Attempts))
 	for _, attempt := range event.Attempts {
@@ -55,7 +62,7 @@ func mapEvent(
 				)
 			}
 		}
-		attemptReceipt := models.JSON(nil)
+		attemptReceipt, attemptUpstreamReceipt := models.JSON(nil), models.JSON(nil)
 		var cooldownUntilMS *int64
 		if !attempt.CooldownUntil.IsZero() {
 			value, err := epochms.FromTime(attempt.CooldownUntil)
@@ -65,41 +72,42 @@ func mapEvent(
 			cooldownUntilMS = &value
 		}
 		if attempt.Sequence == event.Usage.AttemptSequence {
-			attemptReceipt = receipt
+			attemptReceipt, attemptUpstreamReceipt = receipt, upstreamReceipt
 		}
 		attempts = append(attempts, models.RequestLogAttempt{
-			RequestID:             event.RequestID,
-			Sequence:              attempt.Sequence,
-			CompletedAtMS:         attemptCompletedAtMS,
-			GroupID:               attempt.GroupID,
-			GroupName:             redactIdentityValue(redactor, attempt.GroupName),
-			ChannelID:             string(attempt.ChannelID),
-			CredentialID:          attempt.CredentialID,
-			Operation:             string(attempt.Operation),
-			RouteMode:             string(attempt.RouteMode),
-			UpstreamModel:         redactIdentityValue(redactor, projectModel(attempt.UpstreamModel)),
-			UpstreamRequestID:     redactIdentityValue(redactor, projectModel(attempt.UpstreamRequestID)),
-			DispatchState:         string(attempt.DispatchState),
-			ResponseStarted:       attempt.ResponseStarted,
-			UpstreamProtocol:      string(attempt.UpstreamProtocol),
-			ReasoningMode:         attempt.Reasoning.Mode,
-			ReasoningEffort:       attempt.Reasoning.Effort,
-			ReasoningBudgetTokens: attempt.Reasoning.BudgetTokens,
-			StatusCode:            attempt.StatusCode,
-			DurationMs:            attempt.DurationMs,
-			FailureCategory:       string(attempt.FailureCategory),
-			FailureOrigin:         string(attempt.FailureOrigin),
-			FailureScope:          string(attempt.FailureScope),
-			RetryDirective:        string(attempt.RetryDirective),
-			Effect:                string(attempt.Effect),
-			CooldownUntilMS:       cooldownUntilMS,
-			RuleID:                attempt.RuleID,
-			Action:                string(attempt.Action),
-			WillRetry:             attempt.WillRetry,
-			ErrorCode:             attempt.ErrorCode,
-			ErrorSummary:          sanitizeSummary(redactor, attempt.ErrorSummary),
-			Committed:             attempt.Committed,
-			PricingReceipt:        attemptReceipt,
+			RequestID:              event.RequestID,
+			Sequence:               attempt.Sequence,
+			CompletedAtMS:          attemptCompletedAtMS,
+			GroupID:                attempt.GroupID,
+			GroupName:              redactIdentityValue(redactor, attempt.GroupName),
+			ChannelID:              string(attempt.ChannelID),
+			CredentialID:           attempt.CredentialID,
+			Operation:              string(attempt.Operation),
+			RouteMode:              string(attempt.RouteMode),
+			UpstreamModel:          redactIdentityValue(redactor, projectModel(attempt.UpstreamModel)),
+			UpstreamRequestID:      redactIdentityValue(redactor, projectModel(attempt.UpstreamRequestID)),
+			DispatchState:          string(attempt.DispatchState),
+			ResponseStarted:        attempt.ResponseStarted,
+			UpstreamProtocol:       string(attempt.UpstreamProtocol),
+			ReasoningMode:          attempt.Reasoning.Mode,
+			ReasoningEffort:        attempt.Reasoning.Effort,
+			ReasoningBudgetTokens:  attempt.Reasoning.BudgetTokens,
+			StatusCode:             attempt.StatusCode,
+			DurationMs:             attempt.DurationMs,
+			FailureCategory:        string(attempt.FailureCategory),
+			FailureOrigin:          string(attempt.FailureOrigin),
+			FailureScope:           string(attempt.FailureScope),
+			RetryDirective:         string(attempt.RetryDirective),
+			Effect:                 string(attempt.Effect),
+			CooldownUntilMS:        cooldownUntilMS,
+			RuleID:                 attempt.RuleID,
+			Action:                 string(attempt.Action),
+			WillRetry:              attempt.WillRetry,
+			ErrorCode:              attempt.ErrorCode,
+			ErrorSummary:           sanitizeSummary(redactor, attempt.ErrorSummary),
+			Committed:              attempt.Committed,
+			PricingReceipt:         attemptReceipt,
+			UpstreamPricingReceipt: attemptUpstreamReceipt,
 		})
 	}
 
@@ -173,6 +181,9 @@ func mapEvent(
 		UsageState:                  string(result.State),
 		CostState:                   pricingObservation.CostState,
 		PricingCompleteness:         pricingObservation.PricingCompleteness,
+		UpstreamCostNanoUSD:         pricingObservation.UpstreamCostNanoUSD,
+		UpstreamCostState:           pricingObservation.UpstreamCostState,
+		UpstreamPricingCompleteness: pricingObservation.UpstreamPricingCompleteness,
 		AttemptRows:                 attempts,
 	}, nil
 }
@@ -218,25 +229,25 @@ func validateModelObservation(event telemetry.RequestEvent) error {
 	return nil
 }
 
+// canonicalPricingReceipt accepts a receipt only when it is the contract the
+// gateway writes for this cost and explains exactly the observed amount.
 func canonicalPricingReceipt(
-	observation telemetry.PricingObservation,
-	channelID string,
+	receiptJSON string,
+	schemaVersion int,
+	rule pricing.ReceiptRule,
+	totalNanoUSD int64,
 ) (models.JSON, error) {
-	if observation.ReceiptJSON == "" {
+	if receiptJSON == "" {
 		return nil, nil
 	}
 	var receipt pricing.Receipt
-	if err := json.Unmarshal([]byte(observation.ReceiptJSON), &receipt); err != nil {
+	if err := json.Unmarshal([]byte(receiptJSON), &receipt); err != nil {
 		return nil, fmt.Errorf("decode receipt: %w", err)
 	}
 	if err := pricing.ValidateReceipt(receipt); err != nil {
 		return nil, err
 	}
-	if (receipt.SchemaVersion != 4 && receipt.SchemaVersion != 5 && receipt.SchemaVersion != 6) || receipt.Rule != (pricing.ReceiptRule{
-		ChannelID: channelID,
-		ModelID:   observation.UpstreamModel,
-	}) ||
-		receipt.TotalNanoUSD != observation.EstimatedCostNanoUSD {
+	if receipt.SchemaVersion != schemaVersion || receipt.Rule != rule || receipt.TotalNanoUSD != totalNanoUSD {
 		return nil, fmt.Errorf("receipt does not match frozen pricing observation")
 	}
 	encoded, err := json.Marshal(receipt)
@@ -283,13 +294,30 @@ func validateFrozenObservation(event telemetry.RequestEvent) error {
 	); err != nil {
 		return err
 	}
+	upstreamCostState := pricing.CostState(pricingObservation.UpstreamCostState)
+	if err := validateFrozenPricingState(
+		result.State,
+		upstreamCostState,
+		pricing.Completeness(pricingObservation.UpstreamPricingCompleteness),
+		pricingObservation.UpstreamCostNanoUSD,
+	); err != nil {
+		return fmt.Errorf("upstream cost: %w", err)
+	}
 	if pricingObservation.UpstreamModel != "" &&
 		!validRawModel(pricingObservation.UpstreamModel) {
 		return fmt.Errorf("invalid pricing upstream model")
 	}
+	if pricingObservation.ClientModel != "" &&
+		!validRawModel(pricingObservation.ClientModel) {
+		return fmt.Errorf("invalid pricing client model")
+	}
 	if costState == pricing.CostStatePriced &&
+		pricingObservation.ClientModel == "" {
+		return fmt.Errorf("priced observation requires a client model")
+	}
+	if upstreamCostState == pricing.CostStatePriced &&
 		pricingObservation.UpstreamModel == "" {
-		return fmt.Errorf("priced observation requires exact identity")
+		return fmt.Errorf("priced upstream cost requires exact identity")
 	}
 	for _, attempt := range event.Attempts {
 		if _, err := validatedAttemptObservation(attempt); err != nil {

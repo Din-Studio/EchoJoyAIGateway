@@ -2,6 +2,7 @@ package control
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -113,13 +114,14 @@ func logCurrencySwitch(from, to pricing.Currency, rules int) {
 	}).Info("system currency switched; access key cost limits converted and reset")
 }
 
-// usdDecimalToCurrency converts a USD decimal string to the currency's decimal string.
+// usdDecimalToCurrency converts a USD price decimal string to the currency's
+// decimal string, read back the way it was entered in the currency.
 func usdDecimalToCurrency(currency pricing.Currency, usd string) (string, error) {
 	nanoUSD, err := pricing.ParseUSD(usd)
 	if err != nil {
 		return "", err
 	}
-	converted, ok := currency.FromNanoUSD(nanoUSD)
+	converted, ok := currency.PriceFromNanoUSD(nanoUSD)
 	if !ok {
 		return "", fmt.Errorf("amount overflows in %s", currency.Code)
 	}
@@ -152,4 +154,14 @@ func (s *Service) currentCurrency() (pricing.Currency, error) {
 // rate for display; overflow saturates like settlement itself.
 func settledNanoString(settlement pricing.Currency, nanoUSD int64) string {
 	return strconv.FormatInt(settlement.Settle(nanoUSD), 10)
+}
+
+// settledPriceString converts a frozen nano USD unit price at the settlement
+// rate for display, read back the way prices are entered; overflow saturates.
+func settledPriceString(settlement pricing.Currency, nanoUSD int64) string {
+	converted, ok := settlement.PriceFromNanoUSD(pricing.NanoUSD(nanoUSD))
+	if !ok {
+		converted = math.MaxInt64
+	}
+	return strconv.FormatInt(converted, 10)
 }

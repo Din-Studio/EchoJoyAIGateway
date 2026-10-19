@@ -64,9 +64,31 @@ func GroupScopeKey(groupID uint) (string, error) {
 	return "group:" + strconv.FormatUint(uint64(groupID), 10), nil
 }
 
-// NewTable validates and deep-clones exact pricing rules.
+// NewTable validates and deep-clones exact upstream pricing rules.
 func NewTable(rules []Rule) (*Table, error) {
-	table := &Table{rules: make(map[Identity]Rule, len(rules))}
+	return NewTableWithClientRules(rules, nil)
+}
+
+// NewTableWithClientRules validates and deep-clones upstream rules and
+// client-model rules into one immutable snapshot.
+func NewTableWithClientRules(rules []Rule, clientRules []ClientRule) (*Table, error) {
+	table := &Table{
+		rules:       make(map[Identity]Rule, len(rules)),
+		clientRules: make(map[string]ClientRule, len(clientRules)),
+	}
+	for _, rule := range clientRules {
+		if err := validateModelID(rule.ClientModel); err != nil {
+			return nil, fmt.Errorf("client model: %w", err)
+		}
+		if err := validateSchedules(rule.Prices, rule.ContextTiers, rule.ModeSchedules); err != nil {
+			return nil, err
+		}
+		if _, exists := table.clientRules[rule.ClientModel]; exists {
+			return nil, fmt.Errorf("duplicate client model pricing %q", rule.ClientModel)
+		}
+		rule.ContextTiers, rule.ModeSchedules = cloneSchedules(rule.ContextTiers, rule.ModeSchedules)
+		table.clientRules[rule.ClientModel] = rule
+	}
 	for _, rule := range rules {
 		if err := validateRule(rule); err != nil {
 			return nil, err
@@ -99,13 +121,17 @@ func validateRule(rule Rule) error {
 	if err := validateIdentity(rule.Identity); err != nil {
 		return err
 	}
-	if err := validatePrices(rule.Prices); err != nil {
+	return validateSchedules(rule.Prices, rule.ContextTiers, rule.ModeSchedules)
+}
+
+func validateSchedules(prices Prices, contextTiers []ContextTier, modeSchedules map[Mode]Schedule) error {
+	if err := validatePrices(prices); err != nil {
 		return err
 	}
-	if err := validateContextTiers(rule.ContextTiers); err != nil {
+	if err := validateContextTiers(contextTiers); err != nil {
 		return err
 	}
-	for mode, schedule := range rule.ModeSchedules {
+	for mode, schedule := range modeSchedules {
 		if !mode.Valid() || mode == ModeStandard {
 			return fmt.Errorf("invalid non-standard pricing mode %q", mode)
 		}
@@ -163,6 +189,15 @@ func validateModelID(modelID string) error {
 }
 
 func validateReceiptRule(rule ReceiptRule, schemaVersion int) error {
+	if schemaVersion == ClientModelReceiptSchemaVersion {
+		if rule.ScopeKey != "" || rule.ChannelID != "" || rule.ModelID != "" {
+			return fmt.Errorf("client model receipt must contain only a client model")
+		}
+		return validateModelID(rule.ClientModel)
+	}
+	if rule.ClientModel != "" {
+		return fmt.Errorf("upstream receipt must not contain a client model")
+	}
 	switch schemaVersion {
 	case 1:
 		if err := validateModelID(rule.ModelID); err != nil {
@@ -232,18 +267,23 @@ func hasSetPrice(prices Prices) bool {
 }
 
 func cloneRule(rule Rule) Rule {
-	if rule.ContextTiers != nil {
-		rule.ContextTiers = append([]ContextTier(nil), rule.ContextTiers...)
-	}
-	if rule.ModeSchedules != nil {
-		modeSchedules := make(map[Mode]Schedule, len(rule.ModeSchedules))
-		for mode, schedule := range rule.ModeSchedules {
-			schedule.ContextTiers = append([]ContextTier(nil), schedule.ContextTiers...)
-			modeSchedules[mode] = schedule
-		}
-		rule.ModeSchedules = modeSchedules
-	}
+	rule.ContextTiers, rule.ModeSchedules = cloneSchedules(rule.ContextTiers, rule.ModeSchedules)
 	return rule
+}
+
+func cloneSchedules(contextTiers []ContextTier, modeSchedules map[Mode]Schedule) ([]ContextTier, map[Mode]Schedule) {
+	if contextTiers != nil {
+		contextTiers = append([]ContextTier(nil), contextTiers...)
+	}
+	if modeSchedules != nil {
+		cloned := make(map[Mode]Schedule, len(modeSchedules))
+		for mode, schedule := range modeSchedules {
+			schedule.ContextTiers = append([]ContextTier(nil), schedule.ContextTiers...)
+			cloned[mode] = schedule
+		}
+		modeSchedules = cloned
+	}
+	return contextTiers, modeSchedules
 }
 
 func validateContextTiers(tiers []ContextTier) error {

@@ -53,16 +53,13 @@ func TestHandlerFreezesSettlementCurrencyAtAdmission(t *testing.T) {
 	)
 	rules := []accessquota.Rule{{ID: 902, Revision: 1, Kind: accessquota.KindTotal, Currency: pricing.CurrencyCNY, LimitNano: 1_000_000}}
 	quota := useSharedAccessQuota(t, handler)
-	table, err := pricing.NewTable([]pricing.Rule{{
+	table := mustGatewayTableWithClientPrices(t, []pricing.Rule{{
 		Identity: pricing.Identity{ChannelID: "openai", ModelID: "gpt-4o"},
 		Prices: pricing.Prices{
 			Input:  pricing.Price{NanoUSDPerMillion: 600_000, Set: true},
 			Output: pricing.Price{NanoUSDPerMillion: 600_000, Set: true},
 		},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	}}, "gpt-4o")
 	handler.priceTables = &mutableGatewayPriceTableProvider{table: table}
 	input := gatewayAccessQuotaCompileInput(handler, rules)
 	input.SystemSettings = cnySettings("7.1")
@@ -123,10 +120,7 @@ func TestWebsocketTurnFreezesSettlementCurrency(t *testing.T) {
 		t.Fatal(err)
 	}
 	quota := useSharedAccessQuota(t, h)
-	table, err := pricing.NewTable([]pricing.Rule{{Identity: pricing.Identity{ChannelID: "openai", ModelID: "upstream"}, Prices: pricing.Prices{Input: pricing.Price{NanoUSDPerMillion: 1_000_000, Set: true}, Output: pricing.Price{NanoUSDPerMillion: 1_000_000, Set: true}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	table := mustGatewayTableWithClientPrices(t, []pricing.Rule{{Identity: pricing.Identity{ChannelID: "openai", ModelID: "upstream"}, Prices: pricing.Prices{Input: pricing.Price{NanoUSDPerMillion: 1_000_000, Set: true}, Output: pricing.Price{NanoUSDPerMillion: 1_000_000, Set: true}}}}, "public")
 	h.priceTables = &mutableGatewayPriceTableProvider{table: table}
 	server := httptest.NewServer(engine)
 	defer server.Close()

@@ -118,8 +118,10 @@ func notApplicableUsageObservation() telemetry.UsageObservation {
 	return telemetry.UsageObservation{
 		Result: usage.Result{State: usage.StateNotApplicable},
 		Pricing: telemetry.PricingObservation{
-			CostState:           string(pricing.CostStateNotApplicable),
-			PricingCompleteness: string(pricing.CompletenessNotApplicable),
+			CostState:                   string(pricing.CostStateNotApplicable),
+			PricingCompleteness:         string(pricing.CompletenessNotApplicable),
+			UpstreamCostState:           string(pricing.CostStateNotApplicable),
+			UpstreamPricingCompleteness: string(pricing.CompletenessNotApplicable),
 		},
 	}
 }
@@ -220,6 +222,18 @@ func requestOutcomeModelConsistency(
 		return outcome.upstreamReportedModel, telemetry.ModelConsistencyMismatch
 	}
 	return outcome.upstreamReportedModel, telemetry.ModelConsistencyMatch
+}
+
+// routeModel is the client model the request is routed and charged by: the
+// target of an automatic model selection, otherwise the requested model.
+func (recorder *requestRecorder) routeModel() string {
+	if recorder == nil {
+		return ""
+	}
+	if recorder.autoDecision != nil {
+		return recorder.autoDecision.Selection.TargetModel
+	}
+	return recorder.clientModel
 }
 
 func (recorder *requestRecorder) setClientModel(model string) {
@@ -579,7 +593,7 @@ func (recorder *requestRecorder) bindUsage(
 		result.Diagnostics.Merge(requestDiagnostics)
 	}
 	pricingMode = effectivePricingMode(pricingMode)
-	pricingObservation := quoteFrozenAttempt(frozen, result, pricingMode)
+	pricingObservation := quoteFrozenAttempt(frozen, recorder.routeModel(), result, pricingMode)
 	recorder.usage = telemetry.UsageObservation{
 		Result:          result,
 		GroupID:         attempt.GroupID,
@@ -590,38 +604,59 @@ func (recorder *requestRecorder) bindUsage(
 	}
 }
 
+// quoteFrozenAttempt prices the attributed usage twice on the same frozen
+// table: the charge by the client model's unified price and the access key
+// multiplier, and the upstream cost by the channel model's price and the group
+// multiplier.
 func quoteFrozenAttempt(
 	frozen frozenAttemptPricing,
+	clientModel string,
 	result usage.Result,
 	pricingMode pricing.Mode,
 ) telemetry.PricingObservation {
 	observation := telemetry.PricingObservation{
-		UpstreamModel:       frozen.upstreamModel,
-		CostState:           string(pricing.CostStateUnpriced),
-		PricingCompleteness: string(pricing.CompletenessUnavailable),
+		ClientModel:                 clientModel,
+		UpstreamModel:               frozen.upstreamModel,
+		CostState:                   string(pricing.CostStateUnpriced),
+		PricingCompleteness:         string(pricing.CompletenessUnavailable),
+		UpstreamCostState:           string(pricing.CostStateUnpriced),
+		UpstreamPricingCompleteness: string(pricing.CompletenessUnavailable),
 	}
 	if result.State == usage.StateNotApplicable || !frozen.applicable {
 		observation.CostState = string(pricing.CostStateNotApplicable)
 		observation.PricingCompleteness = string(pricing.CompletenessNotApplicable)
+		observation.UpstreamCostState = string(pricing.CostStateNotApplicable)
+		observation.UpstreamPricingCompleteness = string(pricing.CompletenessNotApplicable)
 		return observation
 	}
-	if frozen.table == nil || frozen.upstreamModel == "" {
+	if frozen.table == nil {
 		return observation
 	}
-	identity := pricing.Identity{
-		ChannelID: frozen.channelID,
-		ModelID:   frozen.upstreamModel,
+	if clientModel != "" {
+		quote, receipt := frozen.table.QuoteClientModel(clientModel, result, pricingMode, frozen.priceMultipliers.AccessKey)
+		observation.CostState, observation.PricingCompleteness = string(quote.State), string(quote.Completeness)
+		observation.EstimatedCostNanoUSD, observation.ReceiptJSON = int64(quote.EstimatedCostNanoUSD), encodedReceipt(receipt)
 	}
-	quote, receipt := frozen.table.QuoteForModeWithMultipliers(identity, result, pricingMode, frozen.priceMultipliers)
-	observation.CostState = string(quote.State)
-	observation.PricingCompleteness = string(quote.Completeness)
-	observation.EstimatedCostNanoUSD = int64(quote.EstimatedCostNanoUSD)
-	if receipt != nil {
-		if encoded, err := json.Marshal(receipt); err == nil {
-			observation.ReceiptJSON = string(encoded)
-		}
+	if frozen.upstreamModel != "" {
+		identity := pricing.Identity{ChannelID: frozen.channelID, ModelID: frozen.upstreamModel}
+		quote, receipt := frozen.table.QuoteForModeWithMultipliers(identity, result, pricingMode, pricing.PriceMultipliers{
+			Group: frozen.priceMultipliers.Group, AccessKey: pricing.DefaultPriceMultiplier,
+		})
+		observation.UpstreamCostState, observation.UpstreamPricingCompleteness = string(quote.State), string(quote.Completeness)
+		observation.UpstreamCostNanoUSD, observation.UpstreamReceiptJSON = int64(quote.EstimatedCostNanoUSD), encodedReceipt(receipt)
 	}
 	return observation
+}
+
+func encodedReceipt(receipt *pricing.Receipt) string {
+	if receipt == nil {
+		return ""
+	}
+	encoded, err := json.Marshal(receipt)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func effectivePricingMode(requestedMode pricing.Mode) pricing.Mode {
