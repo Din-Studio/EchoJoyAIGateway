@@ -3,7 +3,7 @@
 # 已有的参数一律不覆盖：ENCRYPTION_KEY 一旦被覆盖，库里的渠道凭据就无法解密。
 #
 # 用法：scripts/put-secrets.sh [--dry-run]
-# REGISTRY_PASSWORD 不存在时会提示输入，也可以通过同名环境变量传入。
+# REGISTRY_PASSWORD、LINGYING_BILLING_TOKEN 不存在时会提示输入，也可以通过同名环境变量传入。
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 require aws openssl
@@ -64,4 +64,18 @@ else
   fi
   [ -n "$REGISTRY_PASSWORD" ] || die "密码为空"
   put_new REGISTRY_PASSWORD "$REGISTRY_PASSWORD"
+fi
+
+# 灵影计费回调 token 由双方约定，必须与灵影网关的 AI_GATEWAY_CALLBACK_TOKEN 相同，所以不自动生成。
+if param_exists LINGYING_BILLING_TOKEN; then
+  log "已存在 $SSM_PREFIX/LINGYING_BILLING_TOKEN，跳过"
+elif [ $DRY_RUN -eq 1 ]; then
+  log "将创建 $SSM_PREFIX/LINGYING_BILLING_TOKEN（灵影网关的 AI_GATEWAY_CALLBACK_TOKEN，需要输入）"
+else
+  if [ -z "${LINGYING_BILLING_TOKEN:-}" ]; then
+    read -rsp "灵影网关的 AI_GATEWAY_CALLBACK_TOKEN：" LINGYING_BILLING_TOKEN
+    echo >&2
+  fi
+  [ -n "$LINGYING_BILLING_TOKEN" ] || die "token 为空"
+  put_new LINGYING_BILLING_TOKEN "$LINGYING_BILLING_TOKEN"
 fi

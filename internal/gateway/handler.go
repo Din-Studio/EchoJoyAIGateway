@@ -131,6 +131,7 @@ type Handler struct {
 	requestLogSink      telemetry.RequestLogSink
 	priceTables         PriceTableProvider
 	accessQuota         AccessQuotaGate
+	billing             ExternalBilling
 	sharedHealth        state.SharedCredentialHealthStore
 	newRequestID        func() (string, error)
 	requestNow          func() time.Time
@@ -252,6 +253,7 @@ func NewHandlerWithLifecycle(
 	priceTables PriceTableProvider,
 	shared SharedState,
 	lifecycle *httplifecycle.Coordinator,
+	billing ExternalBilling,
 ) *Handler {
 	handler := NewHandler(
 		manager,
@@ -273,6 +275,7 @@ func NewHandlerWithLifecycle(
 		handler.subscriptions = subscriptions
 	}
 	handler.lifecycle = lifecycle
+	handler.billing = billing
 	return handler
 }
 
@@ -720,6 +723,15 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 		return
 	}
 	recorder.setClientModel(model)
+	if selectedRoute.ExternalBilling {
+		if failure := handler.admitExternalBilling(
+			ginContext.Request.Context(), recorder, accessKey, requestContext.clientKey,
+			ginContext.Request.Header, snapshot.Settings.Currency,
+		); failure != nil {
+			handler.completeReason(ginContext, recorder, *failure)
+			return
+		}
+	}
 	var boundAuto *automodel.Selection
 	var binding state.ResponseBinding
 	autoQuery := scheduler.Query{}

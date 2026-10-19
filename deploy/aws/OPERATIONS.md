@@ -108,7 +108,39 @@ PostgreSQL 只能在同一个大版本内升级（例如 18.3 → 18.4）。跨�
 
 替换现有实例的流程还没有验证，计划放在 P4 演练。容量提供程序开启了 managed termination protection 和 managed draining，验证时要确认替换过程会先排空任务。
 
-## 8. 2026-10-15 的线上状态
+## 8. 灵影计费回调
+
+名称为 `ly:<key_id>` 的访问密钥由灵影网关同步而来。这类请求在转发前调用灵影的 `POST /internal/aigw/balance` 查余额，结束后把用量写进 PostgreSQL 表 `ly_usage_reports`，由各副本投递到 `POST /internal/aigw/usage`。设计见 [对接计划](../../docs/lingying-billing-callback-plan.md)。
+
+**首次启用**
+
+1. 和灵影约定 token，灵影侧配置为 `AI_GATEWAY_CALLBACK_TOKEN`。
+2. 执行 `scripts/put-secrets.sh`，按提示输入同一个 token，写入 `LINGYING_BILLING_TOKEN`。
+3. 执行 `scripts/deploy.sh gateway --image-tag <标签>`。`LINGYING_BILLING_BASE_URL` 已在 `gateway.yaml` 中设为 `https://<GatewayHost>`。
+4. 在管理后台确认系统货币为 CNY。不是 CNY 时，灵影的密钥一律返回 503 `billing_unavailable`。
+5. 在网关实例上确认网络可达，期望返回 404 `NOT_FOUND`（key 不存在），而不是 401 或 403：
+
+   ```bash
+   curl -sS -X POST https://lingying-gateway.echojoy.cn/internal/aigw/balance \
+     -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' -d '{"api_key":"sk-none"}'
+   ```
+
+**轮换 token**：先改灵影侧，再用第 3 节的 `aws ssm put-parameter --overwrite` 改 `LINGYING_BILLING_TOKEN` 并重启任务。两边不一致期间，查余额返回 503，用量上报失败后会持续重试，token 一致后自动补报。
+
+**排查积压**：用第 2 节的 PostgreSQL 隧道执行：
+
+```sql
+-- 待投递的数量和其中最早开始的请求
+SELECT count(*), min((payload->>'started_at')::timestamptz) FROM ly_usage_reports WHERE next_attempt_at_ms IS NOT NULL;
+-- 最近的失败原因
+SELECT request_id, attempts, last_error FROM ly_usage_reports WHERE next_attempt_at_ms IS NOT NULL ORDER BY attempts DESC LIMIT 20;
+-- 被灵影永久拒收（400、422）的上报
+SELECT request_id, last_error, payload FROM ly_usage_reports WHERE next_attempt_at_ms IS NULL;
+```
+
+被拒收的上报修正原因后，可以重新排队：`UPDATE ly_usage_reports SET next_attempt_at_ms = 0 WHERE request_id = '<id>';`。灵影按 `request_id` 幂等，重复投递不会重复扣费。
+
+## 9. 2026-10-15 的线上状态
 
 | 项目 | 值 |
 |---|---|

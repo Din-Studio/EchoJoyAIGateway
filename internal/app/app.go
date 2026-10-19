@@ -36,6 +36,7 @@ type App struct {
 	startupBootstrap StartupBootstrap
 	startupRecovery  StartupRecovery
 	requestLogs      RequestLogRuntime
+	usageReports     UsageReportRuntime
 	executionRuntime ExecutionRuntime
 	clusterClient    *cluster.Client
 	listen           func(network, address string) (net.Listener, error)
@@ -61,6 +62,12 @@ type CredentialHealthHydrator interface {
 // StartupBootstrap ensures required persisted state exists before runtime loading.
 type StartupBootstrap interface {
 	EnsureInitialState(context.Context) error
+}
+
+// UsageReportRuntime delivers durable usage reports to an external billing
+// system until its context ends.
+type UsageReportRuntime interface {
+	Run(context.Context)
 }
 
 // StartupRecovery restores durable post-commit control-plane side effects.
@@ -100,7 +107,8 @@ type AppParams struct {
 	Lifecycle        *httplifecycle.Coordinator `optional:"true"`
 	ControlRuntime   ControlRuntime
 	RequestLogs      RequestLogRuntime
-	ExecutionRuntime ExecutionRuntime `optional:"true"`
+	UsageReports     UsageReportRuntime `optional:"true"`
+	ExecutionRuntime ExecutionRuntime   `optional:"true"`
 	ClusterClient    *cluster.Client
 }
 
@@ -142,6 +150,7 @@ func NewApp(params AppParams) *App {
 		startupBootstrap: params.StartupBootstrap,
 		startupRecovery:  params.StartupRecovery,
 		requestLogs:      params.RequestLogs,
+		usageReports:     params.UsageReports,
 		executionRuntime: params.ExecutionRuntime,
 		clusterClient:    params.ClusterClient,
 		listen:           net.Listen,
@@ -240,8 +249,13 @@ func (a *App) Start() error {
 	}()
 	go func() {
 		defer close(runtimeDone)
+		var usageReportsDone sync.WaitGroup
+		if a.usageReports != nil {
+			usageReportsDone.Go(func() { a.usageReports.Run(runtimeContext) })
+		}
 		logrus.WithField("event", "startup.control_runtime_start").Info("control runtime started")
 		a.controlRuntime.Run(runtimeContext)
+		usageReportsDone.Wait()
 	}()
 
 	logrus.WithFields(logrus.Fields{

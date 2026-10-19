@@ -1435,3 +1435,46 @@ func TestAppLogsCredentialHealthHydrateFailureAndStarts(t *testing.T) {
 		t.Fatalf("credential health hydrate log level = %s, want warning", got)
 	}
 }
+
+// The usage report delivery loop runs for as long as the control runtime, and
+// Stop waits for it so it never outlives the database it writes.
+func TestAppRunsUsageReportsUntilStop(t *testing.T) {
+	db, err := storage.Open(pgtest.NewEmptyDatabase(t))
+	if err != nil {
+		t.Fatalf("storage.Open() error = %v", err)
+	}
+	_, runtimeState := newTestRuntimeState(db)
+	usageReports := newControlRuntimeFake(nil, true)
+	application := NewApp(AppParams{
+		ClusterClient:    testClusterClient(t),
+		Engine:           mustNewEngine(t),
+		Config:           testConfig(t),
+		DB:               db,
+		StartupBootstrap: startupBootstrapFunc(noopStartupBootstrap),
+		CredentialHealth: credentialHealthHydratorFunc(noopCredentialHealthHydrate),
+		RuntimeState:     runtimeState,
+		ControlRuntime:   newControlRuntimeFake(nil, false),
+		RequestLogs:      newRequestLogRuntimeFake(nil, nil),
+		UsageReports:     usageReports,
+	})
+	cleanupApp(t, application)
+	t.Cleanup(usageReports.Release)
+	if err := application.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	receiveTestSignal(t, usageReports.started, "usage report delivery start")
+
+	stopResult := make(chan error, 1)
+	go func() { stopResult <- application.Stop(context.Background()) }()
+	receiveTestSignal(t, usageReports.canceled, "usage report delivery cancellation")
+	select {
+	case err := <-stopResult:
+		t.Fatalf("Stop() returned before usage report delivery stopped: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	usageReports.Release()
+	receiveTestSignal(t, usageReports.stopped, "usage report delivery stop")
+	if err := receiveTestSignal(t, stopResult, "application stop result"); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}

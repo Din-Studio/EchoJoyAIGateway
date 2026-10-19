@@ -136,6 +136,40 @@ func TestLoadModelsDevAutoSyncOverrideIsOptionalAndStrict(t *testing.T) {
 	}
 }
 
+func TestLoadLingyingBillingRequiresBothValues(t *testing.T) {
+	for _, test := range []struct {
+		name, baseURL, token string
+		want                 LingyingBillingConfig
+		wantErr              bool
+	}{
+		{name: "unset"},
+		{name: "both", baseURL: "https://lingying.example", token: "secret", want: LingyingBillingConfig{BaseURL: "https://lingying.example", Token: "secret"}},
+		{name: "url only", baseURL: "https://lingying.example", wantErr: true},
+		{name: "token only", token: "secret", wantErr: true},
+		{name: "not http", baseURL: "lingying.example", token: "secret", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv("LINGYING_BILLING_BASE_URL", test.baseURL)
+			t.Setenv("LINGYING_BILLING_TOKEN", test.token)
+
+			cfg, err := Load()
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("Load() error = nil, want Lingying billing error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.LingyingBilling != test.want {
+				t.Fatalf("LingyingBilling = %#v, want %#v", cfg.LingyingBilling, test.want)
+			}
+		})
+	}
+}
+
 func boolPointer(value bool) *bool {
 	return &value
 }

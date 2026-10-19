@@ -22,6 +22,7 @@ import (
 	"gpt-load/internal/gateway"
 	"gpt-load/internal/health"
 	"gpt-load/internal/httplifecycle"
+	"gpt-load/internal/integration/ly"
 	"gpt-load/internal/outboundproxy"
 	"gpt-load/internal/platform/config"
 	"gpt-load/internal/platform/encryption"
@@ -189,6 +190,15 @@ func BuildContainer() (*dig.Container, error) {
 		func(runtime *bifrostexecutor.RuntimeManager) app.ExecutionRuntime { return runtime },
 		gateway.NewExecutionForwarder,
 		func(forwarder *gateway.ExecutionForwarder) gateway.AttemptForwarder { return forwarder },
+		func(cfg *config.Config, db *gorm.DB) (*ly.Service, error) {
+			sqlDB, err := db.DB()
+			if err != nil {
+				return nil, fmt.Errorf("open Lingying billing outbox: %w", err)
+			}
+			return ly.New(cfg.LingyingBilling, sqlDB), nil
+		},
+		func(service *ly.Service) gateway.ExternalBilling { return service },
+		func(service *ly.Service) app.UsageReportRuntime { return service },
 		gateway.NewHandlerWithLifecycle,
 		control.NewService,
 		control.NewCatalogSyncCoordinator,

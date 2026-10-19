@@ -22,8 +22,10 @@ const (
 	accessKeyAuthFailurePeerNotAllowed accessKeyAuthFailureReason = "peer_not_allowed"
 )
 
+// authenticate checks plaintext, the key extractClientKey took from request.
 func authenticate(
 	request *http.Request,
+	plaintext string,
 	snapshot *state.ConfigSnapshot,
 	hasher keyHasher,
 	requestStarted time.Time,
@@ -31,7 +33,6 @@ func authenticate(
 	if request == nil || snapshot == nil || hasher == nil {
 		return state.AccessKeyView{}, false, accessKeyAuthFailureInvalid
 	}
-	plaintext := extractClientKey(request)
 	if plaintext == "" {
 		return state.AccessKeyView{}, false, accessKeyAuthFailureInvalid
 	}
