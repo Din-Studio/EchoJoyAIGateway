@@ -52,8 +52,8 @@ type balance struct {
 }
 
 // balance returns the HTTP status and, for 200, the decoded balance.
-func (c *client) balance(ctx context.Context, apiKey string) (int, balance, error) {
-	body, err := json.Marshal(map[string]string{"api_key": apiKey})
+func (c *client) balance(ctx context.Context, credential Credential) (int, balance, error) {
+	body, err := json.Marshal(credential)
 	if err != nil {
 		return 0, balance{}, err
 	}

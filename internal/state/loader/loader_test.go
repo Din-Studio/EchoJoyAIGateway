@@ -970,3 +970,26 @@ func createRuntimeGroup(t *testing.T, db *gorm.DB, name string, p protocol.Proto
 func stringPtr(value string) *string {
 	return &value
 }
+
+func TestLoaderIndexesUserDefaultKeysByNote(t *testing.T) {
+	db := openMigratedDatabase(t)
+	createRuntimeGroup(t, db, "first", protocol.OpenAICompletions, "gpt-4o")
+	defaultKey := models.AccessKey{
+		Name: state.UserDefaultKeyNamePrefix + "k9", Note: "user-1", KeyValue: "default-cipher", KeyHash: "default-hash",
+		KeySuffix: "0005", Status: "active", Filters: models.JSON(`{}`),
+	}
+	mustCreate(t, db, &defaultKey)
+
+	manager := state.NewManager()
+	if err := loader.New(db, manager, state.NewCredentialRegistry()).Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	snapshot := manager.Current()
+	if got := snapshot.UserDefaultKeys; len(got) != 1 || got["user-1"] != defaultKey.ID {
+		t.Fatalf("UserDefaultKeys = %v, want user-1 → %d", got, defaultKey.ID)
+	}
+	if strings.Contains(fmt.Sprintf("%#v", snapshot), defaultKey.KeyValue) {
+		t.Fatal("snapshot exposes the default key's ciphertext")
+	}
+}

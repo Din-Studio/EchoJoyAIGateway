@@ -22,6 +22,7 @@ import (
 	"gpt-load/internal/gateway"
 	"gpt-load/internal/health"
 	"gpt-load/internal/httplifecycle"
+	"gpt-load/internal/integration/echojoyauth"
 	"gpt-load/internal/integration/ly"
 	"gpt-load/internal/outboundproxy"
 	"gpt-load/internal/platform/config"
@@ -199,6 +200,12 @@ func BuildContainer() (*dig.Container, error) {
 		},
 		func(service *ly.Service) gateway.ExternalBilling { return service },
 		func(service *ly.Service) app.UsageReportRuntime { return service },
+		func(cfg *config.Config) gateway.AccessTokenVerifier {
+			if cfg.AccessToken.JWKSURL == "" {
+				return nil
+			}
+			return echojoyauth.New(cfg.AccessToken)
+		},
 		gateway.NewHandlerWithLifecycle,
 		control.NewService,
 		control.NewCatalogSyncCoordinator,

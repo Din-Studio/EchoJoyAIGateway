@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"gpt-load/internal/integration/ly"
 	"gpt-load/internal/platform/httproute"
 	"gpt-load/internal/state"
 )
@@ -17,10 +18,11 @@ type dataPlaneRequestContext struct {
 	selectedRoute  route
 	snapshot       *state.ConfigSnapshot
 	accessKey      state.AccessKeyView
-	// clientKey is the access key plaintext, kept for external billing admission.
-	clientKey       string
-	authenticated   bool
-	locallyRejected bool
+	// billingCredential is the presented access key plaintext, or an access
+	// token's user id, kept for external billing admission.
+	billingCredential ly.Credential
+	authenticated     bool
+	locallyRejected   bool
 }
 
 // HTTPModule declares the complete data-plane HTTP surface.
@@ -104,13 +106,29 @@ func (handler *Handler) authenticateDataPlaneRequest(ginContext *gin.Context) {
 	snapshot := handler.manager.Current()
 	initializeDebugHeaders(ginContext.Writer.Header())
 	clientKey := extractClientKey(ginContext.Request)
-	accessKey, authenticated, failureReason := authenticate(
-		ginContext.Request,
-		clientKey,
-		snapshot,
-		handler.encryption,
-		requestContext.requestStarted,
+	var (
+		accessKey     state.AccessKeyView
+		credential    ly.Credential
+		authenticated bool
+		failureReason accessKeyAuthFailureReason
 	)
+	if isAccessToken(clientKey) && handler.accessTokens != nil {
+		accessKey, credential.UserID, authenticated, failureReason = handler.authenticateAccessToken(
+			ginContext.Request,
+			clientKey,
+			snapshot,
+			requestContext.requestStarted,
+		)
+	} else {
+		credential.APIKey = clientKey
+		accessKey, authenticated, failureReason = authenticate(
+			ginContext.Request,
+			clientKey,
+			snapshot,
+			handler.encryption,
+			requestContext.requestStarted,
+		)
+	}
 	if !authenticated {
 		handler.logDataPlaneAuthFailed(ginContext.Request, accessKey.ID, failureReason)
 		_ = handler.writeReason(ginContext, reasonInvalidAccessKey)
@@ -120,7 +138,7 @@ func (handler *Handler) authenticateDataPlaneRequest(ginContext *gin.Context) {
 
 	requestContext.snapshot = snapshot
 	requestContext.accessKey = accessKey
-	requestContext.clientKey = clientKey
+	requestContext.billingCredential = credential
 	requestContext.authenticated = true
 }
 

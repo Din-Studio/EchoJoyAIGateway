@@ -36,7 +36,7 @@ func fakeBalance(t *testing.T, status int, body string) (*Service, *atomic.Int32
 }
 
 func lingyingInput() AdmitInput {
-	return AdmitInput{KeyName: "ly:k1", Plaintext: "sk-plain", ProjectID: "p1", Currency: pricing.CurrencyCNY}
+	return AdmitInput{KeyName: "ly:k1", Credential: Credential{APIKey: "sk-plain"}, ProjectID: "p1", Currency: pricing.CurrencyCNY}
 }
 
 func TestAdmitAllowsAPositiveBalanceAndKeepsTheAccount(t *testing.T) {
@@ -119,4 +119,25 @@ func TestAdmitFailsClosed(t *testing.T) {
 			t.Fatalf("Admit() = %+v, want Unavailable", decision)
 		}
 	})
+}
+
+func TestAdmitAsksForAnAccessTokenUsersDefaultKey(t *testing.T) {
+	var got map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"user_id":"u1","key_id":"d1","usable":true,"available":"9"}`))
+	}))
+	t.Cleanup(server.Close)
+	service := New(config.LingyingBillingConfig{BaseURL: server.URL, Token: "token"}, nil)
+
+	decision := service.Admit(context.Background(), AdmitInput{
+		KeyName: "ly:default:d1", Credential: Credential{UserID: "u1"}, ProjectID: "p1", Currency: pricing.CurrencyCNY,
+	})
+
+	if len(got) != 1 || got["user_id"] != "u1" {
+		t.Fatalf("balance request = %v, want only user_id u1", got)
+	}
+	if decision.Verdict != Allow || decision.Admission == nil || *decision.Admission != (Admission{UserID: "u1", KeyID: "d1", ProjectID: "p1"}) {
+		t.Fatalf("Admit() = %+v %+v", decision, decision.Admission)
+	}
 }
