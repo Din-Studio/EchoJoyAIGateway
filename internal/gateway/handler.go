@@ -132,6 +132,7 @@ type Handler struct {
 	priceTables         PriceTableProvider
 	accessQuota         AccessQuotaGate
 	billing             ExternalBilling
+	accessTokens        AccessTokenVerifier
 	sharedHealth        state.SharedCredentialHealthStore
 	newRequestID        func() (string, error)
 	requestNow          func() time.Time
@@ -254,6 +255,7 @@ func NewHandlerWithLifecycle(
 	shared SharedState,
 	lifecycle *httplifecycle.Coordinator,
 	billing ExternalBilling,
+	accessTokens AccessTokenVerifier,
 ) *Handler {
 	handler := NewHandler(
 		manager,
@@ -276,6 +278,7 @@ func NewHandlerWithLifecycle(
 	}
 	handler.lifecycle = lifecycle
 	handler.billing = billing
+	handler.accessTokens = accessTokens
 	return handler
 }
 
@@ -725,7 +728,7 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 	recorder.setClientModel(model)
 	if selectedRoute.ExternalBilling {
 		if failure := handler.admitExternalBilling(
-			ginContext.Request.Context(), recorder, accessKey, requestContext.clientKey,
+			ginContext.Request.Context(), recorder, accessKey, requestContext.billingCredential,
 			ginContext.Request.Header, snapshot.Settings.Currency,
 		); failure != nil {
 			handler.completeReason(ginContext, recorder, *failure)

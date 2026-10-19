@@ -43,7 +43,7 @@ func (handler *Handler) admitExternalBilling(
 	ctx context.Context,
 	recorder *requestRecorder,
 	key state.AccessKeyView,
-	clientKey string,
+	credential ly.Credential,
 	header http.Header,
 	currency pricing.Currency,
 ) *reason {
@@ -51,10 +51,10 @@ func (handler *Handler) admitExternalBilling(
 		return nil
 	}
 	decision := handler.billing.Admit(ctx, ly.AdmitInput{
-		KeyName:   key.Name,
-		Plaintext: clientKey,
-		ProjectID: strings.TrimSpace(header.Get(projectIDHeader)),
-		Currency:  currency.Code,
+		KeyName:    key.Name,
+		Credential: credential,
+		ProjectID:  strings.TrimSpace(header.Get(projectIDHeader)),
+		Currency:   currency.Code,
 	})
 	var rejection reason
 	switch decision.Verdict {

@@ -11,10 +11,19 @@ import (
 	"gpt-load/internal/pricing"
 )
 
+// Credential identifies the Lingying key a balance check asks about; exactly
+// one field is set. It is the balance request body.
+type Credential struct {
+	// APIKey is the access key plaintext the client presented.
+	APIKey string `json:"api_key,omitempty"`
+	// UserID is the user of an access token; Lingying bills their default key.
+	UserID string `json:"user_id,omitempty"`
+}
+
 // AdmitInput is what admission needs from an authenticated request.
 type AdmitInput struct {
-	KeyName   string
-	Plaintext string
+	KeyName    string
+	Credential Credential
 	// ProjectID is the client's X-Project-Id header; empty when absent.
 	ProjectID string
 	// Currency is the request's frozen settlement currency; costs are reported in CNY.
@@ -64,7 +73,7 @@ func (s *Service) Admit(ctx context.Context, in AdmitInput) Decision {
 		log.WithField("currency", in.Currency).Error("Lingying key rejected: the system currency must be CNY")
 		return Decision{Verdict: Unavailable}
 	}
-	status, account, err := s.client.balance(ctx, in.Plaintext)
+	status, account, err := s.client.balance(ctx, in.Credential)
 	switch {
 	case err != nil:
 		log.WithError(err).WithField("status", status).Error("Lingying balance check failed")

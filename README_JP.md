@@ -202,6 +202,7 @@ Compose は `.env` をコンテナに渡し、Compose ファイルで設定し�
 | `LOG_FORMAT` | `text` | `text` と `json` に対応します。それ以外の値では起動に失敗します。 |
 | `MODELS_DEV_AUTO_SYNC_ENABLED` | 未設定、初期既定値 `true` | 未設定時は管理画面に保存された設定を使用します。設定時は Models.dev の自動同期を強制的に有効または無効にし、管理画面の同名オプションを読み取り専用にします。 |
 | `LINGYING_BILLING_BASE_URL` / `LINGYING_BILLING_TOKEN` | 未設定 | 霊影ゲートウェイの課金コールバック。両方を設定するか、どちらも設定しません。名前が `ly:<key_id>` のアクセスキーは転送前に霊影の残高を確認し、終了後に使用量を報告します。システム通貨は CNY である必要があります。未設定時はこれらのキーを拒否します。token は霊影の `AI_GATEWAY_CALLBACK_TOKEN` と同じ値です。 |
+| `ECHOJOY_AUTH_JWKS_URL` / `ECHOJOY_AUTH_ISSUER` / `ECHOJOY_AUTH_AUDIENCE` | 未設定 | EchoJoyAuth のアクセストークン検証。JWKS URL と issuer は同時に設定し、audience は任意です。設定時、データプレーンのリクエストはアクセスキーの代わりにユーザーのアクセストークンを使え、そのユーザーの既定キー（名前 `ly:default:<key_id>`、メモはユーザー ID）として処理されます。未設定時はアクセストークンを拒否します。 |
 | `REDIS_ADDRS` | 必須 | カンマ区切りの Redis アドレス。起動時に Redis へ到達できる必要があります。アドレスが 1 つなら単一ノード、Redis Cluster では全ノードのアドレスを列挙してください。既定の Compose は `redis:6379` を使用します。 |
 | `REDIS_PASSWORD` | 空 | Redis のパスワード。 |
 | `REDIS_TLS` | `false` | Redis に TLS で接続するかどうか。 |

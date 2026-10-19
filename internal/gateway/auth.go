@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strings"
@@ -14,13 +15,52 @@ type keyHasher interface {
 	Hash(string) string
 }
 
+// AccessTokenVerifier resolves an EchoJoyAuth access token to its user id.
+// *echojoyauth.Verifier implements it; nil turns access tokens off.
+type AccessTokenVerifier interface {
+	UserID(ctx context.Context, token string) (string, error)
+}
+
 type accessKeyAuthFailureReason string
 
 const (
 	accessKeyAuthFailureInvalid        accessKeyAuthFailureReason = "invalid_access_key"
 	accessKeyAuthFailureExpired        accessKeyAuthFailureReason = "access_key_expired"
 	accessKeyAuthFailurePeerNotAllowed accessKeyAuthFailureReason = "peer_not_allowed"
+	accessKeyAuthFailureInvalidToken   accessKeyAuthFailureReason = "invalid_access_token"
+	accessKeyAuthFailureNoDefaultKey   accessKeyAuthFailureReason = "no_default_access_key"
 )
+
+// isAccessToken reports whether a client credential is a JWT rather than an
+// access key: three dot-separated segments, the first a base64url JSON object.
+func isAccessToken(credential string) bool {
+	return strings.HasPrefix(credential, "eyJ") && strings.Count(credential, ".") == 2
+}
+
+// authenticateAccessToken serves an access token as its user's default access
+// key, which then limits and prices the request like any other key. It also
+// returns the token's user id, which external billing uses in place of the
+// key plaintext.
+func (handler *Handler) authenticateAccessToken(
+	request *http.Request,
+	token string,
+	snapshot *state.ConfigSnapshot,
+	requestStarted time.Time,
+) (state.AccessKeyView, string, bool, accessKeyAuthFailureReason) {
+	if request == nil || snapshot == nil {
+		return state.AccessKeyView{}, "", false, accessKeyAuthFailureInvalid
+	}
+	userID, err := handler.accessTokens.UserID(request.Context(), token)
+	if err != nil {
+		return state.AccessKeyView{}, "", false, accessKeyAuthFailureInvalidToken
+	}
+	accessKeyID, ok := snapshot.UserDefaultKeys[userID]
+	if !ok {
+		return state.AccessKeyView{}, "", false, accessKeyAuthFailureNoDefaultKey
+	}
+	accessKey, authenticated, reason := checkAccessKey(request, snapshot.AccessKeysByID[accessKeyID], requestStarted)
+	return accessKey, userID, authenticated, reason
+}
 
 // authenticate checks plaintext, the key extractClientKey took from request.
 func authenticate(
@@ -40,6 +80,15 @@ func authenticate(
 	if !ok {
 		return state.AccessKeyView{}, false, accessKeyAuthFailureInvalid
 	}
+	return checkAccessKey(request, accessKey, requestStarted)
+}
+
+// checkAccessKey applies an active key's expiry and peer restrictions.
+func checkAccessKey(
+	request *http.Request,
+	accessKey state.AccessKeyView,
+	requestStarted time.Time,
+) (state.AccessKeyView, bool, accessKeyAuthFailureReason) {
 	if accessKey.ExpiresAtMS != nil && requestStarted.UnixMilli() >= *accessKey.ExpiresAtMS {
 		return accessKey, false, accessKeyAuthFailureExpired
 	}

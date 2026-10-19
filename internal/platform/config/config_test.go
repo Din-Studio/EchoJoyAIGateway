@@ -170,6 +170,42 @@ func TestLoadLingyingBillingRequiresBothValues(t *testing.T) {
 	}
 }
 
+func TestLoadAccessTokenRequiresJWKSAndIssuerTogether(t *testing.T) {
+	for _, test := range []struct {
+		name, jwksURL, issuer, audience string
+		want                            AccessTokenConfig
+		wantErr                         bool
+	}{
+		{name: "unset"},
+		{name: "set", jwksURL: "https://auth.example/.well-known/jwks.json", issuer: "echojoyauth", audience: "lingying",
+			want: AccessTokenConfig{JWKSURL: "https://auth.example/.well-known/jwks.json", Issuer: "echojoyauth", Audience: "lingying"}},
+		{name: "jwks only", jwksURL: "https://auth.example/.well-known/jwks.json", wantErr: true},
+		{name: "issuer only", issuer: "echojoyauth", wantErr: true},
+		{name: "not http", jwksURL: "auth.example", issuer: "echojoyauth", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv("ECHOJOY_AUTH_JWKS_URL", test.jwksURL)
+			t.Setenv("ECHOJOY_AUTH_ISSUER", test.issuer)
+			t.Setenv("ECHOJOY_AUTH_AUDIENCE", test.audience)
+
+			cfg, err := Load()
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("Load() error = nil, want access token error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.AccessToken != test.want {
+				t.Fatalf("AccessToken = %#v, want %#v", cfg.AccessToken, test.want)
+			}
+		})
+	}
+}
+
 func boolPointer(value bool) *bool {
 	return &value
 }

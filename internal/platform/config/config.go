@@ -81,6 +81,7 @@ type Config struct {
 	ModelsDevAutoSyncOverride *bool
 	Cluster                   ClusterConfig
 	LingyingBilling           LingyingBillingConfig
+	AccessToken               AccessTokenConfig
 }
 
 // LingyingBillingConfig is the Lingying gateway billing callback endpoint.
@@ -88,6 +89,15 @@ type Config struct {
 type LingyingBillingConfig struct {
 	BaseURL string
 	Token   string
+}
+
+// AccessTokenConfig verifies EchoJoyAuth access tokens, which a data-plane
+// request may present instead of an access key. An empty JWKSURL turns access
+// tokens off; JWKSURL and Issuer are set together, Audience is optional.
+type AccessTokenConfig struct {
+	JWKSURL  string
+	Issuer   string
+	Audience string
 }
 
 // Settings is the dynamic settings shape shared by system and group layers.
@@ -173,6 +183,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	accessToken, err := parseAccessTokenConfig()
+	if err != nil {
+		return nil, err
+	}
 
 	return &Config{
 		Server: ServerConfig{
@@ -196,6 +210,7 @@ func Load() (*Config, error) {
 		ModelsDevAutoSyncOverride: modelsDevAutoSyncOverride,
 		Cluster:                   cluster,
 		LingyingBilling:           lingyingBilling,
+		AccessToken:               accessToken,
 	}, nil
 }
 
@@ -215,6 +230,27 @@ func parseLingyingBillingConfig() (LingyingBillingConfig, error) {
 	parsed, err := url.Parse(value.BaseURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return LingyingBillingConfig{}, errors.New("LINGYING_BILLING_BASE_URL must be an http or https URL")
+	}
+	return value, nil
+}
+
+// parseAccessTokenConfig reads ECHOJOY_AUTH_JWKS_URL, ECHOJOY_AUTH_ISSUER and
+// ECHOJOY_AUTH_AUDIENCE.
+func parseAccessTokenConfig() (AccessTokenConfig, error) {
+	value := AccessTokenConfig{
+		JWKSURL:  strings.TrimSpace(os.Getenv("ECHOJOY_AUTH_JWKS_URL")),
+		Issuer:   strings.TrimSpace(os.Getenv("ECHOJOY_AUTH_ISSUER")),
+		Audience: strings.TrimSpace(os.Getenv("ECHOJOY_AUTH_AUDIENCE")),
+	}
+	if (value.JWKSURL == "") != (value.Issuer == "") {
+		return AccessTokenConfig{}, errors.New("ECHOJOY_AUTH_JWKS_URL and ECHOJOY_AUTH_ISSUER must be set together")
+	}
+	if value.JWKSURL == "" {
+		return AccessTokenConfig{}, nil
+	}
+	parsed, err := url.Parse(value.JWKSURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return AccessTokenConfig{}, errors.New("ECHOJOY_AUTH_JWKS_URL must be an http or https URL")
 	}
 	return value, nil
 }

@@ -74,6 +74,13 @@ func externalModelName(model ModelConfig) string {
 	return strings.TrimSpace(model.ID)
 }
 
+// UserDefaultKeyNamePrefix starts the name of the default access key Lingying
+// mirrors for each of its users (its apikey.DefaultKeyMirrorPrefix). Lingying
+// writes the user's EchoJoyAuth id into the note of every key it mirrors, and a
+// request presenting the user's access token is served as that key; editing
+// such a note by hand detaches the key from its user.
+const UserDefaultKeyNamePrefix = "ly:default:"
+
 type AccessKeyConfig struct {
 	KeyPrefix        string
 	PriceMultiplier  *pricing.PriceMultiplier
@@ -87,6 +94,7 @@ type AccessKeyConfig struct {
 	AllowedPeerCIDRs []netip.Prefix
 	RPMLimit         int64
 	CostLimitRules   []accessquota.Rule
+	Note             string
 }
 
 type AccessKeyStatus string
@@ -196,6 +204,7 @@ type ConfigSnapshot struct {
 	GroupCatalog          map[uint]GroupCatalogView
 	AccessKeysByID        map[uint]AccessKeyView
 	GlobalProxy           outboundproxy.Effective
+	UserDefaultKeys       map[string]uint // user id → id of the user's active default access key
 }
 
 func Compile(input CompileInput) (*ConfigSnapshot, error) {
@@ -237,6 +246,7 @@ func Compile(input CompileInput) (*ConfigSnapshot, error) {
 		AccessKeysByHash:      make(map[string]AccessKeyView),
 		GroupCatalog:          make(map[uint]GroupCatalogView),
 		AccessKeysByID:        make(map[uint]AccessKeyView),
+		UserDefaultKeys:       make(map[string]uint),
 		GlobalProxy:           globalProxy,
 	}
 
@@ -303,12 +313,22 @@ func Compile(input CompileInput) (*ConfigSnapshot, error) {
 		snapshot.AccessKeysByID[accessKey.ID] = newAccessKeyView(accessKey)
 		if accessKey.Status == AccessKeyStatusActive {
 			snapshot.AccessKeysByHash[accessKey.KeyHash] = newAccessKeyView(accessKey)
+			addUserDefaultKey(snapshot.UserDefaultKeys, accessKey)
 		}
 	}
 
 	sortExecutionRouteIndex(snapshot.ExecutionCandidates)
 	sortExecutionRouteIndex(snapshot.ExecutionRouteCatalog)
 	return snapshot, nil
+}
+
+// addUserDefaultKey indexes an active default key by its user; Lingying keeps
+// one per user.
+func addUserDefaultKey(index map[string]uint, accessKey AccessKeyConfig) {
+	if !strings.HasPrefix(accessKey.Name, UserDefaultKeyNamePrefix) || accessKey.Note == "" {
+		return
+	}
+	index[accessKey.Note] = accessKey.ID
 }
 
 func newAccessKeyView(input AccessKeyConfig) AccessKeyView {

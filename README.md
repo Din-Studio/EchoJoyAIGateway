@@ -202,6 +202,7 @@ Compose passes `.env` to the container, and the values set in the Compose file t
 | `LOG_FORMAT` | `text` | Supports `text` and `json`; any other value fails startup. |
 | `MODELS_DEV_AUTO_SYNC_ENABLED` | Unset, initial default `true` | When unset, uses the persisted management UI setting; when set, forces Models.dev auto-sync on or off and makes the same UI option read-only. |
 | `LINGYING_BILLING_BASE_URL` / `LINGYING_BILLING_TOKEN` | Unset | Lingying gateway billing callbacks; set both or neither. Requests from access keys named `ly:<key_id>` check the Lingying balance before forwarding and report usage afterwards; the system currency must be CNY. When unset, those keys are rejected. The token equals Lingying's `AI_GATEWAY_CALLBACK_TOKEN`. |
+| `ECHOJOY_AUTH_JWKS_URL` / `ECHOJOY_AUTH_ISSUER` / `ECHOJOY_AUTH_AUDIENCE` | Unset | EchoJoyAuth access tokens; set the JWKS URL and issuer together, the audience is optional. When set, a data-plane request may present a user's access token instead of an access key and is served as that user's default key (named `ly:default:<key_id>`, note = user id). When unset, access tokens are rejected. |
 | `REDIS_ADDRS` | Required | Comma-separated Redis addresses; Redis must be reachable at startup. A single address is a single node; list every node address for Redis Cluster. The default Compose file uses `redis:6379`. |
 | `REDIS_PASSWORD` | Empty | Redis password. |
 | `REDIS_TLS` | `false` | Connects to Redis over TLS. |

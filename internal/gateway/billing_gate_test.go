@@ -140,7 +140,7 @@ func TestExternalBillingAdmitsAndRecordsTheRequest(t *testing.T) {
 		t.Fatalf("response %d %s, upstream calls %d, admits %d, records %d",
 			response.Code, response.Body, len(forwarder.inputs), len(admits), len(records))
 	}
-	if admits[0] != (ly.AdmitInput{KeyName: "ly:k1", Plaintext: "gl-client", ProjectID: "p1", Currency: pricing.CurrencyCNY}) {
+	if admits[0] != (ly.AdmitInput{KeyName: "ly:k1", Credential: ly.Credential{APIKey: "gl-client"}, ProjectID: "p1", Currency: pricing.CurrencyCNY}) {
 		t.Fatalf("admit input = %+v", admits[0])
 	}
 	record := records[0]
@@ -294,7 +294,7 @@ func TestExternalBillingAdmitsEveryWebsocketTurn(t *testing.T) {
 	for {
 		admits, records := billing.snapshot()
 		if len(admits) == 2 && len(records) == 2 {
-			if records[0].event.RequestID == records[1].event.RequestID || admits[0].Plaintext != "gl-client" {
+			if records[0].event.RequestID == records[1].event.RequestID || admits[0].Credential.APIKey != "gl-client" {
 				t.Fatalf("records = %+v, admits = %+v", records, admits)
 			}
 			return
