@@ -80,6 +80,14 @@ type Config struct {
 	Log                       LogConfig
 	ModelsDevAutoSyncOverride *bool
 	Cluster                   ClusterConfig
+	LingyingBilling           LingyingBillingConfig
+}
+
+// LingyingBillingConfig is the Lingying gateway billing callback endpoint.
+// Both fields are set or neither is.
+type LingyingBillingConfig struct {
+	BaseURL string
+	Token   string
 }
 
 // Settings is the dynamic settings shape shared by system and group layers.
@@ -161,6 +169,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	lingyingBilling, err := parseLingyingBillingConfig()
+	if err != nil {
+		return nil, err
+	}
 
 	return &Config{
 		Server: ServerConfig{
@@ -183,7 +195,28 @@ func Load() (*Config, error) {
 		},
 		ModelsDevAutoSyncOverride: modelsDevAutoSyncOverride,
 		Cluster:                   cluster,
+		LingyingBilling:           lingyingBilling,
 	}, nil
+}
+
+// parseLingyingBillingConfig reads LINGYING_BILLING_BASE_URL and
+// LINGYING_BILLING_TOKEN, which must be set together.
+func parseLingyingBillingConfig() (LingyingBillingConfig, error) {
+	value := LingyingBillingConfig{
+		BaseURL: strings.TrimSpace(os.Getenv("LINGYING_BILLING_BASE_URL")),
+		Token:   strings.TrimSpace(os.Getenv("LINGYING_BILLING_TOKEN")),
+	}
+	if (value.BaseURL == "") != (value.Token == "") {
+		return LingyingBillingConfig{}, errors.New("LINGYING_BILLING_BASE_URL and LINGYING_BILLING_TOKEN must be set together")
+	}
+	if value.BaseURL == "" {
+		return value, nil
+	}
+	parsed, err := url.Parse(value.BaseURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return LingyingBillingConfig{}, errors.New("LINGYING_BILLING_BASE_URL must be an http or https URL")
+	}
+	return value, nil
 }
 
 // requirePostgreSQLDSN parses DATABASE_DSN and rejects an empty or

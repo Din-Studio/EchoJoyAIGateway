@@ -30,6 +30,9 @@ const (
 type route struct {
 	Protocol protocol.Protocol
 	Kind     endpointKind
+	// ExternalBilling marks the generation endpoints whose requests are
+	// admitted and billed by an external billing system.
+	ExternalBilling bool
 }
 
 type dataPlaneEndpoint struct {
@@ -39,21 +42,24 @@ type dataPlaneEndpoint struct {
 	pathValidator   func(*http.Request) bool
 	rejectAfterAuth func(*http.Request) bool
 	resolve         func(*http.Request) route
+	externalBilling bool
 }
 
 func dataPlaneEndpointCatalog() []dataPlaneEndpoint {
 	return []dataPlaneEndpoint{
 		{
-			name:    "data.openai.completions",
-			methods: []string{http.MethodPost},
-			path:    openAICompletionsPath,
-			resolve: staticRoute(protocol.OpenAICompletions, endpointForward),
+			name:            "data.openai.completions",
+			methods:         []string{http.MethodPost},
+			path:            openAICompletionsPath,
+			resolve:         staticRoute(protocol.OpenAICompletions, endpointForward),
+			externalBilling: true,
 		},
 		{
-			name:    "data.anthropic.messages",
-			methods: []string{http.MethodPost},
-			path:    anthropicMessagesPath,
-			resolve: staticRoute(protocol.Anthropic, endpointForward),
+			name:            "data.anthropic.messages",
+			methods:         []string{http.MethodPost},
+			path:            anthropicMessagesPath,
+			resolve:         staticRoute(protocol.Anthropic, endpointForward),
+			externalBilling: true,
 		},
 		{
 			name:    "data.anthropic.count_tokens",
@@ -86,6 +92,7 @@ func dataPlaneEndpointCatalog() []dataPlaneEndpoint {
 			path:            openAIResponsesPath,
 			rejectAfterAuth: rejectResponsesAfterAuthentication,
 			resolve:         staticRoute(protocol.OpenAIResponses, endpointForward),
+			externalBilling: true,
 		},
 		{
 			name:            "data.openai.responses.resource",

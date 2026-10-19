@@ -119,6 +119,7 @@ type websocketConnection struct {
 	request     *http.Request
 	keyID       uint
 	keyHash     string
+	clientKey   string
 	ctx         context.Context
 	cancel      context.CancelFunc
 	write       chan struct{}
@@ -256,7 +257,7 @@ func (h *Handler) handleWebsocket(c *gin.Context, requestContext *dataPlaneReque
 		return
 	}
 	ctx, cancel := context.WithCancel(c.Request.Context())
-	s := &websocketConnection{handler: h, conn: conn, request: c.Request.Clone(ctx), ctx: ctx, cancel: cancel, keyID: requestContext.accessKey.ID, write: make(chan struct{}, 1), bind: make(chan struct{}, 1), parents: make(map[string]websocketParent), accepting: true, bindingStopped: make(chan struct{}, 1)}
+	s := &websocketConnection{handler: h, conn: conn, request: c.Request.Clone(ctx), ctx: ctx, cancel: cancel, keyID: requestContext.accessKey.ID, clientKey: requestContext.clientKey, write: make(chan struct{}, 1), bind: make(chan struct{}, 1), parents: make(map[string]websocketParent), accepting: true, bindingStopped: make(chan struct{}, 1)}
 	for hash, key := range requestContext.snapshot.AccessKeysByHash {
 		if key.ID == s.keyID {
 			s.keyHash = hash

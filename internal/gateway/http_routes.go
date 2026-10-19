@@ -13,10 +13,12 @@ import (
 const dataPlaneRequestContextKey = "gpt-load.data-plane.request-context"
 
 type dataPlaneRequestContext struct {
-	requestStarted  time.Time
-	selectedRoute   route
-	snapshot        *state.ConfigSnapshot
-	accessKey       state.AccessKeyView
+	requestStarted time.Time
+	selectedRoute  route
+	snapshot       *state.ConfigSnapshot
+	accessKey      state.AccessKeyView
+	// clientKey is the access key plaintext, kept for external billing admission.
+	clientKey       string
 	authenticated   bool
 	locallyRejected bool
 }
@@ -80,9 +82,11 @@ func (handler *Handler) prepareDataPlaneRequest(
 		if handler != nil && handler.requestNow != nil {
 			requestNow = handler.requestNow
 		}
+		selectedRoute := endpoint.resolve(ginContext.Request)
+		selectedRoute.ExternalBilling = endpoint.externalBilling
 		ginContext.Set(dataPlaneRequestContextKey, &dataPlaneRequestContext{
 			requestStarted: requestNow(),
-			selectedRoute:  endpoint.resolve(ginContext.Request),
+			selectedRoute:  selectedRoute,
 			locallyRejected: endpoint.rejectAfterAuth != nil &&
 				endpoint.rejectAfterAuth(ginContext.Request),
 		})
@@ -99,8 +103,10 @@ func (handler *Handler) authenticateDataPlaneRequest(ginContext *gin.Context) {
 
 	snapshot := handler.manager.Current()
 	initializeDebugHeaders(ginContext.Writer.Header())
+	clientKey := extractClientKey(ginContext.Request)
 	accessKey, authenticated, failureReason := authenticate(
 		ginContext.Request,
+		clientKey,
 		snapshot,
 		handler.encryption,
 		requestContext.requestStarted,
@@ -114,6 +120,7 @@ func (handler *Handler) authenticateDataPlaneRequest(ginContext *gin.Context) {
 
 	requestContext.snapshot = snapshot
 	requestContext.accessKey = accessKey
+	requestContext.clientKey = clientKey
 	requestContext.authenticated = true
 }
 

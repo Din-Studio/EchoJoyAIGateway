@@ -120,6 +120,7 @@ Resources:
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/ENCRYPTION_KEY
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/DATABASE_DSN
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/REDIS_PASSWORD
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/LINGYING_BILLING_TOKEN
 
   TaskRole:
     Type: AWS::IAM::Role
@@ -400,6 +401,8 @@ Resources:
             - {Name: LOG_FORMAT, Value: json}
             - {Name: LOG_LEVEL, Value: info}
             - {Name: RESPONSE_BINDING_TTL, Value: 168h}
+            # 灵影计费回调：域名经私有 DNS 解析到 alb-internal，/internal/aigw/* 落到旧网关的整域名规则
+            - {Name: LINGYING_BILLING_BASE_URL, Value: !Sub "https://${GatewayHost}"}
           Secrets:
             - Name: AUTH_KEY
               ValueFrom: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/AUTH_KEY
@@ -409,6 +412,8 @@ Resources:
               ValueFrom: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/DATABASE_DSN
             - Name: REDIS_PASSWORD
               ValueFrom: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/REDIS_PASSWORD
+            - Name: LINGYING_BILLING_TOKEN
+              ValueFrom: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/LINGYING_BILLING_TOKEN
           LogConfiguration:
             LogDriver: awslogs
             Options:

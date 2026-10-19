@@ -82,6 +82,9 @@ type requestRecorder struct {
 	now                  func() time.Time
 	redactor             *redact.Redactor
 	emitted              bool
+	// recordBilling reports the request to external billing once emitted; it
+	// is set only when external billing admitted the request.
+	recordBilling func(event telemetry.RequestEvent, chargeNano int64)
 
 	pendingRetry int
 }
@@ -139,7 +142,7 @@ func (recorder *requestRecorder) emit() {
 		duration = 0
 	}
 	reportedModel, modelConsistency := requestOutcomeModelConsistency(recorder.outcome)
-	recorder.sink.Emit(telemetry.RequestEvent{
+	event := telemetry.RequestEvent{
 		AutoDecision:          recorder.autoLogDecision(),
 		RequestID:             recorder.requestID,
 		CompletedAt:           completedAt.UTC(),
@@ -163,7 +166,11 @@ func (recorder *requestRecorder) emit() {
 		Attempts:              append([]telemetry.Attempt(nil), recorder.attempts...),
 		Usage:                 recorder.usage,
 		Currency:              recorder.currency,
-	})
+	}
+	recorder.sink.Emit(event)
+	if recorder.recordBilling != nil {
+		recorder.recordBilling(event, recorder.estimatedCostNano())
+	}
 }
 
 func (recorder *requestRecorder) freezeSensitiveInputErrorSummaries() {

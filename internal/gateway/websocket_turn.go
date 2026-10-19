@@ -171,6 +171,11 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 	}
 	model := *original.metadata.Model
 	recorder.setClientModel(model)
+	// Every turn creates a response, so each is admitted and billed on its own.
+	if failure := h.admitExternalBilling(s.ctx, recorder, key, s.clientKey, s.request.Header, snapshot.Settings.Currency); failure != nil {
+		reject(*failure)
+		return
+	}
 	s.mu.Lock()
 	binding := s.binding
 	parent, parentFound := s.parents[original.previous]
