@@ -33,11 +33,13 @@ type Identity struct {
 
 // ReceiptRule is the frozen model identity written into a request-time cost
 // receipt. ScopeKey is retained only to read historical v1 receipts; ChannelID
-// is populated only by v3 and later receipts.
+// is populated only by v3 and later upstream receipts. ClientModel is the only
+// identity of a v7 client-model receipt.
 type ReceiptRule struct {
-	ScopeKey  string `json:"scope_key,omitempty"`
-	ChannelID string `json:"channel_id,omitempty"`
-	ModelID   string `json:"model_id"`
+	ScopeKey    string `json:"scope_key,omitempty"`
+	ChannelID   string `json:"channel_id,omitempty"`
+	ModelID     string `json:"model_id,omitempty"`
+	ClientModel string `json:"client_model,omitempty"`
 }
 
 // ContextTier replaces all base prices once its inclusive threshold is met.
@@ -60,6 +62,15 @@ type Rule struct {
 	ContextTiers  []ContextTier
 	ModeSchedules map[Mode]Schedule
 	IsManual      bool
+}
+
+// ClientRule is the unified outward price of one client model. It has the
+// same schedule shape as Rule but no channel identity.
+type ClientRule struct {
+	ClientModel   string
+	Prices        Prices
+	ContextTiers  []ContextTier
+	ModeSchedules map[Mode]Schedule
 }
 
 // CostState describes whether a usage result can be priced.
@@ -87,6 +98,13 @@ type Quote struct {
 	Completeness         Completeness
 	EstimatedCostNanoUSD NanoUSD
 }
+
+// UpstreamReceiptSchemaVersion and ClientModelReceiptSchemaVersion are the
+// receipt contracts written for upstream costs and client-model charges.
+const (
+	UpstreamReceiptSchemaVersion    = 6
+	ClientModelReceiptSchemaVersion = 7
+)
 
 // ReceiptMethodUnitRateSum identifies the stable line-item calculation used by
 // the first persisted pricing receipt schema.
@@ -127,7 +145,9 @@ type Receipt struct {
 	TotalNanoUSD           int64             `json:"total_nano_usd"`
 }
 
-// Table is an immutable exact pricing snapshot.
+// Table is an immutable pricing snapshot of upstream channel/model rules and
+// client-model rules.
 type Table struct {
-	rules map[Identity]Rule
+	rules       map[Identity]Rule
+	clientRules map[string]ClientRule
 }

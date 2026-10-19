@@ -65,7 +65,11 @@ func TestProjectProcessLogUsesFrozenPricingAndInputOutputTotals(t *testing.T) {
 	event.Usage.Pricing = telemetry.PricingObservation{
 		UpstreamModel: event.UpstreamModel,
 		CostState:     string(pricing.CostStatePriced), PricingCompleteness: string(pricing.CompletenessPartial),
-		EstimatedCostNanoUSD: 55_000,
+		EstimatedCostNanoUSD:        55_000,
+		ClientModel:                 event.UpstreamModel,
+		UpstreamCostState:           string(pricing.CostStatePriced),
+		UpstreamPricingCompleteness: string(pricing.CompletenessPartial),
+		UpstreamCostNanoUSD:         55_000,
 	}
 
 	level, fields, ok := projectProcessLog(redact.New(), event)
@@ -142,7 +146,7 @@ func TestProjectProcessLogPreservesNoCandidateDiagnostics(t *testing.T) {
 		ErrorCode: "no_available_candidate", ErrorSummary: "No available upstream candidate.", DurationMs: 25,
 		Usage: telemetry.UsageObservation{
 			Result:  usage.Result{State: usage.StateNotApplicable},
-			Pricing: telemetry.PricingObservation{CostState: string(pricing.CostStateNotApplicable), PricingCompleteness: string(pricing.CompletenessNotApplicable)},
+			Pricing: telemetry.PricingObservation{CostState: string(pricing.CostStateNotApplicable), PricingCompleteness: string(pricing.CompletenessNotApplicable), UpstreamCostState: string(pricing.CostStateNotApplicable), UpstreamPricingCompleteness: string(pricing.CompletenessNotApplicable)},
 		},
 	}
 	level, fields, ok := projectProcessLog(redact.New(), event)
@@ -171,7 +175,7 @@ func TestProjectProcessLogOmitsMissingAttribution(t *testing.T) {
 		Status: telemetry.RequestStatusSuccess,
 		Usage: telemetry.UsageObservation{
 			Result:  usage.Result{State: usage.StateNotApplicable},
-			Pricing: telemetry.PricingObservation{CostState: string(pricing.CostStateNotApplicable), PricingCompleteness: string(pricing.CompletenessNotApplicable)},
+			Pricing: telemetry.PricingObservation{CostState: string(pricing.CostStateNotApplicable), PricingCompleteness: string(pricing.CompletenessNotApplicable), UpstreamCostState: string(pricing.CostStateNotApplicable), UpstreamPricingCompleteness: string(pricing.CompletenessNotApplicable)},
 		},
 	}
 	_, fields, ok := projectProcessLog(redact.New(), event)

@@ -144,23 +144,26 @@ func aggregationRow(
 	model string,
 ) models.RequestLog {
 	return models.RequestLog{
-		ID:                   id,
-		CompletedAtMS:        completedAt.UTC().UnixMilli(),
-		AccessKeyID:          1,
-		GroupID:              groupID,
-		Protocol:             string(protocol.OpenAICompletions),
-		ClientModel:          model,
-		UpstreamModel:        model,
-		Status:               string(telemetry.RequestStatusSuccess),
-		StatusCode:           200,
-		DurationMs:           10,
-		AttemptCount:         1,
-		UncachedInputTokens:  1,
-		OutputTokens:         2,
-		EstimatedCostNanoUSD: 250_000_000,
-		UsageState:           string(usage.StateComplete),
-		CostState:            string(pricing.CostStatePriced),
-		PricingCompleteness:  string(pricing.CompletenessComplete),
+		ID:                          id,
+		CompletedAtMS:               completedAt.UTC().UnixMilli(),
+		AccessKeyID:                 1,
+		GroupID:                     groupID,
+		Protocol:                    string(protocol.OpenAICompletions),
+		ClientModel:                 model,
+		UpstreamModel:               model,
+		Status:                      string(telemetry.RequestStatusSuccess),
+		StatusCode:                  200,
+		DurationMs:                  10,
+		AttemptCount:                1,
+		UncachedInputTokens:         1,
+		OutputTokens:                2,
+		EstimatedCostNanoUSD:        250_000_000,
+		UsageState:                  string(usage.StateComplete),
+		CostState:                   string(pricing.CostStatePriced),
+		PricingCompleteness:         string(pricing.CompletenessComplete),
+		UpstreamCostState:           string(pricing.CostStatePriced),
+		UpstreamPricingCompleteness: string(pricing.CompletenessComplete),
+		UpstreamCostNanoUSD:         250_000_000,
 	}
 }
 
@@ -205,9 +208,12 @@ func testEvent(id string) telemetry.RequestEvent {
 				State: usage.StateNotApplicable,
 			},
 			Pricing: telemetry.PricingObservation{
-				UpstreamModel:       "upstream-model",
-				CostState:           string(pricing.CostStateNotApplicable),
-				PricingCompleteness: string(pricing.CompletenessNotApplicable),
+				UpstreamModel:               "upstream-model",
+				CostState:                   string(pricing.CostStateNotApplicable),
+				PricingCompleteness:         string(pricing.CompletenessNotApplicable),
+				ClientModel:                 "upstream-model",
+				UpstreamCostState:           string(pricing.CostStateNotApplicable),
+				UpstreamPricingCompleteness: string(pricing.CompletenessNotApplicable),
 			},
 		},
 	}
@@ -225,4 +231,15 @@ func mustMapEvent(
 		t.Fatalf("mapEvent() error = %v", err)
 	}
 	return row
+}
+
+// withMirroredUpstreamCost copies each row's charge state to its upstream cost
+// for scenarios that vary only the charge.
+func withMirroredUpstreamCost(rows ...models.RequestLog) []models.RequestLog {
+	for index := range rows {
+		rows[index].UpstreamCostState = rows[index].CostState
+		rows[index].UpstreamPricingCompleteness = rows[index].PricingCompleteness
+		rows[index].UpstreamCostNanoUSD = rows[index].EstimatedCostNanoUSD
+	}
+	return rows
 }

@@ -89,3 +89,48 @@ func TestParseAndFormatAmount(t *testing.T) {
 		t.Fatalf("FormatAmount() = %q", got)
 	}
 }
+
+// 价格以美元存储：在系统币种下输入的价格读回来应与输入一致，原样再保存时存储值不变。
+func TestPriceFromNanoUSDReadsBackEnteredPrices(t *testing.T) {
+	for _, rateMicros := range []int64{7_300_000, 7_100_000, 16_250_000_000, 790_000} {
+		currency, err := NewCurrency(CurrencyCNY, rateMicros)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entered := range []int64{
+			30_000_000_000_000, 60_000_000_000_000, 7_300_000_000, 1_234_500_000, 15_000_000, 1,
+		} {
+			stored, ok := currency.ToNanoUSD(entered)
+			if !ok {
+				t.Fatalf("rate %d: ToNanoUSD(%d) overflowed", rateMicros, entered)
+			}
+			shown, ok := currency.PriceFromNanoUSD(stored)
+			if !ok {
+				t.Fatalf("rate %d: PriceFromNanoUSD(%d) overflowed", rateMicros, stored)
+			}
+			if again, _ := currency.ToNanoUSD(shown); again != stored {
+				t.Fatalf("rate %d: shown %d stores %d, want unchanged %d", rateMicros, shown, again, stored)
+			}
+			// 汇率 ≥ 1 时输入值本身就能换算回同一个 nano USD，读回的小数位不会比输入多。
+			if rateMicros >= ExchangeRateScale && decimalPlaces(shown) > decimalPlaces(entered) {
+				t.Fatalf("rate %d: entered %s, shown %s", rateMicros, FormatAmount(entered), FormatAmount(shown))
+			}
+		}
+	}
+	cny, _ := NewCurrency(CurrencyCNY, 7_300_000)
+	if shown, _ := cny.PriceFromNanoUSD(4_109_589_041_096); shown != 30_000_000_000_000 {
+		t.Fatalf("¥30000 stored as nano USD reads back as %s", FormatAmount(shown))
+	}
+	if shown, _ := USDCurrency.PriceFromNanoUSD(4_109_589_041_096); shown != 4_109_589_041_096 {
+		t.Fatalf("USD price changed to %d", shown)
+	}
+}
+
+func decimalPlaces(nano int64) int {
+	places := AmountDecimalPlaces
+	for places > 0 && nano%10 == 0 {
+		nano /= 10
+		places--
+	}
+	return places
+}

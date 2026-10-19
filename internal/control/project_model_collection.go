@@ -77,8 +77,11 @@ type ProjectUpstreamModelDTO struct {
 	CatalogReference *ProjectModelCatalogReferenceDTO `json:"catalog_reference"`
 }
 
+// ProjectModelDTO is one client model. Price is its unified outward price,
+// nil until configured; each upstream model's Price is that source's cost.
 type ProjectModelDTO struct {
 	ClientModel    string                    `json:"client_model"`
+	Price          *ClientModelPriceDTO      `json:"price"`
 	Protocols      []protocol.Protocol       `json:"protocols"`
 	UpstreamModels []ProjectUpstreamModelDTO `json:"upstream_models"`
 }
@@ -170,12 +173,16 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 	}
 	var groups []models.Group
 	var prices []models.ModelPrice
+	var clientPrices []models.ClientModelPrice
 	err := s.withReadSnapshot(ctx, func(tx *gorm.DB) error {
 		if err := tx.Order("id ASC").Find(&groups).Error; err != nil {
 			return fmt.Errorf("load groups for model collection: %w", app_errors.ParseDBError(err))
 		}
 		if err := tx.Order("id ASC").Find(&prices).Error; err != nil {
 			return fmt.Errorf("load model prices for model collection: %w", app_errors.ParseDBError(err))
+		}
+		if err := tx.Order("id ASC").Find(&clientPrices).Error; err != nil {
+			return fmt.Errorf("load client model prices for model collection: %w", app_errors.ParseDBError(err))
 		}
 		groups = cloneGroupRows(groups)
 		return nil
@@ -287,11 +294,21 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 		}
 	}
 
+	clientPriceDTOs := make(map[string]*ClientModelPriceDTO, len(clientPrices))
+	for _, row := range clientPrices {
+		dto, err := projectClientModelPrice(row)
+		if err != nil {
+			return ProjectModelListResponse{}, err
+		}
+		clientPriceDTOs[row.ClientModel] = &dto
+	}
+
 	summary := projectModelSummary(records, priceRecords)
 	result := make([]ProjectModelDTO, 0, len(records))
 	for _, record := range records {
 		dto := ProjectModelDTO{
 			ClientModel:    record.clientModel,
+			Price:          clientPriceDTOs[record.clientModel],
 			Protocols:      append([]protocol.Protocol(nil), record.protocols...),
 			UpstreamModels: []ProjectUpstreamModelDTO{},
 		}
@@ -310,9 +327,14 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 				routeGroups = append(routeGroups, upstream.routeGroups...)
 				affectedGroups = append(affectedGroups, upstream.affectedGroups...)
 			}
+			// 上游价格是网关的成本，访问密钥范围只保留来源身份，不发金额。
+			price := upstream.price
+			if query.AccessKeyID != nil {
+				price = withoutPriceAmounts(price)
+			}
 			upstreamDTO := ProjectUpstreamModelDTO{
 				ModelID: upstream.modelID, AliasApplied: upstream.aliasApplied,
-				Price: upstream.price, RouteGroups: routeGroups,
+				Price: price, RouteGroups: routeGroups,
 				AffectedGroups:   affectedGroups,
 				CatalogReference: upstream.catalogReference,
 			}
@@ -791,4 +813,14 @@ func projectModelTotalPages(total, pageSize int64) int64 {
 		return 0
 	}
 	return (total + pageSize - 1) / pageSize
+}
+
+// withoutPriceAmounts keeps a source's identity and pricing status but drops
+// every amount and how it was obtained.
+func withoutPriceAmounts(price ModelPriceDTO) ModelPriceDTO {
+	price.Prices = PriceSlotsDTO{}
+	price.ContextTiers = []ModelPriceContextTierDTO{}
+	price.ModeSchedules = map[pricing.Mode]ModelPriceScheduleDTO{}
+	price.Method, price.MatchedProviderID, price.MatchSource = nil, nil, nil
+	return price
 }

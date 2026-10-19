@@ -660,11 +660,13 @@ func insertRequestStateFixture(db *gorm.DB, fixture requestStateFixture) error {
 		upstream_model, status, status_code, duration_ms, error_code, error_summary,
 		affinity_hit, uncached_input_tokens, output_tokens, cache_read_tokens,
 		cache_write_5m_tokens, cache_write_1h_tokens, cache_write_unknown_tokens,
-		estimated_cost_nano_usd, usage_state, cost_state, pricing_completeness
+		estimated_cost_nano_usd, usage_state, cost_state, pricing_completeness,
+		upstream_cost_nano_usd, upstream_cost_state, upstream_pricing_completeness
 	) VALUES (?, 1, 0, 0, 'openai-completions', '', '', ?, 200, 0, '', '',
-		false, 0, 0, 0, 0, 0, 0, ?, ?, ?, ?)`,
+		false, 0, 0, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?)`,
 		fixture.id, fixture.status, fixture.estimatedCost,
 		fixture.usage, fixture.cost, fixture.pricing,
+		fixture.estimatedCost, fixture.cost, fixture.pricing,
 	).Error
 }
 

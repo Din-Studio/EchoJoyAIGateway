@@ -10,30 +10,56 @@ import (
 // prices in the system currency at the current rate, and request prices given
 // in the system currency are converted back to USD before the service runs.
 
-// inCurrency returns the price DTO with every USD price shown in the currency.
-func (dto ModelPriceDTO) inCurrency(currency pricing.Currency) (ModelPriceDTO, error) {
+// PriceSchedulesDTO is the price shape shared by an upstream model price and a
+// client model's unified price.
+type PriceSchedulesDTO struct {
+	Currency      pricing.CurrencyCode                   `json:"currency"`
+	Prices        PriceSlotsDTO                          `json:"prices"`
+	ContextTiers  []ModelPriceContextTierDTO             `json:"context_tiers"`
+	ModeSchedules map[pricing.Mode]ModelPriceScheduleDTO `json:"mode_schedules"`
+}
+
+// inCurrency returns the schedules with every USD price shown in the currency.
+func (dto PriceSchedulesDTO) inCurrency(currency pricing.Currency) (PriceSchedulesDTO, error) {
 	var err error
 	dto.Currency = currency.Code
 	if dto.Prices, err = dto.Prices.inCurrency(currency); err != nil {
-		return ModelPriceDTO{}, err
+		return PriceSchedulesDTO{}, err
 	}
 	if dto.ContextTiers, err = contextTiersInCurrency(dto.ContextTiers, currency); err != nil {
-		return ModelPriceDTO{}, err
+		return PriceSchedulesDTO{}, err
 	}
-	if dto.ModeSchedules != nil {
-		schedules := make(map[pricing.Mode]ModelPriceScheduleDTO, len(dto.ModeSchedules))
-		for mode, schedule := range dto.ModeSchedules {
-			if schedule.Prices, err = schedule.Prices.inCurrency(currency); err != nil {
-				return ModelPriceDTO{}, err
-			}
-			if schedule.ContextTiers, err = contextTiersInCurrency(schedule.ContextTiers, currency); err != nil {
-				return ModelPriceDTO{}, err
-			}
-			schedules[mode] = schedule
-		}
-		dto.ModeSchedules = schedules
+	if dto.ModeSchedules, err = modeSchedulesInCurrency(dto.ModeSchedules, currency); err != nil {
+		return PriceSchedulesDTO{}, err
 	}
 	return dto, nil
+}
+
+func (dto ModelPriceDTO) inCurrency(currency pricing.Currency) (ModelPriceDTO, error) {
+	var err error
+	dto.PriceSchedulesDTO, err = dto.PriceSchedulesDTO.inCurrency(currency)
+	return dto, err
+}
+
+func modeSchedulesInCurrency(
+	schedules map[pricing.Mode]ModelPriceScheduleDTO,
+	currency pricing.Currency,
+) (map[pricing.Mode]ModelPriceScheduleDTO, error) {
+	if schedules == nil {
+		return nil, nil
+	}
+	result := make(map[pricing.Mode]ModelPriceScheduleDTO, len(schedules))
+	for mode, schedule := range schedules {
+		var err error
+		if schedule.Prices, err = schedule.Prices.inCurrency(currency); err != nil {
+			return nil, err
+		}
+		if schedule.ContextTiers, err = contextTiersInCurrency(schedule.ContextTiers, currency); err != nil {
+			return nil, err
+		}
+		result[mode] = schedule
+	}
+	return result, nil
 }
 
 func (slots PriceSlotsDTO) inCurrency(currency pricing.Currency) (PriceSlotsDTO, error) {

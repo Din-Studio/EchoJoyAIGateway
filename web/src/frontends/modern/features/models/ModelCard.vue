@@ -38,6 +38,10 @@ const groupCount = computed(() => modelGroupCount(props.model))
 function price(source: ModelSource, field: PriceField): string {
   return modelUnitPrice(source.price.prices[field], source.price.currency, locale.value)
 }
+function clientPrice(field: PriceField): string {
+  const value = props.model.price
+  return value ? modelUnitPrice(value.prices[field], value.currency, locale.value) : ''
+}
 // 表头与来源行是两个独立网格，用 max-content 会各算各的导致列错位。
 // 这里按本卡最长的价格算出一个共享列宽，两边引用同一个值才能对齐。
 // 不能用 ch：它相对元素自身字号，表头 11px 与数据行的字号会解析成两个不同的宽度。
@@ -46,7 +50,7 @@ const priceWidth = computed(() => {
   const longest = props.model.sources.reduce(
     (width, source) =>
       priceFields.reduce((current, field) => Math.max(current, price(source, field).length), width),
-    0,
+    priceFields.reduce((current, field) => Math.max(current, clientPrice(field).length), 0),
   )
   return `calc(${longest} * 0.63 * var(--modern-font-size-small))`
 })
@@ -91,6 +95,41 @@ function hiddenGroupsLabel(source: ModelSource): string {
         <span></span>
       </div>
       <div class="modern-model-card-sources">
+        <!-- 统一价是调用方被收取的价格；下面各来源行是网关付给上游的成本。 -->
+        <div class="modern-model-row">
+          <span class="modern-model-client-price-name">
+            <AppOverflowText :text="t('modelManager.clientPrice')" />
+            <AppBadge
+              v-if="model.price?.context_tiers.length"
+              variant="plain"
+              size="xs"
+              class="modern-model-source-tiers"
+              >{{
+                t('modelManager.tierCount', { count: n(model.price.context_tiers.length) })
+              }}</AppBadge
+            >
+          </span>
+          <span></span>
+          <span
+            v-for="field in priceFields"
+            :key="field"
+            class="r modern-model-source-price"
+            :class="{ 'is-empty': !model.price || model.price.prices[field] === null }"
+            >{{ clientPrice(field) }}</span
+          >
+          <span class="modern-model-source-method">
+            <AppBadge v-if="!model.price" tone="warning" size="xs">{{
+              t('modelManager.priceMethods.pending')
+            }}</AppBadge>
+          </span>
+          <AppIconButton
+            :icon="ChevronRight"
+            :label="t('modelManager.details')"
+            size="xs"
+            :disabled="disabled"
+            @click="emit('open')"
+          />
+        </div>
         <div v-for="source in model.sources" :key="source.price.id" class="modern-model-row">
           <span class="modern-model-source-name">
             <AppChannelIcon
@@ -140,14 +179,20 @@ function hiddenGroupsLabel(source: ModelSource): string {
               >
             </AppTooltip>
           </span>
+          <!-- 上游价格是网关成本，只有管理员能看到金额与定价方式。 -->
           <span
             v-for="field in priceFields"
             :key="field"
             class="r modern-model-source-price"
             :class="{ 'is-empty': source.price.prices[field] === null }"
-            >{{ price(source, field) }}</span
+            >{{ admin ? price(source, field) : '' }}</span
           >
-          <span class="modern-model-source-method" :class="'is-' + priceStatus(source.price)">
+          <span v-if="!admin" class="modern-model-source-method"></span>
+          <span
+            v-else
+            class="modern-model-source-method"
+            :class="'is-' + priceStatus(source.price)"
+          >
             <AppBadge v-if="priceStatus(source.price) === 'pending'" tone="warning" size="xs">{{
               t('modelManager.priceMethods.pending')
             }}</AppBadge>
@@ -320,6 +365,16 @@ function hiddenGroupsLabel(source: ModelSource): string {
   color: var(--modern-control-placeholder);
   font-size: var(--modern-font-size-caption);
   font-variant-numeric: tabular-nums;
+}
+/* 统一价行没有渠道图标，标签占满整列。 */
+.modern-model-client-price-name {
+  display: flex;
+  align-items: center;
+  gap: var(--modern-space-1-5);
+  min-width: 0;
+  color: var(--modern-text);
+  font-size: var(--modern-font-size-small);
+  font-weight: var(--modern-weight-semibold);
 }
 .modern-model-source-price {
   min-width: 0;

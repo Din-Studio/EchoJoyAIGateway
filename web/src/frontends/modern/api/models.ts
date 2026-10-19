@@ -19,12 +19,15 @@ export interface PriceSchedule {
   context_tiers: PriceTier[]
 }
 // 价格以美元保存；接口按当前汇率换算为 currency 后返回，提交时也以 currency 计。
-export interface ModelPrice extends PriceSchedule {
-  id: number
+export interface PriceSchedules extends PriceSchedule {
   currency: string
+  mode_schedules: Record<string, PriceSchedule>
+}
+// 上游价格是某个渠道下上游模型的成本；访问密钥视角下金额为空。
+export interface ModelPrice extends PriceSchedules {
+  id: number
   model: string
   channel: { id: string; name: string; icon: string; mark: string }
-  mode_schedules: Record<string, PriceSchedule>
   status: 'pending' | 'configured'
   method: 'auto_sync' | 'user_set' | 'user_marked_unpriced' | null
   provider: string | null
@@ -57,8 +60,14 @@ export interface ModelSource {
   affectedGroups: ModelGroup[]
   catalog: ModelCatalog | null
 }
+// 统一价是对外模型的收费价格，跨分组、跨渠道生效；未设置时为 null。
+export interface ClientModelPrice extends PriceSchedules {
+  model: string
+  updatedAt: number
+}
 export interface RequestModel {
   name: string
+  price: ClientModelPrice | null
   protocols: string[]
   sources: ModelSource[]
 }
@@ -102,12 +111,24 @@ function schedule(value: unknown): PriceSchedule {
     }),
   }
 }
+function schedules(row: Record<string, unknown>): PriceSchedules {
+  return {
+    ...schedule(row),
+    currency: text(row.currency),
+    mode_schedules: Object.fromEntries(
+      Object.entries(record(row.mode_schedules)).map(([mode, value]) => [mode, schedule(value)]),
+    ),
+  }
+}
+export function readClientModelPrice(value: unknown): ClientModelPrice {
+  const row = record(value)
+  return { ...schedules(row), model: text(row.client_model), updatedAt: integer(row.updated_at_ms) }
+}
 export function readModelPrice(value: unknown): ModelPrice {
   const row = record(value)
   return {
-    ...schedule(row),
+    ...schedules(row),
     id: integer(row.id, 1),
-    currency: text(row.currency),
     model: text(row.model_id),
     channel: {
       id: text(row.channel_id),
@@ -115,9 +136,6 @@ export function readModelPrice(value: unknown): ModelPrice {
       icon: text(row.channel_icon),
       mark: text(row.channel_mark),
     },
-    mode_schedules: Object.fromEntries(
-      Object.entries(record(row.mode_schedules)).map(([mode, value]) => [mode, schedule(value)]),
-    ),
     status: oneOf(row.pricing_status, ['pending', 'configured']),
     method:
       row.method === null
@@ -206,8 +224,12 @@ export async function getModels(client: ApiClient, filters: ModelFilters, signal
   return {
     items: list(row.items).map((value): RequestModel => {
       const model = record(value)
+      const name = text(model.client_model)
+      const price = model.price === null ? null : readClientModelPrice(model.price)
+      if (price && price.model !== name) throw new InvalidResponseError()
       return {
-        name: text(model.client_model),
+        name,
+        price,
         protocols: sortProtocols(list(model.protocols).map(text)),
         sources: list(model.upstream_models).map(source),
       }
@@ -271,6 +293,20 @@ export async function saveModelPrice(
 ): Promise<ModelPrice> {
   const path = `/api/model-prices/${id}` as const
   return readModelPrice(await client.request(path, { method: 'PUT', json: patch, signal }))
+}
+// 统一价没有「标记为未定价」：未设置即待定价，提交时至少要有一项基础价格。
+export async function saveClientModelPrice(
+  client: ApiClient,
+  model: string,
+  update: ModelPriceUpdate,
+  signal: AbortSignal,
+): Promise<ClientModelPrice> {
+  const json = { client_model: model, ...update, confirm_unpriced: false }
+  const result = readClientModelPrice(
+    await client.request('/api/client-model-prices', { method: 'PUT', json, signal }),
+  )
+  if (result.model !== model) throw new InvalidResponseError()
+  return result
 }
 export async function resetModelPrice(client: ApiClient, id: number, signal: AbortSignal) {
   const path = `/api/model-prices/${id}/reset` as const

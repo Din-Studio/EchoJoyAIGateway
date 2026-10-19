@@ -144,6 +144,17 @@ func (s *Server) HTTPModule() httproute.Module {
 				)),
 				s.handleDeleteModelPrice,
 			),
+			controlRoute(
+				"control.client-model-prices.put",
+				http.MethodPut,
+				"/client-model-prices",
+				s.auditMutation(newMutationDescriptor(
+					"client_model_price_put",
+					"client_model_price",
+					staticMutationLocator("client-model-price:unknown"),
+				)),
+				s.handlePutClientModelPrice,
+			),
 			controlRoute("control.home", http.MethodGet, "/home", s.handleHome),
 			controlRoute(
 				"control.home.subscription-accounts",

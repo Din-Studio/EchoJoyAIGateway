@@ -997,10 +997,7 @@ func (handler *Handler) executeAttempts(
 		if operation == execution.OperationWebSearch {
 			return prepared
 		}
-		routeModel := externalModel
-		if recorder.autoDecision != nil {
-			routeModel = recorder.autoDecision.Selection.TargetModel
-		}
+		routeModel := recorder.routeModel()
 		body, applied, err := selection.Group.ParameterOverrides.Apply(
 			selectedDialect.Protocol(),
 			originalMetadata.Operation,

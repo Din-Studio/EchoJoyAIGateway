@@ -497,7 +497,11 @@ func TestEmitPersistsGatewayFrozenQuoteWithoutRepricing(t *testing.T) {
 	eventA.Usage.Pricing = telemetry.PricingObservation{
 		UpstreamModel: "snapshot-model",
 		CostState:     string(pricing.CostStatePriced), PricingCompleteness: string(pricing.CompletenessComplete),
-		EstimatedCostNanoUSD: 1_000_000_000,
+		EstimatedCostNanoUSD:        1_000_000_000,
+		ClientModel:                 "snapshot-model",
+		UpstreamCostState:           string(pricing.CostStatePriced),
+		UpstreamPricingCompleteness: string(pricing.CompletenessComplete),
+		UpstreamCostNanoUSD:         1_000_000_000,
 	}
 	service.Emit(eventA)
 	receiveValue(t, timers.created)
@@ -520,7 +524,11 @@ func TestEmitPersistsGatewayFrozenQuoteWithoutRepricing(t *testing.T) {
 	eventB.Usage.Pricing = telemetry.PricingObservation{
 		UpstreamModel: "snapshot-model",
 		CostState:     string(pricing.CostStatePriced), PricingCompleteness: string(pricing.CompletenessComplete),
-		EstimatedCostNanoUSD: 2_000_000_000,
+		EstimatedCostNanoUSD:        2_000_000_000,
+		ClientModel:                 "snapshot-model",
+		UpstreamCostState:           string(pricing.CostStatePriced),
+		UpstreamPricingCompleteness: string(pricing.CompletenessComplete),
+		UpstreamCostNanoUSD:         2_000_000_000,
 	}
 	service.Emit(eventB)
 	if err := service.Stop(context.Background()); err != nil {

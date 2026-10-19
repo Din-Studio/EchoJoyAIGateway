@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Boxes, PencilLine, RotateCcw } from '@lucide/vue'
+import { Boxes, RotateCcw, Save } from '@lucide/vue'
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { computed, nextTick, onScopeDispose, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -11,10 +11,15 @@ import {
   modelContextKey,
   modelSourceKey,
   resetModelPrice,
+  saveClientModelPrice,
+  saveModelPrice,
   type ModelFilters,
   type ModelPrice,
+  type PriceSchedules,
+  type RequestModel,
 } from '@modern/api/models'
 import { useApiClient } from '@shared/http/client-context'
+import { ApiError } from '@shared/http/errors'
 import { useMessages, useMessageSource } from '@modern/app/messages'
 import {
   AppBadge,
@@ -36,7 +41,7 @@ import { useLoadingActivity } from '@modern/components/ui/loading'
 import AppDraftGuard from '@modern/components/AppDraftGuard.vue'
 import ModelPricingDetails from './ModelPricingDetails.vue'
 import './model-group-chip.css'
-import ModelPriceEditor from './ModelPriceEditor.vue'
+import ModelPriceForm from './ModelPriceForm.vue'
 
 const props = defineProps<{
   model: string
@@ -45,7 +50,7 @@ const props = defineProps<{
   admin: boolean
 }>()
 const emit = defineEmits<{ close: []; select: [source: number]; changed: [] }>()
-const { t, locale } = useI18n()
+const { t, n, locale } = useI18n()
 const client = useApiClient()
 const cache = useQueryClient()
 const messages = useMessages()
@@ -94,13 +99,30 @@ const options = computed(() =>
 const sourceMap = computed(
   () => new Map(modelData.value?.sources.map((source) => [String(source.price.id), source])),
 )
-const editing = ref(false)
-const dirty = ref(false)
+// 统一价属于对外模型本身，与当前查看的来源无关；两张价格表单都直接在详情里编辑，由底部「保存」一起提交。
+const clientPrice = computed(
+  (): PriceSchedules =>
+    modelData.value?.price ?? {
+      currency: modelData.value?.sources[0]?.price.currency ?? 'USD',
+      prices: { input: null, output: null, cache_read: null, cache_write: null },
+      context_tiers: [],
+      mode_schedules: {},
+    },
+)
+const clientForm = ref<InstanceType<typeof ModelPriceForm>>()
+const sourceForm = ref<InstanceType<typeof ModelPriceForm>>()
+// 表单按版本号挂载：保存成功、放弃修改或恢复自动价格后换新版本，从服务端数据重建草稿。
+const clientVersion = ref(0)
+const sourceVersion = ref(0)
+const clientDirty = ref(false)
+const sourceDirty = ref(false)
+const dirty = computed(() => clientDirty.value || sourceDirty.value)
+const canSave = computed(() => Boolean(clientForm.value?.canSave || sourceForm.value?.canSave))
 const saving = ref(false)
+const unpricedOpen = ref(false)
 const resetting = ref(false)
 const resetOpen = ref(false)
 const resetError = ref('')
-const discardOpen = ref(false)
 const guard = ref<InstanceType<typeof AppDraftGuard>>()
 const body = ref<HTMLElement>()
 const capabilities = computed(() =>
@@ -114,7 +136,7 @@ const modalityText = (values: string[]) =>
     .map((value) => (knownModalities.includes(value) ? t('modelManager.modality.' + value) : value))
     .join(' / ')
 const busy = computed(() => saving.value || resetting.value)
-useLoadingActivity(resetting)
+useLoadingActivity(busy)
 useMessageSource(() =>
   (context.isError.value && context.data.value) ||
   (props.source && detail.isError.value && detail.data.value)
@@ -133,7 +155,6 @@ watch(
 watch(
   () => props.source,
   () => {
-    editing.value = false
     resetOpen.value = false
     resetError.value = ''
     void nextTick(() => body.value?.scrollTo({ top: 0 }))
@@ -145,28 +166,65 @@ async function close(): Promise<void> {
 async function select(id: number): Promise<void> {
   if (busy.value || id === props.source) return
   if (!(await guard.value?.confirm())) return
-  editing.value = false
+  // 确认离开即放弃全部未保存的修改，统一价草稿也一起丢弃。
+  clientVersion.value++
   emit('select', id)
-}
-function cancelEdit(): void {
-  if (dirty.value) discardOpen.value = true
-  else editing.value = false
-}
-function discardEdit(): void {
-  discardOpen.value = false
-  editing.value = false
-  dirty.value = false
 }
 function cancelReset(): void {
   resetOpen.value = false
   resetError.value = ''
 }
-function saved(updated: ModelPrice): void {
+function cacheSource(updated: ModelPrice): void {
   if (detail.data.value)
     cache.setQueryData(modelSourceKey(updated.id), { ...detail.data.value, price: updated })
-  dirty.value = false
-  editing.value = false
-  emit('changed')
+}
+// 先校验两张表单再依次提交；任一失败时已成功的那张保留结果，失败的那张保留草稿。
+async function save(confirmed = false): Promise<void> {
+  const forms = [clientForm.value, sourceForm.value].filter((form) => form?.canSave)
+  if (busy.value || !forms.length) return
+  if (!forms.map((form) => form!.validate()).every(Boolean)) {
+    await nextTick()
+    body.value?.querySelector<HTMLInputElement>('[aria-invalid="true"]')?.focus()
+    return
+  }
+  if (!confirmed && sourceForm.value?.canSave && sourceForm.value.unpricedRequested) {
+    unpricedOpen.value = true
+    return
+  }
+  saving.value = true
+  try {
+    if (clientForm.value?.canSave) {
+      const updated = await saveClientModelPrice(
+        client,
+        props.model,
+        clientForm.value.request,
+        controller.signal,
+      )
+      cache.setQueryData<RequestModel | null>(
+        modelContextKey(props.model, props.groups),
+        (current) => (current ? { ...current, price: updated } : current),
+      )
+      clientVersion.value++
+    }
+    if (sourceForm.value?.canSave && price.value) {
+      cacheSource(
+        await saveModelPrice(client, price.value.id, sourceForm.value.request, controller.signal),
+      )
+      sourceVersion.value++
+    }
+    if (controller.signal.aborted) return
+    messages.show({ tone: 'success', text: t('modelManager.saveSuccess') })
+    emit('changed')
+  } catch (cause) {
+    if (!controller.signal.aborted)
+      messages.show({
+        tone: 'danger',
+        text: cause instanceof ApiError ? cause.message : t('modelManager.saveFailed'),
+      })
+  } finally {
+    saving.value = false
+    unpricedOpen.value = false
+  }
 }
 async function reset(): Promise<void> {
   if (!price.value || busy.value) return
@@ -175,8 +233,10 @@ async function reset(): Promise<void> {
   try {
     const updated = await resetModelPrice(client, price.value.id, controller.signal)
     if (controller.signal.aborted) return
-    saved(updated)
+    cacheSource(updated)
+    sourceVersion.value++
     resetOpen.value = false
+    emit('changed')
     messages.show({ tone: 'success', text: t('modelManager.resetSuccess') })
   } catch {
     if (!controller.signal.aborted) resetError.value = t('modelManager.resetFailed')
@@ -205,256 +265,285 @@ async function reset(): Promise<void> {
     >
       <AppDialogHeader
         class="modern-model-detail-header"
-        :title="editing ? t('modelManager.edit') : model"
-        :description="editing ? model : undefined"
+        :title="model"
         :close-label="t('ui.close')"
         :close-disabled="busy"
         @close="close"
       />
-      <ModelPriceEditor
-        v-if="editing && price"
-        :key="price.id"
-        :price="price"
-        :model-count="detail.data.value?.modelCount ?? 0"
-        :group-count="detail.data.value?.groupCount ?? 0"
-        @dirty="dirty = $event"
-        @pending="saving = $event"
-        @saved="saved"
-        @cancel="cancelEdit"
-      />
-      <template v-else>
-        <div ref="body" class="modern-model-detail-body">
+      <div ref="body" class="modern-model-detail-body">
+        <AppCollectionState
+          v-if="!modelData && context.isPending.value"
+          :title="t('modelManager.loading')"
+          loading
+        />
+        <AppCollectionState
+          v-else-if="!modelData && context.isError.value"
+          :title="t('modelManager.failed')"
+          error
+        >
+          <AppButton @click="context.refetch()">{{ t('ui.retry') }}</AppButton>
+        </AppCollectionState>
+        <AppCollectionState
+          v-else-if="!modelData"
+          :icon="Boxes"
+          :title="t('modelManager.missing')"
+        />
+        <template v-else>
+          <AppFormSection
+            :title="t('modelManager.clientPrice')"
+            :description="admin ? t('modelManager.clientPriceImpact') : undefined"
+            compact
+          >
+            <template #actions>
+              <AppBadge v-if="!modelData.price" tone="warning" size="xs">{{
+                t('modelManager.priceMethods.pending')
+              }}</AppBadge>
+            </template>
+            <ModelPriceForm
+              v-if="admin"
+              ref="clientForm"
+              :key="clientVersion"
+              :price="clientPrice"
+              :unpriced-allowed="false"
+              :disabled="busy"
+              @dirty="clientDirty = $event"
+            />
+            <ModelPricingDetails v-else-if="modelData.price" :price="modelData.price" />
+            <p v-else class="modern-model-client-price-empty">
+              {{ t('modelManager.clientPricePending') }}
+            </p>
+          </AppFormSection>
+          <div class="modern-model-detail-navigation">
+            <AppSearchSelect
+              v-if="modelData.sources.length > 1"
+              :model-value="chosen ? String(source) : ''"
+              :options="options"
+              :label="t('modelManager.chooseSource')"
+              :placeholder="t('modelManager.chooseSource')"
+              label-hidden
+              size="sm"
+              class="modern-model-detail-source-select"
+              @update:model-value="select(Number($event))"
+            >
+              <template #option="{ option }">
+                <AppChannelIcon
+                  v-if="sourceMap.has(option.value)"
+                  :icon="sourceMap.get(option.value)!.price.channel.icon"
+                  :mark="sourceMap.get(option.value)!.price.channel.mark"
+                  :name="sourceMap.get(option.value)!.price.channel.name"
+                  :tooltip="false"
+                  size="sm"
+                />
+                <span>{{ option.label }}</span>
+              </template>
+            </AppSearchSelect>
+            <AppCopyValue
+              v-if="chosen && modelData.sources.length > 1"
+              :value="chosen.model"
+              display=""
+              :label="t('modelManager.copyUpstream')"
+            />
+            <div
+              v-if="chosen && modelData.sources.length === 1"
+              class="modern-model-detail-identity"
+            >
+              <AppChannelIcon
+                :icon="chosen.price.channel.icon"
+                :mark="chosen.price.channel.mark"
+                :name="chosen.price.channel.name"
+                :tooltip="false"
+                size="md"
+                surface
+              />
+              <div>
+                <strong>{{ chosen.price.channel.name || t('logs.deleted') }}</strong>
+                <AppCopyValue :value="chosen.model" :label="t('modelManager.copyUpstream')" />
+              </div>
+            </div>
+          </div>
           <AppCollectionState
-            v-if="!modelData && context.isPending.value"
+            v-if="!chosen && !source"
             :title="t('modelManager.loading')"
             loading
           />
           <AppCollectionState
-            v-else-if="!modelData && context.isError.value"
-            :title="t('modelManager.failed')"
-            error
-          >
-            <AppButton @click="context.refetch()">{{ t('ui.retry') }}</AppButton>
-          </AppCollectionState>
-          <AppCollectionState
-            v-else-if="!modelData"
+            v-else-if="!chosen"
             :icon="Boxes"
-            :title="t('modelManager.missing')"
+            :title="t('modelManager.sourceMissing')"
           />
+          <AppCollectionState
+            v-else-if="admin && detail.isPending.value"
+            :title="t('modelManager.loading')"
+            loading
+          />
+          <AppCollectionState v-else-if="!price" :title="t('modelManager.failed')" error>
+            <AppButton @click="detail.refetch()">{{ t('ui.retry') }}</AppButton>
+          </AppCollectionState>
           <template v-else>
-            <div class="modern-model-detail-navigation">
-              <AppSearchSelect
-                v-if="modelData.sources.length > 1"
-                :model-value="chosen ? String(source) : ''"
-                :options="options"
-                :label="t('modelManager.chooseSource')"
-                :placeholder="t('modelManager.chooseSource')"
-                label-hidden
-                size="sm"
-                class="modern-model-detail-source-select"
-                @update:model-value="select(Number($event))"
-              >
-                <template #option="{ option }">
-                  <AppChannelIcon
-                    v-if="sourceMap.has(option.value)"
-                    :icon="sourceMap.get(option.value)!.price.channel.icon"
-                    :mark="sourceMap.get(option.value)!.price.channel.mark"
-                    :name="sourceMap.get(option.value)!.price.channel.name"
-                    :tooltip="false"
-                    size="sm"
-                  />
-                  <span>{{ option.label }}</span>
-                </template>
-              </AppSearchSelect>
-              <AppCopyValue
-                v-if="chosen && modelData.sources.length > 1"
-                :value="chosen.model"
-                display=""
-                :label="t('modelManager.copyUpstream')"
+            <AppFormSection
+              v-if="admin"
+              :title="t('modelManager.upstreamPrice')"
+              :description="
+                t('modelManager.priceImpact', {
+                  models: n(detail.data.value?.modelCount ?? 0),
+                  groups: n(detail.data.value?.groupCount ?? 0),
+                })
+              "
+              compact
+            >
+              <template #actions>
+                <AppBadge
+                  :tone="price.status === 'pending' ? 'warning' : 'neutral'"
+                  size="xs"
+                  variant="plain"
+                  >{{ t('modelManager.priceMethods.' + priceStatus(price)) }}</AppBadge
+                >
+              </template>
+              <ModelPriceForm
+                ref="sourceForm"
+                :key="`${price.id}-${sourceVersion}`"
+                :price="price"
+                :unpriced-allowed="true"
+                :method="price.method"
+                :disabled="busy"
+                @dirty="sourceDirty = $event"
               />
-              <div
-                v-if="chosen && modelData.sources.length === 1"
-                class="modern-model-detail-identity"
+            </AppFormSection>
+            <AppFormSection v-if="catalog" :title="t('modelManager.catalog')" compact>
+              <div class="modern-model-catalog-origin">
+                <span>{{
+                  t(
+                    catalog.source === 'actual_provider'
+                      ? 'modelManager.actualProvider'
+                      : 'modelManager.referenceProvider',
+                  )
+                }}</span>
+                <strong>{{ catalog.provider }} · {{ catalog.name }}</strong>
+              </div>
+              <p v-if="catalog.description" class="modern-model-catalog-description">
+                {{ catalog.description }}
+              </p>
+              <dl class="modern-model-catalog-facts">
+                <template v-for="(value, key) in catalog.limits" :key="key">
+                  <div v-if="value !== null">
+                    <dt>{{ t('modelManager.limits.' + key) }}</dt>
+                    <dd>{{ formatCompactNumber(value, locale) }}</dd>
+                  </div>
+                </template>
+                <div v-if="catalog.family">
+                  <dt>{{ t('modelManager.family') }}</dt>
+                  <dd>{{ catalog.family }}</dd>
+                </div>
+                <div v-if="catalog.releaseDate">
+                  <dt>{{ t('modelManager.released') }}</dt>
+                  <dd>{{ catalog.releaseDate }}</dd>
+                </div>
+                <div v-if="catalog.knowledge">
+                  <dt>{{ t('modelManager.knowledge') }}</dt>
+                  <dd>{{ catalog.knowledge }}</dd>
+                </div>
+              </dl>
+              <p
+                v-if="catalog.modalities.input.length || catalog.modalities.output.length"
+                class="modern-model-modalities"
               >
-                <AppChannelIcon
-                  :icon="chosen.price.channel.icon"
-                  :mark="chosen.price.channel.mark"
-                  :name="chosen.price.channel.name"
-                  :tooltip="false"
-                  size="md"
-                  surface
-                />
-                <div>
-                  <strong>{{ chosen.price.channel.name || t('logs.deleted') }}</strong>
-                  <AppCopyValue :value="chosen.model" :label="t('modelManager.copyUpstream')" />
+                <span>{{ t('modelManager.modalities') }}</span>
+                {{ modalityText(catalog.modalities.input) || '—' }} →
+                {{ modalityText(catalog.modalities.output) || '—' }}
+              </p>
+              <div v-if="capabilities.length || catalog.status" class="modern-model-detail-tags">
+                <AppBadge
+                  v-for="capability in capabilities"
+                  :key="capability"
+                  size="xs"
+                  tone="neutral"
+                >
+                  {{ t('modelManager.capability.' + capability) }}
+                </AppBadge>
+                <AppBadge v-if="catalog.status" tone="neutral" size="xs">
+                  {{
+                    ['alpha', 'beta', 'deprecated'].includes(catalog.status)
+                      ? t('modelManager.catalogStatus.' + catalog.status)
+                      : catalog.status
+                  }}
+                </AppBadge>
+              </div>
+            </AppFormSection>
+            <AppFormSection
+              v-if="admin && groups.length"
+              :title="t('modelManager.relatedGroups')"
+              compact
+            >
+              <div
+                class="modern-model-detail-groups"
+                :class="{ 'has-shared-protocols': sharedProtocols !== null }"
+              >
+                <div v-for="group in groups" :key="group.id" class="modern-model-detail-group">
+                  <RouterLink
+                    :to="{ name: 'modern-group-detail', params: { id: String(group.id) } }"
+                    class="modern-model-group-chip"
+                    ><AppOverflowText :text="group.name || t('logs.deleted')"
+                  /></RouterLink>
+                  <AppBadge v-if="!group.enabled" size="xs" variant="plain">{{
+                    t('modelManager.paused')
+                  }}</AppBadge>
+                  <div v-if="sharedProtocols === null" class="modern-model-detail-tags">
+                    <AppProtocolTag
+                      v-for="protocol in group.protocols"
+                      :key="protocol"
+                      :protocol="protocol"
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
-            <AppCollectionState
-              v-if="!chosen && !source"
-              :title="t('modelManager.loading')"
-              loading
-            />
-            <AppCollectionState
-              v-else-if="!chosen"
-              :icon="Boxes"
-              :title="t('modelManager.sourceMissing')"
-            />
-            <AppCollectionState
-              v-else-if="admin && detail.isPending.value"
-              :title="t('modelManager.loading')"
-              loading
-            />
-            <AppCollectionState v-else-if="!price" :title="t('modelManager.failed')" error>
-              <AppButton @click="detail.refetch()">{{ t('ui.retry') }}</AppButton>
-            </AppCollectionState>
-            <template v-else>
-              <AppFormSection :title="t('modelManager.pricing')" compact>
-                <template #actions>
-                  <AppBadge
-                    :tone="price.status === 'pending' ? 'warning' : 'neutral'"
-                    size="xs"
-                    variant="plain"
-                    >{{ t('modelManager.priceMethods.' + priceStatus(price)) }}</AppBadge
-                  >
-                </template>
-                <ModelPricingDetails :price="price" />
-              </AppFormSection>
-              <AppFormSection v-if="catalog" :title="t('modelManager.catalog')" compact>
-                <div class="modern-model-catalog-origin">
-                  <span>{{
-                    t(
-                      catalog.source === 'actual_provider'
-                        ? 'modelManager.actualProvider'
-                        : 'modelManager.referenceProvider',
-                    )
-                  }}</span>
-                  <strong>{{ catalog.provider }} · {{ catalog.name }}</strong>
-                </div>
-                <p v-if="catalog.description" class="modern-model-catalog-description">
-                  {{ catalog.description }}
-                </p>
-                <dl class="modern-model-catalog-facts">
-                  <template v-for="(value, key) in catalog.limits" :key="key">
-                    <div v-if="value !== null">
-                      <dt>{{ t('modelManager.limits.' + key) }}</dt>
-                      <dd>{{ formatCompactNumber(value, locale) }}</dd>
-                    </div>
-                  </template>
-                  <div v-if="catalog.family">
-                    <dt>{{ t('modelManager.family') }}</dt>
-                    <dd>{{ catalog.family }}</dd>
-                  </div>
-                  <div v-if="catalog.releaseDate">
-                    <dt>{{ t('modelManager.released') }}</dt>
-                    <dd>{{ catalog.releaseDate }}</dd>
-                  </div>
-                  <div v-if="catalog.knowledge">
-                    <dt>{{ t('modelManager.knowledge') }}</dt>
-                    <dd>{{ catalog.knowledge }}</dd>
-                  </div>
-                </dl>
-                <p
-                  v-if="catalog.modalities.input.length || catalog.modalities.output.length"
-                  class="modern-model-modalities"
-                >
-                  <span>{{ t('modelManager.modalities') }}</span>
-                  {{ modalityText(catalog.modalities.input) || '—' }} →
-                  {{ modalityText(catalog.modalities.output) || '—' }}
-                </p>
-                <div v-if="capabilities.length || catalog.status" class="modern-model-detail-tags">
-                  <AppBadge
-                    v-for="capability in capabilities"
-                    :key="capability"
-                    size="xs"
-                    tone="neutral"
-                  >
-                    {{ t('modelManager.capability.' + capability) }}
-                  </AppBadge>
-                  <AppBadge v-if="catalog.status" tone="neutral" size="xs">
-                    {{
-                      ['alpha', 'beta', 'deprecated'].includes(catalog.status)
-                        ? t('modelManager.catalogStatus.' + catalog.status)
-                        : catalog.status
-                    }}
-                  </AppBadge>
-                </div>
-              </AppFormSection>
-              <AppFormSection
-                v-if="admin && groups.length"
-                :title="t('modelManager.relatedGroups')"
-                compact
-              >
-                <div
-                  class="modern-model-detail-groups"
-                  :class="{ 'has-shared-protocols': sharedProtocols !== null }"
-                >
-                  <div v-for="group in groups" :key="group.id" class="modern-model-detail-group">
-                    <RouterLink
-                      :to="{ name: 'modern-group-detail', params: { id: String(group.id) } }"
-                      class="modern-model-group-chip"
-                      ><AppOverflowText :text="group.name || t('logs.deleted')"
-                    /></RouterLink>
-                    <AppBadge v-if="!group.enabled" size="xs" variant="plain">{{
-                      t('modelManager.paused')
-                    }}</AppBadge>
-                    <div v-if="sharedProtocols === null" class="modern-model-detail-tags">
-                      <AppProtocolTag
-                        v-for="protocol in group.protocols"
-                        :key="protocol"
-                        :protocol="protocol"
-                      />
-                    </div>
-                  </div>
-                </div>
-                <div v-if="sharedProtocols?.length" class="modern-model-detail-tags">
-                  <AppProtocolTag
-                    v-for="protocol in sharedProtocols"
-                    :key="protocol"
-                    :protocol="protocol"
-                  />
-                </div>
-              </AppFormSection>
-              <AppFormSection
-                v-if="admin && relatedModels.length > 1"
-                :title="t('modelManager.relatedModels')"
-                compact
-              >
-                <div class="modern-model-detail-tags">
-                  <AppBadge v-for="item in relatedModels" :key="item" size="xs" tone="neutral">
-                    <AppOverflowText :text="item" />
-                  </AppBadge>
-                </div>
-              </AppFormSection>
-            </template>
-          </template>
-        </div>
-        <footer class="modern-model-detail-footer">
-          <AppButton
-            v-if="admin && chosen && price?.canReset"
-            variant="text"
-            size="sm"
-            :icon="RotateCcw"
-            :disabled="busy"
-            @click="resetOpen = true"
-          >
-            {{ t('modelManager.reset') }}
-          </AppButton>
-          <div>
-            <AppButton size="sm" :disabled="busy" @click="close">{{ t('ui.close') }}</AppButton>
-            <AppButton
-              v-if="admin && chosen && price"
-              size="sm"
-              variant="primary"
-              :icon="PencilLine"
-              :disabled="busy"
-              @click="editing = true"
+              <div v-if="sharedProtocols?.length" class="modern-model-detail-tags">
+                <AppProtocolTag
+                  v-for="protocol in sharedProtocols"
+                  :key="protocol"
+                  :protocol="protocol"
+                />
+              </div>
+            </AppFormSection>
+            <AppFormSection
+              v-if="admin && relatedModels.length > 1"
+              :title="t('modelManager.relatedModels')"
+              compact
             >
-              {{ t('modelManager.edit') }}
-            </AppButton>
-          </div>
-        </footer>
-      </template>
+              <div class="modern-model-detail-tags">
+                <AppBadge v-for="item in relatedModels" :key="item" size="xs" tone="neutral">
+                  <AppOverflowText :text="item" />
+                </AppBadge>
+              </div>
+            </AppFormSection>
+          </template>
+        </template>
+      </div>
+      <footer class="modern-model-detail-footer">
+        <AppButton
+          v-if="admin && chosen && price?.canReset"
+          variant="text"
+          size="sm"
+          :icon="RotateCcw"
+          :disabled="busy"
+          @click="resetOpen = true"
+        >
+          {{ t('modelManager.reset') }}
+        </AppButton>
+        <div>
+          <AppButton size="sm" :disabled="busy" @click="close">{{ t('ui.close') }}</AppButton>
+          <AppButton
+            v-if="admin && modelData"
+            size="sm"
+            variant="primary"
+            :icon="Save"
+            :disabled="!canSave || resetting"
+            :loading="saving"
+            @click="save()"
+          >
+            {{ t('modelManager.save') }}
+          </AppButton>
+        </div>
+      </footer>
     </AppDialogContent>
   </DialogRoot>
   <AppDraftGuard
@@ -464,13 +553,13 @@ async function reset(): Promise<void> {
     :query-scope="['model', 'source', 'group_status']"
   />
   <AppConfirmDialog
-    :open="discardOpen"
-    :title="t('groups.edit.unsaved')"
-    :confirm-label="t('groups.edit.discard')"
-    :cancel-label="t('groups.edit.keepEditing')"
-    tone="danger"
-    @confirm="discardEdit"
-    @cancel="discardOpen = false"
+    :open="unpricedOpen"
+    :title="t('modelManager.unpricedTitle')"
+    :description="t('modelManager.unpricedDescription')"
+    :confirm-label="t('modelManager.confirmUnpriced')"
+    :pending="saving"
+    @confirm="save(true)"
+    @cancel="unpricedOpen = false"
   />
   <AppConfirmDialog
     :open="resetOpen"
@@ -486,6 +575,10 @@ async function reset(): Promise<void> {
 </template>
 
 <style scoped>
+.modern-model-client-price-empty {
+  color: var(--modern-muted);
+  font-size: var(--modern-font-size-small);
+}
 .modern-model-detail-header {
   overflow-wrap: anywhere;
 }

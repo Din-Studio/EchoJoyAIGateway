@@ -22,6 +22,7 @@ export const logColumnIds = [
   'output_tokens',
   'cache_read_tokens',
   'estimated_cost_nano',
+  'upstream_cost_nano',
   'upstream_model',
   'upstream_reported_model',
   'model_consistency',
@@ -89,6 +90,7 @@ const definitions: readonly [LogColumnId, number, LogColumnSection, boolean, boo
     ['pricing_mode', 64, 'billing', false],
     ['context_threshold_tokens', 72, 'billing', false],
     ['cost_state', 64, 'billing', false],
+    ['upstream_cost_nano', 76, 'billing', false, true],
   ]
 
 const previousDefaultColumns: readonly LogColumnId[] = [
@@ -122,6 +124,7 @@ export const numericColumns: ReadonlySet<LogColumnId> = new Set([
   'cache_write_tokens',
   'total_tokens',
   'estimated_cost_nano',
+  'upstream_cost_nano',
   'context_threshold_tokens',
 ])
 export const logColumns: readonly LogColumn[] = definitions.map(

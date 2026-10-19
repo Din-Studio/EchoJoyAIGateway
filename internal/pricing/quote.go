@@ -32,12 +32,32 @@ func (table *Table) QuoteForMode(identity Identity, result usage.Result, mode Mo
 	return quote
 }
 
-// QuoteForModeWithMultipliers 在原计价完成后统一调整请求总费用。
+// QuoteForModeWithMultipliers 在上游价格计价完成后统一调整请求总费用。
 func (table *Table) QuoteForModeWithMultipliers(identity Identity, result usage.Result, mode Mode, multipliers PriceMultipliers) (Quote, *Receipt) {
+	quote, receipt := table.QuoteForModeWithReceipt(identity, result, mode)
+	return applyQuoteMultipliers(quote, receipt, multipliers, UpstreamReceiptSchemaVersion)
+}
+
+// QuoteClientModel 按客户端模型的统一价计价，再乘访问密钥倍率；分组倍率只作用于
+// 上游费用，因此这里固定为 1。未配置统一价的模型按未定价处理，不回退到上游价格。
+func (table *Table) QuoteClientModel(clientModel string, result usage.Result, mode Mode, accessKey PriceMultiplier) (Quote, *Receipt) {
+	var rule ClientRule
+	found := false
+	if table != nil {
+		rule, found = table.clientRules[clientModel]
+	}
+	quote, receipt := quoteSchedules(
+		rule.Prices, rule.ContextTiers, rule.ModeSchedules, found,
+		ReceiptRule{ClientModel: clientModel}, result, mode,
+	)
+	multipliers := PriceMultipliers{Group: DefaultPriceMultiplier, AccessKey: accessKey}
+	return applyQuoteMultipliers(quote, receipt, multipliers, ClientModelReceiptSchemaVersion)
+}
+
+func applyQuoteMultipliers(quote Quote, receipt *Receipt, multipliers PriceMultipliers, schemaVersion int) (Quote, *Receipt) {
 	if !multipliers.Group.Valid() || !multipliers.AccessKey.Valid() {
 		return unavailableQuote(), nil
 	}
-	quote, receipt := table.QuoteForModeWithReceipt(identity, result, mode)
 	if receipt == nil {
 		return quote, nil
 	}
@@ -50,7 +70,7 @@ func (table *Table) QuoteForModeWithMultipliers(identity Identity, result usage.
 		quote.EstimatedCostNanoUSD = adjusted
 		receipt.TotalNanoUSD = int64(adjusted)
 	}
-	receipt.SchemaVersion = 6
+	receipt.SchemaVersion = schemaVersion
 	receipt.BaseTotalNanoUSD = &baseTotal
 	receipt.PriceMultipliers = &multipliers
 	return quote, receipt
@@ -64,6 +84,24 @@ func (table *Table) QuoteForModeWithReceipt(
 	result usage.Result,
 	mode Mode,
 ) (Quote, *Receipt) {
+	rule, found := table.Lookup(identity)
+	return quoteSchedules(
+		rule.Prices, rule.ContextTiers, rule.ModeSchedules, found,
+		ReceiptRule{ChannelID: identity.ChannelID, ModelID: identity.ModelID}, result, mode,
+	)
+}
+
+// quoteSchedules prices usage against one rule's schedules; found reports
+// whether a rule exists for the receipt identity.
+func quoteSchedules(
+	basePrices Prices,
+	contextTiers []ContextTier,
+	modeSchedules map[Mode]Schedule,
+	found bool,
+	receiptRule ReceiptRule,
+	result usage.Result,
+	mode Mode,
+) (Quote, *Receipt) {
 	switch result.State {
 	case usage.StateNotApplicable:
 		return Quote{State: CostStateNotApplicable, Completeness: CompletenessNotApplicable}, nil
@@ -74,8 +112,7 @@ func (table *Table) QuoteForModeWithReceipt(
 		return unavailableQuote(), nil
 	}
 
-	rule, ok := table.Lookup(identity)
-	if !ok {
+	if !found {
 		return unavailableQuote(), nil
 	}
 	if _, ok := usage.CheckedTotal(result.Tokens); !ok {
@@ -87,9 +124,9 @@ func (table *Table) QuoteForModeWithReceipt(
 	}
 
 	selectedMode := ModeStandard
-	prices, selectedThreshold := selectSchedulePrices(rule.Prices, rule.ContextTiers, inputTokens)
+	prices, selectedThreshold := selectSchedulePrices(basePrices, contextTiers, inputTokens)
 	if selectedThreshold == nil && mode != "" && mode != ModeStandard {
-		if schedule, exists := rule.ModeSchedules[mode]; exists {
+		if schedule, exists := modeSchedules[mode]; exists {
 			selectedMode = mode
 			prices, selectedThreshold = selectSchedulePrices(
 				schedule.Prices,
@@ -112,15 +149,12 @@ func (table *Table) QuoteForModeWithReceipt(
 		{code: "output", tokens: result.Tokens.Output, price: prices.Output, multiplier: directPriceMultiplier},
 	}
 	receipt := &Receipt{
-		SchemaVersion: 4,
-		Method:        ReceiptMethodUnitRateSum,
-		MethodVersion: 1,
-		Currency:      "USD",
-		PricingMode:   selectedMode,
-		Rule: ReceiptRule{
-			ChannelID: identity.ChannelID,
-			ModelID:   identity.ModelID,
-		},
+		SchemaVersion:          4,
+		Method:                 ReceiptMethodUnitRateSum,
+		MethodVersion:          1,
+		Currency:               "USD",
+		PricingMode:            selectedMode,
+		Rule:                   receiptRule,
 		ContextThresholdTokens: selectedThreshold,
 		LineItems:              make([]ReceiptLine, 0, len(components)+1),
 	}

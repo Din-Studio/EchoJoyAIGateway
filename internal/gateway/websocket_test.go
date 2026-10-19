@@ -151,10 +151,7 @@ func TestWebsocketQuotaCountsConcurrentTurnsOnceWithoutReservation(t *testing.T)
 		t.Fatal(err)
 	}
 	quota := useSharedAccessQuota(t, h)
-	table, err := pricing.NewTable([]pricing.Rule{{Identity: pricing.Identity{ChannelID: "openai", ModelID: "upstream"}, Prices: pricing.Prices{Input: pricing.Price{NanoUSDPerMillion: 1_000_000, Set: true}, Output: pricing.Price{NanoUSDPerMillion: 1_000_000, Set: true}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	table := mustGatewayTableWithClientPrices(t, []pricing.Rule{{Identity: pricing.Identity{ChannelID: "openai", ModelID: "upstream"}, Prices: pricing.Prices{Input: pricing.Price{NanoUSDPerMillion: 1_000_000, Set: true}, Output: pricing.Price{NanoUSDPerMillion: 1_000_000, Set: true}}}}, "public")
 	h.priceTables = &mutableGatewayPriceTableProvider{table: table}
 	server := httptest.NewServer(engine)
 	defer server.Close()

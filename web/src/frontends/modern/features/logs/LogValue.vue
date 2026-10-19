@@ -2,7 +2,7 @@
 import { protocolLabel } from '@modern/i18n/protocols'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { LogEntry } from '@modern/api/logs'
+import type { LogCost, LogEntry } from '@modern/api/logs'
 import type { GroupRow } from '@modern/api/groups'
 import type { GroupChannel } from '@modern/api/group-create'
 import {
@@ -37,6 +37,18 @@ const props = defineProps<{
   table?: boolean
 }>()
 const { t, te, locale, n } = useI18n()
+// 费用与上游费用共用同一套显示规则；不是费用列时为 undefined，管理员以外看不到上游费用时为 null。
+const costCell = computed<LogCost | null | undefined>(() => {
+  const row = props.row
+  if (props.column === 'estimated_cost_nano')
+    return {
+      cost_state: row.cost_state,
+      pricing_completeness: row.pricing_completeness,
+      cost_nano: row.estimated_cost_nano,
+    }
+  if (props.column === 'upstream_cost_nano') return row.upstream_cost
+  return undefined
+})
 const group = computed(() =>
   props.row.group_id ? props.groups?.get(props.row.group_id) : undefined,
 )
@@ -121,12 +133,15 @@ const display = computed(() => {
       return logHasUsage(row) && rate !== null ? n(rate, { maximumFractionDigits: 1 }) + '%' : '—'
     }
     case 'estimated_cost_nano':
-      return row.cost_state === 'unpriced'
-        ? t('logs.values.unpriced')
-        : row.cost_state === 'not_applicable'
-          ? '—'
-          : (row.pricing_completeness === 'partial' ? '≈ ' : '') +
-            logMoney(row.estimated_cost_nano, row.currency, locale.value)
+    case 'upstream_cost_nano': {
+      const cost = costCell.value
+      if (!cost || cost.cost_state === 'not_applicable') return '—'
+      if (cost.cost_state === 'unpriced') return t('logs.values.unpriced')
+      return (
+        (cost.pricing_completeness === 'partial' ? '≈ ' : '') +
+        logMoney(cost.cost_nano, row.currency, locale.value)
+      )
+    }
     case 'context_threshold_tokens':
       return row.context_threshold_tokens === null
         ? '—'
@@ -156,10 +171,11 @@ const deleted = computed(() => {
 })
 const hint = computed(() => {
   const row = props.row
-  if (props.column === 'estimated_cost_nano')
-    return row.cost_state === 'priced'
-      ? `${exactLogMoney(row.estimated_cost_nano, row.currency, locale.value)} · ${valueName(row.pricing_completeness)}`
-      : valueName(row.cost_state)
+  const cost = costCell.value
+  if (cost)
+    return cost.cost_state === 'priced'
+      ? `${exactLogMoney(cost.cost_nano, row.currency, locale.value)} · ${valueName(cost.pricing_completeness)}`
+      : valueName(cost.cost_state)
   if (props.column === 'attempt_count')
     return t('logs.attemptCount', { count: n(row.attempt_count) })
   return undefined
@@ -252,7 +268,7 @@ const hint = computed(() => {
     :full-text="hint"
     :class="{
       'modern-log-empty': table && display === '—',
-      'modern-log-amount': table && column === 'estimated_cost_nano' && row.cost_state === 'priced',
+      'modern-log-amount': table && costCell?.cost_state === 'priced',
       'modern-log-number':
         table &&
         (tokenValue !== undefined || column === 'duration_ms' || column === 'first_response_ms'),

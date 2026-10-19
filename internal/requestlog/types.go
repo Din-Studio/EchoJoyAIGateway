@@ -57,6 +57,8 @@ type Attempt struct {
 	ErrorSummary      string                    `json:"error_summary"`
 	Committed         bool                      `json:"committed"`
 	PricingReceipt    *pricing.Receipt          `json:"pricing_receipt,omitempty"`
+	// UpstreamPricingReceipt explains the upstream cost of the attributed attempt.
+	UpstreamPricingReceipt *pricing.Receipt `json:"upstream_pricing_receipt,omitempty"`
 }
 
 type RetryState string
@@ -162,6 +164,10 @@ type Record struct {
 	CacheWriteUnknownTokens int64
 	OutputTokens            int64
 	EstimatedCostNanoUSD    int64
+	// Upstream* 是按上游价格与分组倍率计算的上游费用，只记美元。
+	UpstreamCostState           pricing.CostState
+	UpstreamPricingCompleteness pricing.Completeness
+	UpstreamCostNanoUSD         int64
 	// Settlement 是结算时冻结的币种与汇率；EstimatedCostNano/DecisionCostNano 以它计。
 	Settlement        pricing.Currency
 	EstimatedCostNano int64

@@ -227,6 +227,8 @@ func requestLogWindowRow(id string, credentialID uint, completedAt time.Time, in
 		UpstreamModel: "codex-a", Status: string(telemetry.RequestStatusSuccess), StatusCode: 200,
 		DurationMs: 1, UncachedInputTokens: input, OutputTokens: 5,
 		UsageState: string(usage.StateComplete), CostState: string(pricing.CostStatePriced),
-		PricingCompleteness: string(pricing.CompletenessComplete),
+		PricingCompleteness:         string(pricing.CompletenessComplete),
+		UpstreamCostState:           string(pricing.CostStatePriced),
+		UpstreamPricingCompleteness: string(pricing.CompletenessComplete),
 	}
 }

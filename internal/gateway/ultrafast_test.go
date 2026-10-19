@@ -103,10 +103,7 @@ func TestUltrafastRequestPricingAcrossTransports(t *testing.T) {
 					wantCost = 12_000
 					wantMode = pricing.ModeStandard
 				}
-				table, err := pricing.NewTable([]pricing.Rule{rule})
-				if err != nil {
-					t.Fatal(err)
-				}
+				table := mustGatewayTableWithClientPrices(t, []pricing.Rule{rule}, "public")
 				handler.priceTables = &mutableGatewayPriceTableProvider{table: table}
 				sink := &recordingRequestLogSink{}
 				handler.requestLogSink = sink

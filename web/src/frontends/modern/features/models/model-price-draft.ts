@@ -2,10 +2,10 @@ import { roundDecimalString } from '@modern/components/ui/format'
 import {
   priceFields,
   type PriceField,
-  type ModelPrice,
   type ModelPriceUpdate,
   type PriceSlots,
   type PriceSchedule,
+  type PriceSchedules,
 } from '@modern/api/models'
 
 export interface PriceDraftTier {
@@ -34,7 +34,7 @@ let nextTier = 0
 export function newPriceTier(): PriceDraftTier {
   return { key: String(++nextTier), threshold: '', prices: draftSlots() }
 }
-export function priceDraft(price: ModelPrice): PriceDraftSchedule[] {
+export function priceDraft(price: PriceSchedules): PriceDraftSchedule[] {
   const read = (mode: string, schedule: PriceSchedule): PriceDraftSchedule => ({
     mode,
     prices: draftSlots(schedule.prices, price.currency),

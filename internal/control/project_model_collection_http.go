@@ -27,6 +27,14 @@ func (s *Server) handleListProjectModels(c *gin.Context) {
 		return
 	}
 	for itemIndex := range result.Items {
+		if price := result.Items[itemIndex].Price; price != nil {
+			converted, err := price.inCurrency(currency)
+			if err != nil {
+				writeServiceError(c, "list_project_models", err)
+				return
+			}
+			result.Items[itemIndex].Price = &converted
+		}
 		upstreams := result.Items[itemIndex].UpstreamModels
 		for index := range upstreams {
 			if upstreams[index].Price, err = upstreams[index].Price.inCurrency(currency); err != nil {

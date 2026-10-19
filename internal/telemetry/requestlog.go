@@ -114,14 +114,23 @@ type Attempt struct {
 	Committed         bool
 }
 
-// PricingObservation is the frozen, dependency-neutral quote selected by the
-// gateway for the attempt whose usage is attributed to the request outcome.
+// PricingObservation is the frozen, dependency-neutral pair of quotes selected
+// by the gateway for the attempt whose usage is attributed to the request
+// outcome. The charge (CostState through ReceiptJSON) is priced by ClientModel
+// and the access key multiplier; the Upstream* cost is priced by the channel's
+// UpstreamModel and the group multiplier.
 type PricingObservation struct {
+	ClientModel          string
 	UpstreamModel        string
 	CostState            string
 	PricingCompleteness  string
 	EstimatedCostNanoUSD int64
 	ReceiptJSON          string
+
+	UpstreamCostState           string
+	UpstreamPricingCompleteness string
+	UpstreamCostNanoUSD         int64
+	UpstreamReceiptJSON         string
 }
 
 type UsageObservation struct {

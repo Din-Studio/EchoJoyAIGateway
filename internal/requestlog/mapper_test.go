@@ -53,10 +53,14 @@ func TestMapEventPersistsFrozenUsagePricingAndAttribution(t *testing.T) {
 	event.Usage.AttemptSequence = 1
 	event.Usage.CredentialID = 8
 	event.Usage.Pricing = telemetry.PricingObservation{
-		UpstreamModel:        "upstream-model",
-		CostState:            string(pricing.CostStatePriced),
-		PricingCompleteness:  string(pricing.CompletenessPartial),
-		EstimatedCostNanoUSD: 123456,
+		UpstreamModel:               "upstream-model",
+		CostState:                   string(pricing.CostStatePriced),
+		PricingCompleteness:         string(pricing.CompletenessPartial),
+		EstimatedCostNanoUSD:        123456,
+		ClientModel:                 "upstream-model",
+		UpstreamCostState:           string(pricing.CostStatePriced),
+		UpstreamPricingCompleteness: string(pricing.CompletenessPartial),
+		UpstreamCostNanoUSD:         123456,
 	}
 
 	row := mustMapEvent(t, redact.New(), event)
@@ -129,10 +133,14 @@ func TestMapEventPersistsEveryValidFrozenPricingState(t *testing.T) {
 			event.Usage.AttemptSequence = 1
 			event.Usage.CredentialID = 8
 			event.Usage.Pricing = telemetry.PricingObservation{
-				UpstreamModel:        event.UpstreamModel,
-				CostState:            string(test.costState),
-				PricingCompleteness:  string(test.completeness),
-				EstimatedCostNanoUSD: test.cost,
+				UpstreamModel:               event.UpstreamModel,
+				CostState:                   string(test.costState),
+				PricingCompleteness:         string(test.completeness),
+				EstimatedCostNanoUSD:        test.cost,
+				ClientModel:                 event.UpstreamModel,
+				UpstreamCostState:           string(test.costState),
+				UpstreamPricingCompleteness: string(test.completeness),
+				UpstreamCostNanoUSD:         test.cost,
 			}
 			row := mustMapEvent(t, redact.New(), event)
 			if row.UsageState != string(test.usageState) || row.CostState != string(test.costState) ||
@@ -152,7 +160,11 @@ func TestMapEventRejectsInvalidFrozenObservationAtomically(t *testing.T) {
 		event.Usage.Pricing = telemetry.PricingObservation{
 			UpstreamModel: event.UpstreamModel,
 			CostState:     string(pricing.CostStatePriced), PricingCompleteness: string(pricing.CompletenessComplete),
-			EstimatedCostNanoUSD: 1,
+			EstimatedCostNanoUSD:        1,
+			ClientModel:                 event.UpstreamModel,
+			UpstreamCostState:           string(pricing.CostStatePriced),
+			UpstreamPricingCompleteness: string(pricing.CompletenessComplete),
+			UpstreamCostNanoUSD:         1,
 		}
 		return event
 	}
@@ -201,6 +213,8 @@ func TestMapEventAllowsUnboundNoModelResourceOnlyAsNotApplicable(t *testing.T) {
 			Result: usage.Result{State: usage.StateNotApplicable},
 			Pricing: telemetry.PricingObservation{
 				CostState: string(pricing.CostStateNotApplicable), PricingCompleteness: string(pricing.CompletenessNotApplicable),
+				UpstreamCostState:           string(pricing.CostStateNotApplicable),
+				UpstreamPricingCompleteness: string(pricing.CompletenessNotApplicable),
 			},
 		},
 	}
@@ -226,8 +240,10 @@ func TestMapEventKeepsLocalAttemptButLeavesCredentialUsageUnbound(t *testing.T) 
 	event.Usage = telemetry.UsageObservation{
 		Result: usage.Result{State: usage.StateNotApplicable},
 		Pricing: telemetry.PricingObservation{
-			CostState:           string(pricing.CostStateNotApplicable),
-			PricingCompleteness: string(pricing.CompletenessNotApplicable),
+			CostState:                   string(pricing.CostStateNotApplicable),
+			PricingCompleteness:         string(pricing.CompletenessNotApplicable),
+			UpstreamCostState:           string(pricing.CostStateNotApplicable),
+			UpstreamPricingCompleteness: string(pricing.CompletenessNotApplicable),
 		},
 	}
 
