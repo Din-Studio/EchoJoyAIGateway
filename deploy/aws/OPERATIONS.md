@@ -118,12 +118,22 @@ PostgreSQL 只能在同一个大版本内升级（例如 18.3 → 18.4）。跨�
 2. 执行 `scripts/put-secrets.sh`，按提示输入同一个 token，写入 `LINGYING_BILLING_TOKEN`。
 3. 执行 `scripts/deploy.sh gateway --image-tag <标签>`。`LINGYING_BILLING_BASE_URL` 已在 `gateway.yaml` 中设为 `https://<GatewayHost>`。
 4. 在管理后台确认系统货币为 CNY。不是 CNY 时，灵影的密钥一律返回 503 `billing_unavailable`。
-5. 在网关实例上确认网络可达，期望返回 404 `NOT_FOUND`（key 不存在），而不是 401 或 403：
+5. 在网关实例上确认网络可达，期望返回 404，消息为 `api key not found or expired`。返回 401 或 403 说明 token 不一致；消息为「接口不存在」说明灵影还没有部署这个接口：
 
    ```bash
    curl -sS -X POST https://lingying-gateway.echojoy.cn/internal/aigw/balance \
      -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' -d '{"api_key":"sk-none"}'
    ```
+
+**灵影调用控制面**：灵影用 `GET /api/models` 读取文本模型目录，用 `POST /api/access-keys`、`DELETE /api/access-keys/{id}` 同步个人 API Key。入口是 `config.env` 的 `CONTROL_HOST`（`aigw-internal.echojoy.cn`）：`scripts/private-dns.sh` 让它只在 VPC 内解析到 alb-internal，`gateway.yaml` 的 `InternalControlListenerRule` 只放行这两组路径，其余路径落到 ALB 默认动作。灵影侧配置：
+
+| 变量 | 值 |
+|---|---|
+| `AI_GATEWAY_BASE_URL` | `https://aigw-internal.echojoy.cn` |
+| `AI_GATEWAY_AUTH_KEY` | SSM `$SSM_PREFIX/AUTH_KEY` |
+| `AI_GATEWAY_CALLBACK_TOKEN` | SSM `$SSM_PREFIX/LINGYING_BILLING_TOKEN` |
+
+轮换 `AUTH_KEY` 时要同步改灵影的 `AI_GATEWAY_AUTH_KEY`，否则 key 同步会返回 401。
 
 **轮换 token**：先改灵影侧，再用第 3 节的 `aws ssm put-parameter --overwrite` 改 `LINGYING_BILLING_TOKEN` 并重启任务。两边不一致期间，查余额返回 503，用量上报失败后会持续重试，token 一致后自动补报。
 

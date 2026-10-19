@@ -10,7 +10,7 @@
 |---|---|
 | `network.yaml` | 3 个安全组、SNS 告警主题、可选的月度预算 |
 | `data.yaml` | 3 台 Redis、1 台 PostgreSQL（固定私有 IP）、数据卷、DLM 快照、备份桶、自动恢复和服务告警 |
-| `gateway.yaml` | ECS 集群、ASG 和容量提供程序、任务定义和服务、两个目标组、两个 ALB 上的新规则、扩缩、告警 |
+| `gateway.yaml` | ECS 集群、ASG 和容量提供程序、任务定义和服务、两个目标组、两个 ALB 上的新规则（含 alb-internal 上给灵影的控制面入口）、扩缩、告警 |
 | `scripts/deploy.sh` | 部署上面 3 个栈，`--dry-run` 只预览变更集 |
 | `scripts/put-secrets.sh` | 在 SSM 创建密钥，只创建不覆盖 |
 | `scripts/mirror-images.sh` | 同步 amd64 的 postgres 和 redis 到 `docker.echojoy.cn/echojoy-gateway/`，已存在的标签不覆盖 |
