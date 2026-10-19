@@ -52,6 +52,13 @@ Parameters:
   NewRulePriority:
     Type: Number
     Default: 30
+  ControlHost:
+    Type: String
+    Default: aigw-internal.echojoy.cn
+    Description: 灵影调用控制面的域名，只在 VPC 内解析到 alb-internal
+  ControlRulePriority:
+    Type: Number
+    Default: 32
   RedisAddrs:
     Type: String
     Default: 172.31.15.11:6379,172.31.31.11:6379,172.31.47.11:6379
@@ -365,6 +372,24 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref InternalTargetGroup
 
+  # 灵影同步个人 API Key、读取文本模型目录（/api/models、/api/access-keys）。
+  # Web UI 和其他控制面接口不放行，运维仍走 SSM 端口转发。
+  InternalControlListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref InternalAlbListenerArn
+      Priority: !Ref ControlRulePriority
+      Conditions:
+        - Field: host-header
+          HostHeaderConfig:
+            Values: [!Ref ControlHost]
+        - Field: path-pattern
+          PathPatternConfig:
+            Values: ["/api/models", "/api/access-keys", "/api/access-keys/*"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref InternalTargetGroup
+
   # ---------- 任务与服务（6.2、6.4 节） ----------
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -634,3 +659,5 @@ Outputs:
     Value: !Ref PublicListenerRule
   InternalListenerRuleArn:
     Value: !Ref InternalListenerRule
+  InternalControlListenerRuleArn:
+    Value: !Ref InternalControlListenerRule
