@@ -38,7 +38,7 @@ scripts/deploy.sh gateway --image-tag "$TAG"             # 正式发布
 实例不开 22 端口，也没有 SSH，用 SSM 端口转发。本机需要安装 `session-manager-plugin`，IAM 用户需要 `ssm:StartSession` 权限。在仓库根目录执行：
 
 ```bash
-make aws-tunnel             # 任选一台网关实例的 3001 → localhost:13001，浏览器打开后用 AUTH_KEY 登录
+make aws-tunnel             # 任选一台运行网关任务的实例的 3001 → localhost:13001，浏览器打开后用 AUTH_KEY 登录
 make aws-tunnel TUNNEL=pg   # PostgreSQL 5432 → localhost:15432，库和用户都是 gateway
 ```
 
