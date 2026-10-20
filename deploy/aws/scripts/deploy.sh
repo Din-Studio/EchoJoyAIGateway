@@ -77,6 +77,9 @@ NewRulePriority=$NEW_RULE_PRIORITY
 ControlHost=$CONTROL_HOST
 ControlRulePriority=$CONTROL_RULE_PRIORITY
 RedisAddrs=$REDIS_IP_A:6379,$REDIS_IP_B:6379,$REDIS_IP_C:6379
+EchoJoyAuthJwksUrl=$ECHOJOY_AUTH_JWKS_URL
+EchoJoyAuthIssuer=$ECHOJOY_AUTH_ISSUER
+EchoJoyAuthAudience=$ECHOJOY_AUTH_AUDIENCE
 EOF
       ;;
   esac

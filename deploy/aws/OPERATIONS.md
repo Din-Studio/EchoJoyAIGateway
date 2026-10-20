@@ -135,6 +135,8 @@ PostgreSQL 只能在同一个大版本内升级（例如 18.3 → 18.4）。跨�
 
 轮换 `AUTH_KEY` 时要同步改灵影的 `AI_GATEWAY_AUTH_KEY`，否则 key 同步会返回 401。
 
+**EchoJoyAuth access token**：数据面请求可以用灵影用户的 access token 代替访问密钥，按该用户的默认密钥 `ly:default:<key_id>` 处理。配置在 `config.env` 的 `ECHOJOY_AUTH_JWKS_URL`、`ECHOJOY_AUTH_ISSUER`、`ECHOJOY_AUTH_AUDIENCE`，由 `deploy.sh gateway` 传进任务定义，修改后要重新执行 `scripts/deploy.sh gateway`。`ISSUER` 要与灵影的 `AUTH_TOKEN_ISSUER` 一致，`AUDIENCE` 要与灵影的 `AUTH_AUDIENCE` 一致，灵影没有设置时留空。JWKS URL 和 issuer 都留空则关闭这个功能。
+
 **轮换 token**：先改灵影侧，再用第 3 节的 `aws ssm put-parameter --overwrite` 改 `LINGYING_BILLING_TOKEN` 并重启任务。两边不一致期间，查余额返回 503，用量上报失败后会持续重试，token 一致后自动补报。
 
 **排查积压**：用第 2 节的 PostgreSQL 隧道执行：

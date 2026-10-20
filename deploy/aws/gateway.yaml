@@ -62,6 +62,17 @@ Parameters:
   RedisAddrs:
     Type: String
     Default: 172.31.15.11:6379,172.31.31.11:6379,172.31.47.11:6379
+  EchoJoyAuthJwksUrl:
+    Type: String
+    Default: ""
+    Description: EchoJoyAuth 的 JWKS 地址；与 EchoJoyAuthIssuer 同时为空时关闭 access token
+  EchoJoyAuthIssuer:
+    Type: String
+    Default: ""
+  EchoJoyAuthAudience:
+    Type: String
+    Default: ""
+    Description: 可选，与灵影的 AUTH_AUDIENCE 一致
   MinTasks:
     Type: Number
     Default: 2
@@ -428,6 +439,10 @@ Resources:
             - {Name: RESPONSE_BINDING_TTL, Value: 168h}
             # 灵影计费回调：域名经私有 DNS 解析到 alb-internal，/internal/aigw/* 落到旧网关的整域名规则
             - {Name: LINGYING_BILLING_BASE_URL, Value: !Sub "https://${GatewayHost}"}
+            # EchoJoyAuth access token：离线校验 JWT，遇到未知 kid 时拉取 JWKS（至多 5 分钟一次）
+            - {Name: ECHOJOY_AUTH_JWKS_URL, Value: !Ref EchoJoyAuthJwksUrl}
+            - {Name: ECHOJOY_AUTH_ISSUER, Value: !Ref EchoJoyAuthIssuer}
+            - {Name: ECHOJOY_AUTH_AUDIENCE, Value: !Ref EchoJoyAuthAudience}
           Secrets:
             - Name: AUTH_KEY
               ValueFrom: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPrefix}/AUTH_KEY
