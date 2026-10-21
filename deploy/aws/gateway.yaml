@@ -439,6 +439,8 @@ Resources:
             - {Name: RESPONSE_BINDING_TTL, Value: 168h}
             # 灵影计费回调：域名经私有 DNS 解析到 alb-internal，/internal/aigw/* 落到旧网关的整域名规则
             - {Name: LINGYING_BILLING_BASE_URL, Value: !Sub "https://${GatewayHost}"}
+            # 每次批量投递最多带的用量条数；100 是灵影批量接口允许的上限，不能再调大
+            - {Name: LINGYING_USAGE_DELIVERY_BATCH_SIZE, Value: "100"}
             # EchoJoyAuth access token：离线校验 JWT，遇到未知 kid 时拉取 JWKS（至多 5 分钟一次）
             - {Name: ECHOJOY_AUTH_JWKS_URL, Value: !Ref EchoJoyAuthJwksUrl}
             - {Name: ECHOJOY_AUTH_ISSUER, Value: !Ref EchoJoyAuthIssuer}

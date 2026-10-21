@@ -110,13 +110,13 @@ PostgreSQL 只能在同一个大版本内升级（例如 18.3 → 18.4）。跨�
 
 ## 8. 灵影计费回调
 
-名称为 `ly:<key_id>` 的访问密钥由灵影网关同步而来。这类请求在转发前调用灵影的 `POST /internal/aigw/balance` 查余额，结束后把用量写进 PostgreSQL 表 `ly_usage_reports`，由各副本批量投递到 `POST /internal/aigw/usage/batch`：每个副本每次最多投递 `LINGYING_USAGE_DELIVERY_BATCH_SIZE`（默认 100）条，同一时刻只有一个投递请求。余额查询的"允许"结果在每个副本内缓存 5 秒。设计见 [对接计划](../../docs/lingying-billing-callback-plan.md)。
+名称为 `ly:<key_id>` 的访问密钥由灵影网关同步而来。这类请求在转发前调用灵影的 `POST /internal/aigw/balance` 查余额，结束后把用量写进 PostgreSQL 表 `ly_usage_reports`，由各副本批量投递到 `POST /internal/aigw/usage/batch`：每个副本每次最多投递 `LINGYING_USAGE_DELIVERY_BATCH_SIZE` 条（`gateway.yaml` 设为 100，即灵影允许的上限），同一时刻只有一个投递请求。余额查询的"允许"结果在每个副本内缓存 5 秒。设计见 [对接计划](../../docs/lingying-billing-callback-plan.md)。
 
 **首次启用**
 
 1. 和灵影约定 token，灵影侧配置为 `AI_GATEWAY_CALLBACK_TOKEN`。
 2. 执行 `scripts/put-secrets.sh`，按提示输入同一个 token，写入 `LINGYING_BILLING_TOKEN`。
-3. 执行 `scripts/deploy.sh gateway --image-tag <标签>`。`LINGYING_BILLING_BASE_URL` 已在 `gateway.yaml` 中设为 `https://<GatewayHost>`。
+3. 执行 `scripts/deploy.sh gateway --image-tag <标签>`。`LINGYING_BILLING_BASE_URL` 已在 `gateway.yaml` 中设为 `https://<GatewayHost>`，`LINGYING_USAGE_DELIVERY_BATCH_SIZE` 设为 100。
 4. 在管理后台确认系统货币为 CNY。不是 CNY 时，灵影的密钥一律返回 503 `billing_unavailable`。
 5. 在网关实例上确认网络可达，期望返回 404，消息为 `api key not found or expired`。返回 401 或 403 说明 token 不一致；消息为「接口不存在」说明灵影还没有部署这个接口：
 
@@ -150,7 +150,7 @@ PostgreSQL 只能在同一个大版本内升级（例如 18.3 → 18.4）。跨�
 
 1. 用下面的 SQL 看 `last_error`。
 2. `HTTP 404` 说明灵影还没有部署批量接口；`HTTP 401`、`HTTP 403` 说明 token 不一致；`HTTP 5xx` 或单条 `503` 看灵影日志里的 `aigw usage batch` 错误。
-3. 看 DocumentDB 的 CPU 和 `TransactionsAborted`。批量已是灵影允许的上限 100，中止多说明同一用户的写冲突严重，需要灵影侧处理。
+3. 看 DocumentDB 的 CPU 和 `TransactionsAborted`。`LINGYING_USAGE_DELIVERY_BATCH_SIZE` 已是灵影允许的上限 100，调大后网关启动失败，调小只会增加请求数和事务数。中止多说明同一用户的写冲突严重，需要灵影侧处理。
 
 **排查积压**：用第 2 节的 PostgreSQL 隧道执行：
 
