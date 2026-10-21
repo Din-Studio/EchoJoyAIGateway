@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 
@@ -55,5 +56,24 @@ func TestClientKeyAndInstanceID(t *testing.T) {
 	}
 	if err := client.Ping(t.Context()); err != nil {
 		t.Fatalf("Ping() error = %v", err)
+	}
+}
+
+func TestNewClientKeepsMinIdleConnsOpen(t *testing.T) {
+	server := miniredis.RunT(t)
+	cfg := clusterTestConfig(t, server.Addr())
+	cfg.Cluster.RedisMinIdleConns = 4
+	client, err := NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	deadline := time.Now().Add(2 * time.Second)
+	for client.PoolStats().IdleConns < 4 {
+		if time.Now().After(deadline) {
+			t.Fatalf("idle connections = %d, want at least 4", client.PoolStats().IdleConns)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

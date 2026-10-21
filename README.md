@@ -208,6 +208,7 @@ Compose passes `.env` to the container, and the values set in the Compose file t
 | `REDIS_PASSWORD` | Empty | Redis password. |
 | `REDIS_TLS` | `false` | Connects to Redis over TLS. |
 | `REDIS_KEY_PREFIX` | `gl` | Prefix for every Redis key and channel; must not contain whitespace or end with `:`. |
+| `REDIS_MIN_IDLE_CONNS` | `0` | Connections kept open per Redis node ahead of demand, so a burst of requests does not wait on new connections; `0` to `128`. |
 | `INSTANCE_ID` | `<hostname>-<random>` | Identifies this replica in cluster events; must be unique per replica. |
 | `RESPONSE_BINDING_TTL` | `720h` | How long Responses ownership (`previous_response_id` continuation) stays in Redis; at least `1m`. |
 

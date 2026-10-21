@@ -208,6 +208,7 @@ Compose 会把 `.env` 传入容器，Compose 文件中设置的值优先。除�
 | `REDIS_PASSWORD`                | 空                                          | Redis 密码。 |
 | `REDIS_TLS`                     | `false`                                     | 是否通过 TLS 连接 Redis。 |
 | `REDIS_KEY_PREFIX`              | `gl`                                        | 所有 Redis 键与频道的前缀；不能包含空白，也不能以 `:` 结尾。 |
+| `REDIS_MIN_IDLE_CONNS`          | `0`                                         | 每个 Redis 节点预先保持打开的连接数，突发请求不必等待新建连接；取值 `0` 到 `128`。 |
 | `INSTANCE_ID`                   | `<主机名>-<随机串>`                         | 本副本在集群事件中的标识，每个副本必须唯一。 |
 | `RESPONSE_BINDING_TTL`          | `720h`                                      | 响应归属（`previous_response_id` 续接）在 Redis 中的保留时长，至少 `1m`。 |
 

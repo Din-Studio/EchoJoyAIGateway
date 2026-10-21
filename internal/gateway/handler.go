@@ -610,7 +610,7 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 			handler.quotaNow(),
 		)
 		if err != nil {
-			handler.completeLimitStateFailure(ginContext, recorder, err)
+			handler.completeLimitStateFailure(ginContext, recorder, "access_quota.check", err)
 			return
 		}
 		if !quotaDecision.Allowed {
@@ -620,7 +620,7 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 	}
 	limitDecision, err := handler.limiter.Allow(ginContext.Request.Context(), accessKey.ID, accessKey.RPMLimit)
 	if err != nil {
-		handler.completeLimitStateFailure(ginContext, recorder, err)
+		handler.completeLimitStateFailure(ginContext, recorder, "access_key_rpm.allow", err)
 		return
 	}
 	if !limitDecision.Allowed {
@@ -1273,7 +1273,7 @@ func (handler *Handler) executeAttempts(
 			ginContext.Request.Context(), selection.CredentialID, ref.ConcurrencyLimit,
 		)
 		if err != nil {
-			handler.completeLimitStateFailure(ginContext, recorder, err)
+			handler.completeLimitStateFailure(ginContext, recorder, "credential_concurrency.acquire", err)
 			return
 		}
 		if !acquired {
@@ -1289,7 +1289,7 @@ func (handler *Handler) executeAttempts(
 				handler.quotaNow(),
 			)
 			if err != nil {
-				handler.completeLimitStateFailure(ginContext, recorder, err)
+				handler.completeLimitStateFailure(ginContext, recorder, "access_quota.admit", err)
 				return
 			}
 			if !decision.Allowed {
