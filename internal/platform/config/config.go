@@ -29,6 +29,12 @@ const (
 	minResponseBindingTTL          = time.Minute
 )
 
+// RedisPoolSize caps the connections in use per Redis node. The go-redis
+// cluster client defaults to 5 per CPU, 10 on a 2-vCPU instance, which
+// hundreds of in-flight streams exhaust: callers then queue past the
+// shared-state timeout and requests fail.
+const RedisPoolSize = 128
+
 // ServerConfig contains process-level HTTP server settings.
 type ServerConfig struct {
 	Host                    string
@@ -65,7 +71,11 @@ type ClusterConfig struct {
 	RedisPassword  string
 	RedisTLS       bool
 	RedisKeyPrefix string
-	InstanceID     string
+	// RedisMinIdleConns keeps connections per Redis node open ahead of
+	// demand, so a burst of requests does not dial under the shared-state
+	// timeout. 0 opens connections only on demand.
+	RedisMinIdleConns int
+	InstanceID        string
 	// ResponseBindingTTL bounds how long Responses ownership stays in Redis.
 	ResponseBindingTTL time.Duration
 }
@@ -309,6 +319,13 @@ func parseClusterConfig() (ClusterConfig, error) {
 		strings.HasSuffix(keyPrefix, ":") {
 		return ClusterConfig{}, fmt.Errorf("REDIS_KEY_PREFIX must not contain whitespace or end with a colon")
 	}
+	minIdleConns := 0
+	if raw := strings.TrimSpace(os.Getenv("REDIS_MIN_IDLE_CONNS")); raw != "" {
+		minIdleConns, err = strconv.Atoi(raw)
+		if err != nil || minIdleConns < 0 || minIdleConns > RedisPoolSize {
+			return ClusterConfig{}, fmt.Errorf("REDIS_MIN_IDLE_CONNS must be an integer from 0 to %d", RedisPoolSize)
+		}
+	}
 	instanceID := strings.TrimSpace(os.Getenv("INSTANCE_ID"))
 	if instanceID == "" {
 		instanceID, err = defaultInstanceID()
@@ -328,6 +345,7 @@ func parseClusterConfig() (ClusterConfig, error) {
 		RedisPassword:      os.Getenv("REDIS_PASSWORD"),
 		RedisTLS:           redisTLS != nil && *redisTLS,
 		RedisKeyPrefix:     keyPrefix,
+		RedisMinIdleConns:  minIdleConns,
 		InstanceID:         instanceID,
 		ResponseBindingTTL: responseBindingTTL,
 	}, nil
