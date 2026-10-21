@@ -23,41 +23,45 @@ type Redactor struct {
 	replacements []replacement
 }
 
+// replacements are compiled once: a Redactor is built for every request, and
+// compiling these patterns dominated its cost.
+var replacements = []replacement{
+	{
+		pattern: regexp.MustCompile(`(?i)\b(?:sk|gl)-[a-z0-9][a-z0-9._-]{7,}\b`),
+		value:   Placeholder,
+	},
+	{
+		pattern: regexp.MustCompile(`(?i)(^|[\s,{?&])(["']?authorization["']?\s*[:=]\s*)("(?:\\.|[^"\\])*")`),
+		value:   `${1}${2}"` + Placeholder + `"`,
+	},
+	{
+		pattern: regexp.MustCompile(`(?i)(^|[\s,{?&])(["']?authorization["']?\s*[:=]\s*)('(?:\\.|[^'\\])*')`),
+		value:   `${1}${2}'` + Placeholder + `'`,
+	},
+	{
+		pattern: regexp.MustCompile(`(?im)(^|[\s,{?&])(["']?authorization["']?\s*[:=]\s*)([^"'\r\n&}][^\r\n&}]*)`),
+		value:   `${1}${2}` + Placeholder,
+	},
+	{
+		pattern: regexp.MustCompile(`(?i)(^|[\s,({?&])([\"']?(?:api[_-]?key|x-api-key|x-goog-api-key|access[_-]?key|client[_-]?secret|refresh[_-]?token|id[_-]?token|access[_-]?token|key|token)[\"']?\s*[:=]\s*[\"']?)[^\"',\s&})\[\]]+`),
+		value:   `${1}${2}` + Placeholder,
+	},
+	{
+		pattern: regexp.MustCompile(`(?i)(^|[\s,({?&])([\"']?(?:cookie|set-cookie|password|passcode|secret|credential|session|signature)[\"']?\s*[:=]\s*[\"']?)[^\"',\s&})\[\]]+`),
+		value:   `${1}${2}` + Placeholder,
+	},
+	{
+		pattern: regexp.MustCompile(`(?i)\b(?:bearer|basic)\s+(?:[a-z0-9_-]*[-._~+/=][a-z0-9._~+/=-]*|[a-z0-9]{20,})`),
+		value:   Placeholder,
+	},
+	{
+		pattern: regexp.MustCompile(`(?i)(https?://[^\s?#]+)\?[^\s#]*`),
+		value:   `${1}?` + Placeholder,
+	},
+}
+
 func New() *Redactor {
-	return &Redactor{replacements: []replacement{
-		{
-			pattern: regexp.MustCompile(`(?i)\b(?:sk|gl)-[a-z0-9][a-z0-9._-]{7,}\b`),
-			value:   Placeholder,
-		},
-		{
-			pattern: regexp.MustCompile(`(?i)(^|[\s,{?&])(["']?authorization["']?\s*[:=]\s*)("(?:\\.|[^"\\])*")`),
-			value:   `${1}${2}"` + Placeholder + `"`,
-		},
-		{
-			pattern: regexp.MustCompile(`(?i)(^|[\s,{?&])(["']?authorization["']?\s*[:=]\s*)('(?:\\.|[^'\\])*')`),
-			value:   `${1}${2}'` + Placeholder + `'`,
-		},
-		{
-			pattern: regexp.MustCompile(`(?im)(^|[\s,{?&])(["']?authorization["']?\s*[:=]\s*)([^"'\r\n&}][^\r\n&}]*)`),
-			value:   `${1}${2}` + Placeholder,
-		},
-		{
-			pattern: regexp.MustCompile(`(?i)(^|[\s,({?&])([\"']?(?:api[_-]?key|x-api-key|x-goog-api-key|access[_-]?key|client[_-]?secret|refresh[_-]?token|id[_-]?token|access[_-]?token|key|token)[\"']?\s*[:=]\s*[\"']?)[^\"',\s&})\[\]]+`),
-			value:   `${1}${2}` + Placeholder,
-		},
-		{
-			pattern: regexp.MustCompile(`(?i)(^|[\s,({?&])([\"']?(?:cookie|set-cookie|password|passcode|secret|credential|session|signature)[\"']?\s*[:=]\s*[\"']?)[^\"',\s&})\[\]]+`),
-			value:   `${1}${2}` + Placeholder,
-		},
-		{
-			pattern: regexp.MustCompile(`(?i)\b(?:bearer|basic)\s+(?:[a-z0-9_-]*[-._~+/=][a-z0-9._~+/=-]*|[a-z0-9]{20,})`),
-			value:   Placeholder,
-		},
-		{
-			pattern: regexp.MustCompile(`(?i)(https?://[^\s?#]+)\?[^\s#]*`),
-			value:   `${1}?` + Placeholder,
-		},
-	}}
+	return &Redactor{replacements: replacements}
 }
 
 func (r *Redactor) String(text string, knownSecrets ...string) string {
@@ -86,8 +90,10 @@ func (r *Redactor) Bytes(body []byte, knownSecrets ...string) []byte {
 	return bytes.Clone([]byte(r.String(string(body), knownSecrets...)))
 }
 
+var fieldNameSeparators = strings.NewReplacer("-", "", "_", "")
+
 func sensitiveFieldName(name string) bool {
-	normalized := strings.NewReplacer("-", "", "_", "").Replace(strings.ToLower(name))
+	normalized := fieldNameSeparators.Replace(strings.ToLower(name))
 	switch normalized {
 	case "authorization", "apikey", "xapikey", "xgoogapikey", "accesskey", "clientsecret", "refreshtoken", "idtoken", "accesstoken", "cookie", "setcookie", "password", "passcode", "secret", "session", "signature", "key", "token":
 		return true

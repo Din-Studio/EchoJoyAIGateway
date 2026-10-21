@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/tidwall/gjson"
+
 	"gpt-load/internal/usage"
 )
 
@@ -36,6 +38,15 @@ type openAIUsageStreamExtractor struct {
 }
 
 func (e *openAIUsageStreamExtractor) Observe(payload []byte) error {
+	// Only the last chunk of a stream carries usage; recognize the others
+	// without decoding them.
+	if gjson.ValidBytes(payload) {
+		if root := gjson.ParseBytes(payload); root.IsObject() {
+			if field := root.Get("usage"); !field.Exists() || field.Type == gjson.Null {
+				return e.accumulator.MergePatch(usage.Patch{})
+			}
+		}
+	}
 	object, err := decodeJSONObject(payload)
 	if err != nil {
 		e.invalidPayload = true
