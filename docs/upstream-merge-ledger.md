@@ -32,6 +32,7 @@ dev 迁移注册表要求编号连续，dev 已用到 `0024`。上游从 `0019` 
 | 决策费用 | 按决策模型的客户端模型统一价（`client_model_prices`）计价，不用渠道价，也不设单独的决策价格设置 | 8eceed2a #703 |
 | 决策的上游成本（`Decision.ProviderCostUSD`） | 只给管理员看，`sanitizeAccessKeyRequestLog` 清零 | 8eceed2a #703 |
 | 共享别名的模型轮询游标（`SchedulingLedger.ModelCursors`） | 和调度 ledger 一样留在副本内，不持久化、不放 Redis；新建游标时用 `staggerModelOrder` 按副本随机旋转初始顺序，防止各副本先选中同一个上游模型。上游对游标 checkpoint 的改动一律丢弃 | cca2316a #717 |
+| AccessKey 余额接口（`/v1/user/balance`、`/user/balance`） | 额度从 `cluster.AccessQuota.View`（Redis）读，失败走 `completeLimitStateFailure`；金额按当前系统币种（规则的 `LimitNano`，或 `queryUsageSummary(scope, currency)` 的 `EstimatedCostNano`）；响应字段和上游一致，不加 `unit` | d71f8a31 #722 |
 | 上游版本检查（`internal/releasecheck`、前端检查更新提示） | fork 不跟进：它查的是 tbphp/gpt-load 的 GitHub release，和 fork 的容器镜像发布无关。后续改版本检查的上游提交（如 dec6dc7f #728）整体用 `-s ours` 跳过；dev 现有的 releasecheck 是删掉还是改成查 fork 自己的版本，另开任务决定 | 68681794 #714 |
 
 ## 已知重叠点
