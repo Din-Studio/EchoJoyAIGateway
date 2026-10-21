@@ -265,6 +265,8 @@ func TestCredentialConcurrencyFailsClosedWhenSharedStateIsUnavailable(t *testing
 	)
 	setCredentialConcurrencyLimits(t, registry, map[uint]int{1: 2})
 	handler.concurrency = &scriptedConcurrencyLimiter{err: errors.New("redis: connection refused")}
+	var logs strings.Builder
+	handler.logger = newGatewayJSONLogger(&logs)
 
 	response := serveConcurrencyRequest(engine, `{"model":"gpt-4o"}`)
 
@@ -272,6 +274,10 @@ func TestCredentialConcurrencyFailsClosedWhenSharedStateIsUnavailable(t *testing
 		!strings.Contains(response.Body.String(), `"code":"cluster_state_unavailable"`) ||
 		response.Header().Get("Retry-After") != "1" || len(forwarder.inputs) != 0 {
 		t.Fatalf("response = %d headers=%v forwards=%d body=%s", response.Code, response.Header(), len(forwarder.inputs), response.Body.String())
+	}
+	if !strings.Contains(logs.String(), `"operation":"credential_concurrency.acquire"`) ||
+		!strings.Contains(logs.String(), `"error":"redis: connection refused"`) {
+		t.Fatalf("logs = %s, want the failed acquire and its Redis error", logs.String())
 	}
 }
 

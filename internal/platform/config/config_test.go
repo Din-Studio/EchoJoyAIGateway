@@ -35,6 +35,9 @@ func TestLoadUsesDefaultConfiguration(t *testing.T) {
 	if len(cfg.Cluster.RedisAddrs) == 0 {
 		t.Fatal("Cluster.RedisAddrs is empty")
 	}
+	if cfg.Cluster.RedisMinIdleConns != 0 {
+		t.Fatalf("RedisMinIdleConns = %d, want 0", cfg.Cluster.RedisMinIdleConns)
+	}
 	if cfg.DatabasePool.MaxOpenConnections != 10 || cfg.DatabasePool.MaxIdleConnections != 5 {
 		t.Fatalf("DatabasePool = %#v, want max open/idle 10/5", cfg.DatabasePool)
 	}
@@ -73,6 +76,7 @@ func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
 	t.Setenv("IDLE_TIMEOUT", "90")
 	t.Setenv("DATABASE_MAX_OPEN_CONNECTIONS", "24")
 	t.Setenv("DATABASE_MAX_IDLE_CONNECTIONS", "12")
+	t.Setenv("REDIS_MIN_IDLE_CONNS", "32")
 
 	cfg, err := Load()
 	if err != nil {
@@ -96,6 +100,9 @@ func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
 	}
 	if cfg.Log.Level != "debug" || cfg.Log.Format != "json" {
 		t.Fatalf("Log = %#v", cfg.Log)
+	}
+	if cfg.Cluster.RedisMinIdleConns != 32 {
+		t.Fatalf("RedisMinIdleConns = %d, want 32", cfg.Cluster.RedisMinIdleConns)
 	}
 }
 
@@ -215,6 +222,8 @@ func TestLoadRejectsInvalidRequiredAndNumericValues(t *testing.T) {
 		{name: "invalid idle timeout", env: map[string]string{"AUTH_KEY": "x", "IDLE_TIMEOUT": "nope"}},
 		{name: "invalid database max open connections", env: map[string]string{"AUTH_KEY": "x", "DATABASE_MAX_OPEN_CONNECTIONS": "0"}},
 		{name: "invalid database max idle connections", env: map[string]string{"AUTH_KEY": "x", "DATABASE_MAX_IDLE_CONNECTIONS": "nope"}},
+		{name: "negative redis min idle connections", env: map[string]string{"AUTH_KEY": "x", "REDIS_MIN_IDLE_CONNS": "-1"}},
+		{name: "redis min idle connections exceed pool size", env: map[string]string{"AUTH_KEY": "x", "REDIS_MIN_IDLE_CONNS": "129"}},
 		{name: "database max idle connections exceed max open", env: map[string]string{
 			"AUTH_KEY": "x", "DATABASE_MAX_OPEN_CONNECTIONS": "4", "DATABASE_MAX_IDLE_CONNECTIONS": "5",
 		}},
@@ -242,7 +251,7 @@ func clearEnvironment(t *testing.T) {
 		"READ_TIMEOUT", "IDLE_TIMEOUT", "MODELS_DEV_AUTO_SYNC_ENABLED",
 		"DATABASE_MAX_OPEN_CONNECTIONS", "DATABASE_MAX_IDLE_CONNECTIONS",
 		"REDIS_ADDRS", "REDIS_PASSWORD", "REDIS_TLS", "REDIS_KEY_PREFIX", "INSTANCE_ID",
-		"RESPONSE_BINDING_TTL",
+		"RESPONSE_BINDING_TTL", "REDIS_MIN_IDLE_CONNS",
 	} {
 		t.Setenv(key, "")
 	}

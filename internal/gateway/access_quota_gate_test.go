@@ -51,12 +51,14 @@ func TestHandlerFailsClosedWhenSharedLimitStateIsUnavailable(t *testing.T) {
 		gate       *scriptedAccessQuotaGate
 		limiterErr error
 		wantCode   string
+		// wantOperation is the failed call the log names; empty means no log.
+		wantOperation string
 	}{
-		{name: "quota check unavailable", gate: &scriptedAccessQuotaGate{checkErr: unavailable}, wantCode: "cluster_state_unavailable"},
+		{name: "quota check unavailable", gate: &scriptedAccessQuotaGate{checkErr: unavailable}, wantCode: "cluster_state_unavailable", wantOperation: "access_quota.check"},
 		{name: "quota check stale", gate: &scriptedAccessQuotaGate{checkErr: accessquota.ErrStaleRules}, wantCode: "configuration_changed"},
-		{name: "quota admit unavailable", gate: &scriptedAccessQuotaGate{admitErr: unavailable}, wantCode: "cluster_state_unavailable"},
+		{name: "quota admit unavailable", gate: &scriptedAccessQuotaGate{admitErr: unavailable}, wantCode: "cluster_state_unavailable", wantOperation: "access_quota.admit"},
 		{name: "quota admit stale", gate: &scriptedAccessQuotaGate{admitErr: accessquota.ErrStaleRules}, wantCode: "configuration_changed"},
-		{name: "rpm unavailable", gate: &scriptedAccessQuotaGate{}, limiterErr: unavailable, wantCode: "cluster_state_unavailable"},
+		{name: "rpm unavailable", gate: &scriptedAccessQuotaGate{}, limiterErr: unavailable, wantCode: "cluster_state_unavailable", wantOperation: "access_key_rpm.allow"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			forwarder := &scriptedForwarder{results: []UpstreamResult{{
@@ -65,12 +67,23 @@ func TestHandlerFailsClosedWhenSharedLimitStateIsUnavailable(t *testing.T) {
 			limiter := &recordingAccessKeyRPMLimiter{err: test.limiterErr}
 			engine, handler, _, _ := newRequestLogHandlerTestRuntime(t, forwarder, limiter, &recordingRequestLogSink{}, "sk-first")
 			handler.accessQuota = test.gate
+			var logs strings.Builder
+			handler.logger = newGatewayJSONLogger(&logs)
 
 			request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o"}`))
 			request.Header.Set("Authorization", "Bearer gl-client")
 			response := httptest.NewRecorder()
 			engine.ServeHTTP(response, request)
 
+			logged := strings.Contains(logs.String(), `"event":"limit_state.unavailable"`)
+			if test.wantOperation == "" && logged {
+				t.Fatalf("stale rules logged as unavailable: %s", logs.String())
+			}
+			if test.wantOperation != "" && (!logged ||
+				!strings.Contains(logs.String(), `"operation":"`+test.wantOperation+`"`) ||
+				!strings.Contains(logs.String(), `"error":"`+unavailable.Error()+`"`)) {
+				t.Fatalf("logs = %s, want operation %s with the Redis error", logs.String(), test.wantOperation)
+			}
 			if response.Code != http.StatusServiceUnavailable ||
 				!strings.Contains(response.Body.String(), `"code":"`+test.wantCode+`"`) ||
 				response.Header().Get("Retry-After") != "1" {

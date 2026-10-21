@@ -205,6 +205,7 @@ Compose は `.env` をコンテナに渡し、Compose ファイルで設定し�
 | `REDIS_PASSWORD` | 空 | Redis のパスワード。 |
 | `REDIS_TLS` | `false` | Redis に TLS で接続するかどうか。 |
 | `REDIS_KEY_PREFIX` | `gl` | すべての Redis キーとチャネルの接頭辞。空白を含めたり `:` で終わらせたりすることはできません。 |
+| `REDIS_MIN_IDLE_CONNS` | `0` | Redis ノードごとに事前に開いておく接続数。リクエストが急増しても新しい接続の確立を待たずに済みます。`0` から `128`。 |
 | `INSTANCE_ID` | `<ホスト名>-<ランダム>` | クラスターイベントにおけるこのレプリカの識別子。レプリカごとに一意である必要があります。 |
 | `RESPONSE_BINDING_TTL` | `720h` | Responses の所有情報（`previous_response_id` による継続）を Redis に保持する期間。`1m` 以上。 |
 
