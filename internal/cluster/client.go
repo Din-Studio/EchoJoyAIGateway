@@ -21,9 +21,10 @@ const (
 	commandTimeout = 2 * time.Second
 	startupPing    = 5 * time.Second
 	maxRetries     = 3
-	// poolSize is the connections kept per Redis node. go-redis defaults to
-	// 10 per CPU, which a 2-vCPU instance with hundreds of streams in flight
-	// exhausts: callers then queue past stateTimeout and requests fail.
+	// poolSize caps the connections in use per Redis node. The go-redis
+	// cluster client defaults to 5 per CPU, 10 on a 2-vCPU instance, which
+	// hundreds of in-flight streams exhaust: callers then queue past
+	// stateTimeout and requests fail.
 	poolSize = 128
 
 	// stateTimeout bounds each data-plane round trip for shared request state,
