@@ -130,6 +130,28 @@ func TestModelRewritersRewriteResponseFields(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponseModelRewriteKeepsOtherBytesAndInput(t *testing.T) {
+	body := []byte(`{"id":"c1", "model":"real","choices":[{"delta":{"content":"model"}}]}`)
+	original := bytes.Clone(body)
+
+	got, err := NewOpenAI().RewriteResponseModel(body, "public")
+	if err != nil {
+		t.Fatalf("RewriteResponseModel() error = %v", err)
+	}
+	want := `{"id":"c1", "model":"public","choices":[{"delta":{"content":"model"}}]}`
+	if string(got) != want {
+		t.Fatalf("RewriteResponseModel() = %s, want %s", got, want)
+	}
+	if !bytes.Equal(body, original) {
+		t.Fatalf("RewriteResponseModel() mutated input to %s", body)
+	}
+	for _, invalid := range []string{`{"model":"real"`, `["model"]`, `{"model":"real"} {}`} {
+		if _, err := NewOpenAI().RewriteResponseModel([]byte(invalid), "public"); err == nil {
+			t.Fatalf("RewriteResponseModel(%s) error = nil", invalid)
+		}
+	}
+}
+
 func TestOpenAIResponsesResponseModelRewriteTreatsNullResponseAsAbsent(t *testing.T) {
 	body := []byte(`{"type":"response.output_text.delta","response":null,"delta":"hello"}`)
 
