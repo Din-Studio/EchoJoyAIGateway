@@ -175,7 +175,7 @@ func TestCredentialQuotaHistoryIncludesLatestAnchorBeforeRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := gin.New()
-	NewServer(&config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
+	newTestServer(t, &config.Config{AuthKey: authTestKey}, fixture.service).RegisterRoutes(engine)
 	result := performGroupCollectionRequest(engine, fmt.Sprintf("/api/groups/%d/credentials/%d/quota-history?from_ms=3000&to_ms=5000", group.ID, credential.ID), "Bearer "+authTestKey)
 	if result.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", result.Code, result.Body.String())

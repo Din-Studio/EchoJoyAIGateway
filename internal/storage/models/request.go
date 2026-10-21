@@ -4,6 +4,9 @@ package models
 type RequestLog struct {
 	AutoDecision                JSON   `gorm:"type:json"`
 	DecisionModel               string `gorm:"type:varchar(512);not null;default:''"`
+	DecisionGroupID             uint   `gorm:"not null;default:0"`
+	DecisionChannelID           string `gorm:"type:varchar(64);not null;default:''"`
+	DecisionCredentialID        uint   `gorm:"not null;default:0"`
 	DecisionCostNanoUSD         int64  `gorm:"column:decision_cost_nano_usd;not null;default:0"`
 	DecisionPricingCompleteness string `gorm:"type:varchar(32);not null;default:'not_applicable'"`
 	// Currency 和 ExchangeRateMicros 是结算时冻结的系统货币与汇率（1 USD = 汇率/1e6）；

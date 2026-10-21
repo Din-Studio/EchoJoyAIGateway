@@ -8,11 +8,13 @@
 
 ## 迁移编号映射
 
-dev 迁移注册表要求编号连续，dev 已用到 `0022`。上游从 `0019` 起和 dev 撞号，必须重新编号，见 ARCHITECTURE.md §5。
+dev 迁移注册表要求编号连续，dev 已用到 `0023`。上游从 `0019` 起和 dev 撞号，必须重新编号，见 ARCHITECTURE.md §5。
 
 | 上游迁移 | dev 迁移 | 来源提交 | 备注 |
 |---|---|---|---|
-| — | — | — | 尚无 |
+| `0019_auto_decision_attribution` | `0023_auto_decision_attribution` | 8eceed2a #703 | 复制表重建改为原地加 `group_id`/`channel_id`/`credential_id`，主键保留 `currency` |
+
+跨分支冲突：`main` 上有 dev 没有的 `0023_ly_usage_reports`（灵影计费，dev #27），和这里的 `0023` 撞号。共享测试库跑过 main 系分支后，本分支的 `TestExternal*` 会报 `non-contiguous migration`，需要换一个干净库。dev 同步 main 时必须统一重新编号：保留已部署那一侧的编号，另一侧整体后移，台账的映射表一起改。
 
 ## 长期决定
 
@@ -25,6 +27,9 @@ dev 迁移注册表要求编号连续，dev 已用到 `0022`。上游从 `0019` 
 | `usage_aggregation_journal` 相关代码 | 丢弃 | dev #11 |
 | 运行时 checkpoint 文件（`*_checkpoint.go`、`DATA_DIR`） | 丢弃，持久状态进 PG，共享状态进 Redis | dev #8 |
 | 凭据文本块导入（`batch_text`） | 改成 `credentials: [{fields, concurrency_limit}]` | dev #13 |
+| 自动模型决策调用（auto-model decisions） | 走渠道/分组/凭据路由，占用 `cluster.CredentialConcurrency` 槽并跳过饱和凭据；共享状态失败时决策按尽力而为处理，落到 fallback 预设，不返回 503 | 8eceed2a #703 |
+| 决策费用 | 按决策模型的客户端模型统一价（`client_model_prices`）计价，不用渠道价，也不设单独的决策价格设置 | 8eceed2a #703 |
+| 决策的上游成本（`Decision.ProviderCostUSD`） | 只给管理员看，`sanitizeAccessKeyRequestLog` 清零 | 8eceed2a #703 |
 
 ## 已知重叠点
 
@@ -32,7 +37,6 @@ dev 迁移注册表要求编号连续，dev 已用到 `0022`。上游从 `0019` 
 
 | 上游提交 | 预判 |
 |---|---|
-| 8eceed2a #703 Jev 路由（迁移 U0019） | U0019 用复制表重建 `auto_decision_usage_stats`，主键里没有 `currency`，会让 dev 的 `Validate0021` 失败。改成原地加 `group_id`/`channel_id`/`credential_id`，主键保留 `currency`（§5、§7） |
 | 1c280a27 #706（U0020） | 去掉 MySQL `GormDBDataType` |
 | 7b57fa94 #727 JEV 审计（U0021） | `request_audit_usages`、`audit_cost_nano_usd` 只有 USD，要补本币孪生列和 `currency`；审计成本对 AccessKey 是否可见要确认（§7） |
 | dd8fa169 #739 RPM 统计（U0022） | `requestlog/rpm_checkpoint.go` 按 session 做绝对值 upsert，是进程内统计；改成集群语义，可以复用 `cluster.AccessKeyRPM`（§1、§4、§5） |

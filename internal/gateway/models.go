@@ -161,6 +161,7 @@ func modelListProtocols(value protocol.Protocol) []protocol.Protocol {
 			protocol.OpenAIImages,
 			protocol.OpenAIEmbeddings,
 			protocol.Rerank,
+			protocol.Decisions,
 		}
 	}
 	return []protocol.Protocol{value}

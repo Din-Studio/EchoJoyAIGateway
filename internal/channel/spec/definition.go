@@ -35,6 +35,7 @@ const (
 	Alibaba          ID = "alibaba"
 	Volcengine       ID = "volcengine"
 	OpenRouter       ID = "openrouter"
+	Jev              ID = "jev"
 	Groq             ID = "groq"
 	Vercel           ID = "vercel"
 	XAI              ID = "xai"
@@ -58,6 +59,7 @@ const (
 	ProviderGoogleVertex         ProviderKind = "google_vertex"
 	ProviderDeepSeek             ProviderKind = "deepseek"
 	ProviderOpenRouter           ProviderKind = "openrouter"
+	ProviderJev                  ProviderKind = "jev"
 	ProviderGroq                 ProviderKind = "groq"
 	ProviderXAI                  ProviderKind = "xai"
 )
@@ -108,6 +110,7 @@ func (kind ProviderKind) Valid() bool {
 		ProviderGoogleVertex,
 		ProviderDeepSeek,
 		ProviderOpenRouter,
+		ProviderJev,
 		ProviderGroq,
 		ProviderXAI:
 		return true

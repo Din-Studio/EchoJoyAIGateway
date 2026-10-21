@@ -8,17 +8,20 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"gpt-load/internal/automodel"
+	"gpt-load/internal/execution"
 	"gpt-load/internal/outboundproxy"
 	"gpt-load/internal/platform/encryption"
 	"gpt-load/internal/platform/epochms"
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/pricing"
+	"gpt-load/internal/protocol"
 	"gpt-load/internal/state"
 	"gpt-load/internal/storage/models"
 )
@@ -65,6 +68,7 @@ type SettingsValuesResponse struct {
 
 type SettingsResponse struct {
 	AutoModelTemplate automodel.Entry        `json:"auto_model_template"`
+	DecisionModels    []string               `json:"decision_models"`
 	Revision          uint64                 `json:"-"`
 	Values            SettingsValuesResponse `json:"values"`
 	Overrides         []string               `json:"overrides"`
@@ -164,7 +168,7 @@ func (s *Service) UpdateSettings(
 			return err
 		}
 		if raw, exists := request.Settings[automodel.SettingKey]; exists {
-			update, err := s.normalizeAutoModelUpdate(tx, raw, currencyBefore)
+			update, err := s.normalizeAutoModelUpdate(tx, raw)
 			if err != nil {
 				return err
 			}
@@ -367,12 +371,10 @@ func mapSettingsResponse(
 		modelsDevAutoSyncEnabled = *modelsDevAutoSyncOverride
 		readOnly = append(readOnly, state.SettingModelsDevAutoSyncEnabled)
 	}
-	autoModel, err := newAutoModelSettingsView(snapshot.AutoModels, settings.Currency)
-	if err != nil {
-		return SettingsResponse{}, app_errors.ErrInternalServer
-	}
+	autoModel := newAutoModelSettingsView(snapshot.AutoModels)
 	return SettingsResponse{
 		AutoModelTemplate: automodel.Template(),
+		DecisionModels:    decisionModelNames(snapshot),
 		Revision:          snapshot.Revision,
 		Values: SettingsValuesResponse{
 			AutoModel:         autoModel,
@@ -424,6 +426,22 @@ func settingsExchangeRate(currency pricing.Currency) *string {
 	}
 	rate := pricing.FormatExchangeRate(currency.RateMicros)
 	return &rate
+}
+
+func decisionModelNames(snapshot *state.ConfigSnapshot) []string {
+	if snapshot == nil {
+		return []string{}
+	}
+	byOperation := snapshot.ExecutionCandidates[protocol.Decisions]
+	byModel := byOperation[execution.OperationDecisionsCreate]
+	names := make([]string, 0, len(byModel))
+	for name, targets := range byModel {
+		if strings.TrimSpace(name) != "" && len(targets) > 0 {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 func durationSeconds(value time.Duration) int64 {

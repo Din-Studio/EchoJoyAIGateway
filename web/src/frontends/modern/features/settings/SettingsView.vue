@@ -789,6 +789,7 @@ onScopeDispose(() => {
                   <AutoModelEditor
                     v-model="draft.auto_model"
                     :template="base?.autoModelTemplate"
+                    :decision-models="base?.decisionModels ?? []"
                     :disabled="disabled('auto_model')"
                     :error="fieldErrors.auto_model"
                   />

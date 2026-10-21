@@ -25,7 +25,7 @@ func pricedTestEvent(id string, currency pricing.Currency, costNanoUSD, decision
 	if decisionNanoUSD > 0 {
 		event.AutoDecision = &automodel.Decision{
 			Selection: automodel.Selection{EntryID: "auto", EntryName: "auto", PresetID: "medium", TargetModel: "upstream-model"},
-			Source:    "jev", Status: "selected", Provider: "openrouter", RequestedModel: "jev-latest",
+			Source:    "jev", Status: "selected", Provider: "jev", RequestedModel: "jev-router", UpstreamModel: "jev-latest",
 			PromptVersion: automodel.PromptVersion, Called: true, CostState: "priced",
 			PricingCompleteness: "complete", EstimatedCostNanoUSD: decisionNanoUSD,
 		}
