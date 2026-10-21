@@ -3236,11 +3236,11 @@ func TestHandlerDoesNotAdvanceCandidatesAfterRequestDeadline(t *testing.T) {
 		bytes.NewBufferString(`{"model":"gpt-4o","stream":true}`),
 	)
 	request.Header.Set("Authorization", "Bearer gl-client")
-	ctx, cancel := context.WithTimeout(request.Context(), 20*time.Millisecond)
-	defer cancel()
+	// deadline 在转发器内才到期，路由阶段的 Redis 往返不会提前耗尽预算。
+	ctx := newExpiringContext(request.Context())
 	request = request.WithContext(ctx)
 	forwarder.onStreamCall = func(_ int, _ http.ResponseWriter) {
-		<-ctx.Done()
+		ctx.expire()
 	}
 	recorder := httptest.NewRecorder()
 
@@ -3251,6 +3251,30 @@ func TestHandlerDoesNotAdvanceCandidatesAfterRequestDeadline(t *testing.T) {
 	}
 	if recorder.Body.Len() != 0 {
 		t.Fatalf("deadline path appended a response: %s", recorder.Body.String())
+	}
+}
+
+// expiringContext reports context.DeadlineExceeded once expire is called.
+type expiringContext struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+func newExpiringContext(parent context.Context) *expiringContext {
+	return &expiringContext{Context: parent, done: make(chan struct{})}
+}
+
+func (ctx *expiringContext) expire() { ctx.once.Do(func() { close(ctx.done) }) }
+
+func (ctx *expiringContext) Done() <-chan struct{} { return ctx.done }
+
+func (ctx *expiringContext) Err() error {
+	select {
+	case <-ctx.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
 	}
 }
 
