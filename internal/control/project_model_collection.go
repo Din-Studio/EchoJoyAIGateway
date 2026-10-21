@@ -82,6 +82,7 @@ type ProjectUpstreamModelDTO struct {
 type ProjectModelDTO struct {
 	ClientModel    string                    `json:"client_model"`
 	Price          *ClientModelPriceDTO      `json:"price"`
+	HasOverrides   bool                      `json:"has_overrides"`
 	Protocols      []protocol.Protocol       `json:"protocols"`
 	UpstreamModels []ProjectUpstreamModelDTO `json:"upstream_models"`
 }
@@ -167,6 +168,10 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 	}
 
 	s.writeMu.RLock()
+	var configSnapshot *state.ConfigSnapshot
+	if s.manager != nil {
+		configSnapshot = s.manager.Current()
+	}
 	var catalogSnapshot *catalog.Snapshot
 	if s.catalogRuntime != nil {
 		catalogSnapshot = s.catalogRuntime.Load()
@@ -309,6 +314,7 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 		dto := ProjectModelDTO{
 			ClientModel:    record.clientModel,
 			Price:          clientPriceDTOs[record.clientModel],
+			HasOverrides:   configSnapshot != nil && configSnapshot.ClientModelOverrides[record.clientModel].IsEmpty() == false,
 			Protocols:      append([]protocol.Protocol(nil), record.protocols...),
 			UpstreamModels: []ProjectUpstreamModelDTO{},
 		}

@@ -525,6 +525,84 @@ paths:
         '429': { $ref: '#/components/responses/AuthLocked' }
         '500': { $ref: '#/components/responses/InternalError' }
 
+  /api/models/profile:
+    get:
+      tags: [Models]
+      operationId: getClientModelProfile
+      summary: 查询客户端模型的 Codex 模型目录资料
+      description: |
+        返回网关向 Codex 客户端下发模型目录时使用的资料：按内置目录模板自动推断的值（`automatic`）、
+        管理员保存的覆盖（`overrides`）和二者合并后的生效值（`effective`）。
+        只接受一个 `model` 查询参数，出现其他参数、参数重复或模型名首尾有空白时返回 `400 BAD_REQUEST`；
+        模型未被任何分组引用时返回 `404 NOT_FOUND`。
+      security:
+        - adminBearer: []
+      parameters:
+        - name: model
+          in: query
+          required: true
+          description: 客户端模型名。
+          schema: { type: string }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/ClientModelProfileResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    put:
+      tags: [Models]
+      operationId: updateClientModelProfile
+      summary: 保存客户端模型的 Codex 模型目录覆盖（整体替换）
+      description: |
+        `overrides` 整体替换已保存的覆盖，省略的字段回到自动值；传 `{}` 即删除全部覆盖。
+        客户端模型必须被某个分组引用，否则返回 `404 NOT_FOUND`。
+        保存后立即发布配置，其他实例经集群配置同步重新加载。不接受查询参数。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [client_model, overrides]
+              properties:
+                client_model: { type: string }
+                overrides: { $ref: '#/components/schemas/ClientModelOverrides' }
+            example:
+              client_model: gpt-5.5
+              overrides: { display_name: GPT-5.5, context_window: 400000 }
+      responses:
+        '200':
+          description: 保存后的模型资料
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/ClientModelProfileResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/RecoveryPending' }
+
   /api/client-model-prices:
     put:
       tags: [ModelPrices]
@@ -1871,11 +1949,14 @@ components:
 
     ProjectModel:
       type: object
-      required: [client_model, price, protocols, upstream_models]
+      required: [client_model, price, has_overrides, protocols, upstream_models]
       properties:
         client_model:
           type: string
           description: 客户端请求时使用的模型名。
+        has_overrides:
+          type: boolean
+          description: 是否为该客户端模型保存了 Codex 模型目录的手动覆盖，见 `GET /api/models/profile`。
         price:
           oneOf:
             - $ref: '#/components/schemas/ClientModelPrice'
@@ -1889,6 +1970,49 @@ components:
           type: array
           description: 按 `model_id`、`price.channel_id` 升序。
           items: { $ref: '#/components/schemas/ProjectUpstreamModel' }
+
+    ClientModelProfile:
+      type: object
+      required: [display_name, context_window, supported_reasoning_levels, input_modalities]
+      properties:
+        display_name: { type: string }
+        context_window:
+          type: [integer, 'null']
+          description: 上下文窗口 tokens；模板未提供时为 `null`。
+        supported_reasoning_levels:
+          type: array
+          items: { type: string, enum: [none, minimal, low, medium, high, xhigh, max, ultra, persistent] }
+        input_modalities:
+          type: array
+          items: { type: string, enum: [text, image, audio] }
+
+    ClientModelOverrides:
+      type: object
+      additionalProperties: false
+      description: 只包含被覆盖的字段；省略的字段使用自动值。
+      properties:
+        display_name: { type: string, maxLength: 512, description: '非空白 UTF-8 文本，最长 512 字节。' }
+        context_window: { type: integer, minimum: 1, maximum: 9007199254740991 }
+        supported_reasoning_levels:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string, enum: [none, minimal, low, medium, high, xhigh, max, ultra, persistent] }
+        input_modalities:
+          type: array
+          uniqueItems: true
+          description: 必须包含 `text`。
+          items: { type: string, enum: [text, image, audio] }
+
+    ClientModelProfileResponse:
+      type: object
+      required: [client_model, automatic, overrides, effective, has_overrides]
+      properties:
+        client_model: { type: string }
+        automatic: { $ref: '#/components/schemas/ClientModelProfile' }
+        overrides: { $ref: '#/components/schemas/ClientModelOverrides' }
+        effective: { $ref: '#/components/schemas/ClientModelProfile' }
+        has_overrides: { type: boolean }
 
     ProjectModelCollection:
       type: object

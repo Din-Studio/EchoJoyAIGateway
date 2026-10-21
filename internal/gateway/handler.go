@@ -16,6 +16,7 @@ import (
 
 	"gpt-load/internal/accessquota"
 	"gpt-load/internal/automodel"
+	"gpt-load/internal/catalog"
 	"gpt-load/internal/channel"
 	"gpt-load/internal/connection"
 	"gpt-load/internal/dialect"
@@ -112,6 +113,7 @@ type Handler struct {
 	autoTasks           autoTaskCache
 	decisionClient      autoDecisionRunner
 	manager             *state.Manager
+	catalog             *catalog.Runtime
 	channels            *channel.Registry
 	subscriptions       *subscriptionruntime.Runtime
 	registry            runtimeCredentialRegistry
@@ -244,6 +246,7 @@ func NewHandlerWithLifecycle(
 	priceTables PriceTableProvider,
 	shared SharedState,
 	lifecycle *httplifecycle.Coordinator,
+	catalogRuntime *catalog.Runtime,
 ) *Handler {
 	handler := NewHandler(
 		manager,
@@ -265,6 +268,7 @@ func NewHandlerWithLifecycle(
 		handler.subscriptions = subscriptions
 	}
 	handler.lifecycle = lifecycle
+	handler.catalog = catalogRuntime
 	return handler
 }
 
