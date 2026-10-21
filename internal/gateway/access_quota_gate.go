@@ -33,11 +33,28 @@ func limitStateFailureReason(err error) reason {
 	return reasonClusterStateUnavailable
 }
 
+// completeLimitStateFailure rejects a request whose shared limit state could
+// not be read. operation names the failed call; the log keeps the underlying
+// error, which tells a pool wait, a dial, and a slow reply apart.
 func (handler *Handler) completeLimitStateFailure(
 	context *gin.Context,
 	recorder *requestRecorder,
+	operation string,
 	err error,
 ) {
+	if !errors.Is(err, accessquota.ErrStaleRules) {
+		utils.LogPlaneBestEffort(
+			handler.logger,
+			logrus.WarnLevel,
+			utils.LogPlaneData,
+			logrus.Fields{
+				"event":     "limit_state.unavailable",
+				"operation": operation,
+				"error":     err.Error(),
+			},
+			"Shared limit state unavailable",
+		)
+	}
 	context.Writer.Header().Set("Retry-After", "1")
 	handler.completeReason(context, recorder, limitStateFailureReason(err))
 }

@@ -396,6 +396,7 @@ Resources:
             - {Name: DATABASE_MAX_OPEN_CONNECTIONS, Value: "10"}
             - {Name: DATABASE_MAX_IDLE_CONNECTIONS, Value: "10"}
             - {Name: REDIS_ADDRS, Value: !Ref RedisAddrs}
+            - {Name: REDIS_MIN_IDLE_CONNS, Value: "32"}
             - {Name: GOMEMLIMIT, Value: 3GiB}
             - {Name: LOG_FORMAT, Value: json}
             - {Name: LOG_LEVEL, Value: info}

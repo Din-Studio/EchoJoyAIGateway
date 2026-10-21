@@ -359,6 +359,7 @@ aws ssm start-session --target "$INSTANCE_ID" \
 | `GRACEFUL_SHUTDOWN_TIMEOUT` | `20` | |
 | `DATABASE_MAX_OPEN_CONNECTIONS` / `DATABASE_MAX_IDLE_CONNECTIONS` | `10` / `10` | 空闲数等于上限，连接用完不关闭，避免 PG 反复新建后端进程。`MaxTasks=24` 时常驻最多 240 个连接；滚动部署时任务数最多翻倍（`MaximumPercent: 200`），超过 20 个任务时部署会超出 `max_connections=400`，此时先缩到 20 个以内再部署，或调高 `max_connections` |
 | `REDIS_ADDRS` | `172.31.15.11:6379,172.31.31.11:6379,172.31.47.11:6379` | 多地址时启用集群客户端 |
+| `REDIS_MIN_IDLE_CONNS` | `32` | 每个节点预先保持 32 个连接，并发突增时新请求不必在 200ms 的共享状态超时内新建连接。`MaxTasks=24` 时空闲连接最多 24 × 3 × 32 = 2304 个，低于 Redis 默认 `maxclients=10000` |
 | `GOMEMLIMIT` | `3GiB` | 让 Go GC 在接近内存上限前更积极地回收 |
 | `LOG_FORMAT` / `LOG_LEVEL` | `json` / `info` | 方便用 CloudWatch Logs Insights 查询 |
 | `RESPONSE_BINDING_TTL` | `168h` | Redis 内存按这个值规划，见 7.2 |
