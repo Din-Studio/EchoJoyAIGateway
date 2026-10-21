@@ -357,7 +357,7 @@ aws ssm start-session --target "$INSTANCE_ID" \
 | `READ_TIMEOUT` | `120` | 留给大上传，默认 60 秒 |
 | `IDLE_TIMEOUT` | `3660` | 必须大于两个 ALB 的空闲超时 3600 秒，否则 ALB 可能复用一个已被网关关闭的连接，导致偶发 502 |
 | `GRACEFUL_SHUTDOWN_TIMEOUT` | `20` | |
-| `DATABASE_MAX_OPEN_CONNECTIONS` / `DATABASE_MAX_IDLE_CONNECTIONS` | `8` / `8` | 部署时最多 48 个任务，48 × 8 = 384，低于 `max_connections=400`；空闲数等于上限，连接用完不关闭，避免 PG 反复新建后端进程 |
+| `DATABASE_MAX_OPEN_CONNECTIONS` / `DATABASE_MAX_IDLE_CONNECTIONS` | `10` / `10` | 空闲数等于上限，连接用完不关闭，避免 PG 反复新建后端进程。`MaxTasks=24` 时常驻最多 240 个连接；滚动部署时任务数最多翻倍（`MaximumPercent: 200`），超过 20 个任务时部署会超出 `max_connections=400`，此时先缩到 20 个以内再部署，或调高 `max_connections` |
 | `REDIS_ADDRS` | `172.31.15.11:6379,172.31.31.11:6379,172.31.47.11:6379` | 多地址时启用集群客户端 |
 | `GOMEMLIMIT` | `3GiB` | 让 Go GC 在接近内存上限前更积极地回收 |
 | `LOG_FORMAT` / `LOG_LEVEL` | `json` / `info` | 方便用 CloudWatch Logs Insights 查询 |

@@ -393,8 +393,8 @@ Resources:
             - {Name: READ_TIMEOUT, Value: "120"}
             - {Name: IDLE_TIMEOUT, Value: "3660"}
             - {Name: GRACEFUL_SHUTDOWN_TIMEOUT, Value: "20"}
-            - {Name: DATABASE_MAX_OPEN_CONNECTIONS, Value: "8"}
-            - {Name: DATABASE_MAX_IDLE_CONNECTIONS, Value: "8"}
+            - {Name: DATABASE_MAX_OPEN_CONNECTIONS, Value: "10"}
+            - {Name: DATABASE_MAX_IDLE_CONNECTIONS, Value: "10"}
             - {Name: REDIS_ADDRS, Value: !Ref RedisAddrs}
             - {Name: GOMEMLIMIT, Value: 3GiB}
             - {Name: LOG_FORMAT, Value: json}
