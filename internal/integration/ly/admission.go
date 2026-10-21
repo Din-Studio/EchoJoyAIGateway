@@ -73,11 +73,15 @@ func (s *Service) Admit(ctx context.Context, in AdmitInput) Decision {
 		log.WithField("currency", in.Currency).Error("Lingying key rejected: the system currency must be CNY")
 		return Decision{Verdict: Unavailable}
 	}
-	status, account, err := s.client.balance(ctx, in.Credential)
+	status, account, err := s.balances.lookup(ctx, s.now(), in.Credential, s.client.balance)
 	switch {
 	case err != nil:
 		log.WithError(err).WithField("status", status).Error("Lingying balance check failed")
 		return Decision{Verdict: Unavailable}
+	case allows(status, account):
+		return Decision{Verdict: Allow, Admission: &Admission{
+			UserID: account.UserID, KeyID: account.KeyID, ProjectID: in.ProjectID,
+		}}
 	case status == http.StatusNotFound:
 		return Decision{Verdict: InvalidKey}
 	case status != http.StatusOK || account.UserID == "":
@@ -85,12 +89,16 @@ func (s *Service) Admit(ctx context.Context, in AdmitInput) Decision {
 		return Decision{Verdict: Unavailable}
 	case !account.Usable:
 		return Decision{Verdict: Unusable, Reason: account.Reason}
-	case !positive(account.Available):
+	default:
 		return Decision{Verdict: Insufficient}
 	}
-	return Decision{Verdict: Allow, Admission: &Admission{
-		UserID: account.UserID, KeyID: account.KeyID, ProjectID: in.ProjectID,
-	}}
+}
+
+// allows reports whether a balance check lets a request through: the account
+// is known, usable and has a positive balance. It is the only result the
+// balance cache keeps.
+func allows(status int, account balance) bool {
+	return status == http.StatusOK && account.UserID != "" && account.Usable && positive(account.Available)
 }
 
 // positive reports whether a decimal amount is greater than zero. An

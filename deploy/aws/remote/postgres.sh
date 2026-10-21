@@ -75,15 +75,31 @@ pg_dump_upload() {
   echo "uploaded $key"
 }
 
-# pg_report_metrics <container> <user> <node> <region> <data-dir>：
-# 上报 PostgresUp 和 DataDiskUsedPercent，由 systemd timer 每分钟调用。
+# pg_report_metrics <container> <user> <db> <node> <region> <data-dir>：
+# 上报 PostgresUp 和 DataDiskUsedPercent，以及灵影用量上报的积压
+# LyUsageReportsPending（已到期的条数）和 LyUsageReportOldestDueSeconds
+# （最早到期一条已等待的秒数），由 systemd timer 每分钟调用。
+# 积压查询失败时（例如网关还没建表）只上报前两个指标。
 pg_report_metrics() {
-  local name=$1 user=$2 node=$3 region=$4 data=$5 up=0 disk
+  local name=$1 user=$2 db=$3 node=$4 region=$5 data=$6 up=0 disk backlog='' pending oldest
+  local metrics=()
   if docker exec "$name" pg_isready -q -U "$user"; then
     up=1
   fi
   disk=$(df -P "$data" | awk 'NR == 2 {gsub("%", "", $5); print $5}')
-  aws cloudwatch put-metric-data --region "$region" --namespace EchoJoyGateway --metric-data \
-    "MetricName=PostgresUp,Value=$up,Unit=Count,Dimensions=[{Name=Node,Value=$node}]" \
-    "MetricName=DataDiskUsedPercent,Value=$disk,Unit=Percent,Dimensions=[{Name=Node,Value=$node}]"
+  metrics+=("MetricName=PostgresUp,Value=$up,Unit=Count,Dimensions=[{Name=Node,Value=$node}]")
+  metrics+=("MetricName=DataDiskUsedPercent,Value=$disk,Unit=Percent,Dimensions=[{Name=Node,Value=$node}]")
+  if [ "$up" = 1 ]; then
+    backlog=$(docker exec "$name" psql -U "$user" -d "$db" -At -F' ' -c \
+      "SELECT count(*), COALESCE(floor(extract(epoch FROM now()) - min(next_attempt_at_ms) / 1000.0), 0)::bigint
+       FROM ly_usage_reports
+       WHERE next_attempt_at_ms IS NOT NULL AND next_attempt_at_ms <= (extract(epoch FROM now()) * 1000)::bigint" \
+      2>/dev/null) || backlog=
+  fi
+  if [ -n "$backlog" ]; then
+    read -r pending oldest <<< "$backlog"
+    metrics+=("MetricName=LyUsageReportsPending,Value=$pending,Unit=Count,Dimensions=[{Name=Node,Value=$node}]")
+    metrics+=("MetricName=LyUsageReportOldestDueSeconds,Value=$oldest,Unit=Seconds,Dimensions=[{Name=Node,Value=$node}]")
+  fi
+  aws cloudwatch put-metric-data --region "$region" --namespace EchoJoyGateway --metric-data "${metrics[@]}"
 }

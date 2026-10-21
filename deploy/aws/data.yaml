@@ -557,6 +557,23 @@ Resources:
       TreatMissingData: notBreaching
       AlarmActions: [!Ref AlertTopicArn]
 
+  LyUsageBacklogAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: gateway-ly-usage-backlog
+      AlarmDescription: 灵影用量上报最早到期一条等待超过 5 分钟
+      Namespace: EchoJoyGateway
+      MetricName: LyUsageReportOldestDueSeconds
+      Dimensions: [{Name: Node, Value: pg}]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 5
+      Threshold: 300
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopicArn]
+      OKActions: [!Ref AlertTopicArn]
+
 Outputs:
   RedisAInstanceId:
     Value: !Ref RedisA

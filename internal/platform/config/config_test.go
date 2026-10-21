@@ -142,8 +142,9 @@ func TestLoadLingyingBillingRequiresBothValues(t *testing.T) {
 		want                 LingyingBillingConfig
 		wantErr              bool
 	}{
-		{name: "unset"},
-		{name: "both", baseURL: "https://lingying.example", token: "secret", want: LingyingBillingConfig{BaseURL: "https://lingying.example", Token: "secret"}},
+		{name: "unset", want: LingyingBillingConfig{DeliveryBatchSize: 100}},
+		{name: "both", baseURL: "https://lingying.example", token: "secret",
+			want: LingyingBillingConfig{BaseURL: "https://lingying.example", Token: "secret", DeliveryBatchSize: 100}},
 		{name: "url only", baseURL: "https://lingying.example", wantErr: true},
 		{name: "token only", token: "secret", wantErr: true},
 		{name: "not http", baseURL: "lingying.example", token: "secret", wantErr: true},
@@ -165,6 +166,39 @@ func TestLoadLingyingBillingRequiresBothValues(t *testing.T) {
 			}
 			if cfg.LingyingBilling != test.want {
 				t.Fatalf("LingyingBilling = %#v, want %#v", cfg.LingyingBilling, test.want)
+			}
+		})
+	}
+}
+
+func TestLoadLingyingDeliveryBatchSize(t *testing.T) {
+	for _, test := range []struct {
+		value   string
+		want    int
+		wantErr bool
+	}{
+		{value: "", want: 100},
+		{value: "20", want: 20},
+		{value: "0", wantErr: true},
+		{value: "abc", wantErr: true},
+		{value: "101", wantErr: true},
+	} {
+		t.Run(test.value, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv("LINGYING_USAGE_DELIVERY_BATCH_SIZE", test.value)
+
+			cfg, err := Load()
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("Load() error = nil, want batch size error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.LingyingBilling.DeliveryBatchSize != test.want {
+				t.Fatalf("DeliveryBatchSize = %d, want %d", cfg.LingyingBilling.DeliveryBatchSize, test.want)
 			}
 		})
 	}

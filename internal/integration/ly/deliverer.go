@@ -27,44 +27,79 @@ func (s *Service) Run(ctx context.Context) {
 			return
 		case <-timer.C:
 		}
-		for ctx.Err() == nil && s.deliverNext(ctx) {
+		for ctx.Err() == nil && s.deliverBatch(ctx) > 0 {
 		}
 		timer.Reset(pollInterval)
 	}
 }
 
-// deliverNext delivers one due report and reports whether there was one.
-func (s *Service) deliverNext(ctx context.Context) bool {
+// deliverBatch delivers up to deliveryBatchSize due reports in one request
+// and returns how many it claimed. A replica therefore holds at most one
+// delivery in flight, which bounds the transactions Lingying opens.
+func (s *Service) deliverBatch(ctx context.Context) int {
 	log := logrus.WithField("component", "ly_billing")
-	report, found, err := s.outbox.claim(ctx, s.now())
+	reports, err := s.outbox.claim(ctx, s.now(), s.deliveryBatchSize)
 	if err != nil {
 		if ctx.Err() == nil {
 			log.WithError(err).Warn("claim Lingying usage report failed")
 		}
-		return false
+		return 0
 	}
-	if !found {
-		return false
+	if len(reports) == 0 {
+		return 0
 	}
-	log = log.WithFields(logrus.Fields{"request_id": report.RequestID, "attempt": report.Attempts})
-	status, body, err := s.client.reportUsage(ctx, []byte(report.Payload))
-	switch {
-	case err == nil && status == http.StatusOK:
-		err = s.outbox.remove(ctx, report.RequestID)
-	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity:
-		detail := fmt.Sprintf("HTTP %d: %s", status, body)
-		log.WithField("detail", detail).Error("Lingying rejected a usage report; it is parked and will not be retried")
-		err = s.outbox.park(ctx, report.RequestID, detail)
-	default:
-		detail := fmt.Sprintf("HTTP %d: %s", status, body)
-		if err != nil {
-			detail = err.Error()
+	payloads := make([]string, len(reports))
+	for index, report := range reports {
+		payloads[index] = report.Payload
+	}
+	results, err := s.client.reportUsageBatch(ctx, payloads)
+	if err != nil {
+		log.WithFields(logrus.Fields{"reports": len(reports), "detail": err.Error()}).
+			Warn("Lingying usage batch delivery failed; it will be retried")
+		for _, report := range reports {
+			warnIfUpdateFailed(ctx, report, s.outbox.fail(ctx, report.RequestID, err.Error()))
 		}
-		log.WithField("detail", detail).Warn("Lingying usage report delivery failed; it will be retried")
-		err = s.outbox.fail(ctx, report.RequestID, detail)
+		return len(reports)
 	}
+	byRequestID := make(map[string]batchResult, len(results))
+	for _, result := range results {
+		byRequestID[result.RequestID] = result
+	}
+	var accepted []string
+	for _, report := range reports {
+		result, found := byRequestID[report.RequestID]
+		detail := fmt.Sprintf("HTTP %d: %s", result.Status, result.Error)
+		switch {
+		case found && result.Status == http.StatusOK:
+			accepted = append(accepted, report.RequestID)
+		case found && (result.Status == http.StatusBadRequest || result.Status == http.StatusUnprocessableEntity):
+			reportLog(report).WithField("detail", detail).Error("Lingying rejected a usage report; it is parked and will not be retried")
+			warnIfUpdateFailed(ctx, report, s.outbox.park(ctx, report.RequestID, detail))
+		default:
+			if !found {
+				detail = "missing from the Lingying batch response"
+			}
+			reportLog(report).WithField("detail", detail).Warn("Lingying usage report delivery failed; it will be retried")
+			warnIfUpdateFailed(ctx, report, s.outbox.fail(ctx, report.RequestID, detail))
+		}
+	}
+	// Reports left after a failed delete are delivered again, and Lingying
+	// answers them as duplicates.
+	if err := s.outbox.remove(ctx, accepted); err != nil && ctx.Err() == nil {
+		log.WithError(err).WithField("reports", len(accepted)).Warn("update Lingying usage report failed")
+	}
+	return len(reports)
+}
+
+func reportLog(report pendingReport) *logrus.Entry {
+	return logrus.WithFields(logrus.Fields{
+		"component": "ly_billing", "request_id": report.RequestID, "attempt": report.Attempts,
+	})
+}
+
+// warnIfUpdateFailed logs a failure to record a report's delivery outcome.
+func warnIfUpdateFailed(ctx context.Context, report pendingReport, err error) {
 	if err != nil && ctx.Err() == nil {
-		log.WithError(err).Warn("update Lingying usage report failed")
+		reportLog(report).WithError(err).Warn("update Lingying usage report failed")
 	}
-	return true
 }

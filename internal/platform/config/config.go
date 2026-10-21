@@ -85,11 +85,16 @@ type Config struct {
 }
 
 // LingyingBillingConfig is the Lingying gateway billing callback endpoint.
-// Both fields are set or neither is.
+// BaseURL and Token are set together or neither is.
 type LingyingBillingConfig struct {
 	BaseURL string
 	Token   string
+	// DeliveryBatchSize is how many usage reports one batch delivery carries.
+	DeliveryBatchSize int
 }
+
+// maxLingyingDeliveryBatchSize is the most reports Lingying accepts in one batch.
+const maxLingyingDeliveryBatchSize = 100
 
 // AccessTokenConfig verifies EchoJoyAuth access tokens, which a data-plane
 // request may present instead of an access key. An empty JWKSURL turns access
@@ -215,11 +220,20 @@ func Load() (*Config, error) {
 }
 
 // parseLingyingBillingConfig reads LINGYING_BILLING_BASE_URL and
-// LINGYING_BILLING_TOKEN, which must be set together.
+// LINGYING_BILLING_TOKEN, which must be set together, and
+// LINGYING_USAGE_DELIVERY_BATCH_SIZE.
 func parseLingyingBillingConfig() (LingyingBillingConfig, error) {
+	batchSize, err := parsePositiveInt("LINGYING_USAGE_DELIVERY_BATCH_SIZE", maxLingyingDeliveryBatchSize)
+	if err != nil {
+		return LingyingBillingConfig{}, err
+	}
+	if batchSize > maxLingyingDeliveryBatchSize {
+		return LingyingBillingConfig{}, fmt.Errorf("LINGYING_USAGE_DELIVERY_BATCH_SIZE must not exceed %d, the most reports Lingying accepts in one batch", maxLingyingDeliveryBatchSize)
+	}
 	value := LingyingBillingConfig{
-		BaseURL: strings.TrimSpace(os.Getenv("LINGYING_BILLING_BASE_URL")),
-		Token:   strings.TrimSpace(os.Getenv("LINGYING_BILLING_TOKEN")),
+		BaseURL:           strings.TrimSpace(os.Getenv("LINGYING_BILLING_BASE_URL")),
+		Token:             strings.TrimSpace(os.Getenv("LINGYING_BILLING_TOKEN")),
+		DeliveryBatchSize: batchSize,
 	}
 	if (value.BaseURL == "") != (value.Token == "") {
 		return LingyingBillingConfig{}, errors.New("LINGYING_BILLING_BASE_URL and LINGYING_BILLING_TOKEN must be set together")

@@ -3,7 +3,6 @@ package ly
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"strings"
 	"time"
 )
@@ -37,37 +36,46 @@ func (o outbox) enqueue(ctx context.Context, requestID string, payload []byte, n
 	return err
 }
 
-// claim takes one due report and, in the same statement, schedules its next
-// attempt: reportTimeout plus an exponential backoff of 1s, 2s, 4s... up to
-// maxBackoff. A replica that dies mid-delivery therefore leaves the report due
-// again later, and another replica cannot take it while the delivery may still
-// be in flight.
-func (o outbox) claim(ctx context.Context, now time.Time) (pendingReport, bool, error) {
-	var report pendingReport
-	err := o.db.QueryRowContext(ctx,
+// claim takes up to limit due reports, oldest first, and in the same
+// statement schedules their next attempt: reportTimeout plus an exponential
+// backoff of 1s, 2s, 4s... up to maxBackoff. A replica that dies mid-delivery
+// therefore leaves the reports due again later, and another replica cannot
+// take them while the delivery may still be in flight.
+func (o outbox) claim(ctx context.Context, now time.Time, limit int) ([]pendingReport, error) {
+	rows, err := o.db.QueryContext(ctx,
 		`UPDATE ly_usage_reports
 		SET attempts = attempts + 1,
 			next_attempt_at_ms = $1 + LEAST(1000 * POWER(2, LEAST(attempts, 20)), $2)::bigint
-		WHERE request_id = (
+		WHERE request_id IN (
 			SELECT request_id FROM ly_usage_reports
 			WHERE next_attempt_at_ms <= $3
 			ORDER BY next_attempt_at_ms
-			LIMIT 1
+			LIMIT $4
 			FOR UPDATE SKIP LOCKED)
 		RETURNING request_id, payload, attempts`,
-		now.Add(reportTimeout).UnixMilli(), maxBackoff.Milliseconds(), now.UnixMilli(),
-	).Scan(&report.RequestID, &report.Payload, &report.Attempts)
-	if errors.Is(err, sql.ErrNoRows) {
-		return pendingReport{}, false, nil
-	}
+		now.Add(reportTimeout).UnixMilli(), maxBackoff.Milliseconds(), now.UnixMilli(), limit,
+	)
 	if err != nil {
-		return pendingReport{}, false, err
+		return nil, err
 	}
-	return report, true, nil
+	defer rows.Close()
+	var reports []pendingReport
+	for rows.Next() {
+		var report pendingReport
+		if err := rows.Scan(&report.RequestID, &report.Payload, &report.Attempts); err != nil {
+			return nil, err
+		}
+		reports = append(reports, report)
+	}
+	return reports, rows.Err()
 }
 
-func (o outbox) remove(ctx context.Context, requestID string) error {
-	_, err := o.db.ExecContext(ctx, `DELETE FROM ly_usage_reports WHERE request_id = $1`, requestID)
+// remove deletes the reports Lingying accepted.
+func (o outbox) remove(ctx context.Context, requestIDs []string) error {
+	if len(requestIDs) == 0 {
+		return nil
+	}
+	_, err := o.db.ExecContext(ctx, `DELETE FROM ly_usage_reports WHERE request_id = ANY($1)`, requestIDs)
 	return err
 }
 

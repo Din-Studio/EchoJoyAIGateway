@@ -12,13 +12,14 @@ import (
 )
 
 const (
-	balancePath = "/internal/aigw/balance"
-	usagePath   = "/internal/aigw/usage"
+	balancePath    = "/internal/aigw/balance"
+	usageBatchPath = "/internal/aigw/usage/batch"
 
 	balanceTimeout = 3 * time.Second
-	// reportTimeout exceeds Lingying's 15-second usage write timeout.
-	reportTimeout    = 20 * time.Second
-	maxResponseBytes = 64 << 10
+	// reportTimeout exceeds Lingying's 25-second deadline for a whole batch.
+	reportTimeout = 30 * time.Second
+	// maxResponseBytes holds the results of a full batch with their errors.
+	maxResponseBytes = 1 << 20
 )
 
 // client calls the Lingying billing callbacks. A response is classified by its
@@ -70,11 +71,44 @@ func (c *client) balance(ctx context.Context, credential Credential) (int, balan
 	return status, decoded, nil
 }
 
-// reportUsage posts one usage report and returns the HTTP status and body.
-func (c *client) reportUsage(ctx context.Context, payload []byte) (int, []byte, error) {
+// batchResult is Lingying's outcome for one report of a batch. Status has
+// the meaning the single-report endpoint gives its HTTP status.
+type batchResult struct {
+	RequestID string `json:"request_id"`
+	Status    int    `json:"status"`
+	Error     string `json:"error"`
+}
+
+// reportUsageBatch posts usage reports in one request, each payload as
+// stored, and returns the per-report results. Any answer other than 200 is an
+// error that fails the whole batch.
+func (c *client) reportUsageBatch(ctx context.Context, payloads []string) ([]batchResult, error) {
+	reports := make([]json.RawMessage, len(payloads))
+	for index, payload := range payloads {
+		reports[index] = json.RawMessage(payload)
+	}
+	body, err := json.Marshal(struct {
+		Reports []json.RawMessage `json:"reports"`
+	}{reports})
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, reportTimeout)
 	defer cancel()
-	return c.post(ctx, usagePath, payload)
+	status, response, err := c.post(ctx, usageBatchPath, body)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d: %s", status, response)
+	}
+	var decoded struct {
+		Results []batchResult `json:"results"`
+	}
+	if err := json.Unmarshal(response, &decoded); err != nil {
+		return nil, fmt.Errorf("decode usage batch results: %w", err)
+	}
+	return decoded.Results, nil
 }
 
 // post returns status 0 with an error when no response arrived.

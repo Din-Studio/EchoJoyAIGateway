@@ -5,7 +5,8 @@
 // The package is the only place that knows the Lingying billing callback
 // contract (docs/lingying-billing-callback-plan.md):
 //
-//   - Admit checks the account balance before a billable request is forwarded.
+//   - Admit checks the account balance before a billable request is forwarded,
+//     reusing a balance that allows requests for a few seconds.
 //   - Record stores the finished request's usage report in a durable outbox.
 //   - Run delivers the outbox to Lingying, retrying with the same request_id.
 package ly
@@ -22,15 +23,21 @@ const keyNamePrefix = "ly:"
 
 // Service implements admission, usage recording and outbox delivery.
 type Service struct {
-	client *client // nil when Lingying billing is not configured
-	outbox outbox
-	now    func() time.Time
+	client   *client // nil when Lingying billing is not configured
+	outbox   outbox
+	balances *balanceCache
+	// deliveryBatchSize is the most reports one delivery carries.
+	deliveryBatchSize int
+	now               func() time.Time
 }
 
 // New builds the service. db holds the outbox table. Without a configured
 // endpoint, Lingying keys are rejected (fail closed).
 func New(cfg config.LingyingBillingConfig, db *sql.DB) *Service {
-	service := &Service{outbox: outbox{db: db}, now: time.Now}
+	service := &Service{
+		outbox: outbox{db: db}, balances: newBalanceCache(),
+		deliveryBatchSize: cfg.DeliveryBatchSize, now: time.Now,
+	}
 	if cfg.BaseURL != "" && cfg.Token != "" {
 		service.client = newClient(cfg.BaseURL, cfg.Token)
 	}
