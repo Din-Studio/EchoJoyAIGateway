@@ -90,7 +90,7 @@ curl -u admin https://docker.echojoy.cn/v2/echojoy-gateway/ai-gateway/tags/list
 | 网关环境变量、机型、任务数上下限 | 改 `gateway.yaml` 或 `config.env`，执行 `scripts/deploy.sh gateway --image-tag <当前标签>` | 任务定义有变化时会触发第 1 节的滚动部署 |
 | 安全组、告警主题 | 改 `network.yaml`，执行 `scripts/deploy.sh network` | 宁夏的 SNS 不支持邮件订阅，不要设置 `ALERT_EMAIL` |
 | 数据层实例、数据卷、快照策略、告警 | 改 `data.yaml`，执行 `scripts/deploy.sh data` | 栈开了删除保护。预览里 Replacement 列为 `True` 的实例会被替换：数据卷会保留，但替换后要重新执行对应的 bootstrap 脚本 |
-| Redis 或 PostgreSQL 参数 | 改 `remote/redis.sh` 的 `redis_write_conf`，或 `remote/postgres.sh` 的 `PG_SETTINGS`，再执行 `scripts/bootstrap-redis.sh` 或 `scripts/bootstrap-pg.sh` | 配置有变化时容器会重建，配置没变时脚本什么也不做 |
+| Redis 或 PostgreSQL 参数、主机上的定时任务（指标上报、备份） | 改 `remote/` 下的脚本，例如 `redis.sh` 的 `redis_write_conf`、`postgres.sh` 的 `PG_SETTINGS` 或 `pg_report_metrics`，再执行 `scripts/bootstrap-redis.sh` 或 `scripts/bootstrap-pg.sh` | 配置有变化时容器会重建，配置没变时容器不动；定时任务的脚本每次都会重新安装 |
 
 ## 6. 升级 postgres 或 redis 镜像
 
@@ -125,6 +125,13 @@ PostgreSQL 只能在同一个大版本内升级（例如 18.3 → 18.4）。跨�
      -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' -d '{"api_key":"sk-none"}'
    ```
 
+6. 确认灵影已经部署批量上报接口，期望返回 400，消息为 `reports must hold 1 to 100 entries`。空批次不会记账。消息为「接口不存在」说明灵影还没有部署这个接口，在此之前用量会在 `ly_usage_reports` 积压，灵影部署后自动补报：
+
+   ```bash
+   curl -sS -X POST https://lingying-gateway.echojoy.cn/internal/aigw/usage/batch \
+     -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' -d '{"reports":[]}'
+   ```
+
 **灵影调用控制面**：灵影用 `GET /api/models` 读取文本模型目录，用 `POST /api/access-keys`、`DELETE /api/access-keys/{id}` 同步个人 API Key。入口是 `config.env` 的 `CONTROL_HOST`（`aigw-internal.echojoy.cn`）：`scripts/private-dns.sh` 让它只在 VPC 内解析到 alb-internal，`gateway.yaml` 的 `InternalControlListenerRule` 只放行这两组路径，其余路径落到 ALB 默认动作。灵影侧配置：
 
 | 变量 | 值 |
@@ -143,7 +150,7 @@ PostgreSQL 只能在同一个大版本内升级（例如 18.3 → 18.4）。跨�
 
 1. 用下面的 SQL 看 `last_error`。
 2. `HTTP 404` 说明灵影还没有部署批量接口；`HTTP 401`、`HTTP 403` 说明 token 不一致；`HTTP 5xx` 或单条 `503` 看灵影日志里的 `aigw usage batch` 错误。
-3. 看 DocumentDB 的 CPU 和 `TransactionsAborted`。中止多说明同一用户的写冲突严重，可以减少投递副本或调大批量。
+3. 看 DocumentDB 的 CPU 和 `TransactionsAborted`。批量已是灵影允许的上限 100，中止多说明同一用户的写冲突严重，需要灵影侧处理。
 
 **排查积压**：用第 2 节的 PostgreSQL 隧道执行：
 
