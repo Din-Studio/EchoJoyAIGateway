@@ -17,7 +17,7 @@
 | `scripts/build-push.sh` | 构建 amd64 网关镜像并推送，标签为提交短 SHA |
 | `scripts/bootstrap-redis.sh`、`scripts/bootstrap-pg.sh` | 经 SSM 配置数据层实例，可重复执行 |
 | `scripts/waf-update.sh` | 调整共用 Web ACL，自动备份，可 `restore` |
-| `scripts/alb-cutover.sh` | 切换或回滚：旧网关的文本接口（`/gateway/v1/chat/completions`、`messages`、`responses`）转给新网关 |
+| `scripts/alb-cutover.sh` | 切换或回滚：旧网关的文本接口（`/gateway/v1/chat/completions`、`messages`、`responses`）和 Gemini 接口（`/gateway/v1beta/models/*`）转给新网关 |
 | `scripts/private-dns.sh` | 给域名建指向 `alb-internal` 的 VPC 私有解析 |
 | `scripts/tunnel.sh` | 用 SSM 端口转发把管理后台或 PostgreSQL 映射到本机 |
 | `remote/` | 在数据层实例上执行的函数和入口脚本 |
