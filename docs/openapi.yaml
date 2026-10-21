@@ -14,9 +14,10 @@ info:
 
     - `admin`：token 等于服务端环境变量 `AUTH_KEY`，可访问全部控制面接口。
     - `access_key`：token 为某个 AccessKey，仅能以 GET 访问只读白名单
-      （`/api/auth/session`、`/api/home`、`/api/models`、`/api/usage`、`/api/logs` 等）。
+      （`/api/auth/session`、`/api/currency`、`/api/home`、`/api/home/statistics`、`/api/models`、`/api/usage`、
+      `/api/logs`、`/api/logs/{request_id}`），响应一律带 `Cache-Control: no-store`。
 
-    本文档中除 `GET /api/models` 外的接口**仅限 `admin`**，AccessKey 调用返回 `403 FORBIDDEN`。
+    本文档中除 `GET /api/models`、`GET /api/currency` 外的接口**仅限 `admin`**，AccessKey 调用返回 `403 FORBIDDEN`。
     同一来源 IP 连续认证失败会被临时锁定，返回 `429 AUTH_LOCKED` 并带 `Retry-After`。
 
     ## 响应包络
@@ -28,6 +29,16 @@ info:
     会生成或替换密钥明文的写操作要求 `Idempotency-Key` 请求头（小写规范 UUID v4）。
     相同 key + 相同请求体重放时返回首次结果，`replayed=true`，且**不再返回明文 `key`**。
     相同 key + 不同请求体返回 `409 IDEMPOTENCY_KEY_REUSED`。
+
+    ## 灵影镜像密钥
+    灵影通过 `/api/access-keys` 把用户的个人 API Key 镜像为 AccessKey，并通过 `GET /api/models` 读取模型目录。
+    控制面不校验下列约定，但数据面按名称前缀识别：
+
+    - 名称以 `ly:` 开头（灵影写为 `ly:<key_id>`）：数据面生成类请求（`/v1/chat/completions`、`/v1/messages`、
+      `/v1/responses`）先向灵影查询余额、结束后上报用量。要求系统货币为 `CNY` 且配置了
+      `LINGYING_BILLING_BASE_URL`、`LINGYING_BILLING_TOKEN`，否则这些请求被拒绝。
+    - 名称以 `ly:default:` 开头且备注非空：该密钥是备注中 EchoJoyAuth 用户 ID 的默认密钥。
+      数据面收到该用户的 EchoJoyAuth access token 时，按这把启用中的密钥鉴权、限流和计费。
 
     ## 请求体
     JSON 请求体严格解析：未知字段、重复字段、多个 JSON 值均拒绝；上限 32 MiB。
@@ -338,6 +349,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '429': { $ref: '#/components/responses/AuthLocked' }
         '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/RecoveryPending' }
 
   /api/access-keys/{id}/reveal:
     parameters:
@@ -399,12 +411,17 @@ paths:
                     required: [data]
                     properties:
                       data: { $ref: '#/components/schemas/AccessKeySecretResult' }
-        '400': { $ref: '#/components/responses/BadRequest' }
+        '400':
+          description: '`BAD_REQUEST` / `INVALID_JSON` / `INVALID_IDEMPOTENCY_KEY`'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/IdempotencyKeyReused' }
         '410': { $ref: '#/components/responses/IdempotencyExpired' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
         '428': { $ref: '#/components/responses/IdempotencyKeyRequired' }
         '429': { $ref: '#/components/responses/AuthLocked' }
         '500': { $ref: '#/components/responses/InternalError' }
@@ -448,6 +465,7 @@ paths:
         '413': { $ref: '#/components/responses/RequestTooLarge' }
         '429': { $ref: '#/components/responses/AuthLocked' }
         '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/RecoveryPending' }
 
   /api/models:
     get:
@@ -461,7 +479,7 @@ paths:
         条目按 `client_model` 升序。只接受下列查询参数，出现其他参数或同一参数重复时返回 `400 BAD_REQUEST`。
 
         **允许 `access_key` 身份调用**，此时：
-        - `group_status` 固定为 `enabled`，传入值被忽略；
+        - `group_status` 固定为 `enabled`，合法的传入值被忽略；
         - 只包含该密钥 `filters` 允许访问的分组、协议与模型，`protocols` 也按密钥过滤；
         - `route_groups`、`affected_groups` 恒为空数组，只返回被分组引用的价格；
         - 上游价格是网关成本：`upstream_models[].price` 只保留渠道与定价状态，`prices` 各项为 `null`，
@@ -603,6 +621,11 @@ paths:
                       data: { $ref: '#/components/schemas/CredentialValidationData' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: '`NOT_FOUND`：`staged_credential_id` 对应的暂存凭据不存在'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '409':
           description: |
             `STAGED_CREDENTIAL_NOT_READY` / `STAGED_CREDENTIAL_MISMATCH` /
@@ -1115,7 +1138,9 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     OperationIncomplete:
-      description: '`CONTROL_OPERATION_INCOMPLETE`：已提交但运行时恢复未完成，可用同一 Idempotency-Key 重试'
+      description: |
+        `CONTROL_RECOVERY_PENDING`：之前已提交的操作仍在恢复，稍后重试；
+        `CONTROL_OPERATION_INCOMPLETE`：本次操作已提交但运行时恢复未完成，可用同一 Idempotency-Key 重试
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
@@ -1167,13 +1192,17 @@ components:
 
     AccessKeyName:
       type: string
-      description: 去除首尾空白后非空，不超过 255 字节，不含控制字符。
+      description: |
+        去除首尾空白后非空，不超过 255 字节，不含控制字符。
+        `ly:` 与 `ly:default:` 前缀有约定含义，见「灵影镜像密钥」。
       minLength: 1
       maxLength: 255
 
     AccessKeyNote:
       type: string
-      description: 备注，去除首尾空白后不超过 500 个字符（按 Unicode 字符计），可含换行；空串表示无备注。
+      description: |
+        备注，去除首尾空白后不超过 500 个字符（按 Unicode 字符计），可含换行；空串表示无备注。
+        灵影镜像密钥的备注是灵影写入的 EchoJoyAuth 用户 ID，手动修改 `ly:default:` 密钥的备注会使它与用户脱钩。
       maxLength: 500
 
     PriceMultiplier:
@@ -1378,7 +1407,9 @@ components:
           description: 备注；未设置时为空串。
         masked_key:
           type: string
-          description: 掩码密钥，形如 `sk-gl-****ab12`；短密钥只显示 `****` 或末 4 位。
+          description: |
+            掩码密钥：超过 16 个字符时为前 6 位 + `****` + 末 4 位（如 `sk-gl-****ab12`）；
+            9–16 个字符时为 `****` + 末 4 位；不超过 8 个字符时为 `********`。
           examples: [sk-gl-****ab12]
         status: { $ref: '#/components/schemas/AccessKeyStatus' }
         price_multiplier: { $ref: '#/components/schemas/PriceMultiplier' }
@@ -1535,8 +1566,12 @@ components:
 
     PricingMode:
       type: string
-      description: 非标准计费模式。`fast` 不支持分档价格。
-      enum: [fast, ultrafast]
+      description: |
+        非标准计费模式名，如 `fast`、`ultrafast`；不可为 `standard`。`fast` 不支持分档价格。
+        上游价格（`PUT /api/model-prices/{id}`）的模式集合不可增删，`ultrafast` 除外；统一价不限。
+      minLength: 1
+      maxLength: 64
+      pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
 
     ModelPrice:
       type: object
