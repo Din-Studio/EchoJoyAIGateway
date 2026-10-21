@@ -31,6 +31,7 @@ dev 迁移注册表要求编号连续，dev 已用到 `0024`。上游从 `0019` 
 | 自动模型决策调用（auto-model decisions） | 走渠道/分组/凭据路由，占用 `cluster.CredentialConcurrency` 槽并跳过饱和凭据；共享状态失败时决策按尽力而为处理，落到 fallback 预设，不返回 503 | 8eceed2a #703 |
 | 决策费用 | 按决策模型的客户端模型统一价（`client_model_prices`）计价，不用渠道价，也不设单独的决策价格设置 | 8eceed2a #703 |
 | 决策的上游成本（`Decision.ProviderCostUSD`） | 只给管理员看，`sanitizeAccessKeyRequestLog` 清零 | 8eceed2a #703 |
+| 上游版本检查（`internal/releasecheck`、前端检查更新提示） | fork 不跟进：它查的是 tbphp/gpt-load 的 GitHub release，和 fork 的容器镜像发布无关。后续改版本检查的上游提交（如 dec6dc7f #728）整体用 `-s ours` 跳过；dev 现有的 releasecheck 是删掉还是改成查 fork 自己的版本，另开任务决定 | 68681794 #714 |
 
 ## 已知重叠点
 
@@ -48,5 +49,4 @@ dev 迁移注册表要求编号连续，dev 已用到 `0024`。上游从 `0019` 
 | ab655129 #851 请求体记录（U0030） | 写入要并进 dev 的 `writeRequestLogBatch`；`access_keys` 新列要加进 `accessKeyMetadataColumns`（§6、§9） |
 | cca2316a #717 共享别名轮询 | 丢弃改 `scheduling_checkpoint.go` 的部分，轮询进度留在副本内（§1） |
 | 3745fbab #842 CLI update 命令 | 二进制自更新，和“只发布容器镜像”冲突，倾向整体丢弃 `update` 命令，要走决策门（§11） |
-| 68681794 #714、dec6dc7f #728 等版本检查 | `releasecheck` 查的是上游 GitHub release，fork 的版本号不同，要走决策门（§11） |
 | 36b40124 #752、b8cadb40 #889 发布验收 | `scripts/release*`、Playwright、Makefile 目标，和 dev 的发布方式不一定一致，要核对 workflow 契约测试（§11） |
