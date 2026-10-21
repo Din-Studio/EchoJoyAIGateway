@@ -21,6 +21,11 @@ const (
 	commandTimeout = 2 * time.Second
 	startupPing    = 5 * time.Second
 	maxRetries     = 3
+	// poolSize caps the connections in use per Redis node. The go-redis
+	// cluster client defaults to 5 per CPU, 10 on a 2-vCPU instance, which
+	// hundreds of in-flight streams exhaust: callers then queue past
+	// stateTimeout and requests fail.
+	poolSize = 128
 
 	// stateTimeout bounds each data-plane round trip for shared request state,
 	// so an unavailable Redis fails the request fast instead of stalling it.
@@ -44,6 +49,7 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		ReadTimeout:  commandTimeout,
 		WriteTimeout: commandTimeout,
 		MaxRetries:   maxRetries,
+		PoolSize:     poolSize,
 		// Honor per-call context deadlines such as stateTimeout.
 		ContextTimeoutEnabled: true,
 	}
