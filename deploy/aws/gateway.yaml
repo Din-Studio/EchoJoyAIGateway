@@ -2,7 +2,8 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   EchoJoy AI Gateway 网关层：ECS 集群（EC2、host 网络）、ASG 和容量提供程序、任务定义与服务、
   两个目标组、两个共用 ALB 上的新监听规则、扩缩和告警（计划文档 5.3、6、10 节）。
-  新监听规则把旧网关的文本接口（/gateway/v1/chat/completions、messages、responses）去掉 /gateway 前缀后
+  新监听规则把旧网关的文本接口（/gateway/v1/chat/completions、messages、responses）和 Gemini 接口
+  （/gateway/v1beta/models/*）去掉 /gateway 前缀后
   转给新网关，调用方不用改配置。规则以 NewRulePriority 创建，排在旧网关整域名规则之后，部署后不接流量；
   由 scripts/alb-cutover.sh 调整旧规则的优先级来切换。
 
@@ -350,7 +351,7 @@ Resources:
             Values: [!Ref GatewayHost]
         - Field: path-pattern
           PathPatternConfig:
-            Values: ["/gateway/v1/chat/completions", "/gateway/v1/messages*", "/gateway/v1/responses*"]
+            Values: ["/gateway/v1/chat/completions", "/gateway/v1/messages*", "/gateway/v1/responses*", "/gateway/v1beta/models/*"]
       Transforms:
         - Type: url-rewrite
           UrlRewriteConfig:
@@ -372,7 +373,7 @@ Resources:
             Values: [!Ref GatewayHost]
         - Field: path-pattern
           PathPatternConfig:
-            Values: ["/gateway/v1/chat/completions", "/gateway/v1/messages*", "/gateway/v1/responses*"]
+            Values: ["/gateway/v1/chat/completions", "/gateway/v1/messages*", "/gateway/v1/responses*", "/gateway/v1beta/models/*"]
       Transforms:
         - Type: url-rewrite
           UrlRewriteConfig:
