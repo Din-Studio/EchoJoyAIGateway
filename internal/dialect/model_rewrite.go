@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 var (
@@ -182,15 +185,24 @@ func rewriteJSONRequestModel(req *ParsedRequest, model, protocolName string) (*P
 	return clone, nil
 }
 
+// rewriteOptionalJSONField replaces one top-level field in place, leaving the
+// rest of the object byte-for-byte as received. It runs on every streamed
+// chunk, so it avoids decoding and re-encoding the whole object.
 func rewriteOptionalJSONField(body []byte, field, model string) ([]byte, error) {
-	object, err := decodeJSONObject(body)
-	if err != nil {
-		return nil, err
+	if !gjson.ValidBytes(body) {
+		return nil, fmt.Errorf("decode JSON object: invalid JSON")
 	}
-	if _, exists := object[field]; !exists {
+	if !gjson.ParseBytes(body).IsObject() {
+		return nil, fmt.Errorf("decode JSON object: root must be an object")
+	}
+	if !gjson.GetBytes(body, field).Exists() {
 		return bytes.Clone(body), nil
 	}
-	return marshalRewrittenField(object, field, model)
+	rewritten, err := sjson.SetBytes(body, field, model)
+	if err != nil {
+		return nil, fmt.Errorf("encode rewritten object: %w", err)
+	}
+	return rewritten, nil
 }
 
 func marshalRewrittenField(object map[string]json.RawMessage, field, model string) ([]byte, error) {
