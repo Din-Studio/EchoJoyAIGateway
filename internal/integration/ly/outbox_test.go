@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -36,15 +36,21 @@ func openOutboxDB(t *testing.T) *sql.DB {
 	return sqlDB
 }
 
-// fakeLingying is an idempotent POST /internal/aigw/usage: a request_id is
-// booked once, and later deliveries answer duplicate. script, when set,
-// decides the status of every delivery before booking.
+// fakeLingying is an idempotent POST /internal/aigw/usage/batch: a
+// request_id is booked once, and later deliveries answer duplicate. script,
+// when set, decides the status of every report before booking; omitResult
+// leaves the report out of the response. batchStatus, when set, answers the
+// whole request with that status instead.
 type fakeLingying struct {
-	mu         sync.Mutex
-	deliveries map[string][]string // request_id -> raw payloads received
-	booked     map[string]int      // request_id -> times booked
-	script     func(requestID string, delivery int) int
+	mu          sync.Mutex
+	deliveries  map[string][]string // request_id -> raw payloads received
+	booked      map[string]int      // request_id -> times booked
+	batches     []int               // reports per request received
+	script      func(requestID string, delivery int) int
+	batchStatus int
 }
+
+const omitResult = -1
 
 func newFakeLingying(t *testing.T) (*fakeLingying, string) {
 	t.Helper()
@@ -55,24 +61,46 @@ func newFakeLingying(t *testing.T) (*fakeLingying, string) {
 }
 
 func (f *fakeLingying) serve(w http.ResponseWriter, r *http.Request) {
-	raw, _ := io.ReadAll(r.Body)
-	var report usageReport
-	if r.URL.Path != usagePath || json.Unmarshal(raw, &report) != nil || report.RequestID == "" {
+	var batch struct {
+		Reports []json.RawMessage `json:"reports"`
+	}
+	if r.URL.Path != usageBatchPath || json.NewDecoder(r.Body).Decode(&batch) != nil || len(batch.Reports) == 0 {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.deliveries[report.RequestID] = append(f.deliveries[report.RequestID], string(raw))
-	status := http.StatusOK
-	if f.script != nil {
-		status = f.script(report.RequestID, len(f.deliveries[report.RequestID]))
+	f.batches = append(f.batches, len(batch.Reports))
+	if f.batchStatus != 0 {
+		w.WriteHeader(f.batchStatus)
+		_, _ = w.Write([]byte(`{"error":"unavailable"}`))
+		return
 	}
-	if status == http.StatusOK && f.booked[report.RequestID] == 0 {
-		f.booked[report.RequestID]++
+	results := []batchResult{}
+	for _, raw := range batch.Reports {
+		var report usageReport
+		if json.Unmarshal(raw, &report) != nil || report.RequestID == "" {
+			results = append(results, batchResult{Status: http.StatusBadRequest, Error: "invalid report"})
+			continue
+		}
+		f.deliveries[report.RequestID] = append(f.deliveries[report.RequestID], string(raw))
+		status := http.StatusOK
+		if f.script != nil {
+			status = f.script(report.RequestID, len(f.deliveries[report.RequestID]))
+		}
+		if status == omitResult {
+			continue
+		}
+		if status == http.StatusOK && f.booked[report.RequestID] == 0 {
+			f.booked[report.RequestID]++
+		}
+		result := batchResult{RequestID: report.RequestID, Status: status}
+		if status != http.StatusOK {
+			result.Error = "scripted failure"
+		}
+		results = append(results, result)
 	}
-	w.WriteHeader(status)
-	_, _ = fmt.Fprintf(w, `{"request_log_id":%q,"charged":"0.02","duplicate":false}`, report.RequestID)
+	_ = json.NewEncoder(w).Encode(map[string][]batchResult{"results": results})
 }
 
 // clock is a settable time source shared by services standing in for replicas.
@@ -85,7 +113,7 @@ func (c *clock) Now() time.Time      { c.mu.Lock(); defer c.mu.Unlock(); return 
 func (c *clock) Add(d time.Duration) { c.mu.Lock(); defer c.mu.Unlock(); c.now = c.now.Add(d) }
 
 func newReplica(db *sql.DB, baseURL string, clock *clock) *Service {
-	service := New(config.LingyingBillingConfig{BaseURL: baseURL, Token: "token"}, db)
+	service := New(config.LingyingBillingConfig{BaseURL: baseURL, Token: "token", DeliveryBatchSize: 100}, db)
 	service.now = clock.Now
 	return service
 }
@@ -157,25 +185,25 @@ func TestDeliveryRetriesTheSameReportUntilAccepted(t *testing.T) {
 	first := newReplica(db, baseURL, clock)
 	recordRequest(first, "req-1")
 
-	if !first.deliverNext(context.Background()) {
+	if first.deliverBatch(context.Background()) != 1 {
 		t.Fatal("first delivery found nothing due")
 	}
 	row, _ := readRow(t, db, "req-1")
-	if row.attempts != 1 || row.nextAttempt.Int64 != 1_000_000+20_000+1_000 || row.lastError == "" {
+	if row.attempts != 1 || row.nextAttempt.Int64 != 1_000_000+30_000+1_000 || row.lastError == "" {
 		t.Fatalf("after a 503 the row = %+v, want retry at now+timeout+1s", row)
 	}
-	if first.deliverNext(context.Background()) {
+	if first.deliverBatch(context.Background()) != 0 {
 		t.Fatal("a report was delivered again before its retry time")
 	}
-	clock.Add(21 * time.Second)
-	first.deliverNext(context.Background())
-	if row, _ := readRow(t, db, "req-1"); row.attempts != 2 || row.nextAttempt.Int64 != clock.Now().UnixMilli()+20_000+2_000 {
+	clock.Add(31 * time.Second)
+	first.deliverBatch(context.Background())
+	if row, _ := readRow(t, db, "req-1"); row.attempts != 2 || row.nextAttempt.Int64 != clock.Now().UnixMilli()+30_000+2_000 {
 		t.Fatalf("after a second 503 the row = %+v, want a 2s backoff", row)
 	}
 
 	restarted := newReplica(db, baseURL, clock)
-	clock.Add(22 * time.Second)
-	if !restarted.deliverNext(context.Background()) {
+	clock.Add(32 * time.Second)
+	if restarted.deliverBatch(context.Background()) != 1 {
 		t.Fatal("restarted replica found nothing due")
 	}
 	if _, exists := readRow(t, db, "req-1"); exists {
@@ -187,7 +215,7 @@ func TestDeliveryRetriesTheSameReportUntilAccepted(t *testing.T) {
 	}
 }
 
-// T13: 400 and 422 park a report for good; other failures retry it.
+// T13: a report answered 400 or 422 is parked for good; other failures retry it.
 func TestDeliveryClassifiesLingyingResponses(t *testing.T) {
 	for _, test := range []struct {
 		status int
@@ -207,9 +235,9 @@ func TestDeliveryClassifiesLingyingResponses(t *testing.T) {
 			service := newReplica(db, baseURL, clock)
 			recordRequest(service, "req-1")
 
-			service.deliverNext(context.Background())
+			service.deliverBatch(context.Background())
 			clock.Add(time.Hour)
-			retried := service.deliverNext(context.Background())
+			retried := service.deliverBatch(context.Background()) > 0
 
 			row, exists := readRow(t, db, "req-1")
 			if !exists || row.nextAttempt.Valid == test.parked || retried == test.parked || row.lastError == "" {
@@ -226,18 +254,18 @@ func TestClaimedReportIsRetriedAfterAReplicaDies(t *testing.T) {
 	clock := &clock{now: time.UnixMilli(1_000_000)}
 	dead := newReplica(db, "http://unused", clock)
 	recordRequest(dead, "req-1")
-	if _, claimed, err := dead.outbox.claim(context.Background(), clock.Now()); err != nil || !claimed {
-		t.Fatalf("claim() = %t, %v", claimed, err)
+	if reports, err := dead.outbox.claim(context.Background(), clock.Now(), 100); err != nil || len(reports) != 1 {
+		t.Fatalf("claim() = %+v, %v", reports, err)
 	}
 
 	survivor := newReplica(db, "http://unused", clock)
-	clock.Add(20 * time.Second)
-	if _, claimed, _ := survivor.outbox.claim(context.Background(), clock.Now()); claimed {
+	clock.Add(30 * time.Second)
+	if reports, _ := survivor.outbox.claim(context.Background(), clock.Now(), 100); len(reports) != 0 {
 		t.Fatal("a report in flight was claimed again within the request timeout")
 	}
 	clock.Add(time.Second)
-	if report, claimed, _ := survivor.outbox.claim(context.Background(), clock.Now()); !claimed || report.Attempts != 2 {
-		t.Fatalf("claim() after the retry time = %+v, %t", report, claimed)
+	if reports, _ := survivor.outbox.claim(context.Background(), clock.Now(), 100); len(reports) != 1 || reports[0].Attempts != 2 {
+		t.Fatalf("claim() after the retry time = %+v", reports)
 	}
 }
 
@@ -254,8 +282,9 @@ func TestConcurrentReplicasBookEveryReportOnce(t *testing.T) {
 	var replicas sync.WaitGroup
 	for range 4 {
 		replica := newReplica(db, baseURL, clock)
+		replica.deliveryBatchSize = 8
 		replicas.Go(func() {
-			for replica.deliverNext(context.Background()) {
+			for replica.deliverBatch(context.Background()) > 0 {
 			}
 		})
 	}
@@ -277,5 +306,129 @@ func TestConcurrentReplicasBookEveryReportOnce(t *testing.T) {
 		if times != 1 {
 			t.Fatalf("%s booked %d times", requestID, times)
 		}
+	}
+}
+
+func countOutbox(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var left int
+	if err := db.QueryRow(`SELECT count(*) FROM ly_usage_reports`).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	return left
+}
+
+// A batch of due reports goes to Lingying in one request.
+func TestDeliveryPostsDueReportsInOneRequest(t *testing.T) {
+	db := openOutboxDB(t)
+	fake, baseURL := newFakeLingying(t)
+	service := newReplica(db, baseURL, &clock{now: time.UnixMilli(1_000_000)})
+	for index := range 32 {
+		recordRequest(service, fmt.Sprintf("req-%03d", index))
+	}
+
+	delivered := service.deliverBatch(context.Background())
+
+	if delivered != 32 || len(fake.batches) != 1 || fake.batches[0] != 32 || len(fake.booked) != 32 {
+		t.Fatalf("deliverBatch() = %d, Lingying received batches %v and booked %d", delivered, fake.batches, len(fake.booked))
+	}
+	if left := countOutbox(t, db); left != 0 {
+		t.Fatalf("outbox left %d rows", left)
+	}
+}
+
+// Each report of a batch is handled by its own result.
+func TestDeliveryHandlesEachResultOfABatch(t *testing.T) {
+	db := openOutboxDB(t)
+	fake, baseURL := newFakeLingying(t)
+	statuses := map[string]int{
+		"req-ok": http.StatusOK, "req-invalid": http.StatusBadRequest,
+		"req-retry": http.StatusServiceUnavailable, "req-missing": omitResult,
+	}
+	fake.script = func(requestID string, _ int) int { return statuses[requestID] }
+	service := newReplica(db, baseURL, &clock{now: time.UnixMilli(1_000_000)})
+	for requestID := range statuses {
+		recordRequest(service, requestID)
+	}
+
+	if delivered := service.deliverBatch(context.Background()); delivered != 4 || len(fake.batches) != 1 {
+		t.Fatalf("deliverBatch() = %d in %d requests, want 4 in one", delivered, len(fake.batches))
+	}
+
+	if _, exists := readRow(t, db, "req-ok"); exists {
+		t.Fatal("accepted report is still in the outbox")
+	}
+	if row, _ := readRow(t, db, "req-invalid"); row.nextAttempt.Valid || row.lastError == "" {
+		t.Fatalf("rejected report = %+v, want parked", row)
+	}
+	for _, requestID := range []string{"req-retry", "req-missing"} {
+		row, _ := readRow(t, db, requestID)
+		if row.attempts != 1 || row.nextAttempt.Int64 != 1_000_000+30_000+1_000 || row.lastError == "" {
+			t.Fatalf("%s = %+v, want a retry at the time claim set", requestID, row)
+		}
+	}
+}
+
+// A batch Lingying does not answer with 200 is retried as a whole.
+func TestDeliveryRetriesAFailedBatch(t *testing.T) {
+	db := openOutboxDB(t)
+	fake, baseURL := newFakeLingying(t)
+	fake.batchStatus = http.StatusServiceUnavailable
+	service := newReplica(db, baseURL, &clock{now: time.UnixMilli(1_000_000)})
+	for _, requestID := range []string{"req-1", "req-2"} {
+		recordRequest(service, requestID)
+	}
+
+	service.deliverBatch(context.Background())
+
+	for _, requestID := range []string{"req-1", "req-2"} {
+		row, _ := readRow(t, db, requestID)
+		if row.attempts != 1 || !row.nextAttempt.Valid || !strings.Contains(row.lastError, "HTTP 503") {
+			t.Fatalf("%s = %+v, want a retry recording HTTP 503", requestID, row)
+		}
+	}
+}
+
+// One delivery carries at most deliveryBatchSize reports.
+func TestDeliveryClaimsAtMostTheBatchSize(t *testing.T) {
+	db := openOutboxDB(t)
+	_, baseURL := newFakeLingying(t)
+	service := newReplica(db, baseURL, &clock{now: time.UnixMilli(1_000_000)})
+	for index := range 150 {
+		recordRequest(service, fmt.Sprintf("req-%03d", index))
+	}
+
+	var delivered []int
+	for range 3 {
+		delivered = append(delivered, service.deliverBatch(context.Background()))
+	}
+
+	if fmt.Sprint(delivered) != "[100 50 0]" {
+		t.Fatalf("deliverBatch() returned %v, want [100 50 0]", delivered)
+	}
+}
+
+// Run keeps delivering batches until nothing is due, without waiting a poll
+// interval between them.
+func TestRunDeliversEveryDueBatchAtOnce(t *testing.T) {
+	db := openOutboxDB(t)
+	fake, baseURL := newFakeLingying(t)
+	service := newReplica(db, baseURL, &clock{now: time.UnixMilli(1_000_000)})
+	for index := range 250 {
+		recordRequest(service, fmt.Sprintf("req-%03d", index))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	go func() { service.Run(ctx); close(stopped) }()
+	defer func() { cancel(); <-stopped }()
+
+	deadline := time.Now().Add(pollInterval / 2)
+	for countOutbox(t, db) != 0 {
+		if time.Now().After(deadline) {
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			t.Fatalf("outbox not drained within half a poll interval; batches %v", fake.batches)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

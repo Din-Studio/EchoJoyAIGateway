@@ -18,5 +18,5 @@ install_timer gateway-pg-dump '*-*-* *:05:00' \
   /usr/local/bin/gateway-pg-dump postgres "$PG_USER" "$PG_DB" "s3://$BACKUP_BUCKET/pg" "$AWS_REGION" /data/backup-tmp
 export_function_script /usr/local/bin/gateway-report-metrics pg_report_metrics
 install_timer gateway-report-metrics '*:*:00' \
-  /usr/local/bin/gateway-report-metrics postgres "$PG_USER" pg "$AWS_REGION" /data
+  /usr/local/bin/gateway-report-metrics postgres "$PG_USER" "$PG_DB" pg "$AWS_REGION" /data
 echo "postgres ready"

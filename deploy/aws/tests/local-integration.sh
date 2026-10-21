@@ -159,11 +159,18 @@ section "指标上报（aws 为桩，用 export_function_script 生成的独立�
 export_function_script "$WORK/bin/redis-metrics" redis_report_metrics
 export_function_script "$WORK/bin/pg-metrics" pg_report_metrics
 PATH="$WORK/bin:$PATH" "$WORK/bin/redis-metrics" gwt-redis-1 "$WORK/redis-1/redis.conf" redis-a cn-northwest-1
-PATH="$WORK/bin:$PATH" "$WORK/bin/pg-metrics" gwt-pg "$PG_USER" pg cn-northwest-1 "$WORK"
+PATH="$WORK/bin:$PATH" "$WORK/bin/pg-metrics" gwt-pg "$PG_USER" "$PG_DB" pg cn-northwest-1 "$WORK"
 check "RedisClusterOk=1" grep -q 'MetricName=RedisClusterOk,Value=1,' "$WORK/metrics.log"
 check "RedisMemoryUsedPercent 已上报" grep -qE 'MetricName=RedisMemoryUsedPercent,Value=[0-9.]+,' "$WORK/metrics.log"
 check "PostgresUp=1" grep -q 'MetricName=PostgresUp,Value=1,' "$WORK/metrics.log"
 check "DataDiskUsedPercent 已上报" grep -qE 'MetricName=DataDiskUsedPercent,Value=[0-9]+,' "$WORK/metrics.log"
+check "LyUsageReportsPending=0" grep -q 'MetricName=LyUsageReportsPending,Value=0,' "$WORK/metrics.log"
+check "LyUsageReportOldestDueSeconds=0" grep -q 'MetricName=LyUsageReportOldestDueSeconds,Value=0,' "$WORK/metrics.log"
+: > "$WORK/metrics.log"
+# postgres 库里没有 ly_usage_reports，相当于网关还没跑迁移
+PATH="$WORK/bin:$PATH" "$WORK/bin/pg-metrics" gwt-pg "$PG_USER" postgres pg cn-northwest-1 "$WORK"
+check "积压表不存在时 PostgresUp=1 照常上报" grep -q 'MetricName=PostgresUp,Value=1,' "$WORK/metrics.log"
+if grep -q LyUsage "$WORK/metrics.log"; then fail "积压表不存在时不上报积压指标"; else pass "积压表不存在时不上报积压指标"; fi
 
 section "Redis 节点故障与恢复"
 docker stop gwt-redis-2 >/dev/null

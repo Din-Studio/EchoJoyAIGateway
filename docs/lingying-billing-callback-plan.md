@@ -192,8 +192,8 @@ RETURNING request_id, payload, attempts
 
 - **领取即安排重试**：领取时就把下次重试时间写好。副本在投递途中崩溃，这一行到期后会被任意副本重新领取，不需要额外的租约机制。
 - **退避**：`backoff` 依次为 1s、2s、4s……，最长 5 分钟。
-- **时间下限**：下次重试时间至少比现在晚一个请求超时（20 秒；灵影处理一次上报最长 15 秒），所以投递还在进行时，这一行不会被别的副本领走。
-- **节奏**：投递循环逐条处理，直到没有到期记录，然后休眠 1 秒。
+- **时间下限**：下次重试时间至少比现在晚一个请求超时（20 秒；灵影处理一次上报最长 15 秒），所以投递还在进行时，这一行不会被别的副本领走。（10.9 改为 30 秒）
+- **节奏**：投递循环逐条处理，直到没有到期记录，然后休眠 1 秒。（10.9 改为批量领取、批量上报）
 
 投递结果的处理：
 
@@ -429,3 +429,51 @@ A1–A13、A14b 的结果与 10.3 相同，都让对应测试失败。A8、A10 �
 | A14a 去掉 `SKIP LOCKED` | 通过（符合预期） | 金额仍然正确，100 条上报用了 125 次投递 |
 
 A18 保留的理由：不等待并不会丢上报（领取时已写好重试时间，灵影幂等），但 `Stop` 随后会关闭数据库，投递循环可能在数据库关闭后还在访问它；而且仓库对控制面运行时的约定也是等它退出。
+
+### 10.9 吞吐改造：批量投递、积压告警、余额缓存（2026-10-21）
+
+依据：[2026-10-20 压测报告](load-test-2026-10-20-report.md) 第 2.1、2.2 节，[批量上报调研](lingying-batch-usage-research.md)。逐条上报时，灵影对每条开一个 DocumentDB 事务，同一用户的事务在余额文档上冲突，每秒只能提交约 50 个，压测积压了 23.3 万条。
+
+| 项 | 原设计 | 现在 |
+|---|---|---|
+| 上报接口 | `POST /internal/aigw/usage`，每条一次请求 | `POST /internal/aigw/usage/batch`，请求体 `{"reports": [payload…]}`，响应按条返回 `status` |
+| 4.5 节奏 | 逐条领取、逐条上报 | 一条语句领取最多 `LINGYING_USAGE_DELIVERY_BATCH_SIZE`（默认 100，最大 100）条，一次请求发出，接受的用一条 `DELETE … = ANY($1)` 删除。每个副本同一时刻最多一个投递请求 |
+| 请求超时与时间下限 | 20 秒 | 30 秒，大于灵影整批 25 秒的截止时间 |
+| 结果处理 | 按 HTTP 状态 | 整体 200 时按每条的 `status` 处理，规则同 4.5 的表；响应里缺少的条目、整体非 200 和网络错误都按领取时写好的时间重试 |
+| A17 余额缓存 | 不做 | 做：每个副本按凭证缓存"允许"的余额 5 秒，并发未命中合并为一次调用；拒绝类结果不缓存，`ProjectID` 取自当前请求 |
+| 监控 | 无 | PG 主机上报 `LyUsageReportsPending`、`LyUsageReportOldestDueSeconds`，告警 `gateway-ly-usage-backlog`（超过 300 秒持续 5 分钟） |
+
+上线顺序：灵影先上线批量接口，再发布网关；网关先于灵影上线时每批都会收到 404 并整批重试，积压告警会响，但不会丢失或重复记账。
+
+**审查与消融（2026-10-21）**
+
+按高内聚、低耦合审查后做了 4 处调整：
+
+- "允许"的判定只保留一处：`allows(status, account)`，`Admit` 和余额缓存共用。原先缓存另写了一份，规则改动时两边容易不一致。
+- 缓存的 map 和 singleflight 共用同一个键 `cacheKey(credential)`，不再一处用结构体、一处用字符串。
+- `reportUsageBatch` 只返回 `([]batchResult, error)`，非 200 的状态码和响应体由客户端整理成错误；投递循环不再解读整体的 HTTP 状态码。
+- `settle` 改名为 `warnIfUpdateFailed`，名字与它只记日志的行为一致。
+
+消融：脚本逐项破坏机制，运行对应测试后还原。
+
+| 被破坏的机制 | 结果 | 失败的测试 |
+|---|---|---|
+| B1 每轮只领 1 条 | 失败 ✔ | `TestDeliveryPostsDueReportsInOneRequest`、`TestDeliveryClaimsAtMostTheBatchSize` |
+| B2 忽略批量上限 | 失败 ✔ | `TestDeliveryClaimsAtMostTheBatchSize` |
+| B3 响应缺少的条目当作已接受 | 失败 ✔ | `TestDeliveryHandlesEachResultOfABatch` |
+| B4 单条 400/422 不停放 | 失败 ✔ | `TestDeliveryHandlesEachResultOfABatch`、`TestDeliveryClassifiesLingyingResponses` |
+| B5 整批失败时删除 | 失败 ✔ | `TestDeliveryRetriesAFailedBatch` |
+| B6 接受的条目不删除 | 失败 ✔ | `TestDeliveryPostsDueReportsInOneRequest` |
+| B7 领取时不加请求超时下限 | 失败 ✔ | `TestDeliveryRetriesTheSameReportUntilAccepted` 等 3 个 |
+| B8 每次唤醒只投一批 | 失败 ✔ | `TestRunDeliversEveryDueBatchAtOnce`。第一轮没有测试发现，补了这个测试 |
+| B9 不读缓存 | 失败 ✔ | `TestAdmitReusesAnAllowingBalance` |
+| B10 拒绝结果也缓存 | 失败 ✔ | `TestAdmitDoesNotReuseARejection` |
+| B11 不合并并发查询 | 失败 ✔ | `TestAdmitJoinsConcurrentLookups` |
+| B12 缓存永不过期 | 失败 ✔ | `TestAdmitReusesAnAllowingBalance` |
+| B13 缓存键不区分 key 与 user | 失败 ✔ | `TestAdmitCachesEachCredentialApart` |
+| B14 等待中的请求不响应自己的 ctx | 失败 ✔ | `TestAdmitFailsClosed/timeout`。原先只是晚 3 秒通过，补了耗时断言 |
+| B15 共享调用随发起者取消 | 失败 ✔ | `TestAdmitKeepsASharedLookupWhenItsCallerGivesUp`。第一轮没有测试发现，补了这个测试 |
+| B16 批量大小不设上限 100 | 失败 ✔ | `TestLoadLingyingDeliveryBatchSize` |
+| B17 指标脚本不容忍积压查询失败 | 失败 ✔ | `local-integration.sh` 新增的检查"积压表不存在时 PostgresUp=1 照常上报"。第一轮没有覆盖，补了这项检查 |
+
+B8 保留的理由：不连续投递时，每个副本每秒最多只能投一批（100 条），跟不上压测的请求速度。B15 保留的理由：同一个 key 的并发请求共用一次余额查询，如果发起查询的客户端断开会取消这次查询，其他请求就会一起收到 503。

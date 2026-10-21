@@ -110,7 +110,7 @@ PostgreSQL 只能在同一个大版本内升级（例如 18.3 → 18.4）。跨�
 
 ## 8. 灵影计费回调
 
-名称为 `ly:<key_id>` 的访问密钥由灵影网关同步而来。这类请求在转发前调用灵影的 `POST /internal/aigw/balance` 查余额，结束后把用量写进 PostgreSQL 表 `ly_usage_reports`，由各副本投递到 `POST /internal/aigw/usage`。设计见 [对接计划](../../docs/lingying-billing-callback-plan.md)。
+名称为 `ly:<key_id>` 的访问密钥由灵影网关同步而来。这类请求在转发前调用灵影的 `POST /internal/aigw/balance` 查余额，结束后把用量写进 PostgreSQL 表 `ly_usage_reports`，由各副本批量投递到 `POST /internal/aigw/usage/batch`：每个副本每次最多投递 `LINGYING_USAGE_DELIVERY_BATCH_SIZE`（默认 100）条，同一时刻只有一个投递请求。余额查询的"允许"结果在每个副本内缓存 5 秒。设计见 [对接计划](../../docs/lingying-billing-callback-plan.md)。
 
 **首次启用**
 
@@ -138,6 +138,12 @@ PostgreSQL 只能在同一个大版本内升级（例如 18.3 → 18.4）。跨�
 **EchoJoyAuth access token**：数据面请求可以用灵影用户的 access token 代替访问密钥，按该用户的默认密钥 `ly:default:<key_id>` 处理。配置在 `config.env` 的 `ECHOJOY_AUTH_JWKS_URL`、`ECHOJOY_AUTH_ISSUER`、`ECHOJOY_AUTH_AUDIENCE`，由 `deploy.sh gateway` 传进任务定义，修改后要重新执行 `scripts/deploy.sh gateway`。`ISSUER` 要与灵影的 `AUTH_TOKEN_ISSUER` 一致，`AUDIENCE` 要与灵影的 `AUTH_AUDIENCE` 一致，灵影没有设置时留空。JWKS URL 和 issuer 都留空则关闭这个功能。
 
 **轮换 token**：先改灵影侧，再用第 3 节的 `aws ssm put-parameter --overwrite` 改 `LINGYING_BILLING_TOKEN` 并重启任务。两边不一致期间，查余额返回 503，用量上报失败后会持续重试，token 一致后自动补报。
+
+**积压告警**：PG 主机每分钟上报 `LyUsageReportsPending`（已到期的条数）和 `LyUsageReportOldestDueSeconds`（最早到期一条已等待的秒数）。后者连续 5 分钟超过 300 秒时，`gateway-ly-usage-backlog` 发出通知。处置：
+
+1. 用下面的 SQL 看 `last_error`。
+2. `HTTP 404` 说明灵影还没有部署批量接口；`HTTP 401`、`HTTP 403` 说明 token 不一致；`HTTP 5xx` 或单条 `503` 看灵影日志里的 `aigw usage batch` 错误。
+3. 看 DocumentDB 的 CPU 和 `TransactionsAborted`。中止多说明同一用户的写冲突严重，可以减少投递副本或调大批量。
 
 **排查积压**：用第 2 节的 PostgreSQL 隧道执行：
 

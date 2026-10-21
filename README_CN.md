@@ -201,7 +201,8 @@ Compose 会把 `.env` 传入容器，Compose 文件中设置的值优先。除�
 | `LOG_LEVEL`                     | `info`                                      | 支持 `panic`、`fatal`、`error`、`warn`、`warning`、`info`、`debug`、`trace`；无效值会告警并回退到 `info`。                                               |
 | `LOG_FORMAT`                    | `text`                                      | 支持 `text`、`json`；其他值会导致启动失败。                                                                                                              |
 | `MODELS_DEV_AUTO_SYNC_ENABLED`  | 未设置，初始默认 `true`                     | 未设置时使用管理界面的持久化设置；设置后强制开启或关闭 Models.dev 自动同步，并使管理界面中的同名选项变为只读。                                           |
-| `LINGYING_BILLING_BASE_URL` / `LINGYING_BILLING_TOKEN` | 未设置 | 灵影网关计费回调，两项同时设置或都不设置。名称为 `ly:<key_id>` 的访问密钥在转发前查询灵影余额，结束后上报用量；系统货币必须为 CNY。未设置时拒绝这类密钥。token 与灵影的 `AI_GATEWAY_CALLBACK_TOKEN` 相同。 |
+| `LINGYING_BILLING_BASE_URL` / `LINGYING_BILLING_TOKEN` | 未设置 | 灵影网关计费回调，两项同时设置或都不设置。名称为 `ly:<key_id>` 的访问密钥在转发前查询灵影余额，结束后上报用量；系统货币必须为 CNY。未设置时拒绝这类密钥。token 与灵影的 `AI_GATEWAY_CALLBACK_TOKEN` 相同。用量投递到灵影的 `POST /internal/aigw/usage/batch`，灵影必须提供这个接口。每个副本对允许请求的余额结果复用 5 秒，拒绝结果每次都实时查询。 |
+| `LINGYING_USAGE_DELIVERY_BATCH_SIZE` | `100` | 每次向灵影投递的最多用量条数，取值 1–100（灵影的单批上限），超出范围时启动失败。每个副本同一时刻最多一个投递请求。 |
 | `ECHOJOY_AUTH_JWKS_URL` / `ECHOJOY_AUTH_ISSUER` / `ECHOJOY_AUTH_AUDIENCE` | 未设置 | EchoJoyAuth access token 校验；JWKS URL 与 issuer 同时设置，audience 可选。设置后数据面请求可用用户的 access token 代替访问密钥，按该用户的默认密钥（名称 `ly:default:<key_id>`，备注为用户 ID）处理。未设置时拒绝 access token。 |
 | `REDIS_ADDRS`                   | 必填                                        | 逗号分隔的 Redis 地址，启动时 Redis 必须可达。只写一个地址即单节点；Redis Cluster 需列出全部节点地址。默认 Compose 使用 `redis:6379`。 |
 | `REDIS_PASSWORD`                | 空                                          | Redis 密码。 |
