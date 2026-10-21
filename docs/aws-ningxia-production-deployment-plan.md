@@ -287,7 +287,7 @@ EC2 的 `NetworkIn` 和 `NetworkOut` 只能反映总量，看不出流量是否�
 
 | 优先级 | 条件 | 动作 | 状态 |
 |---|---|---|---|
-| 30 | 域名 `lingying-gateway.echojoy.cn`，路径 `/gateway/v1/chat/completions`、`/gateway/v1/messages*`、`/gateway/v1/responses*` | URL 改写 `^/gateway/(.*)$` → `/$1`，转发到 `tg-ai-gateway-pub` | 新增 |
+| 30 | 域名 `lingying-gateway.echojoy.cn`，路径 `/gateway/v1/chat/completions`、`/gateway/v1/messages*`、`/gateway/v1/responses*`、`/gateway/v1beta/models/*` | URL 改写 `^/gateway/(.*)$` → `/$1`，转发到 `tg-ai-gateway-pub` | 新增 |
 | 31 | 域名 `lingying-gateway.echojoy.cn` | 转发到 `gateway-dev-tg`，包括 `/gateway/*` | 现有规则，优先级从 2 改为 31 |
 
 切换后 `alb-internal` 的 443 监听器：

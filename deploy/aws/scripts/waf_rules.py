@@ -4,7 +4,8 @@
 改动是声明式的，对已经改过的 ACL 再执行一次，输出与输入相同：
 
 1. `block-llm-api-endpoints` 保留，但不再拦截网关域名下转给新网关的文本接口
-   （`/gateway/v1/chat/completions`、`/gateway/v1/messages*`、`/gateway/v1/responses*`）。
+   （`/gateway/v1/chat/completions`、`/gateway/v1/messages*`、`/gateway/v1/responses*`）
+   和 Gemini 接口（`/gateway/v1beta/models/*`）。
    其他域名和旧网关其他路径上以 `/v1/chat/completions`、`/v1/messages` 结尾的请求照拦。
 2. 删除 `AWS-AWSManagedRulesPHPRuleSet`。
 3. 给 `AWS-AWSManagedRulesKnownBadInputsRuleSet` 加 scope-down，同样跳过这些文本接口。
@@ -26,9 +27,9 @@ REMOVED_RULES = {"AWS-AWSManagedRulesPHPRuleSet"}
 SCOPED_RULE = "AWS-AWSManagedRulesKnownBadInputsRuleSet"
 # 转给新网关的文本接口。WAF 看到的是 ALB 改写之后的路径（2026-10-15 实测：采样里的 URI 是
 # /v1/chat/completions，而不是 /gateway/v1/chat/completions），所以这里写改写后的前缀，
-# 对应 gateway.yaml 监听规则里的 /gateway/v1/chat/completions、messages*、responses*。
+# 对应 gateway.yaml 监听规则里的 /gateway/v1/chat/completions、messages*、responses*、v1beta/models/*。
 # 没被改写的请求（例如 console.echojoy.cn/gateway/v1/messages）不受例外影响，照拦。
-GATEWAY_TEXT_PREFIXES = ["/v1/chat/completions", "/v1/messages", "/v1/responses"]
+GATEWAY_TEXT_PREFIXES = ["/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1beta/models/"]
 
 
 def b64(text):

@@ -117,4 +117,4 @@ PostgreSQL 只能在同一个大版本内升级（例如 18.3 → 18.4）。跨�
 | 网关镜像 | `docker.echojoy.cn/echojoy-gateway/ai-gateway:a5ca5e99`，任务定义 `ai-gateway:2` |
 | ECS | 集群 `echojoy-gateway-prod`，服务 `ai-gateway`，2 个任务，2 台 `c6in.large`（1a、1b） |
 | 数据层镜像 | `echojoy-gateway/postgres:18-alpine`（18.3）、`echojoy-gateway/redis:7.4-alpine`（7.4.8） |
-| 流量 | 已切换：`lingying-gateway.echojoy.cn` 的 `/gateway/v1/chat/completions`、`messages*`、`responses*` 由新网关处理 |
+| 流量 | 已切换：`lingying-gateway.echojoy.cn` 的 `/gateway/v1/chat/completions`、`messages*`、`responses*`、`v1beta/models/*` 由新网关处理 |
