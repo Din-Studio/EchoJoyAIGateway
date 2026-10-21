@@ -76,15 +76,3 @@ export function roundDecimalString(value: string, places: number): string {
   const kept = digits.slice(-places).replace(/0+$/, '')
   return digits.slice(0, -places) + (kept ? '.' + kept : '')
 }
-
-// 把美元十进制金额按汇率（1 USD = rate）换算为目标货币，结果保留 6 位小数。
-export function convertUSDDecimal(usd: string, rate: string): string {
-  const nano = (value: string, places: number) => {
-    const [whole = '0', fraction = ''] = value.split('.')
-    return BigInt(whole + fraction.padEnd(places, '0').slice(0, places))
-  }
-  const product = nano(usd, 9) * nano(rate, 6)
-  const scaled = (product + 500_000n) / 1_000_000n
-  const digits = scaled.toString().padStart(10, '0')
-  return roundDecimalString(digits.slice(0, -9) + '.' + digits.slice(-9), 6)
-}

@@ -136,6 +136,7 @@ Codex、Claude、Antigravity 的 OAuth 客户端使用固定回调端口。Compo
 | OpenAI Images           | `POST /v1/images/...`        |
 | OpenAI Embeddings       | `POST /v1/embeddings`        |
 | Rerank                  | `POST /v1/rerank`            |
+| Jev Decisions           | `POST /v1/systemone`         |
 | Anthropic Messages      | `POST /v1/messages`          |
 | Gemini                  | `/v1beta/models/...`         |
 
@@ -148,7 +149,7 @@ Rerank 使用独立的 `rerank` 协议，在 OpenAI Compatible、New API、GPT-L
 ### 内置渠道
 
 - **官方与云平台**：OpenAI、Anthropic、Gemini、xAI、Azure OpenAI、AWS Bedrock、Google Vertex AI
-- **常用模型服务**：DeepSeek、Moonshot AI、SiliconFlow、Zhipu AI、Alibaba、Volcengine、OpenRouter、Groq、Vercel AI Gateway
+- **常用模型服务**：DeepSeek、Moonshot AI、SiliconFlow、Zhipu AI、Alibaba、Volcengine、OpenRouter、Groq、Vercel AI Gateway、Jev
 - **订阅渠道**：Codex、Claude、Antigravity、Grok
 - **自定义**：OpenAI Compatible（任意兼容中转）
 

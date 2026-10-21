@@ -136,6 +136,7 @@ When working over SSH or from a remote browser, the browser's `localhost` may no
 | OpenAI Images           | `POST /v1/images/...`                  |
 | OpenAI Embeddings       | `POST /v1/embeddings`                  |
 | Rerank                  | `POST /v1/rerank`                      |
+| Jev Decisions           | `POST /v1/systemone`                   |
 | Anthropic Messages      | `POST /v1/messages`                    |
 | Gemini                  | `/v1beta/models/...`                   |
 
@@ -148,7 +149,7 @@ Rerank uses the independent `rerank` protocol through `POST /v1/rerank` on the O
 ### Built-in channels
 
 - **Official and cloud** — OpenAI, Anthropic, Gemini, xAI, Azure OpenAI, AWS Bedrock, Google Vertex AI
-- **Model services** — DeepSeek, Moonshot AI, SiliconFlow, Zhipu AI, Alibaba, Volcengine, OpenRouter, Groq, Vercel AI Gateway
+- **Model services** — DeepSeek, Moonshot AI, SiliconFlow, Zhipu AI, Alibaba, Volcengine, OpenRouter, Groq, Vercel AI Gateway, Jev
 - **Subscription** — Codex, Claude, Antigravity, Grok
 - **Custom** — OpenAI Compatible (any compatible relay)
 
