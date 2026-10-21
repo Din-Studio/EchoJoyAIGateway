@@ -102,9 +102,11 @@ curl -u admin https://docker.echojoy.cn/v2/echojoy-gateway/ai-gateway/tags/list
 
 PostgreSQL 只能在同一个大版本内升级（例如 18.3 → 18.4）。跨大版本升级需要 `pg_upgrade` 或用 `pg_dump` 迁移，本手册不包含这部分。
 
-## 7. 网关实例更换 AMI
+## 7. 更换 AMI
 
-启动模板的 AMI 来自 SSM 参数 `/aws/service/ecs/optimized-ami/amazon-linux-2023/recommended/image_id`，每次执行 `scripts/deploy.sh gateway` 时取最新值。之后新启动的实例使用新 AMI，现有实例不会被自动替换。
+**数据层实例**：AMI 固定为 `config.env` 的 `DATA_AMI_ID`。Redis 和 PostgreSQL 实例引用启动模板的最新版本，AMI 一变，`deploy.sh data` 就会替换全部 4 台实例，所以不跟随最新 AMI。预览里实例的 Replacement 列出现 `Conditional` 或 `True` 时，先确认是不是 `DATA_AMI_ID` 变了。
+
+**网关实例**：启动模板的 AMI 来自 SSM 参数 `/aws/service/ecs/optimized-ami/amazon-linux-2023/recommended/image_id`，每次执行 `scripts/deploy.sh gateway` 时取最新值。之后新启动的实例使用新 AMI，现有实例不会被自动替换。
 
 替换现有实例的流程还没有验证，计划放在 P4 演练。容量提供程序开启了 managed termination protection 和 managed draining，验证时要确认替换过程会先排空任务。
 

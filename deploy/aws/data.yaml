@@ -21,8 +21,8 @@ Parameters:
   AlertTopicArn:
     Type: String
   AmiId:
-    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Type: AWS::EC2::Image::Id
+    Description: 固定的 AL2023 AMI。实例引用启动模板的最新版本，AMI 一变就会替换全部数据实例
   RedisInstanceType:
     Type: String
     Default: t3a.medium

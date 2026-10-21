@@ -54,6 +54,7 @@ RedisIpB=$REDIS_IP_B
 RedisIpC=$REDIS_IP_C
 PostgresIp=$PG_IP
 SsmPrefix=$SSM_PREFIX
+AmiId=$DATA_AMI_ID
 EOF
       ;;
     gateway)
