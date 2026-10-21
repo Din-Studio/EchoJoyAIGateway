@@ -1001,7 +1001,8 @@ paths:
       summary: 替换分组模型列表
       description: |
         用 `models` 整体替换分组的模型列表（可为空数组）。`id`、`alias` 会去除首尾空白；
-        `alias_enabled=false` 时 `alias` 被丢弃。同一分组内客户端模型名（别名或 ID）不可重复。
+        `alias_enabled=false` 时 `alias` 被丢弃。同一分组内多个上游模型 ID 可以共用一个客户端模型名，
+        请求该名称时在所选凭据可用的模型之间轮询；客户端模型名与上游 ID 完全相同的重复条目会被去重。
         上游模型 ID 集合发生变化时，会在后台触发一次价格目录同步。
       requestBody:
         required: true
@@ -1035,16 +1036,6 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409':
-          description: '`MODEL_NAME_CONFLICT`：客户端模型名冲突，`data` 列出冲突项'
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/ErrorEnvelope'
-                  - type: object
-                    properties:
-                      data: { $ref: '#/components/schemas/ModelNameConflictData' }
         '413': { $ref: '#/components/responses/RequestTooLarge' }
         '429': { $ref: '#/components/responses/AuthLocked' }
         '500': { $ref: '#/components/responses/InternalError' }
@@ -2107,22 +2098,6 @@ components:
         pending:
           type: integer
           description: 待定价的模型数。
-
-    ModelNameConflictData:
-      type: object
-      required: [conflicts]
-      properties:
-        conflicts:
-          type: array
-          items:
-            type: object
-            required: [client_model, indexes]
-            properties:
-              client_model: { type: string }
-              indexes:
-                type: array
-                description: 冲突条目在请求 `models` 数组中的下标（从 0 开始）。
-                items: { type: integer, minimum: 0 }
 
     CredentialEntryInput:
       type: object
