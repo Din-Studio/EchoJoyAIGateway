@@ -85,6 +85,58 @@ func TestApplyMigrationRegistryRejectsOutOfOrderEntries(t *testing.T) {
 	}
 }
 
+func TestApplyMigrationTracksAddsATrackToAnExistingSchema(t *testing.T) {
+	core, calls := testMigrationRegistry()
+	extension := migrationTrack{
+		Ledger: "ext_schema_migrations",
+		Prefix: "ext",
+		Entries: []migration{{
+			ID: "ext0001_test",
+			Up: func(*gorm.DB) error {
+				*calls = append(*calls, "ext0001_test")
+				return nil
+			},
+			Validate: func(*gorm.DB) error { return nil },
+		}},
+	}
+	db := openEmptyTestDatabase(t)
+	if err := applyMigrationRegistry(db, core); err != nil {
+		t.Fatalf("migrate core track: %v", err)
+	}
+	// The core schema exists before the extension track has a ledger.
+	if err := db.Exec(`CREATE TABLE ` + initialSchemaSentinelTable + ` (id bigint)`).Error; err != nil {
+		t.Fatalf("create core schema table: %v", err)
+	}
+
+	*calls = nil
+	if err := applyMigrationTracks(db, coreMigrationTrack(core), extension); err != nil {
+		t.Fatalf("migrate with extension track: %v", err)
+	}
+	if !reflect.DeepEqual(*calls, []string{"ext0001_test"}) {
+		t.Fatalf("migration calls = %v, want [ext0001_test]", *calls)
+	}
+	for ledger, want := range map[string][]string{
+		migrationLedgerTable:    {"0001_test", "0002_test"},
+		"ext_schema_migrations": {"ext0001_test"},
+	} {
+		var ids []string
+		if err := db.Table(ledger).Order("id").Pluck("id", &ids).Error; err != nil {
+			t.Fatalf("read %s: %v", ledger, err)
+		}
+		if !reflect.DeepEqual(ids, want) {
+			t.Fatalf("%s = %v, want %v", ledger, ids, want)
+		}
+	}
+}
+
+func TestValidateMigrationRegistryRequiresTheTrackPrefix(t *testing.T) {
+	entries, _ := testMigrationRegistry()
+	err := validateMigrationRegistry(migrationTrack{Ledger: "ext_schema_migrations", Prefix: "ext", Entries: entries})
+	if err == nil || !strings.Contains(err.Error(), "ext migration registry entry 1 has invalid ID") {
+		t.Fatalf("validateMigrationRegistry() error = %v, want prefix rejection", err)
+	}
+}
+
 func testMigrationRegistry() ([]migration, *[]string) {
 	calls := make([]string, 0, 2)
 	entry := func(id string) migration {

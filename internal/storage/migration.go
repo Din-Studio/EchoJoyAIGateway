@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -15,8 +16,6 @@ const (
 	migrationLedgerTable       = "schema_migrations"
 	initialSchemaSentinelTable = "groups"
 )
-
-var migrationIDPattern = regexp.MustCompile(`^(\d{4})_[a-z0-9]+(?:_[a-z0-9]+)*$`)
 
 type schemaMigration struct {
 	ID string `gorm:"column:id;type:varchar(255);primaryKey;not null"`
@@ -31,6 +30,28 @@ type migration struct {
 	Up              func(*gorm.DB) error
 	Validate        func(*gorm.DB) error
 	ValidateCurrent func(*gorm.DB) error
+}
+
+// migrationTrack is one independently numbered migration chain with its own
+// ledger. IDs are Prefix followed by a contiguous 4-digit number starting at
+// 0001, so a deployment can add its own track after the core one without
+// taking core numbers. Tracks run in order under one lock.
+type migrationTrack struct {
+	Ledger string
+	Prefix string
+	// FreshSentinel, when set, is a table whose presence without the ledger
+	// means the schema was not created by this track; the track refuses to
+	// adopt it. Only the core track owns such a table.
+	FreshSentinel string
+	Entries       []migration
+}
+
+func coreMigrationTrack(entries []migration) migrationTrack {
+	return migrationTrack{
+		Ledger:        migrationLedgerTable,
+		FreshSentinel: initialSchemaSentinelTable,
+		Entries:       entries,
+	}
 }
 
 var migrations = []migration{
@@ -62,15 +83,22 @@ var migrations = []migration{
 }
 
 func applyMigrations(db *gorm.DB) error {
-	return applyMigrationRegistry(db, migrations)
+	return applyMigrationTracks(db, coreMigrationTrack(migrations))
 }
 
+// applyMigrationRegistry applies entries as the core track.
 func applyMigrationRegistry(db *gorm.DB, entries []migration) error {
+	return applyMigrationTracks(db, coreMigrationTrack(entries))
+}
+
+func applyMigrationTracks(db *gorm.DB, tracks ...migrationTrack) error {
 	if db == nil {
 		return fmt.Errorf("apply migrations: db is nil")
 	}
-	if err := validateMigrationRegistry(entries); err != nil {
-		return err
+	for _, track := range tracks {
+		if err := validateMigrationRegistry(track); err != nil {
+			return err
+		}
 	}
 
 	return db.Connection(func(connection *gorm.DB) error {
@@ -80,58 +108,61 @@ func applyMigrationRegistry(db *gorm.DB, entries []migration) error {
 		// Raw lock acquisition and Scan may populate GORM's statement schema
 		// with the scalar result type. Start fresh sessions for migration and
 		// release so that state cannot leak into the schema/table operations.
-		operationErr := applyMigrationsLocked(
-			connection.Session(&gorm.Session{NewDB: true}),
-			entries,
-		)
+		var operationErr error
+		for _, track := range tracks {
+			if operationErr = applyMigrationsLocked(
+				connection.Session(&gorm.Session{NewDB: true}),
+				track,
+			); operationErr != nil {
+				break
+			}
+		}
 		releaseErr := releaseMigrationLock(connection.Session(&gorm.Session{NewDB: true}))
 		return errors.Join(operationErr, releaseErr)
 	})
 }
 
-func validateMigrationRegistry(entries []migration) error {
-	for index, entry := range entries {
+func validateMigrationRegistry(track migrationTrack) error {
+	label := strings.TrimSpace(track.Prefix + " migration registry")
+	pattern := regexp.MustCompile(`^` + regexp.QuoteMeta(track.Prefix) + `(\d{4})_[a-z0-9]+(?:_[a-z0-9]+)*$`)
+	for index, entry := range track.Entries {
 		position := index + 1
-		matches := migrationIDPattern.FindStringSubmatch(entry.ID)
+		matches := pattern.FindStringSubmatch(entry.ID)
 		if len(matches) != 2 {
-			return fmt.Errorf("migration registry entry %d has invalid ID %q", position, entry.ID)
+			return fmt.Errorf("%s entry %d has invalid ID %q", label, position, entry.ID)
 		}
 		number, err := strconv.Atoi(matches[1])
 		if err != nil || number != position {
-			return fmt.Errorf(
-				"migration registry entry %d has non-contiguous ID %q",
-				position,
-				entry.ID,
-			)
+			return fmt.Errorf("%s entry %d has non-contiguous ID %q", label, position, entry.ID)
 		}
 		if entry.Up == nil || entry.Validate == nil {
-			return fmt.Errorf("migration registry entry %d (%s) is incomplete", position, entry.ID)
+			return fmt.Errorf("%s entry %d (%s) is incomplete", label, position, entry.ID)
 		}
 	}
 	return nil
 }
 
-func applyMigrationsLocked(db *gorm.DB, entries []migration) error {
-	hadMigrationLedger := db.Migrator().HasTable(migrationLedgerTable)
-	if !hadMigrationLedger {
-		if db.Migrator().HasTable(initialSchemaSentinelTable) {
+func applyMigrationsLocked(db *gorm.DB, track migrationTrack) error {
+	entries := track.Entries
+	if !db.Migrator().HasTable(track.Ledger) {
+		if track.FreshSentinel != "" && db.Migrator().HasTable(track.FreshSentinel) {
 			return fmt.Errorf(
 				"initialize database schema: %s table already exists",
-				initialSchemaSentinelTable,
+				track.FreshSentinel,
 			)
 		}
-		if err := db.AutoMigrate(&schemaMigration{}); err != nil {
-			return fmt.Errorf("create schema_migrations: %w", err)
+		if err := db.Table(track.Ledger).AutoMigrate(&schemaMigration{}); err != nil {
+			return fmt.Errorf("create %s: %w", track.Ledger, err)
 		}
 	}
 
 	var applied []string
-	if err := db.Table(migrationLedgerTable).Order("id ASC").Pluck("id", &applied).Error; err != nil {
-		return fmt.Errorf("read schema_migrations: %w", err)
+	if err := db.Table(track.Ledger).Order("id ASC").Pluck("id", &applied).Error; err != nil {
+		return fmt.Errorf("read %s: %w", track.Ledger, err)
 	}
 	for index, id := range applied {
 		if index >= len(entries) || entries[index].ID != id {
-			return fmt.Errorf("schema_migrations contains unknown or non-contiguous migration %q", id)
+			return fmt.Errorf("%s contains unknown or non-contiguous migration %q", track.Ledger, id)
 		}
 	}
 	for index, id := range applied {
@@ -145,7 +176,7 @@ func applyMigrationsLocked(db *gorm.DB, entries []migration) error {
 	}
 
 	for _, entry := range entries[len(applied):] {
-		if err := applyMigration(db, entry); err != nil {
+		if err := applyMigration(db, track.Ledger, entry); err != nil {
 			return err
 		}
 	}
@@ -155,7 +186,7 @@ func applyMigrationsLocked(db *gorm.DB, entries []migration) error {
 // applyMigration runs one migration, its validation, and its ledger row in a
 // single transaction; PostgreSQL DDL is transactional, so a failed migration
 // leaves no partial schema behind.
-func applyMigration(db *gorm.DB, entry migration) error {
+func applyMigration(db *gorm.DB, ledger string, entry migration) error {
 	return db.Transaction(func(tx *gorm.DB) error {
 		if err := entry.Up(tx); err != nil {
 			return fmt.Errorf("apply migration %s: %w", entry.ID, err)
@@ -163,7 +194,7 @@ func applyMigration(db *gorm.DB, entry migration) error {
 		if err := entry.Validate(tx); err != nil {
 			return fmt.Errorf("validate migration %s: %w", entry.ID, err)
 		}
-		if err := tx.Create(&schemaMigration{ID: entry.ID}).Error; err != nil {
+		if err := tx.Table(ledger).Create(&schemaMigration{ID: entry.ID}).Error; err != nil {
 			return fmt.Errorf("record migration %s: %w", entry.ID, err)
 		}
 		return nil
