@@ -28,20 +28,19 @@ type accessKeyUsageResponse struct {
 func (handler *Handler) handleUsage(c *gin.Context, request *dataPlaneRequestContext) {
 	c.Header("Cache-Control", "no-store")
 	result := accessKeyUsageResponse{IsActive: true}
+	// 没有额度规则时 View 不访问 Redis，直接返回空视图。
+	view, err := handler.accessQuota.View(
+		c.Request.Context(), request.snapshot, request.accessKey.ID, handler.quotaNow(),
+	)
+	if err != nil {
+		handler.completeLimitStateFailure(c, nil, "access_quota.view", err)
+		return
+	}
 	var totalRule *accessquota.RuleView
-	if len(request.accessKey.CostLimitRules) > 0 {
-		view, err := handler.accessQuota.View(
-			c.Request.Context(), request.snapshot, request.accessKey.ID, handler.quotaNow(),
-		)
-		if err != nil {
-			handler.completeLimitStateFailure(c, nil, "access_quota.view", err)
-			return
-		}
-		for index := range view.Rules {
-			if view.Rules[index].Kind == accessquota.KindTotal {
-				totalRule = &view.Rules[index]
-				break
-			}
+	for index := range view.Rules {
+		if view.Rules[index].Kind == accessquota.KindTotal {
+			totalRule = &view.Rules[index]
+			break
 		}
 	}
 	if totalRule != nil {
