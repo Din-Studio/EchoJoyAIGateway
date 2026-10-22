@@ -18,6 +18,7 @@ import (
 	"gpt-load/internal/pricing"
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/reasoning"
+	"gpt-load/internal/requestaudit"
 	"gpt-load/internal/scheduler"
 	"gpt-load/internal/state"
 	"gpt-load/internal/telemetry"
@@ -54,6 +55,8 @@ type frozenAttemptPricing struct {
 }
 
 type requestRecorder struct {
+	audit                *requestaudit.Result
+	auditCache           map[[32]byte]bool
 	autoDecision         *automodel.Decision
 	sink                 telemetry.RequestLogSink
 	requestID            string
@@ -141,6 +144,7 @@ func (recorder *requestRecorder) emit() {
 	reportedModel, modelConsistency := requestOutcomeModelConsistency(recorder.outcome)
 	recorder.sink.Emit(telemetry.RequestEvent{
 		AutoDecision:          recorder.autoLogDecision(),
+		RequestAudit:          recorder.audit,
 		RequestID:             recorder.requestID,
 		CompletedAt:           completedAt.UTC(),
 		AccessKeyID:           recorder.accessKeyID,
@@ -185,8 +189,8 @@ func (recorder *requestRecorder) freezeSensitiveInputErrorSummaries() {
 	}
 }
 
-// estimatedCostNano 是以结算币种计的本次费用。答复与决策费用分别换算，
-// 与请求日志中 estimated_cost_nano 和 decision_cost_nano 两列之和一致。
+// estimatedCostNano 是以结算币种计的本次费用。答复、决策与护栏费用分别换算，
+// 与请求日志中 estimated_cost_nano、decision_cost_nano 和 audit_cost_nano 三列之和一致。
 func (recorder *requestRecorder) estimatedCostNano() int64 {
 	if recorder == nil {
 		return 0
@@ -197,6 +201,14 @@ func (recorder *requestRecorder) estimatedCostNano() int64 {
 		decision = recorder.currency.Settle(recorder.autoDecision.EstimatedCostNanoUSD)
 	}
 	total, ok := usage.CheckedAdd(answer, decision)
+	if ok && recorder.audit != nil {
+		for _, call := range recorder.audit.Calls {
+			total, ok = usage.CheckedAdd(total, recorder.currency.Settle(call.EstimatedCostNanoUSD))
+			if !ok {
+				break
+			}
+		}
+	}
 	if !ok {
 		return math.MaxInt64
 	}

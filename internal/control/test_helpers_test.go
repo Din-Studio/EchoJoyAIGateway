@@ -24,6 +24,7 @@ import (
 	"gpt-load/internal/platform/encryption"
 	"gpt-load/internal/platform/httproute"
 	"gpt-load/internal/platform/i18n"
+	"gpt-load/internal/requestaudit"
 	"gpt-load/internal/requestlog"
 	"gpt-load/internal/state"
 	stateloader "gpt-load/internal/state/loader"
@@ -280,6 +281,7 @@ func newTestGatewaySharedState(fixture serviceFixture) gateway.SharedState {
 		ResponseBindings:      cluster.NewResponseBindings(fixture.cluster, time.Hour),
 		Affinity:              cluster.NewAffinity(fixture.cluster),
 		CredentialConcurrency: cluster.NewCredentialConcurrency(fixture.cluster),
+		GuardrailEvidence:     cluster.NewGuardrailVerdicts(fixture.cluster, requestaudit.EvidenceTTL),
 	}
 }
 
