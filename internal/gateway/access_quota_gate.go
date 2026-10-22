@@ -22,6 +22,7 @@ type AccessQuotaGate interface {
 	Check(ctx context.Context, snapshot *state.ConfigSnapshot, accessKeyID uint, now time.Time) (accessquota.Decision, error)
 	Admit(ctx context.Context, snapshot *state.ConfigSnapshot, accessKeyID uint, now time.Time) (accessquota.Ticket, accessquota.Decision, error)
 	Complete(ctx context.Context, ticket accessquota.Ticket, costNano int64) (accessquota.CompletionResult, error)
+	View(ctx context.Context, snapshot *state.ConfigSnapshot, accessKeyID uint, now time.Time) (accessquota.View, error)
 }
 
 // limitStateFailureReason maps an AccessQuotaGate or AccessKeyRPMLimiter
