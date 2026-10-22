@@ -14,7 +14,7 @@ const (
 	maxLastErrorBytes = 1024
 )
 
-// outbox is the ly_usage_reports table (migration 0023). A row is a report not
+// outbox is the ly_usage_reports table (migration ly0001). A row is a report not
 // yet accepted by Lingying; next_attempt_at_ms NULL parks a rejected report.
 // It uses database/sql because the data plane must not depend on the ORM.
 type outbox struct {

@@ -23,7 +23,7 @@ func TestAutoDecisionAttributionMigrationPreservesHistoricalTotals(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	if err := migrations.Validate0024(db); err == nil {
+	if err := migrations.Validate0023(db); err == nil {
 		t.Fatal("missing attribution columns accepted")
 	}
 	if err := db.Exec(`INSERT INTO auto_decision_usage_stats
@@ -33,7 +33,7 @@ func TestAutoDecisionAttributionMigrationPreservesHistoricalTotals(t *testing.T)
 	}
 
 	for range 2 {
-		if err := migrations.Up0024(db); err != nil {
+		if err := migrations.Up0023(db); err != nil {
 			t.Fatal(err)
 		}
 	}
