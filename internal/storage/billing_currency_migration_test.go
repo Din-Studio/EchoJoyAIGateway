@@ -41,7 +41,7 @@ func testBillingCurrencyUpgrade(t *testing.T, db *gorm.DB) {
 		Protocol: "openai-completions", ClientModel: "gpt", UpstreamModel: "gpt", ModelConsistency: "match",
 		Status: "success", StatusCode: 200, DurationMs: 1, UncachedInputTokens: 1, UsageState: "complete",
 		CostState: "priced", PricingCompleteness: "complete", EstimatedCostNanoUSD: 42}
-	if err := db.Omit("Currency", "ExchangeRateMicros", "EstimatedCostNano", "DecisionCostNano", "UpstreamCostNanoUSD", "UpstreamCostState", "UpstreamPricingCompleteness", "DecisionGroupID", "DecisionChannelID", "DecisionCredentialID").Create(&legacyRequest).Error; err != nil {
+	if err := db.Omit("RequestAudit", "AuditModel", "AuditGroupID", "AuditChannelID", "AuditCredentialID", "AuditCostNanoUSD", "AuditCostNano", "AuditPricingCompleteness", "Currency", "ExchangeRateMicros", "EstimatedCostNano", "DecisionCostNano", "UpstreamCostNanoUSD", "UpstreamCostState", "UpstreamPricingCompleteness", "DecisionGroupID", "DecisionChannelID", "DecisionCredentialID").Create(&legacyRequest).Error; err != nil {
 		t.Fatal(err)
 	}
 

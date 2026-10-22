@@ -51,6 +51,8 @@ export const zhCN = {
     system: '版本与部署信息',
   },
   fields: {
+    jev: 'JEV 公共配置',
+    request_audit: '智能护栏',
     route_strategy: '路由策略',
     auto_model: '自动模型',
     affinity_enabled: '请求亲和',
@@ -75,6 +77,8 @@ export const zhCN = {
     exchange_rate: '汇率',
   },
   hints: {
+    jev: '自动模型与语义审计共用。请求文本会发送到所选分组；语义审计需要明确指定分组。',
+    request_audit: '使用 JEV 按自定义规则拦截或告警。',
     auto_model: 'Jev 选择预设，现有调度选择分组和凭据。',
     route_strategy:
       '原生优先先选择原生协议；混合权重让原生与转换候选按有效权重竞争，请求亲和仍生效。',
@@ -148,6 +152,7 @@ export const zhCN = {
     publicBaseURL: '请输入不含查询参数和凭据的 http:// 或 https:// 地址。',
     gatewayName: '请输入 1–64 位字母、数字、- 或 _，并以字母或数字开头。',
     exchangeRate: '请输入大于 0、最多 6 位小数的汇率。',
+    experimental: '请检查决策分组、模型、审计规则和阈值。',
     number: '请输入 {min}–{max} 之间的整数。',
     autoModel: '请补全自动入口、兜底、预设与合法参数覆盖。',
     proxy: '请输入有效的 http:// 或 socks5:// 代理地址。',
@@ -225,6 +230,8 @@ export const enUS = {
     system: 'Version and deployment',
   },
   fields: {
+    jev: 'Shared JEV configuration',
+    request_audit: 'AI Guardrails',
     route_strategy: 'Routing strategy',
     auto_model: 'Automatic models',
     affinity_enabled: 'Request affinity',
@@ -249,6 +256,8 @@ export const enUS = {
     exchange_rate: 'Exchange rate',
   },
   hints: {
+    jev: 'Used by automatic models and semantic auditing. Request text is sent to this route; semantic auditing requires an explicit group.',
+    request_audit: 'Use JEV to block or warn on custom rules.',
     route_strategy:
       'Native first prefers native protocols. Weighted mix lets native and converted candidates compete by effective weight. Request affinity still applies.',
     affinity_enabled: 'Reuse the previously selected route. Individual groups may override this.',
@@ -330,6 +339,7 @@ export const enUS = {
     publicBaseURL: 'Enter an http:// or https:// URL without query parameters or credentials.',
     gatewayName: 'Enter 1–64 letters, digits, - or _, starting with a letter or digit.',
     exchangeRate: 'Enter a rate greater than 0 with at most 6 decimals.',
+    experimental: 'Check the decision group, model, audit rules, and thresholds.',
     number: 'Enter an integer between {min} and {max}.',
     autoModel: 'Complete automatic entries, fallbacks, presets and valid override rules.',
     proxy: 'Enter a valid http:// or socks5:// proxy URL.',
@@ -408,6 +418,8 @@ export const jaJP = {
     system: 'バージョンと配置情報',
   },
   fields: {
+    jev: 'JEV 共通設定',
+    request_audit: 'AI ガードレール',
     route_strategy: 'ルーティング方式',
     auto_model: '自動モデル',
     affinity_enabled: 'リクエスト親和性',
@@ -432,6 +444,8 @@ export const jaJP = {
     exchange_rate: '為替レート',
   },
   hints: {
+    jev: '自動モデルと意味監査で共用します。リクエスト本文を選択したグループに送信します。意味監査にはグループの指定が必要です。',
+    request_audit: 'JEV が独自ルールでブロックまたは警告します。',
     route_strategy:
       'ネイティブ優先は元のプロトコルを優先し、重み付き混合は変換候補も含めて選択します。親和性は引き続き適用されます。',
     affinity_enabled: '前回選択したルートを再利用します。グループごとに上書きできます。',
@@ -514,6 +528,7 @@ export const jaJP = {
       'クエリパラメータや認証情報を含まない http:// または https:// の URL を入力してください。',
     gatewayName: '英字・数字で始まる 1～64 文字の英数字、- または _ を入力してください。',
     exchangeRate: '0 より大きく、小数 6 桁以内の為替レートを入力してください。',
+    experimental: '判定グループ、モデル、ルール、しきい値を確認してください。',
     number: '{min}～{max} の整数を入力してください。',
     autoModel: '自動入口、フォールバック、プリセット、有効な上書きルールを入力してください。',
     proxy: '有効な http:// または socks5:// プロキシ URL を入力してください。',

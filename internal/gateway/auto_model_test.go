@@ -21,6 +21,7 @@ import (
 	"gpt-load/internal/channel"
 	"gpt-load/internal/dialect"
 	"gpt-load/internal/execution"
+	"gpt-load/internal/jev"
 	"gpt-load/internal/pricing"
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/state"
@@ -101,7 +102,7 @@ func TestAutoModelWebsocketContinuationClassifiesEachTask(t *testing.T) {
 		{ID: "low", Name: "low", Description: "Simple tasks", Model: "public", ParameterOverrides: json.RawMessage(`[]`)},
 		{ID: "high", Name: "high", Description: "Complex tasks", Model: "public", ParameterOverrides: json.RawMessage(`[]`)},
 	}}}
-	input.AutoModel = &config
+	input.AutoModel, input.Jev = &config, testSharedJev(config)
 	input.Groups = append(input.Groups, state.GroupConfig{ID: 99, Name: "jev", ChannelID: channel.Jev, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "jev-latest", Alias: "jev-router"}}, Enabled: true})
 	if _, err := handler.manager.Publish(input); err != nil {
 		t.Fatal(err)
@@ -171,7 +172,7 @@ func TestAutoModelWebsocketPrewarmDoesNotFreezeLaterTask(t *testing.T) {
 				{ID: "balanced", Name: "balanced", Description: "Simple work", Model: "public", ParameterOverrides: json.RawMessage(`[]`)},
 				{ID: "strong", Name: "strong", Description: "Complex work", Model: "strong", ParameterOverrides: json.RawMessage(`[]`)},
 			}}}
-			input.AutoModel = &config
+			input.AutoModel, input.Jev = &config, testSharedJev(config)
 			input.Groups = append(input.Groups, state.GroupConfig{ID: 99, Name: "jev", ChannelID: channel.Jev, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "jev-latest", Alias: "jev-router"}}, Enabled: true})
 			if _, err := handler.manager.Publish(input); err != nil {
 				t.Fatal(err)
@@ -267,7 +268,7 @@ func configureAutoModelTest(
 ) {
 	t.Helper()
 	config := autoModelTestConfig()
-	_, err := manager.Publish(state.CompileInput{AutoModel: &config, ChannelRegistry: channel.NewRegistry(),
+	_, err := manager.Publish(state.CompileInput{AutoModel: &config, Jev: testSharedJev(config), ChannelRegistry: channel.NewRegistry(),
 		Groups: []state.GroupConfig{
 			{ID: 1, Name: "openai", ChannelID: channel.OpenAI, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "gpt-4o"}, {ID: "gpt-4.1"}}, Enabled: true},
 			{ID: 2, Name: "jev", ChannelID: channel.Jev, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "jev-latest", Alias: "jev-router"}}, Enabled: true},
@@ -313,6 +314,7 @@ func TestAutoModelUsesInternalDecisionsRouteOutsideClientFilters(t *testing.T) {
 	}}
 	input := state.CompileInput{
 		AutoModel:       &config,
+		Jev:             testSharedJev(config),
 		ChannelRegistry: channel.NewRegistry(),
 		Groups: []state.GroupConfig{
 			{ID: 1, Name: "answers", ChannelID: channel.OpenAI, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "gpt-4o"}, {ID: "gpt-4.1"}}, Enabled: true},
@@ -438,7 +440,7 @@ func TestAutoModelLocalDecisionFailureIsNotBilledAsAnUpstreamCall(t *testing.T) 
 		},
 	}}
 	if _, err := manager.Publish(state.CompileInput{
-		AutoModel: &config, ChannelRegistry: channel.NewRegistry(),
+		AutoModel: &config, Jev: testSharedJev(config), ChannelRegistry: channel.NewRegistry(),
 		Groups: []state.GroupConfig{
 			{ID: 1, Name: "answers", ChannelID: channel.OpenAI, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "gpt-4o"}, {ID: "gpt-4.1"}}, Enabled: true},
 			{ID: 2, Name: "decisions", ChannelID: channel.Jev, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "jev-latest", Alias: "jev-router"}}, Enabled: true},
@@ -635,7 +637,7 @@ func TestAutoModelToolContinuationChecksEntryConfigurationAcrossInstances(t *tes
 			if test.edit != nil {
 				test.edit(&config)
 			}
-			if _, err := writer.Publish(state.CompileInput{AutoModel: &config, ChannelRegistry: channel.NewRegistry(),
+			if _, err := writer.Publish(state.CompileInput{AutoModel: &config, Jev: testSharedJev(config), ChannelRegistry: channel.NewRegistry(),
 				Groups: []state.GroupConfig{
 					{ID: 1, Name: "openai", ChannelID: channel.OpenAI, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "gpt-4o"}, {ID: "gpt-4.1"}}, Enabled: true},
 					{ID: 2, Name: "jev", ChannelID: channel.Jev, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "jev-latest", Alias: "jev-router"}}, Enabled: true},
@@ -708,7 +710,7 @@ func TestAutoModelSkipsJevWhenOnlyFallbackPresetIsAvailable(t *testing.T) {
 	config := automodel.DefaultConfig()
 	config.Enabled, config.Model = true, "jev-router"
 	config.Models = []automodel.Entry{{ID: "auto-one", Name: "auto-one", Enabled: true, Fallback: "only", Presets: []automodel.Preset{{ID: "only", Name: "only", Description: "All permitted work", Model: "gpt-4o", ParameterOverrides: json.RawMessage(`[]`)}}}}
-	_, err := manager.Publish(state.CompileInput{AutoModel: &config, ChannelRegistry: channel.NewRegistry(),
+	_, err := manager.Publish(state.CompileInput{AutoModel: &config, Jev: testSharedJev(config), ChannelRegistry: channel.NewRegistry(),
 		Groups: []state.GroupConfig{
 			{ID: 1, Name: "openai", ChannelID: channel.OpenAI, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "gpt-4o"}}, Enabled: true},
 			{ID: 2, Name: "jev", ChannelID: channel.Jev, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "jev-latest", Alias: "jev-router"}}, Enabled: true},
@@ -780,7 +782,7 @@ func TestAutoModelContinuationDecisionExcludesOtherGroups(t *testing.T) {
 	configureAutoModelTest(t, handler, manager, state.FilterSet{})
 	config := manager.Current().AutoModels.Config()
 	config.Models[0].Presets = append(config.Models[0].Presets, automodel.Preset{ID: "alternate", Name: "alternate", Description: "Another permitted task class", Model: "gpt-4o", ParameterOverrides: json.RawMessage(`[]`)})
-	_, err := manager.Publish(state.CompileInput{AutoModel: &config, ChannelRegistry: channel.NewRegistry(),
+	_, err := manager.Publish(state.CompileInput{AutoModel: &config, Jev: testSharedJev(config), ChannelRegistry: channel.NewRegistry(),
 		Groups: []state.GroupConfig{
 			{ID: 1, Name: "bound", ChannelID: channel.OpenAI, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "gpt-4o"}}, Enabled: true},
 			{ID: 2, Name: "other", ChannelID: channel.OpenAI, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "gpt-4.1"}}, Enabled: true},
@@ -1034,4 +1036,9 @@ func TestAutoModelPrewarmReuseDoesNotFreezeNextUserTask(t *testing.T) {
 			}
 		})
 	}
+}
+
+// testSharedJev 把夹具中自动模型的 JEV 连接写成共享 jev 设置。
+func testSharedJev(config automodel.Config) *jev.Config {
+	return &jev.Config{Model: config.Model, TimeoutSeconds: config.TimeoutSeconds}
 }

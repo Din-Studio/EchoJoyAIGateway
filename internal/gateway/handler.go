@@ -110,6 +110,7 @@ type runtimeCredentialRegistry interface {
 }
 
 type Handler struct {
+	guardrails          GuardrailEvidenceStore
 	autoTasks           autoTaskCache
 	decisionClient      autoDecisionRunner
 	manager             *state.Manager
@@ -178,6 +179,7 @@ type SharedState struct {
 	ResponseBindings      ResponseBindingStore
 	Affinity              AffinityStore
 	CredentialConcurrency CredentialConcurrencyLimiter
+	GuardrailEvidence     GuardrailEvidenceStore
 }
 
 func NewHandler(
@@ -211,6 +213,7 @@ func NewHandler(
 		affinity:         shared.Affinity,
 		responseBindings: shared.ResponseBindings,
 		concurrency:      shared.CredentialConcurrency,
+		guardrails:       shared.GuardrailEvidence,
 		websocketLimits:  defaultWebsocketLimits(),
 		newRequestID:     newRequestID,
 		requestNow:       time.Now,
@@ -723,6 +726,8 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 		return
 	}
 	recorder.setClientModel(model)
+	recorder.setOperation(metadata.Operation)
+	recorder.setStream(metadata.Stream)
 	var boundAuto *automodel.Selection
 	var binding state.ResponseBinding
 	autoQuery := scheduler.Query{}
@@ -806,6 +811,7 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 	iterator := scheduler.New(snapshot, handler.registry, query)
 	handler.executeAttempts(
 		ginContext,
+		snapshot,
 		iterator,
 		retryAttemptLimit(snapshot.Settings.RetryCount),
 		allowedCredentialRefs,
@@ -939,6 +945,7 @@ func headerFieldValues(headers http.Header, name string) []string {
 
 func (handler *Handler) executeAttempts(
 	ginContext *gin.Context,
+	snapshot *state.ConfigSnapshot,
 	iterator *scheduler.Iterator,
 	forwardAttemptLimit int,
 	allowedCredentialRefs map[uint]state.CredentialRef,
@@ -1254,6 +1261,13 @@ func (handler *Handler) executeAttempts(
 				break
 			}
 			continue
+		}
+		// 护栏在占用业务凭据并发槽之前审查最终内容；同一内容的结果在本请求内复用。
+		if failure := handler.checkRequestAudit(ginContext.Request.Context(), snapshot, snapshot.AccessKeysByID[recorder.accessKeyID], prepared.request.Body, recorder, func() *reason {
+			return handler.admitAutoQuota(ginContext.Request.Context(), snapshot, quotaAdmission)
+		}); failure != nil {
+			handler.completeReason(ginContext, recorder, *failure)
+			return
 		}
 		// A full credential is skipped without spending a forward attempt; the
 		// iterator never returns it again for this request.

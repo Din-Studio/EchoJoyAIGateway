@@ -2,6 +2,16 @@ package models
 
 // RequestLog is the durable request-level audit and usage record.
 type RequestLog struct {
+	// RequestAudit 与 Audit* 是护栏的审查结果和 JEV 调用；每个请求最多调用一次，
+	// 归因与费用列和 Decision* 同构。
+	RequestAudit                JSON   `gorm:"type:json"`
+	AuditModel                  string `gorm:"type:varchar(512);not null;default:''"`
+	AuditGroupID                uint   `gorm:"not null;default:0"`
+	AuditChannelID              string `gorm:"type:varchar(64);not null;default:''"`
+	AuditCredentialID           uint   `gorm:"not null;default:0"`
+	AuditCostNanoUSD            int64  `gorm:"column:audit_cost_nano_usd;not null;default:0"`
+	AuditCostNano               int64  `gorm:"column:audit_cost_nano;not null;default:0"`
+	AuditPricingCompleteness    string `gorm:"type:varchar(32);not null;default:'not_applicable'"`
 	AutoDecision                JSON   `gorm:"type:json"`
 	DecisionModel               string `gorm:"type:varchar(512);not null;default:''"`
 	DecisionGroupID             uint   `gorm:"not null;default:0"`

@@ -9,6 +9,7 @@ import (
 	"gpt-load/internal/pricing"
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/reasoning"
+	"gpt-load/internal/requestaudit"
 	"gpt-load/internal/usage"
 )
 
@@ -143,6 +144,7 @@ type UsageObservation struct {
 }
 
 type RequestEvent struct {
+	RequestAudit          *requestaudit.Result
 	AutoDecision          *automodel.Decision
 	RequestID             string
 	CompletedAt           time.Time

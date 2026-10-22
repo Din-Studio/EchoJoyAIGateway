@@ -292,6 +292,26 @@ function resolveRedactedLog(): Promise<string> {
               </div>
             </dl>
           </section>
+          <AppFormSection
+            v-if="log.request_audit && log.request_audit.status !== 'passed'"
+            :title="t('requestAudit.title')"
+            compact
+          >
+            <dl class="modern-log-detail-grid">
+              <div>
+                <dt>{{ t('requestAudit.result') }}</dt>
+                <dd>{{ t('requestAudit.statuses.' + log.request_audit.status) }}</dd>
+              </div>
+              <div v-if="log.request_audit.reason">
+                <dt>{{ t('autoModel.reason') }}</dt>
+                <dd>{{ t('requestAudit.reasons.' + log.request_audit.reason) }}</dd>
+              </div>
+              <div v-for="finding in log.request_audit.findings" :key="finding.rule_id">
+                <dt>{{ finding.name }}</dt>
+                <dd>{{ t('requestAudit.actions.' + finding.action) }}</dd>
+              </div>
+            </dl>
+          </AppFormSection>
           <AppFormSection v-if="log.auto_decision" :title="t('autoModel.log')" compact>
             <dl class="modern-log-detail-grid">
               <div>
@@ -409,13 +429,16 @@ function resolveRedactedLog(): Promise<string> {
             </dl>
           </AppFormSection>
           <AppFormSection
-            v-if="receipt || log.auto_decision"
+            v-if="
+              receipt || log.auto_decision || log.request_audit?.calls.some((call) => call.called)
+            "
             :title="t('logs.pricingInfo')"
             :description="t('logs.frozenPricing')"
             compact
             ><LogPricingReceipt
               :receipt="receipt"
               :decision="log.auto_decision"
+              :audit="log.request_audit"
               :total-cost="log.estimated_cost_nano"
               :currency="log.currency"
               :exchange-rate="log.exchange_rate"

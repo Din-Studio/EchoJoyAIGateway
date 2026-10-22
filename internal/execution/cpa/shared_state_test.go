@@ -6,6 +6,7 @@ import (
 
 	"gpt-load/internal/cluster"
 	"gpt-load/internal/gateway"
+	"gpt-load/internal/requestaudit"
 	"gpt-load/internal/state"
 	"gpt-load/internal/testutil/clustertest"
 )
@@ -27,5 +28,6 @@ func newGatewaySharedState(
 		ResponseBindings:      cluster.NewResponseBindings(client, time.Hour),
 		Affinity:              cluster.NewAffinity(client),
 		CredentialConcurrency: cluster.NewCredentialConcurrency(client),
+		GuardrailEvidence:     cluster.NewGuardrailVerdicts(client, requestaudit.EvidenceTTL),
 	}, quota
 }

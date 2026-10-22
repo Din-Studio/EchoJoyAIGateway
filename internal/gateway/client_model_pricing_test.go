@@ -106,7 +106,7 @@ func TestAutoModelIsChargedByItsTargetModel(t *testing.T) {
 	autoConfig.Models = []automodel.Entry{{ID: "auto-one", Name: "auto-one", Enabled: true, Fallback: "only", Presets: []automodel.Preset{{
 		ID: "only", Name: "only", Description: "All permitted work", Model: "gpt-4o", ParameterOverrides: json.RawMessage(`[]`),
 	}}}}
-	if _, err := manager.Publish(state.CompileInput{AutoModel: &autoConfig, ChannelRegistry: channel.NewRegistry(),
+	if _, err := manager.Publish(state.CompileInput{AutoModel: &autoConfig, Jev: testSharedJev(autoConfig), ChannelRegistry: channel.NewRegistry(),
 		Groups: []state.GroupConfig{
 			{ID: 1, Name: "openai", ChannelID: channel.OpenAI, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "gpt-4o"}}, Enabled: true},
 			{ID: 2, Name: "jev", ChannelID: channel.Jev, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "jev-latest", Alias: "jev-router"}}, Enabled: true},

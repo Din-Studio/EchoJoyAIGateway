@@ -8,6 +8,7 @@ import (
 
 	"gpt-load/internal/accessquota"
 	"gpt-load/internal/cluster"
+	"gpt-load/internal/requestaudit"
 	"gpt-load/internal/state"
 	"gpt-load/internal/testutil/clustertest"
 )
@@ -32,6 +33,7 @@ func newTestSharedStateOn(client *cluster.Client, registry *state.CredentialRegi
 		ResponseBindings:      cluster.NewResponseBindings(client, testResponseBindingTTL),
 		Affinity:              cluster.NewAffinity(client),
 		CredentialConcurrency: cluster.NewCredentialConcurrency(client),
+		GuardrailEvidence:     cluster.NewGuardrailVerdicts(client, requestaudit.EvidenceTTL),
 	}
 }
 
