@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -17,16 +16,15 @@ import (
 
 	"gpt-load/internal/accessquota"
 	"gpt-load/internal/automodel"
+	"gpt-load/internal/catalog"
 	"gpt-load/internal/channel"
 	"gpt-load/internal/connection"
 	"gpt-load/internal/dialect"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/health"
 	"gpt-load/internal/httplifecycle"
-	"gpt-load/internal/outboundproxy"
 	"gpt-load/internal/platform/contentcoding"
 	"gpt-load/internal/platform/encryption"
-	platformhttp "gpt-load/internal/platform/httpclient"
 	platformheader "gpt-load/internal/platform/httpheader"
 	"gpt-load/internal/platform/utils"
 	"gpt-load/internal/pricing"
@@ -113,12 +111,9 @@ type runtimeCredentialRegistry interface {
 
 type Handler struct {
 	autoTasks           autoTaskCache
-	decisionClient      automodel.HTTPDoer
-	decisionClients     *platformhttp.HTTPClientManager
-	decisionMu          sync.Mutex
-	decisionHTTP        *http.Client
-	decisionProxy       outboundproxy.Effective
+	decisionClient      autoDecisionRunner
 	manager             *state.Manager
+	catalog             *catalog.Runtime
 	channels            *channel.Registry
 	subscriptions       *subscriptionruntime.Runtime
 	registry            runtimeCredentialRegistry
@@ -134,6 +129,7 @@ type Handler struct {
 	billing             ExternalBilling
 	accessTokens        AccessTokenVerifier
 	sharedHealth        state.SharedCredentialHealthStore
+	usageReader         AccessKeyUsageReader
 	newRequestID        func() (string, error)
 	requestNow          func() time.Time
 	now                 func() time.Time
@@ -209,8 +205,7 @@ func NewHandler(
 	channels := channel.NewRegistry()
 	subscriptions, _ := subscriptionruntime.NewRuntime(channels, subscriptionproviders.Implementations()...)
 	return &Handler{
-		decisionClients: platformhttp.NewHTTPClientManager(),
-		manager:         manager, channels: channels, subscriptions: subscriptions, registry: registry, encryption: encryptionService,
+		manager: manager, channels: channels, subscriptions: subscriptions, registry: registry, encryption: encryptionService,
 		forwarder: forwarder, dialects: dialects, stats: stats, mutations: mutations,
 		limiter: limiter, requestLogSink: requestLogSink, priceTables: priceTables,
 		accessQuota:      shared.AccessQuota,
@@ -256,6 +251,8 @@ func NewHandlerWithLifecycle(
 	lifecycle *httplifecycle.Coordinator,
 	billing ExternalBilling,
 	accessTokens AccessTokenVerifier,
+	catalogRuntime *catalog.Runtime,
+	usageReader AccessKeyUsageReader,
 ) *Handler {
 	handler := NewHandler(
 		manager,
@@ -279,6 +276,8 @@ func NewHandlerWithLifecycle(
 	handler.lifecycle = lifecycle
 	handler.billing = billing
 	handler.accessTokens = accessTokens
+	handler.catalog = catalogRuntime
+	handler.usageReader = usageReader
 	return handler
 }
 
@@ -541,6 +540,10 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 	}
 	if requestContext.locallyRejected {
 		handler.dataPlaneRouteNotFound(ginContext)
+		return
+	}
+	if requestContext.selectedRoute.Kind == endpointUsage {
+		handler.handleUsage(ginContext, requestContext)
 		return
 	}
 	if websocketIntent(ginContext.Request) {
