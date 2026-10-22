@@ -14,6 +14,7 @@ import (
 	"gpt-load/internal/pricing"
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/reasoning"
+	"gpt-load/internal/requestaudit"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/telemetry"
 	"gpt-load/internal/usage"
@@ -21,8 +22,8 @@ import (
 
 const defaultListLimit = 50
 
-const requestTotalCostStateSQL = `CASE WHEN cost_state = 'priced' OR decision_pricing_completeness IN ('complete','partial') THEN 'priced' WHEN cost_state = 'unpriced' OR decision_pricing_completeness = 'unavailable' THEN 'unpriced' ELSE 'not_applicable' END`
-const requestTotalCompletenessSQL = `CASE WHEN (` + requestTotalCostStateSQL + `) = 'priced' THEN CASE WHEN pricing_completeness IN ('partial','unavailable') OR decision_pricing_completeness IN ('partial','unavailable') THEN 'partial' ELSE 'complete' END WHEN (` + requestTotalCostStateSQL + `) = 'unpriced' THEN 'unavailable' ELSE 'not_applicable' END`
+const requestTotalCostStateSQL = `CASE WHEN cost_state = 'priced' OR decision_pricing_completeness IN ('complete','partial') OR audit_pricing_completeness IN ('complete','partial') THEN 'priced' WHEN cost_state = 'unpriced' OR decision_pricing_completeness = 'unavailable' OR audit_pricing_completeness = 'unavailable' THEN 'unpriced' ELSE 'not_applicable' END`
+const requestTotalCompletenessSQL = `CASE WHEN (` + requestTotalCostStateSQL + `) = 'priced' THEN CASE WHEN pricing_completeness IN ('partial','unavailable') OR decision_pricing_completeness IN ('partial','unavailable') OR audit_pricing_completeness IN ('partial','unavailable') THEN 'partial' ELSE 'complete' END WHEN (` + requestTotalCostStateSQL + `) = 'unpriced' THEN 'unavailable' ELSE 'not_applicable' END`
 
 func (service *Service) List(ctx context.Context, input ListQuery) (Page, error) {
 	limit := input.Limit
@@ -50,6 +51,7 @@ func (service *Service) List(ctx context.Context, input ListQuery) (Page, error)
 	if input.Status != "" {
 		query = query.Where("status = ?", input.Status)
 	}
+	query = applyRequestAuditFilters(query, input)
 	if input.RequestID != "" {
 		query = query.Where("id = ?", input.RequestID)
 	}
@@ -104,7 +106,7 @@ func (service *Service) List(ctx context.Context, input ListQuery) (Page, error)
 	query = applyNullableRange(query, "output_tokens", input.OutputTokensMin, input.OutputTokensMax)
 	if input.CostMinNano != nil || input.CostMaxNano != nil {
 		query = query.Where("currency = ?", input.CostCurrency)
-		query = applyNullableRange(query, "(estimated_cost_nano + decision_cost_nano)", input.CostMinNano, input.CostMaxNano)
+		query = applyNullableRange(query, "(estimated_cost_nano + decision_cost_nano + audit_cost_nano)", input.CostMinNano, input.CostMaxNano)
 	}
 	query = applyAttemptFilters(query, input)
 	if input.Cursor != nil {
@@ -389,13 +391,21 @@ func decodeRequestLogRows(rows []models.RequestLog) ([]Record, error) {
 				return nil, fmt.Errorf("decode automatic decision: %w", err)
 			}
 		}
-		total := telemetry.TotalPricing(telemetry.PricingObservation{CostState: row.CostState, PricingCompleteness: row.PricingCompleteness, EstimatedCostNanoUSD: row.EstimatedCostNanoUSD}, decision)
+		var audit *requestaudit.Result
+		if len(row.RequestAudit) > 0 && string(row.RequestAudit) != "null" {
+			audit = new(requestaudit.Result)
+			if err := json.Unmarshal(row.RequestAudit, audit); err != nil {
+				return nil, fmt.Errorf("decode request audit: %w", err)
+			}
+		}
+		total := telemetry.TotalPricing(telemetry.PricingObservation{CostState: row.CostState, PricingCompleteness: row.PricingCompleteness, EstimatedCostNanoUSD: row.EstimatedCostNanoUSD}, decision, audit)
 		settlement, err := pricing.NewCurrency(pricing.CurrencyCode(row.Currency), row.ExchangeRateMicros)
 		if err != nil {
 			return nil, fmt.Errorf("decode request log settlement currency: %w", err)
 		}
 		records = append(records, Record{
 			AutoDecision:          decision,
+			RequestAudit:          audit,
 			TotalPricing:          total,
 			RequestID:             row.ID,
 			CompletedAtMS:         row.CompletedAtMS,
@@ -441,6 +451,7 @@ func decodeRequestLogRows(rows []models.RequestLog) ([]Record, error) {
 			Settlement:                  settlement,
 			EstimatedCostNano:           row.EstimatedCostNano,
 			DecisionCostNano:            row.DecisionCostNano,
+			AuditCostNano:               row.AuditCostNano,
 		})
 	}
 	return records, nil

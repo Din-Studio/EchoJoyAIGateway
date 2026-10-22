@@ -33,6 +33,7 @@ import (
 	"gpt-load/internal/pricing"
 	"gpt-load/internal/provideradapter"
 	"gpt-load/internal/releasecheck"
+	"gpt-load/internal/requestaudit"
 	"gpt-load/internal/requestlog"
 	"gpt-load/internal/state"
 	stateloader "gpt-load/internal/state/loader"
@@ -303,6 +304,7 @@ func newGatewaySharedState(
 		ResponseBindings:      cluster.NewResponseBindings(client, cfg.Cluster.ResponseBindingTTL),
 		Affinity:              cluster.NewAffinity(client),
 		CredentialConcurrency: cluster.NewCredentialConcurrency(client),
+		GuardrailEvidence:     cluster.NewGuardrailVerdicts(client, requestaudit.EvidenceTTL),
 	}
 }
 

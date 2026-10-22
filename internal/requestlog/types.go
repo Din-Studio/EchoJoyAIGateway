@@ -10,6 +10,7 @@ import (
 	"gpt-load/internal/pricing"
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/reasoning"
+	"gpt-load/internal/requestaudit"
 	"gpt-load/internal/telemetry"
 	"gpt-load/internal/usage"
 )
@@ -83,6 +84,8 @@ type ListQuery struct {
 	ModelConsistency    telemetry.ModelConsistency
 	AccessKeyID         *uint
 	Status              telemetry.RequestStatus
+	AuditStatus         string
+	AuditRule           string
 	RequestID           string
 	Protocol            protocol.Protocol
 	Operation           execution.Operation
@@ -124,6 +127,7 @@ type AccessKeyRef struct {
 }
 
 type Record struct {
+	RequestAudit            *requestaudit.Result
 	AutoDecision            *automodel.Decision
 	TotalPricing            telemetry.PricingObservation
 	RequestID               string
@@ -168,10 +172,11 @@ type Record struct {
 	UpstreamCostState           pricing.CostState
 	UpstreamPricingCompleteness pricing.Completeness
 	UpstreamCostNanoUSD         int64
-	// Settlement 是结算时冻结的币种与汇率；EstimatedCostNano/DecisionCostNano 以它计。
+	// Settlement 是结算时冻结的币种与汇率；EstimatedCostNano/DecisionCostNano/AuditCostNano 以它计。
 	Settlement        pricing.Currency
 	EstimatedCostNano int64
 	DecisionCostNano  int64
+	AuditCostNano     int64
 }
 
 type Page struct {
