@@ -1,3 +1,4 @@
+import { readRedactionRules, type RedactionRule } from './request-redaction'
 import {
   readJev,
   readAudit,
@@ -67,6 +68,7 @@ export type SettingsValues = Record<SettingNumber, number> &
     proxy_config: ProxyConfigView
     auto_model?: AutoModelConfig
     jev: JevConfig
+    request_redaction: RedactionRule[]
     request_audit: AuditConfig
   }
 export type SettingKey = keyof SettingsValues
@@ -85,6 +87,7 @@ export const settingKeys: readonly SettingKey[] = [
   'auto_model',
   'jev',
   'request_audit',
+  'request_redaction',
 ]
 export interface SettingsData {
   decisionRoutes: DecisionRoute[]
@@ -178,6 +181,7 @@ function readSettings(value: unknown): SettingsData {
       auto_model: readAutoModel(values.auto_model),
       jev: readJev(values.jev),
       request_audit: readAudit(values.request_audit),
+      request_redaction: readRedactionRules(values.request_redaction),
     },
     overrides: list(row.overrides).map((key) => oneOf(key, settingKeys)),
     readOnly:
