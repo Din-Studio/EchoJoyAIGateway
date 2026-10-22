@@ -206,9 +206,10 @@ func TestExternalBillingAndAutoModelDecision(t *testing.T) {
 			handler.billing = billing
 			config := autoModelTestConfig()
 			if _, err := manager.Publish(state.CompileInput{
-				AutoModel: &config, ChannelRegistry: channel.NewRegistry(), SystemSettings: cnySettings("7.2"),
+				AutoModel: &config, Jev: testSharedJev(config), ChannelRegistry: channel.NewRegistry(), SystemSettings: cnySettings("7.2"),
 				Groups: []state.GroupConfig{{ID: 1, Name: "openai", ChannelID: channel.OpenAI, ConnectionType: "api_key",
-					Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "gpt-4o"}, {ID: "gpt-4.1"}}, Enabled: true}},
+					Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "gpt-4o"}, {ID: "gpt-4.1"}}, Enabled: true},
+					{ID: 99, Name: "jev", ChannelID: channel.Jev, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "jev-latest", Alias: "jev-router"}}, Enabled: true}},
 				Credentials: []state.CredentialConfig{{ID: 1, GroupID: 1, Status: state.CredentialStatusActive, Version: 1, IdentityGeneration: 1, Fingerprint: "credential-1"}},
 				AccessKeys:  []state.AccessKeyConfig{{ID: 1, Name: "ly:k1", KeyHash: handler.encryption.Hash("gl-client"), Status: state.AccessKeyStatusActive}},
 			}); err != nil {

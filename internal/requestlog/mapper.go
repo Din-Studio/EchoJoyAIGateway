@@ -8,9 +8,11 @@ import (
 	"unicode/utf8"
 
 	"gpt-load/internal/execution"
+	"gpt-load/internal/jev"
 	"gpt-load/internal/platform/epochms"
 	"gpt-load/internal/platform/redact"
 	"gpt-load/internal/pricing"
+	"gpt-load/internal/requestaudit"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/telemetry"
 	"gpt-load/internal/usage"
@@ -116,6 +118,8 @@ func mapEvent(
 	var autoJSON models.JSON
 	var decisionCost int64
 	decisionCompleteness, decisionModel := "not_applicable", ""
+	var decisionGroupID, decisionCredentialID uint
+	decisionChannelID := ""
 	if event.AutoDecision != nil {
 		decision := *event.AutoDecision
 		decision.Selection.ParameterOverrides = nil
@@ -127,10 +131,28 @@ func mapEvent(
 		autoJSON, _ = json.Marshal(decision)
 		decisionCost, decisionCompleteness = decision.EstimatedCostNanoUSD, decision.PricingCompleteness
 		if decision.Called {
-			decisionModel = "jev/" + decision.Provider + "/" + decision.RequestedModel
+			decisionModel = decision.UpstreamModel
+			decisionGroupID = decision.GroupID
+			decisionChannelID = decision.ChannelID
+			decisionCredentialID = decision.CredentialID
 		}
 	}
 
+	var auditJSON models.JSON
+	audit := mappedAudit{completeness: "not_applicable"}
+	if event.RequestAudit != nil {
+		if audit, err = mapAuditCall(event.RequestAudit.Calls); err != nil {
+			return models.RequestLog{}, err
+		}
+		auditCopy := *event.RequestAudit
+		auditCopy.Findings = append([]requestaudit.Finding{}, event.RequestAudit.Findings...)
+		for index := range auditCopy.Findings {
+			auditCopy.Findings[index].Name = redactIdentityValue(redactor, auditCopy.Findings[index].Name)
+		}
+		if auditJSON, err = json.Marshal(auditCopy); err != nil {
+			return models.RequestLog{}, err
+		}
+	}
 	if !event.Currency.Valid() {
 		return models.RequestLog{}, fmt.Errorf("invalid settlement currency %q", event.Currency.Code)
 	}
@@ -138,8 +160,19 @@ func mapEvent(
 	settledDecisionCost := event.Currency.Settle(decisionCost)
 
 	return models.RequestLog{
+		RequestAudit:                auditJSON,
+		AuditModel:                  audit.model,
+		AuditGroupID:                audit.groupID,
+		AuditChannelID:              audit.channelID,
+		AuditCredentialID:           audit.credentialID,
+		AuditCostNanoUSD:            audit.costNanoUSD,
+		AuditCostNano:               event.Currency.Settle(audit.costNanoUSD),
+		AuditPricingCompleteness:    audit.completeness,
 		AutoDecision:                autoJSON,
 		DecisionModel:               decisionModel,
+		DecisionGroupID:             decisionGroupID,
+		DecisionChannelID:           decisionChannelID,
+		DecisionCredentialID:        decisionCredentialID,
 		DecisionCostNanoUSD:         decisionCost,
 		DecisionCostNano:            settledDecisionCost,
 		Currency:                    string(event.Currency.Code),
@@ -499,4 +532,36 @@ func sanitizeSummaryLimit(
 		prefixBytes--
 	}
 	return summary[:prefixBytes] + truncatedMarker
+}
+
+// mappedAudit 是护栏唯一一次 JEV 调用的归因与费用；未调用时费用为零。
+type mappedAudit struct {
+	model        string
+	groupID      uint
+	channelID    string
+	credentialID uint
+	costNanoUSD  int64
+	completeness string
+}
+
+func mapAuditCall(calls []jev.Observation) (mappedAudit, error) {
+	audit := mappedAudit{completeness: "not_applicable"}
+	called := false
+	for _, call := range calls {
+		if call.EstimatedCostNanoUSD < 0 {
+			return mappedAudit{}, fmt.Errorf("negative guardrail cost")
+		}
+		if !call.Called {
+			continue
+		}
+		if called {
+			return mappedAudit{}, fmt.Errorf("multiple guardrail calls in one request")
+		}
+		called = true
+		audit = mappedAudit{
+			model: call.UpstreamModel, groupID: call.GroupID, channelID: call.ChannelID, credentialID: call.CredentialID,
+			costNanoUSD: call.EstimatedCostNanoUSD, completeness: call.PricingCompleteness,
+		}
+	}
+	return audit, nil
 }

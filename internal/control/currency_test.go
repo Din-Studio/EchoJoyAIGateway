@@ -113,24 +113,6 @@ func TestCurrencySettingsRejectInvalidCombinationWithoutWriting(t *testing.T) {
 	}
 }
 
-func TestAutoModelPricesUseSystemCurrencyAtTheBoundary(t *testing.T) {
-	t.Parallel()
-	fixture := newServiceFixture(t)
-	if _, err := updateCurrencySettings(t, fixture, `{"currency":"CNY","exchange_rate":"7"}`); err != nil {
-		t.Fatal(err)
-	}
-	response, err := updateCurrencySettings(t, fixture, `{"auto_model":{"enabled":false,"provider":"typesafe","model":"jev-latest","api_key":"","timeout_seconds":2,"input_price":"0.7","output_price":"0","models":[]}}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.Values.AutoModel.InputPrice != "0.7" {
-		t.Fatalf("auto model input price = %q, want ¥0.7", response.Values.AutoModel.InputPrice)
-	}
-	if got := fixture.service.manager.Current().AutoModels.Config().InputPrice; got != "0.1" {
-		t.Fatalf("stored decision input price = %q, want $0.1", got)
-	}
-}
-
 func TestModelPriceHTTPShowsAndAcceptsPricesInSystemCurrency(t *testing.T) {
 	t.Parallel()
 	fixture, engine, row := newModelPriceHTTPFixture(t, true)

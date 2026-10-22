@@ -6,11 +6,11 @@ import (
 	"gorm.io/gorm"
 )
 
-const ID0023 = "0023_ly_usage_reports"
+const IDLy0001 = "ly0001_usage_reports"
 
 // 冻结本次迁移的表与字段，后续运行模型变化不能改写历史 DDL。
 // 每行是一条尚未被灵影网关接受的用量上报；next_attempt_at_ms 为空表示已停放、不再投递。
-type lyUsageReport0023 struct {
+type lyUsageReportLy0001 struct {
 	RequestID       string `gorm:"column:request_id;type:varchar(36);primaryKey"`
 	Payload         string `gorm:"column:payload;type:jsonb;not null"`
 	Attempts        int    `gorm:"column:attempts;not null;default:0;check:chk_ly_usage_report_attempts,attempts >= 0"`
@@ -18,20 +18,20 @@ type lyUsageReport0023 struct {
 	LastError       string `gorm:"column:last_error;type:text;not null;default:''"`
 }
 
-func (lyUsageReport0023) TableName() string { return "ly_usage_reports" }
+func (lyUsageReportLy0001) TableName() string { return "ly_usage_reports" }
 
-// Up0023 adds the outbox of usage reports owed to the Lingying gateway.
-func Up0023(db *gorm.DB) error {
-	if !db.Migrator().HasTable(&lyUsageReport0023{}) {
-		if err := db.Migrator().CreateTable(&lyUsageReport0023{}); err != nil {
+// UpLy0001 adds the outbox of usage reports owed to the Lingying gateway.
+func UpLy0001(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&lyUsageReportLy0001{}) {
+		if err := db.Migrator().CreateTable(&lyUsageReportLy0001{}); err != nil {
 			return fmt.Errorf("create ly usage reports: %w", err)
 		}
 	}
-	return Validate0023(db)
+	return ValidateLy0001(db)
 }
 
-func Validate0023(db *gorm.DB) error {
-	model := &lyUsageReport0023{}
+func ValidateLy0001(db *gorm.DB) error {
+	model := &lyUsageReportLy0001{}
 	if !db.Migrator().HasTable(model) {
 		return fmt.Errorf("validate ly usage reports: table is missing")
 	}

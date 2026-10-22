@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -17,20 +16,20 @@ import (
 
 	"gpt-load/internal/accessquota"
 	"gpt-load/internal/automodel"
+	"gpt-load/internal/catalog"
 	"gpt-load/internal/channel"
 	"gpt-load/internal/connection"
 	"gpt-load/internal/dialect"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/health"
 	"gpt-load/internal/httplifecycle"
-	"gpt-load/internal/outboundproxy"
 	"gpt-load/internal/platform/contentcoding"
 	"gpt-load/internal/platform/encryption"
-	platformhttp "gpt-load/internal/platform/httpclient"
 	platformheader "gpt-load/internal/platform/httpheader"
 	"gpt-load/internal/platform/utils"
 	"gpt-load/internal/pricing"
 	"gpt-load/internal/ratelimit"
+	"gpt-load/internal/requestredact"
 	"gpt-load/internal/scheduler"
 	"gpt-load/internal/state"
 	subscriptionproviders "gpt-load/internal/subscription/providers"
@@ -112,13 +111,11 @@ type runtimeCredentialRegistry interface {
 }
 
 type Handler struct {
+	guardrails          GuardrailEvidenceStore
 	autoTasks           autoTaskCache
-	decisionClient      automodel.HTTPDoer
-	decisionClients     *platformhttp.HTTPClientManager
-	decisionMu          sync.Mutex
-	decisionHTTP        *http.Client
-	decisionProxy       outboundproxy.Effective
+	decisionClient      autoDecisionRunner
 	manager             *state.Manager
+	catalog             *catalog.Runtime
 	channels            *channel.Registry
 	subscriptions       *subscriptionruntime.Runtime
 	registry            runtimeCredentialRegistry
@@ -134,6 +131,7 @@ type Handler struct {
 	billing             ExternalBilling
 	accessTokens        AccessTokenVerifier
 	sharedHealth        state.SharedCredentialHealthStore
+	usageReader         AccessKeyUsageReader
 	newRequestID        func() (string, error)
 	requestNow          func() time.Time
 	now                 func() time.Time
@@ -184,6 +182,7 @@ type SharedState struct {
 	ResponseBindings      ResponseBindingStore
 	Affinity              AffinityStore
 	CredentialConcurrency CredentialConcurrencyLimiter
+	GuardrailEvidence     GuardrailEvidenceStore
 }
 
 func NewHandler(
@@ -209,8 +208,7 @@ func NewHandler(
 	channels := channel.NewRegistry()
 	subscriptions, _ := subscriptionruntime.NewRuntime(channels, subscriptionproviders.Implementations()...)
 	return &Handler{
-		decisionClients: platformhttp.NewHTTPClientManager(),
-		manager:         manager, channels: channels, subscriptions: subscriptions, registry: registry, encryption: encryptionService,
+		manager: manager, channels: channels, subscriptions: subscriptions, registry: registry, encryption: encryptionService,
 		forwarder: forwarder, dialects: dialects, stats: stats, mutations: mutations,
 		limiter: limiter, requestLogSink: requestLogSink, priceTables: priceTables,
 		accessQuota:      shared.AccessQuota,
@@ -218,6 +216,7 @@ func NewHandler(
 		affinity:         shared.Affinity,
 		responseBindings: shared.ResponseBindings,
 		concurrency:      shared.CredentialConcurrency,
+		guardrails:       shared.GuardrailEvidence,
 		websocketLimits:  defaultWebsocketLimits(),
 		newRequestID:     newRequestID,
 		requestNow:       time.Now,
@@ -256,6 +255,8 @@ func NewHandlerWithLifecycle(
 	lifecycle *httplifecycle.Coordinator,
 	billing ExternalBilling,
 	accessTokens AccessTokenVerifier,
+	catalogRuntime *catalog.Runtime,
+	usageReader AccessKeyUsageReader,
 ) *Handler {
 	handler := NewHandler(
 		manager,
@@ -279,6 +280,8 @@ func NewHandlerWithLifecycle(
 	handler.lifecycle = lifecycle
 	handler.billing = billing
 	handler.accessTokens = accessTokens
+	handler.catalog = catalogRuntime
+	handler.usageReader = usageReader
 	return handler
 }
 
@@ -543,6 +546,10 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 		handler.dataPlaneRouteNotFound(ginContext)
 		return
 	}
+	if requestContext.selectedRoute.Kind == endpointUsage {
+		handler.handleUsage(ginContext, requestContext)
+		return
+	}
 	if websocketIntent(ginContext.Request) {
 		handler.handleWebsocket(ginContext, requestContext)
 		return
@@ -726,6 +733,8 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 		return
 	}
 	recorder.setClientModel(model)
+	recorder.setOperation(metadata.Operation)
+	recorder.setStream(metadata.Stream)
 	if selectedRoute.ExternalBilling {
 		if failure := handler.admitExternalBilling(
 			ginContext.Request.Context(), recorder, accessKey, requestContext.billingCredential,
@@ -818,6 +827,7 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 	iterator := scheduler.New(snapshot, handler.registry, query)
 	handler.executeAttempts(
 		ginContext,
+		snapshot,
 		iterator,
 		retryAttemptLimit(snapshot.Settings.RetryCount),
 		allowedCredentialRefs,
@@ -951,6 +961,7 @@ func headerFieldValues(headers http.Header, name string) []string {
 
 func (handler *Handler) executeAttempts(
 	ginContext *gin.Context,
+	snapshot *state.ConfigSnapshot,
 	iterator *scheduler.Iterator,
 	forwardAttemptLimit int,
 	allowedCredentialRefs map[uint]state.CredentialRef,
@@ -1000,15 +1011,21 @@ func (handler *Handler) executeAttempts(
 	var cachedPrepared *preparedRequest
 	loggedOverrideFailures := make(map[uint]struct{})
 	var parameterOverrideFailure *reason
-	prepareRequest := func(selection scheduler.Selection) preparedRequest {
+	prepareRequest := func(selection scheduler.Selection) (prepared preparedRequest) {
 		if cachedPrepared != nil && preparedGroupID == selection.GroupID {
 			return *cachedPrepared
 		}
 		cachedPrepared = nil
 		preparedGroupID = selection.GroupID
-		prepared := preparedRequest{
+		prepared = preparedRequest{
 			request: parsed, observations: originalMetadata, observationsAvailable: true,
 		}
+		defer func() {
+			if prepared.err == nil {
+				prepared.request, prepared.err = redactOutboundRequest(snapshot.RequestRedaction, selectedDialect.Protocol(), prepared.request)
+			}
+			cachedPrepared = &prepared
+		}()
 		if operation == execution.OperationWebSearch {
 			return prepared
 		}
@@ -1185,6 +1202,10 @@ func (handler *Handler) executeAttempts(
 		}
 		prepared := prepareRequest(selection)
 		if prepared.err != nil {
+			if errors.Is(prepared.err, requestredact.ErrContent) {
+				handler.completeReason(ginContext, recorder, reasonRedactionFailed)
+				return
+			}
 			if errors.Is(prepared.err, errRequestTooLarge) {
 				if parameterOverrideFailure == nil {
 					parameterOverrideFailure = &reasonRequestTooLarge
@@ -1266,6 +1287,13 @@ func (handler *Handler) executeAttempts(
 				break
 			}
 			continue
+		}
+		// 护栏在占用业务凭据并发槽之前审查最终内容；同一内容的结果在本请求内复用。
+		if failure := handler.checkRequestAudit(ginContext.Request.Context(), snapshot, snapshot.AccessKeysByID[recorder.accessKeyID], prepared.request.Body, recorder, func() *reason {
+			return handler.admitAutoQuota(ginContext.Request.Context(), snapshot, quotaAdmission)
+		}); failure != nil {
+			handler.completeReason(ginContext, recorder, *failure)
+			return
 		}
 		// A full credential is skipped without spending a forward attempt; the
 		// iterator never returns it again for this request.

@@ -1,3 +1,4 @@
+import { readAuditResult, type AuditResult } from './experimental'
 import type { ApiClient } from '@shared/http/client'
 import { ApiError, InvalidResponseError } from '@shared/http/errors'
 import { boolean, integer, list, oneOf, record, text } from './response'
@@ -19,6 +20,7 @@ export const logOperations = [
   'images_edit',
   'embeddings_create',
   'rerank',
+  'decisions_create',
   'list_models',
   'probe',
 ] as const
@@ -34,6 +36,8 @@ export const logFilterNames = [
   'model_consistency',
   'access_key_id',
   'status',
+  'audit_status',
+  'audit_rule',
   'request_id',
   'protocol',
   'operation',
@@ -87,6 +91,7 @@ export interface LogReasoning {
   budget_tokens: string | null
 }
 export interface LogEntry {
+  request_audit?: AuditResult
   auto_decision?: LogAutoDecision
   request_id: string
   completed_at_ms: number
@@ -148,7 +153,12 @@ export interface LogAutoDecision {
   execution_phase: string
   reason: string
   provider: string
+  group_name: string
+  channel_name: string
+  credential_name: string
+  credential_deleted: boolean
   requested_model: string
+  upstream_model: string
   reported_model: string
   duration_ms: number
   called: boolean
@@ -335,6 +345,7 @@ function entry(value: unknown): LogEntry {
       'not_applicable',
     ] as const),
     auto_decision: row.auto_decision === undefined ? undefined : autoDecision(row.auto_decision),
+    request_audit: row.request_audit === undefined ? undefined : readAuditResult(row.request_audit),
     cost_state: oneOf(row.total_cost_state ?? row.cost_state, [
       'priced',
       'unpriced',
@@ -399,7 +410,12 @@ function autoDecision(value: unknown): LogAutoDecision {
     execution_phase: text(row.execution_phase ?? ''),
     reason: text(row.reason ?? ''),
     provider: text(row.provider ?? ''),
+    group_name: text(row.group_name ?? ''),
+    channel_name: text(row.channel_name ?? ''),
+    credential_name: text(row.credential_name ?? ''),
+    credential_deleted: boolean(row.credential_deleted ?? false),
     requested_model: text(row.requested_model ?? ''),
+    upstream_model: text(row.upstream_model ?? ''),
     reported_model: text(row.reported_model ?? ''),
     duration_ms: integer(row.duration_ms),
     called: boolean(row.called),

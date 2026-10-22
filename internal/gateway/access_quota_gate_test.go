@@ -37,6 +37,12 @@ func (gate *scriptedAccessQuotaGate) Admit(
 	return ticket, accessquota.Decision{Allowed: true, Recoverable: true}, gate.admitErr
 }
 
+func (gate *scriptedAccessQuotaGate) View(
+	context.Context, *state.ConfigSnapshot, uint, time.Time,
+) (accessquota.View, error) {
+	return accessquota.View{Allowed: true, Recoverable: true}, gate.checkErr
+}
+
 func (gate *scriptedAccessQuotaGate) Complete(
 	context.Context, accessquota.Ticket, int64,
 ) (accessquota.CompletionResult, error) {

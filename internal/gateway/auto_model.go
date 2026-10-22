@@ -5,14 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"time"
 
 	"gpt-load/internal/accessquota"
 	"gpt-load/internal/automodel"
 	"gpt-load/internal/dialect"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/parameteroverride"
-	platformhttp "gpt-load/internal/platform/httpclient"
 	"gpt-load/internal/scheduler"
 	"gpt-load/internal/state"
 )
@@ -20,6 +18,16 @@ import (
 var reasonAutoModelUnavailable = reason{http.StatusServiceUnavailable, "auto_model_unavailable", "Automatic model selection is unavailable."}
 var reasonAutoModelForbidden = reason{http.StatusForbidden, "auto_model_target_forbidden", "Automatic model entry or fallback target is not permitted for this request."}
 var reasonAutoModelUnsupported = reason{http.StatusBadRequest, "auto_model_operation_unsupported", "Automatic model selection is unsupported for this operation."}
+
+type autoDecisionRunner interface {
+	Decide(
+		context.Context,
+		*state.ConfigSnapshot,
+		state.AccessKeyView,
+		[]automodel.CompiledPreset,
+		automodel.TaskState,
+	) automodel.Decision
+}
 
 func (handler *Handler) admitAutoQuota(ctx context.Context, snapshot *state.ConfigSnapshot, admission *requestAccessQuotaAdmission) *reason {
 	if admission == nil || admission.admitted {
@@ -37,26 +45,6 @@ func (handler *Handler) admitAutoQuota(ctx context.Context, snapshot *state.Conf
 	}
 	admission.admitted = true
 	return nil
-}
-
-func (handler *Handler) autoDecisionClient(snapshot *state.ConfigSnapshot) (automodel.HTTPDoer, error) {
-	if handler.decisionClient != nil {
-		return handler.decisionClient, nil
-	}
-	handler.decisionMu.Lock()
-	defer handler.decisionMu.Unlock()
-	if handler.decisionHTTP != nil && handler.decisionProxy == snapshot.GlobalProxy {
-		return handler.decisionHTTP, nil
-	}
-	client, err := handler.decisionClients.NewClientForOutboundProxy(&platformhttp.Config{ConnectTimeout: 2 * time.Second, TLSHandshakeTimeout: 2 * time.Second, DisableRedirects: true, MaxIdleConns: 10, MaxIdleConnsPerHost: 5, IdleConnTimeout: time.Minute, ForceAttemptHTTP2: true}, snapshot.GlobalProxy)
-	if err != nil {
-		return nil, err
-	}
-	if handler.decisionHTTP != nil {
-		handler.decisionHTTP.CloseIdleConnections()
-	}
-	handler.decisionHTTP, handler.decisionProxy = client, snapshot.GlobalProxy
-	return client, nil
 }
 
 func allowedAutoPresets(snapshot *state.ConfigSnapshot, key state.AccessKeyView, entry automodel.CompiledEntry, metadata dialect.RequestMetadata, query scheduler.Query) ([]automodel.CompiledPreset, bool) {
@@ -112,6 +100,15 @@ func (handler *Handler) prepareAutoModel(ctx context.Context, snapshot *state.Co
 	query.Operation, query.RouteRequirement = metadata.Operation, metadata.RouteRequirement
 	query.ResponsesStorePreference = metadata.ResponsesStorePreference
 	view, extractReason := automodel.Extract(selectedDialect.Protocol(), parsed.Body)
+	if !snapshot.RequestRedaction.Empty() {
+		clean, err := redactOutboundRequest(snapshot.RequestRedaction, selectedDialect.Protocol(), parsed)
+		if err != nil {
+			return parsed, metadata, nil, &reasonRedactionFailed
+		}
+		fingerprint := view.TaskFingerprint
+		view, extractReason = automodel.Extract(selectedDialect.Protocol(), clean.Body)
+		view.TaskFingerprint = fingerprint
+	}
 	prewarm := false
 	if metadata.Operation == execution.OperationResponsesCreate {
 		var options struct {
@@ -206,19 +203,18 @@ func (handler *Handler) prepareAutoModel(ctx context.Context, snapshot *state.Co
 		decision.Source, decision.Status, decision.Reason = "single_preset", "selected", ""
 	} else {
 		if extractReason == "" {
-			client, err := handler.autoDecisionClient(snapshot)
-			if err != nil {
-				decision.Reason = "proxy_unavailable"
+			var result automodel.Decision
+			if handler.decisionClient != nil {
+				result = handler.decisionClient.Decide(ctx, snapshot, key, presets, view)
+			} else {
+				result = handler.executeAutoDecision(ctx, snapshot, key, presets, view)
 			}
-			if client != nil {
-				result := automodel.Decide(ctx, client, snapshot.AutoModels, presets, view, key.PriceMultiplier)
-				decision = &result
-				if result.Status == "selected" {
-					for _, preset := range presets {
-						if preset.ID == result.Choice {
-							chosen = preset
-							break
-						}
+			decision = &result
+			if result.Status == "selected" {
+				for _, preset := range presets {
+					if preset.ID == result.Choice {
+						chosen = preset
+						break
 					}
 				}
 			}
@@ -262,6 +258,41 @@ func (handler *Handler) prepareAutoModel(ctx context.Context, snapshot *state.Co
 		}
 	}
 	return rewritten, updated, decision, nil
+}
+
+func (handler *Handler) executeAutoDecision(ctx context.Context, snapshot *state.ConfigSnapshot, key state.AccessKeyView, presets []automodel.CompiledPreset, view automodel.TaskState) automodel.Decision {
+	payload, decision := automodel.BuildDecisionRequest(snapshot.AutoModels, presets, view)
+	if len(payload) == 0 {
+		return decision
+	}
+	observed, result := handler.executeJevDecision(ctx, snapshot, key, payload, false)
+	decision.Provider = observed.Provider
+	decision.GroupID = observed.GroupID
+	decision.GroupName = observed.GroupName
+	decision.ChannelID = observed.ChannelID
+	decision.ChannelName = observed.ChannelName
+	decision.CredentialID = observed.CredentialID
+	decision.RequestedModel = observed.RequestedModel
+	decision.UpstreamModel = observed.UpstreamModel
+	decision.ReportedModel = observed.ReportedModel
+	decision.RequestID = observed.RequestID
+	decision.DurationMs = observed.DurationMs
+	decision.Called = observed.Called
+	decision.InputTokens = observed.InputTokens
+	decision.OutputTokens = observed.OutputTokens
+	decision.ProviderCostUSD = observed.ProviderCostUSD
+	decision.CostState = observed.CostState
+	decision.PricingCompleteness = observed.PricingCompleteness
+	decision.EstimatedCostNanoUSD = observed.EstimatedCostNanoUSD
+	decision.Receipt = observed.Receipt
+	decision.Reason = observed.Reason
+	if observed.Called && result.HasResponse() {
+		decision = automodel.InterpretDecisionResponse(decision, presets, result.StatusCode, result.Header, result.Body, result.Usage)
+	}
+	// 答案解析不能覆盖执行层已规范化和脱敏的观测元数据。
+	decision.ReportedModel = observed.ReportedModel
+	decision.RequestID = observed.RequestID
+	return decision
 }
 
 func (recorder *requestRecorder) autoSelection() *automodel.Selection {

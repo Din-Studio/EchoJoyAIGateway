@@ -26,7 +26,7 @@ func testClientModelPriceUpgrade(t *testing.T, db *gorm.DB) {
 		Status: "success", StatusCode: 200, DurationMs: 1, UncachedInputTokens: 1, UsageState: "complete",
 		CostState: "priced", PricingCompleteness: "complete", EstimatedCostNanoUSD: 42, EstimatedCostNano: 42,
 		Currency: "USD", ExchangeRateMicros: 1_000_000}
-	if err := db.Omit("UpstreamCostNanoUSD", "UpstreamCostState", "UpstreamPricingCompleteness").Create(&legacyRequest).Error; err != nil {
+	if err := db.Omit("RequestAudit", "AuditModel", "AuditGroupID", "AuditChannelID", "AuditCredentialID", "AuditCostNanoUSD", "AuditCostNano", "AuditPricingCompleteness", "UpstreamCostNanoUSD", "UpstreamCostState", "UpstreamPricingCompleteness", "DecisionGroupID", "DecisionChannelID", "DecisionCredentialID").Create(&legacyRequest).Error; err != nil {
 		t.Fatal(err)
 	}
 

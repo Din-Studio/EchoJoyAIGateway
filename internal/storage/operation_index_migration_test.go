@@ -13,11 +13,12 @@ func TestExternalOperationIndexMigrationContract(t *testing.T) {
 
 func testOperationIndexMigration(t *testing.T, open func(*testing.T) *gorm.DB) {
 	t.Helper()
+	const operationIndexMigrationPosition = 16
 	for _, scenario := range []string{"fresh", "existing", "interrupted"} {
 		t.Run(scenario, func(t *testing.T) {
 			db := open(t)
 			if scenario != "fresh" {
-				if err := applyMigrationRegistry(db, migrations[:16]); err != nil {
+				if err := applyMigrationRegistry(db, migrations[:operationIndexMigrationPosition]); err != nil {
 					t.Fatal(err)
 				}
 				if err := db.Table("request_logs").Create(map[string]any{
@@ -29,9 +30,9 @@ func testOperationIndexMigration(t *testing.T, open func(*testing.T) *gorm.DB) {
 					t.Fatal(err)
 				}
 				if scenario == "interrupted" {
-					registry := append([]migration(nil), migrations[:17]...)
-					up := registry[16].Up
-					registry[16].Up = func(tx *gorm.DB) error {
+					registry := append([]migration(nil), migrations[:operationIndexMigrationPosition+1]...)
+					up := registry[operationIndexMigrationPosition].Up
+					registry[operationIndexMigrationPosition].Up = func(tx *gorm.DB) error {
 						if err := up(tx); err != nil {
 							return err
 						}
@@ -60,7 +61,7 @@ func testOperationIndexMigration(t *testing.T, open func(*testing.T) *gorm.DB) {
 	}
 	t.Run("unexpected index definition", func(t *testing.T) {
 		db := open(t)
-		if err := applyMigrationRegistry(db, migrations[:16]); err != nil {
+		if err := applyMigrationRegistry(db, migrations[:operationIndexMigrationPosition]); err != nil {
 			t.Fatal(err)
 		}
 		if err := db.Exec("CREATE INDEX idx_request_logs_operation_completed_id ON request_logs (status)").Error; err != nil {
@@ -72,7 +73,7 @@ func testOperationIndexMigration(t *testing.T, open func(*testing.T) *gorm.DB) {
 	})
 	t.Run("unexpected index direction", func(t *testing.T) {
 		db := open(t)
-		if err := applyMigrationRegistry(db, migrations[:16]); err != nil {
+		if err := applyMigrationRegistry(db, migrations[:operationIndexMigrationPosition]); err != nil {
 			t.Fatal(err)
 		}
 		if err := db.Exec(

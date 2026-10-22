@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { AuditResult } from '@modern/api/experimental'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { LogAutoDecision, LogPricingLine, LogReceipt } from '@modern/api/logs'
@@ -11,10 +12,12 @@ const props = defineProps<{
   totalCost?: string
   currency: string
   exchangeRate: string
+  audit?: AuditResult
 }>()
 const money = (value: string) => logMoney(value, props.currency, locale.value)
 const exact = (value: string) => exactLogMoney(value, props.currency, locale.value)
 const { t, te, locale } = useI18n()
+const auditCalls = computed(() => props.audit?.calls.filter((call) => call.called) ?? [])
 function lineName(value: string): string {
   return te('logs.priceLines.' + value) ? t('logs.priceLines.' + value) : value
 }
@@ -85,6 +88,19 @@ const total = computed(
           :full-text="exact(decision.estimated_cost_nano)"
         />
       </div>
+      <div v-for="(call, index) in auditCalls" :key="'audit-' + index" class="modern-log-price-row">
+        <span>{{ t('requestAudit.cost') }}</span>
+        <AppOverflowText :text="call.model || '—'" />
+        <span>—</span>
+        <AppOverflowText
+          :text="
+            call.cost_state === 'priced'
+              ? money(call.estimated_cost_nano)
+              : t('logs.values.unpriced')
+          "
+          :full-text="call.cost_state === 'priced' ? exact(call.estimated_cost_nano) : undefined"
+        />
+      </div>
       <div v-for="line in receipt?.line_items ?? []" :key="line.code" class="modern-log-price-row">
         <span>{{ lineName(line.code) }}</span>
         <AppOverflowText
@@ -110,7 +126,7 @@ const total = computed(
       <span v-if="currency !== 'USD'">{{
         t('logs.exchangeRate', { rate: exchangeRate, currency })
       }}</span
-      ><span v-if="!decision && receipt && receipt.base_total_nano !== null"
+      ><span v-if="!decision && !auditCalls.length && receipt && receipt.base_total_nano !== null"
         >{{ t('logs.baseCost') }} {{ exact(receipt.base_total_nano) }}</span
       ><span
         >{{ t('logs.totalCost') }} <strong>{{ exact(total) }}</strong></span

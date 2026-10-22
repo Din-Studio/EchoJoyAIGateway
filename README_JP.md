@@ -136,6 +136,7 @@ SSH やリモートブラウザ経由で操作する場合、ブラウザの `lo
 | OpenAI Images           | `POST /v1/images/...`                  |
 | OpenAI Embeddings       | `POST /v1/embeddings`                  |
 | Rerank                  | `POST /v1/rerank`                      |
+| Jev Decisions           | `POST /v1/systemone`                   |
 | Anthropic Messages      | `POST /v1/messages`                    |
 | Gemini                  | `/v1beta/models/...`                   |
 
@@ -148,7 +149,7 @@ Rerank は独立した `rerank` プロトコルを使用し、OpenAI Compatible�
 ### 組み込みチャネル
 
 - **公式・クラウド**：OpenAI、Anthropic、Gemini、xAI、Azure OpenAI、AWS Bedrock、Google Vertex AI
-- **モデルサービス**：DeepSeek、Moonshot AI、SiliconFlow、Zhipu AI、Alibaba、Volcengine、OpenRouter、Groq、Vercel AI Gateway
+- **モデルサービス**：DeepSeek、Moonshot AI、SiliconFlow、Zhipu AI、Alibaba、Volcengine、OpenRouter、Groq、Vercel AI Gateway、Jev
 - **サブスクリプション**：Codex、Claude、Antigravity、Grok
 - **カスタム**：OpenAI Compatible（任意の互換中継）
 

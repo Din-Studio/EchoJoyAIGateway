@@ -21,7 +21,7 @@ func TestErrorDecisionMigrationPreservesAttemptsAndAddsDecisionContract(t *testi
 		UsageState: "not_applicable", CostState: "not_applicable",
 		PricingCompleteness: "not_applicable",
 	}
-	if err := db.Omit("AffinityKind", "AutoDecision", "DecisionModel", "DecisionCostNanoUSD", "DecisionPricingCompleteness", "Currency", "ExchangeRateMicros", "EstimatedCostNano", "DecisionCostNano", "UpstreamCostNanoUSD", "UpstreamCostState", "UpstreamPricingCompleteness").Create(&request).Error; err != nil {
+	if err := db.Omit("RequestAudit", "AuditModel", "AuditGroupID", "AuditChannelID", "AuditCredentialID", "AuditCostNanoUSD", "AuditCostNano", "AuditPricingCompleteness", "AffinityKind", "AutoDecision", "DecisionModel", "DecisionCostNanoUSD", "DecisionPricingCompleteness", "Currency", "ExchangeRateMicros", "EstimatedCostNano", "DecisionCostNano", "UpstreamCostNanoUSD", "UpstreamCostState", "UpstreamPricingCompleteness", "DecisionGroupID", "DecisionChannelID", "DecisionCredentialID").Create(&request).Error; err != nil {
 		t.Fatalf("create request log: %v", err)
 	}
 	attempt := models.RequestLogAttempt{

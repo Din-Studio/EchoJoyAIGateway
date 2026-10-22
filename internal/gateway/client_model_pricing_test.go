@@ -102,12 +102,15 @@ func TestAutoModelIsChargedByItsTargetModel(t *testing.T) {
 	forwarder := &scriptedForwarder{results: []UpstreamResult{clientModelPricingResult()}}
 	handler, manager, _ := newHandlerForTest(t, forwarder, "key-a")
 	autoConfig := automodel.DefaultConfig()
-	autoConfig.Enabled, autoConfig.APIKey = true, "decision-secret"
+	autoConfig.Enabled, autoConfig.Model = true, "jev-router"
 	autoConfig.Models = []automodel.Entry{{ID: "auto-one", Name: "auto-one", Enabled: true, Fallback: "only", Presets: []automodel.Preset{{
 		ID: "only", Name: "only", Description: "All permitted work", Model: "gpt-4o", ParameterOverrides: json.RawMessage(`[]`),
 	}}}}
-	if _, err := manager.Publish(state.CompileInput{AutoModel: &autoConfig, ChannelRegistry: channel.NewRegistry(),
-		Groups:      []state.GroupConfig{{ID: 1, Name: "openai", ChannelID: channel.OpenAI, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "gpt-4o"}}, Enabled: true}},
+	if _, err := manager.Publish(state.CompileInput{AutoModel: &autoConfig, Jev: testSharedJev(autoConfig), ChannelRegistry: channel.NewRegistry(),
+		Groups: []state.GroupConfig{
+			{ID: 1, Name: "openai", ChannelID: channel.OpenAI, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "gpt-4o"}}, Enabled: true},
+			{ID: 2, Name: "jev", ChannelID: channel.Jev, ConnectionType: "api_key", Params: json.RawMessage(`{}`), Models: []state.ModelConfig{{ID: "jev-latest", Alias: "jev-router"}}, Enabled: true},
+		},
 		Credentials: []state.CredentialConfig{{ID: 1, GroupID: 1, Status: state.CredentialStatusActive, Version: 1, IdentityGeneration: 1, Fingerprint: "credential-1"}},
 		AccessKeys:  []state.AccessKeyConfig{{ID: 1, Name: "client", KeyHash: handler.encryption.Hash("gl-client"), Status: state.AccessKeyStatusActive}},
 	}); err != nil {
