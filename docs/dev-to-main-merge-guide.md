@@ -26,6 +26,19 @@ upstream/main ──(/upstream-merge)──► dev ──(git merge)──► ma
 - **不要 rebase main**：main 已推送并部署，改写历史会让所有协作者的 main 失效。
 - **同一改动只在 dev 提交一次**：核心改动先合进 dev，再通过 merge 带到 main；不要在 main 上手工重做一遍。
 
+### PR 合并方式
+
+| PR 类型 | 合并方式 |
+|---|---|
+| 普通功能、修复 PR（单个分支，不含合并提交） | **Rebase and merge**，保持历史整洁 |
+| `merge/dev-into-main-*`（dev 合进 main） | **Create a merge commit** |
+| `merge/upstream-*`（上游合进 dev） | **Create a merge commit** |
+
+同步类 PR 不能用 rebase 或 squash：
+
+- rebase 会丢掉合并提交，把对方分支的提交逐个重放到目标分支。合并提交里解决过的冲突会重新出现，GitHub 会提示无法 rebase。
+- 即使没有冲突，重放后的提交也是新 hash，效果等同 cherry-pick，下次同步时会再次冲突（见第 6 节）。
+
 ## 3. 操作步骤（约 5–15 分钟，含冲突处理）
 
 ```bash
@@ -36,6 +49,7 @@ git merge --no-ff origin/dev -m "merge: dev ($(git rev-parse --short origin/dev)
 make check
 git push -u origin HEAD
 gh pr create --base main --title "merge: dev into main"
+gh pr merge <PR号> --merge --delete-branch   # 必须用 merge commit，见第 2 节
 ```
 
 合并前可以先看差距，确认要带入哪些提交：
