@@ -29,6 +29,7 @@ import { validProxyURL } from '@modern/app/proxy'
 import GroupWorkspacePanel from './GroupWorkspacePanel.vue'
 import CredentialAccountInfo from './CredentialAccountInfo.vue'
 import CredentialTrends from './CredentialTrends.vue'
+import RPMTrend from '../rpm/RPMTrend.vue'
 import CredentialWindowUsage from './CredentialWindowUsage.vue'
 
 const props = defineProps<{ group: GroupRow; row: CredentialRow; channel?: GroupChannel }>()
@@ -181,6 +182,7 @@ useMessageSource(() =>
         v-if="item.observation?.windows.length"
         :windows="item.observation.windows"
       />
+      <RPMTrend :scope="{ kind: 'credential', id: row.id, group: group.id }" />
       <section class="modern-credential-detail-section">
         <div class="modern-credential-detail-title">
           <h3>{{ t('credentialCards.runtime') }}</h3>

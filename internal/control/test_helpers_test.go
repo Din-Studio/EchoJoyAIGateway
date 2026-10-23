@@ -248,6 +248,7 @@ func newServiceFixtureWithDatabase(t *testing.T, db *gorm.DB) serviceFixture {
 		accessQuota,
 		sharedHealth,
 		refreshLease,
+		cluster.NewRPMStats(clusterClient),
 		channelRegistry,
 	)
 	subscriptionCredentials.SetConfigCommitter(service)

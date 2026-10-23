@@ -17,21 +17,25 @@ import (
 
 // rpmScript is the 60 s sliding window: entries at or before now-60000
 // expire, a full window rejects with the admission time of the entry that
-// must expire first, and an admitted request is recorded.
+// must expire first, and an admitted request is recorded. Every arrival,
+// admitted or rejected, is also counted in the RPM statistics.
 //
-// KEYS: the AccessKey window ZSET. ARGV: nowMS, limit, unique member.
+// KEYS: the AccessKey window ZSET, then the RPMStats seconds and minutes
+// Hashes. ARGV: nowMS, limit, unique member, unix second, minute start ms.
 // Returns {"1"} when admitted or {"0", targetMS} when rejected.
-var rpmScript = redis.NewScript(`
+var rpmScript = redis.NewScript(rpmObserveLua + `
 local now = tonumber(ARGV[1])
 local limit = tonumber(ARGV[2])
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now - 60000)
 local count = redis.call('ZCARD', KEYS[1])
 if count >= limit then
+  observe(KEYS[2], KEYS[3], ARGV[4], ARGV[5], true)
   local target = redis.call('ZRANGE', KEYS[1], count - limit, count - limit, 'WITHSCORES')
   return {'0', target[2]}
 end
 redis.call('ZADD', KEYS[1], now, ARGV[3])
 redis.call('PEXPIRE', KEYS[1], 60000)
+observe(KEYS[2], KEYS[3], ARGV[4], ARGV[5], false)
 return {'1'}
 `)
 
@@ -55,19 +59,21 @@ func NewAccessKeyRPM(client *Client) *AccessKeyRPM {
 }
 
 // Allow admits one request when fewer than limit requests were admitted in
-// the last minute. A non-positive limit is unlimited and skips Redis, leaving
-// the old window to expire on its own.
+// the last minute, and counts it in the RPM statistics. A non-positive limit
+// is unlimited: it only feeds the statistics, never fails, and leaves the old
+// window to expire on its own.
 func (limiter *AccessKeyRPM) Allow(ctx context.Context, accessKeyID uint, limit int64) (ratelimit.LimitDecision, error) {
+	now := limiter.now()
 	if limit <= 0 {
+		observeRPM(ctx, limiter.client, RPMAccessKey, accessKeyID, now)
 		return ratelimit.LimitDecision{Allowed: true}, nil
 	}
-	now := limiter.now()
 	member := limiter.memberPrefix + strconv.FormatUint(limiter.sequence.Add(1), 10)
 	callCtx, cancel := context.WithTimeout(ctx, stateTimeout)
 	defer cancel()
 	reply, err := runStrings(callCtx, limiter.client, rpmScript,
-		[]string{limiter.client.Key(accessKeyHashTag(accessKeyID), "rpm")},
-		[]any{strconv.FormatInt(now.UnixMilli(), 10), strconv.FormatInt(limit, 10), member})
+		append([]string{limiter.client.Key(accessKeyHashTag(accessKeyID), "rpm")}, RPMAccessKey.keys(limiter.client, accessKeyID)...),
+		append([]any{strconv.FormatInt(now.UnixMilli(), 10), strconv.FormatInt(limit, 10), member}, rpmObserveArgs(now)...))
 	if err == nil && (len(reply) == 0 || (reply[0] == "0" && len(reply) != 2)) {
 		err = fmt.Errorf("malformed reply %q", reply)
 	}
