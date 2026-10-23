@@ -14,8 +14,9 @@ import (
 // ModernCredentialItem 复用凭据读快照，仅补充配置来源，不改变经典 API 或调度逻辑。
 type ModernCredentialItem struct {
 	CredentialItemResponse
-	WeightManual     *int `json:"weight_manual"`
-	ConcurrencyLimit int  `json:"concurrency_limit"`
+	WeightManual     *int   `json:"weight_manual"`
+	ConcurrencyLimit int    `json:"concurrency_limit"`
+	RPMPeakHour      *int64 `json:"rpm_peak_hour,omitempty"`
 }
 
 func newModernCredentialItem(item CredentialItemResponse) ModernCredentialItem {
@@ -23,6 +24,7 @@ func newModernCredentialItem(item CredentialItemResponse) ModernCredentialItem {
 		CredentialItemResponse: item,
 		WeightManual:           item.WeightManual,
 		ConcurrencyLimit:       item.ConcurrencyLimit,
+		RPMPeakHour:            item.RPMPeakHour,
 	}
 }
 
@@ -56,7 +58,7 @@ func parseModernCredentialQuery(raw string) (CredentialCollectionQuery, *app_err
 		target  *string
 		allowed []string
 	}{
-		{"sort", &filters.sort, []string{"priority", "newest", "oldest", "name", "weight_desc", "weight_asc", "failures"}},
+		{"sort", &filters.sort, []string{"priority", "newest", "oldest", "name", "weight_desc", "weight_asc", "failures", "rpm_peak_desc"}},
 		{"proxy", &filters.proxy, []string{"inherit", "direct", "custom"}},
 		{"reset", &filters.reset, []string{"available", "none", "unknown"}},
 	} {
@@ -115,6 +117,10 @@ func matchesModernCredential(record credentialCollectionRecord, filters modernCr
 
 func modernCredentialLess(left, right credentialCollectionRecord, order string) bool {
 	switch order {
+	case "rpm_peak_desc":
+		if compared := compareRPMPeaks(left.item.RPMPeakHour, right.item.RPMPeakHour); compared != 0 {
+			return compared > 0
+		}
 	case "newest", "oldest":
 		if left.createdAtMS != right.createdAtMS {
 			if order == "newest" {
