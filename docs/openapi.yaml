@@ -467,6 +467,36 @@ paths:
         '500': { $ref: '#/components/responses/InternalError' }
         '503': { $ref: '#/components/responses/RecoveryPending' }
 
+  /api/access-keys/{id}/rpm:
+    parameters:
+      - $ref: '#/components/parameters/AccessKeyID'
+    get:
+      tags: [AccessKeys]
+      operationId: getAccessKeyRPM
+      summary: 最近一小时的 RPM 统计
+      description: |
+        统计所有网关实例上到达该 AccessKey RPM 闸门的请求，包括被 `rpm_limit` 拒绝的请求和不限速的 AccessKey。
+        按分钟分桶，只保留最近一小时；`peak_rpm` 是 60 秒滑动窗口内请求数的最大值。
+        这一小时内没有请求时省略 `peak_rpm` 和 `current`，`points` 为空数组。不接受查询参数。
+      responses:
+        '200':
+          description: RPM 统计
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/RPMReport' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
   /api/models:
     get:
       tags: [Models]
@@ -1584,6 +1614,37 @@ components:
           items: { $ref: '#/components/schemas/AccessKeyCollectionItem' }
         pagination: { $ref: '#/components/schemas/Pagination' }
 
+    RPMCounter:
+      type: object
+      required: [requests, rejected]
+      properties:
+        requests: { type: integer, minimum: 0 }
+        rejected: { type: integer, minimum: 0, description: 被 `rpm_limit` 拒绝的请求数 }
+    RPMReport:
+      type: object
+      required: [from_ms, to_ms, observed_at_ms, bucket_width_ms, requests, rejected, points]
+      properties:
+        from_ms: { type: integer }
+        to_ms: { type: integer }
+        observed_at_ms: { type: integer }
+        bucket_width_ms: { type: integer, const: 60000 }
+        current:
+          allOf:
+            - $ref: '#/components/schemas/RPMCounter'
+          description: 截至 `observed_at_ms` 的 60 秒滑动窗口。
+        peak_rpm: { type: integer, minimum: 0 }
+        requests: { type: integer, minimum: 0 }
+        rejected: { type: integer, minimum: 0 }
+        points:
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/RPMCounter'
+              - type: object
+                required: [bucket_start_ms, peak_rpm]
+                properties:
+                  bucket_start_ms: { type: integer }
+                  peak_rpm: { type: integer, minimum: 0 }
     Pagination:
       type: object
       required: [page, page_size, total_items, total_pages]

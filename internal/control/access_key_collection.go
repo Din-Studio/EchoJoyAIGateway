@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"gpt-load/internal/cluster"
 	"gpt-load/internal/platform/epochms"
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/pricing"
@@ -16,6 +17,7 @@ import (
 
 type AccessKeyCollectionItem struct {
 	AccessKeyMetadata
+	RPMPeakHour     *int64                              `json:"-"`
 	Usage           *usageDistributionAggregateResponse `json:"usage,omitempty"`
 	LastRequestAtMS *int64                              `json:"last_request_at_ms"`
 	Expired         bool                                `json:"expired"`
@@ -93,6 +95,18 @@ func (s *Service) ListAccessKeyCollection(
 		}
 		if status := mapAccessKeyCostLimitStatus(view); len(status.Rules) > 0 {
 			records[index].CostLimitStatus = &status
+		}
+	}
+	if query.modern {
+		ids := make([]uint, len(records))
+		for i, record := range records {
+			ids[i] = record.ID
+		}
+		peaks := s.rpmPeaks(ctx, cluster.RPMAccessKey, ids)
+		for i := range records {
+			if peak, ok := peaks[records[i].ID]; ok {
+				records[i].RPMPeakHour = &peak
+			}
 		}
 	}
 	result := queryAccessKeyCollectionRecords(records, query)

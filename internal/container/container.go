@@ -71,6 +71,7 @@ func BuildContainer() (*dig.Container, error) {
 		state.NewStaggeredCredentialRegistry,
 		cluster.NewCredentialHealth,
 		cluster.NewRefreshLease,
+		cluster.NewRPMStats,
 		cluster.NewJobLease,
 		cluster.NewCatalogStore,
 		cluster.NewAuthFailures,
@@ -193,7 +194,11 @@ func BuildContainer() (*dig.Container, error) {
 		newProviderAdapterRegistry,
 		func(registry *provideradapter.Registry) execution.Executor { return registry },
 		func(runtime *bifrostexecutor.RuntimeManager) app.ExecutionRuntime { return runtime },
-		gateway.NewExecutionForwarder,
+		func(executor execution.Executor, stats *cluster.RPMStats) *gateway.ExecutionForwarder {
+			forwarder := gateway.NewExecutionForwarder(executor)
+			forwarder.SetCredentialRPM(stats)
+			return forwarder
+		},
 		func(forwarder *gateway.ExecutionForwarder) gateway.AttemptForwarder { return forwarder },
 		gateway.NewHandlerWithLifecycle,
 		control.NewService,
