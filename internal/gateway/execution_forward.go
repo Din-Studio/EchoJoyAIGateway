@@ -24,22 +24,57 @@ type ExecutionForwarder struct {
 	executor       execution.Executor
 	representation *responseProcessor
 	usageCapture   *usageCaptureBoundary
+	credentialRPM  CredentialRPMRecorder
 	writeTimeout   time.Duration
+}
+
+// CredentialRPMRecorder counts each upstream attempt per credential for the
+// RPM statistics. Recording never fails a request.
+type CredentialRPMRecorder interface {
+	RecordCredential(ctx context.Context, credentialID uint)
+}
+
+type noCredentialRPM struct{}
+
+func (noCredentialRPM) RecordCredential(context.Context, uint) {}
+
+// rpmObservedWebsocketSession counts every business turn; the handshake is
+// not an upstream request.
+type rpmObservedWebsocketSession struct {
+	execution.WebsocketSession
+	recorder     CredentialRPMRecorder
+	credentialID uint
+}
+
+func (session *rpmObservedWebsocketSession) ExecuteTurn(ctx context.Context, payload []byte, emit func(context.Context, []byte) error) execution.WebsocketResult {
+	session.recorder.RecordCredential(ctx, session.credentialID)
+	return session.WebsocketSession.ExecuteTurn(ctx, payload, emit)
 }
 
 func NewExecutionForwarder(executor execution.Executor) *ExecutionForwarder {
 	return &ExecutionForwarder{
 		executor: executor, representation: &responseProcessor{redactor: redact.New()},
-		usageCapture: newUsageCaptureBoundary(),
+		usageCapture: newUsageCaptureBoundary(), credentialRPM: noCredentialRPM{},
 		writeTimeout: downstreamWriteTimeout,
 	}
+}
+
+// SetCredentialRPM wires the shared RPM statistics at startup.
+func (forwarder *ExecutionForwarder) SetCredentialRPM(recorder CredentialRPMRecorder) {
+	forwarder.credentialRPM = recorder
 }
 
 func (forwarder *ExecutionForwarder) OpenWebsocket(ctx context.Context, input ForwardInput) (execution.WebsocketSession, execution.WebsocketResult) {
 	spec, err := newExecutionAttemptSpec(input)
 	if forwarder != nil && err == nil {
 		if opener, ok := forwarder.executor.(execution.WebsocketOpener); ok {
-			return opener.OpenWebsocket(ctx, spec)
+			session, result := opener.OpenWebsocket(ctx, spec)
+			if session != nil {
+				session = &rpmObservedWebsocketSession{
+					WebsocketSession: session, recorder: forwarder.credentialRPM, credentialID: spec.Credential.ID,
+				}
+			}
+			return session, result
 		}
 	}
 	return nil, execution.WebsocketResult{DispatchState: execution.DispatchNotSent, Error: &execution.ErrorEvidence{
@@ -56,6 +91,7 @@ func (forwarder *ExecutionForwarder) Forward(
 	if err != nil || forwarder == nil || forwarder.executor == nil {
 		return executionInputFailure(err)
 	}
+	forwarder.credentialRPM.RecordCredential(ctx, spec.Credential.ID)
 	executionResult := forwarder.executor.Execute(ctx, spec)
 	if err := executionResult.Validate(); err != nil {
 		return invalidExecutionAttemptResult(executionResult)
@@ -314,6 +350,7 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 		}
 	}
 
+	forwarder.credentialRPM.RecordCredential(ctx, spec.Credential.ID)
 	terminal := forwarder.executor.ExecuteStream(ctx, spec, sink)
 	if err := terminal.Validate(); err != nil {
 		terminal = invalidExecutionStreamResult(terminal, ready, committed)
