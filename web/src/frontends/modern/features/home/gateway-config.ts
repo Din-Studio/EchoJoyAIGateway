@@ -149,7 +149,8 @@ export function gatewayConfiguration(config: GatewayConfig, key: string): Config
             `model_provider = ${tomlQuote(provider)}`,
             '',
             `[model_providers.${provider}]`,
-            `name = ${tomlQuote(config.gatewayName)}`,
+            // Codex 以 name == "OpenAI" 启用远程 compaction、web search、图像生成，不能用网关名
+            'name = "OpenAI"',
             `base_url = ${tomlQuote(endpoint)}`,
             `model_catalog_url = ${tomlQuote(`${endpoint}/models`)}`,
             `env_key = ${tomlQuote(envKey)}`,
