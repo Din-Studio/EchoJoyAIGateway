@@ -33,6 +33,8 @@ scripts/deploy.sh gateway --image-tag "$TAG"             # 正式发布
 
 整个过程约 15 分钟。新任务起不来时，circuit breaker 会自动回滚到旧版本，栈更新也会失败并回滚。
 
+线上镜像是 `25eca3c9` 或更早的版本时，第一次升级前要先修迁移账本，见[第 10 节](#10-一次性升级灵影迁移移到-ly-账本)。不修的话，新任务启动时迁移失败。
+
 ## 2. 连接管理后台和数据库
 
 实例不开 22 端口，也没有 SSH，用 SSM 端口转发。本机需要安装 `session-manager-plugin`，IAM 用户需要 `ssm:StartSession` 权限。在仓库根目录执行：
@@ -67,7 +69,7 @@ aws ssm put-parameter --name /echojoy-gateway/prod/AUTH_KEY --type SecureString 
 
 | 情况 | 操作 |
 |---|---|
-| 新版本有问题 | 用上一个标签重新发布：`scripts/deploy.sh gateway --image-tag <旧标签>` |
+| 新版本有问题 | 用上一个标签重新发布：`scripts/deploy.sh gateway --image-tag <旧标签>`。旧标签不能是 `25eca3c9` 或更早的版本，见第 10 节 |
 | 新网关整体有问题，文本接口切回旧网关 | `scripts/alb-cutover.sh rollback`，把旧网关规则挪回优先级 2，两个 ALB 一起生效 |
 | WAF 改动有问题 | `scripts/waf-update.sh restore .backup/waf-acl-<时间>.json` |
 
@@ -175,3 +177,24 @@ SELECT request_id, last_error, payload FROM ly_usage_reports WHERE next_attempt_
 | ECS | 集群 `echojoy-gateway-prod`，服务 `ai-gateway`，2 个任务，2 台 `c6in.large`（1a、1b） |
 | 数据层镜像 | `echojoy-gateway/postgres:18-alpine`（18.3）、`echojoy-gateway/redis:7.4-alpine`（7.4.8） |
 | 流量 | 已切换：`lingying-gateway.echojoy.cn` 的 `/gateway/v1/chat/completions`、`messages*`、`responses*`、`v1beta/models/*` 由新网关处理 |
+
+## 10. 一次性升级：灵影迁移移到 ly 账本
+
+`25eca3c9` 及更早的版本把灵影的用量表迁移记为核心第 23 号 `0023_ly_usage_reports`。之后的版本把核心第 23 号改为 `0023_auto_decision_attribution`，灵影迁移改名 `ly0001_usage_reports`，记在单独的账本表 `ly_schema_migrations`。新版本启动时发现 `schema_migrations` 里有 `0023_ly_usage_reports`，会报 `unknown or non-contiguous migration` 并退出。
+
+升级时删掉这一行，不需要删库。删掉后，新版本补跑核心的 0023 到 0025，并建立 `ly_schema_migrations`；`ly_usage_reports` 已经存在，所以不会重建，表里的积压也会保留：
+
+1. 先推送镜像：`TAG=$(scripts/build-push.sh | tail -1)`。
+2. 另开一个终端执行 `make aws-tunnel TUNNEL=pg`。
+3. 删掉账本里的旧记录：
+
+   ```bash
+   PGPASSWORD=$(aws ssm get-parameter --name /echojoy-gateway/prod/PG_PASSWORD --with-decryption --query Parameter.Value --output text) \
+     psql -h 127.0.0.1 -p 15432 -U gateway -d gateway \
+     -c "DELETE FROM schema_migrations WHERE id = '0023_ly_usage_reports';"
+   ```
+
+4. 马上发布：`scripts/deploy.sh gateway --image-tag "$TAG"`。第 3 步和第 4 步之间如果有旧任务重启，旧任务会把这一行写回去，新任务仍然起不来，circuit breaker 会回滚到旧版本；这时重新执行第 3 步和第 4 步。
+5. 发布完成后在隧道里检查。`SELECT id FROM ly_schema_migrations;` 应返回 `ly0001_usage_reports`；`SELECT max(id) FROM schema_migrations;` 应返回 `0025_request_audit`。
+
+升级完成后，不能再回滚到 `25eca3c9` 或更早的版本：旧版本不认识新的核心迁移，启动就会失败。

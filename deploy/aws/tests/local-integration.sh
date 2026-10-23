@@ -123,7 +123,7 @@ for line in open(sys.argv[1]):
         print(f"{m.group(1)}={m.group(3)}")
 EOF
 )
-check "从模板读到 11 个固定环境变量" test "${#ENV_ARGS[@]}" -eq 22
+check "从模板读到 13 个固定环境变量" test "${#ENV_ARGS[@]}" -eq 26
 docker run -d --name gwt-gateway "${PLATFORM[@]}" --network "$NET" --ip "$SUBNET_PREFIX.31" \
   -p 127.0.0.1:13901:3001 --ulimit nofile=1048576:1048576 "${ENV_ARGS[@]}" \
   -e "REDIS_ADDRS=$SUBNET_PREFIX.11:6379,$SUBNET_PREFIX.12:6379,$SUBNET_PREFIX.13:6379" \
