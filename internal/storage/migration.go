@@ -144,12 +144,27 @@ func validateMigrationRegistry(track migrationTrack) error {
 
 func applyMigrationsLocked(db *gorm.DB, track migrationTrack) error {
 	entries := track.Entries
-	if !db.Migrator().HasTable(track.Ledger) {
-		if track.FreshSentinel != "" && db.Migrator().HasTable(track.FreshSentinel) {
-			return fmt.Errorf(
-				"initialize database schema: %s table already exists",
-				track.FreshSentinel,
-			)
+	// 账本表刚建时 applied 为空，不会读到 inspection 里过期的表清单。
+	inspection, err := newMigrationInspection(db)
+	if err != nil {
+		return err
+	}
+	hadLedger, err := inspection.hasTable(track.Ledger)
+	if err != nil {
+		return err
+	}
+	if !hadLedger {
+		if track.FreshSentinel != "" {
+			hadFreshSentinel, err := inspection.hasTable(track.FreshSentinel)
+			if err != nil {
+				return err
+			}
+			if hadFreshSentinel {
+				return fmt.Errorf(
+					"initialize database schema: %s table already exists",
+					track.FreshSentinel,
+				)
+			}
 		}
 		if err := db.Table(track.Ledger).AutoMigrate(&schemaMigration{}); err != nil {
 			return fmt.Errorf("create %s: %w", track.Ledger, err)
@@ -170,7 +185,7 @@ func applyMigrationsLocked(db *gorm.DB, track migrationTrack) error {
 		if entries[index].ValidateCurrent != nil {
 			validator = entries[index].ValidateCurrent
 		}
-		if err := validator(db); err != nil {
+		if err := inspection.validate(validator); err != nil {
 			return fmt.Errorf("validate applied migration %s: %w", id, err)
 		}
 	}
@@ -191,7 +206,7 @@ func applyMigration(db *gorm.DB, ledger string, entry migration) error {
 		if err := entry.Up(tx); err != nil {
 			return fmt.Errorf("apply migration %s: %w", entry.ID, err)
 		}
-		if err := entry.Validate(tx); err != nil {
+		if err := validateMigrationAfterDDL(tx, entry.Validate); err != nil {
 			return fmt.Errorf("validate migration %s: %w", entry.ID, err)
 		}
 		if err := tx.Table(ledger).Create(&schemaMigration{ID: entry.ID}).Error; err != nil {
