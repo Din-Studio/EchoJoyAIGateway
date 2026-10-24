@@ -517,7 +517,10 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 	if downstreamErr != nil {
 		result.Err = downstreamErr
 		if errors.Is(downstreamErr, errRedactionStream) {
+			// 执行层只看到消费方中止；还原失败是网关内部失败，不是上游提交前的错误。
 			result.ExecutionError = responseRedactionEvidence(0)
+			result.ErrorSummary = result.ExecutionError.Summary
+			result.ProviderErrorBeforeCommit = false
 		}
 	}
 	if committed {
