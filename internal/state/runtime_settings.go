@@ -29,6 +29,7 @@ const (
 	SettingBlacklistThreshold        = "blacklist_threshold"
 	SettingAffinityEnabled           = "affinity_enabled"
 	SettingResponsesWebsocketEnabled = "responses_websocket_enabled"
+	SettingEmptyResponseRetry        = "empty_response_retry"
 	SettingAffinityTTL               = "affinity_ttl"
 	SettingAffinityCapacity          = "affinity_capacity"
 	SettingValidationInterval        = "validation_interval"
@@ -73,6 +74,7 @@ type RuntimeSettings struct {
 	BlacklistThreshold        int
 	AffinityEnabled           bool
 	ResponsesWebsocketEnabled bool
+	EmptyResponseRetry        bool
 	AffinityTTL               time.Duration
 	AffinityCapacity          int
 	ValidationInterval        time.Duration
@@ -92,6 +94,7 @@ type ResolvedGroupSettings struct {
 	BlacklistThreshold        int
 	AffinityEnabled           bool
 	ResponsesWebsocketEnabled bool
+	EmptyResponseRetry        bool
 	ParameterOverrides        parameteroverride.Rules
 }
 
@@ -108,6 +111,7 @@ func DefaultRuntimeSettings() RuntimeSettings {
 		BlacklistThreshold:        3,
 		AffinityEnabled:           true,
 		ResponsesWebsocketEnabled: true,
+		EmptyResponseRetry:        false,
 		AffinityTTL:               time.Hour,
 		AffinityCapacity:          defaultAffinityCapacity,
 		ValidationInterval:        10 * time.Minute,
@@ -131,6 +135,7 @@ func IsRuntimeSettingKey(key string) bool {
 		SettingBlacklistThreshold,
 		SettingAffinityEnabled,
 		SettingResponsesWebsocketEnabled,
+		SettingEmptyResponseRetry,
 		SettingAffinityTTL,
 		SettingAffinityCapacity,
 		SettingValidationInterval,
@@ -216,6 +221,12 @@ func ResolveRuntimeSettings(settings config.Settings) (RuntimeSettings, error) {
 				return RuntimeSettings{}, err
 			}
 			resolved.ResponsesWebsocketEnabled = value
+		case SettingEmptyResponseRetry:
+			value, err := strictBoolean(key, value)
+			if err != nil {
+				return RuntimeSettings{}, err
+			}
+			resolved.EmptyResponseRetry = value
 		case SettingAffinityTTL:
 			seconds, err := positiveWholeSeconds(key, value)
 			if err != nil {
@@ -326,6 +337,7 @@ func ResolveGroupRuntimeSettings(
 		BlacklistThreshold:        base.BlacklistThreshold,
 		AffinityEnabled:           base.AffinityEnabled,
 		ResponsesWebsocketEnabled: base.ResponsesWebsocketEnabled,
+		EmptyResponseRetry:        base.EmptyResponseRetry,
 	}
 	for key, value := range settings {
 		switch key {
@@ -374,6 +386,12 @@ func ResolveGroupRuntimeSettings(
 				return ResolvedGroupSettings{}, err
 			}
 			resolved.ResponsesWebsocketEnabled = parsed
+		case SettingEmptyResponseRetry:
+			parsed, err := strictBoolean(key, value)
+			if err != nil {
+				return ResolvedGroupSettings{}, err
+			}
+			resolved.EmptyResponseRetry = parsed
 		case SettingParameterOverrides:
 			parsed, err := parameteroverride.Compile(value)
 			if err != nil {
@@ -410,7 +428,7 @@ func ValidateRuntimeSetting(key string, value any) error {
 	case SettingRouteStrategy:
 		_, err := parseRouteStrategy(value)
 		return err
-	case SettingAffinityEnabled, SettingResponsesWebsocketEnabled:
+	case SettingAffinityEnabled, SettingResponsesWebsocketEnabled, SettingEmptyResponseRetry:
 		_, err := strictBoolean(key, value)
 		return err
 	case SettingAffinityTTL:
