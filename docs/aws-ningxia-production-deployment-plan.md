@@ -302,13 +302,13 @@ EC2 的 `NetworkIn` 和 `NetworkOut` 只能反映总量，看不出流量是否�
 
 **WAF 改动。** `dev-alb` 的 Web ACL `acl` 是共用的，以下改动会影响 `dev-alb` 上的所有域名：
 
-1. **保留** `block-llm-api-endpoints`，只给转发到新网关的文本接口开例外。这条规则拦截路径以 `/v1/chat/completions` 或 `/v1/messages` 结尾的请求，不分域名，挡住的也包括旧网关的 `/gateway/v1/chat/completions` 等接口（2026-10-15 采样到 `console.echojoy.cn/gateway/v1/messages` 被拦）。所以不删除，改为「规则原条件 AND NOT（域名 `lingying-gateway.echojoy.cn` AND 路径以 `/v1/chat/completions`、`/v1/messages`、`/v1/responses` 开头）」。
+1. **删除** `block-llm-api-endpoints`（2026-10-24 执行）。这条规则拦截路径以 `/v1/chat/completions` 或 `/v1/messages` 结尾的请求，不分域名。P3 时先保留，只给转发到新网关的文本接口开了例外，因为它还拦着 `dev-alb` 上其他服务的请求（例如 `console.echojoy.cn/gateway/v1/messages`、`scenemint-dev.echojoy.cn/api/agent/v1/messages`）。2026-10-24 确认这些服务都不需要它，整条删除。
 2. 删除 `AWS-AWSManagedRulesPHPRuleSet`。`dev-alb` 后面没有 PHP 服务（2026-10-14 确认），这组规则只会误拦提示词里含 PHP 代码的请求。**已在 P1 提前执行（2026-10-15）**：它把镜像层的二进制内容误判为 PHP 攻击（`PHPHighRiskMethodsVariables_BODY`），拦截了向 `docker.echojoy.cn` 的推送。
 3. 给 `AWS-AWSManagedRulesKnownBadInputsRuleSet` 加 scope-down，跳过同样的文本接口。这组规则会检查请求体并直接拦截。`CommonRuleSet` 和 `SQLiRuleSet` 里检查请求体的规则已经设为 Count，不用改。
 
-**WAF 检查的是 ALB 改写之后的路径**（2026-10-15 实测）：请求 `/gateway/v1/chat/completions` 在 WAF 采样里的 URI 是 `/v1/chat/completions`。所以例外条件写的是改写后的前缀。没被改写的请求不受影响，例如 console 上的 `/gateway/v1/messages` 仍被拦截。P0 里 `/api/v1/chat/completions` 返回 403 也是这个原因。
+**WAF 检查的是 ALB 改写之后的路径**（2026-10-15 实测）：请求 `/gateway/v1/chat/completions` 在 WAF 采样里的 URI 是 `/v1/chat/completions`。所以 KnownBadInputs 的 scope-down 写的是改写后的前缀。P0 里 `/api/v1/chat/completions` 返回 403 也是这个原因。
 
-WAF 的请求单价按 Web ACL 的容量分档。`acl` 现在是 1550 WCU，超过 1500，按第 2 档 ¥5.37/百万请求计费（Cost Explorer 计费项 `CNW1-RequestV2-Tier2-2000WCU`）。完成以上三项后容量是 1466 WCU，回到第 1 档 ¥3.92/百万请求，`dev-alb` 上所有域名的请求都按这个价格计费。同时少了 1 条规则（PHP 规则组），¥6.53/月。`waf-update.sh` 执行前后都要用 `check-capacity` 确认容量不超过 1500。
+WAF 的请求单价按 Web ACL 的容量分档。`acl` 现在是 1550 WCU，超过 1500，按第 2 档 ¥5.37/百万请求计费（Cost Explorer 计费项 `CNW1-RequestV2-Tier2-2000WCU`）。完成以上三项后容量是 1441 WCU，回到第 1 档 ¥3.92/百万请求，`dev-alb` 上所有域名的请求都按这个价格计费。同时少了 1 条规则（PHP 规则组），¥6.53/月。`waf-update.sh` 执行前后都要用 `check-capacity` 确认容量不超过 1500。
 
 **管理后台。** 新网关的 Web UI 和 `/api` 管理接口不经过任何 ALB，也没有域名。两个 ALB 上只有上述文本接口的规则指向新集群，管理接口在公网和 VPC 内都访问不到。运维时用 SSM 端口转发，把某台网关实例的 3001 端口映射到本机：
 
