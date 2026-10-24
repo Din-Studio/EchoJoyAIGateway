@@ -50,7 +50,7 @@ scripts/deploy.sh gateway --image-tag "$TAG"
 # 5. 确认两个新目标组都有健康目标
 scripts/alb-cutover.sh status
 
-# 6. 调整 WAF（block-llm-api-endpoints 和 KnownBadInputs 对网关域名的文本接口开例外，删除 PHP 规则组）
+# 6. 调整 WAF（删除 block-llm-api-endpoints 和 PHP 规则组，KnownBadInputs 对网关域名的文本接口开例外）
 scripts/waf-update.sh --dry-run
 scripts/waf-update.sh apply
 
