@@ -80,7 +80,6 @@ export interface ModelSource {
   price: ModelPrice
   groups: ModelGroup[]
   affectedGroups: ModelGroup[]
-  catalog: ModelCatalog | null
 }
 // 统一价是对外模型的收费价格，跨分组、跨渠道生效；未设置时为 null。
 export interface ClientModelPrice extends PriceSchedules {
@@ -294,7 +293,6 @@ function source(value: unknown): ModelSource {
     price,
     groups: list(row.route_groups).map(group),
     affectedGroups: list(row.affected_groups).map(group),
-    catalog: catalog(row.catalog_reference),
   }
 }
 export async function getModels(client: ApiClient, filters: ModelFilters, signal: AbortSignal) {

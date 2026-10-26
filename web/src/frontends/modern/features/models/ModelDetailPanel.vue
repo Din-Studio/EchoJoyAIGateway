@@ -74,7 +74,7 @@ const detail = useQuery(
   })),
 )
 const price = computed(() => (props.admin ? detail.data.value?.price : chosen.value?.price))
-const catalog = computed(() => (props.admin ? detail.data.value?.catalog : chosen.value?.catalog))
+const catalog = computed(() => detail.data.value?.catalog)
 const associations = computed(() => detail.data.value?.associations ?? [])
 const groups = computed(() => {
   const rows = props.admin
@@ -251,7 +251,9 @@ async function reset(): Promise<void> {
     <AppDialogContent
       placement="editor"
       :title="model"
-      :description="t('modelManager.detailDescription')"
+      :description="
+        t(admin ? 'modelManager.detailDescription' : 'modelManager.readOnlyDetailDescription')
+      "
       @escape-key-down="
         (event: Event) => {
           if (busy) event.preventDefault()
@@ -291,7 +293,9 @@ async function reset(): Promise<void> {
         <template v-else>
           <AppFormSection
             :title="t('modelManager.clientPrice')"
-            :description="admin ? t('modelManager.clientPriceImpact') : undefined"
+            :description="
+              t(admin ? 'modelManager.clientPriceImpact' : 'modelManager.readOnlyPriceHelp')
+            "
             compact
           >
             <template #actions>
