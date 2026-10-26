@@ -39,14 +39,14 @@ func TestRedactionToolResultJSONEscaping(t *testing.T) {
 			}
 			if strings.HasPrefix(tc.name, "Responses") {
 				history := []byte(`{"object":"list","data":` + gjson.GetBytes(encrypted, "input").Raw + `}`)
-				restoredHistory, err := restoreUnaryBusinessFields(history, protocol.OpenAIResponses, cipher.RestoreText, false)
+				restoredHistory, err := restoreUnaryBusinessFields(history, protocol.OpenAIResponses, cipher.RestoreText, false, nil)
 				if err != nil || gjson.GetBytes(restoredHistory, "data.0."+tc.path).Str != inner {
 					t.Fatalf("historical tool result no longer matches original JSON: %v", err)
 				}
 			}
 			token := gjson.Get(gjson.GetBytes(encrypted, "input.0."+tc.path).Str, "key").Str
 			response := redactionBoundaryJSON(t, map[string]any{"output": []any{map[string]any{"type": "function_call", "arguments": string(redactionBoundaryJSON(t, map[string]any{"key": token}))}}})
-			restored, err := restoreUnaryBusinessFields(response, protocol.OpenAIResponses, cipher.RestoreText, false)
+			restored, err := restoreUnaryBusinessFields(response, protocol.OpenAIResponses, cipher.RestoreText, false, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

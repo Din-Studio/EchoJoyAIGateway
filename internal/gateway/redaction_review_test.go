@@ -36,7 +36,7 @@ func TestRedactionReviewStructuredNoToken(t *testing.T) {
 	for _, text := range []string{"", `{"x":"truncated`, "I cannot help with that."} {
 		v, _ := json.Marshal(text)
 		body := []byte(`{"id":"\u0041","choices":[{"message":{"content":` + string(v) + `}}]}`)
-		got, err := restoreUnaryBusinessFields(body, protocol.OpenAICompletions, c.RestoreText, true)
+		got, err := restoreUnaryBusinessFields(body, protocol.OpenAICompletions, c.RestoreText, true, nil)
 		if err != nil || !bytes.Equal(got, body) {
 			t.Errorf("token-free structured content length=%d was rejected: %v", len(text), err)
 		}
@@ -118,7 +118,7 @@ func TestRedactionReviewCustomToolsRoundTrip(t *testing.T) {
 	}
 	item := map[string]any{"type": "custom_tool_call", "name": "apply_patch", "call_id": "ct2", "input": encrypted}
 	body, _ := json.Marshal(map[string]any{"output": []any{item}})
-	got, err := restoreUnaryBusinessFields(body, protocol.OpenAIResponses, c.RestoreText, false)
+	got, err := restoreUnaryBusinessFields(body, protocol.OpenAIResponses, c.RestoreText, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,15 +174,21 @@ func TestRedactionReviewWebsocketClientError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := cipher.EncryptToken("synthetic")
+	// 请求历史里带着密文时才启用还原。
+	history, err := cipher.EncryptToken("history")
 	if err != nil {
 		t.Fatal(err)
 	}
-	damaged := token[:len(token)-1] + "!"
-	h.forwarder = websocketScriptForwarder{AttemptForwarder: h.forwarder, open: func(_ context.Context, _ ForwardInput) (execution.WebsocketSession, execution.WebsocketResult) {
+	h.forwarder = websocketScriptForwarder{AttemptForwarder: h.forwarder, open: func(_ context.Context, input ForwardInput) (execution.WebsocketSession, execution.WebsocketResult) {
+		// 还原结果含上游凭据时必须拒绝，用它触发还原失败。
+		token, err := cipher.EncryptToken(input.APIKey)
+		if err != nil || input.APIKey == "" {
+			t.Error("missing synthetic credential")
+			return nil, execution.WebsocketResult{}
+		}
 		session := &websocketScriptSession{done: make(chan struct{})}
 		session.turn = func(ctx context.Context, _ []byte, emit func(context.Context, []byte) error) execution.WebsocketResult {
-			if err := emit(ctx, websocketRedactionEvent(t, "response.output_text.delta", "", "delta", damaged)); err != nil {
+			if err := emit(ctx, websocketRedactionEvent(t, "response.output_text.delta", "", "delta", token)); err != nil {
 				return execution.WebsocketResult{DispatchState: execution.DispatchMaybeSent, Error: &execution.ErrorEvidence{Kind: execution.ErrorKindInternal}}
 			}
 			return execution.WebsocketResult{DispatchState: execution.DispatchMaybeSent}
@@ -194,7 +200,7 @@ func TestRedactionReviewWebsocketClientError(t *testing.T) {
 	defer server.Close()
 	conn := dialGatewayWebsocket(t, server.URL)
 	defer conn.Close()
-	if err := conn.WriteJSON(map[string]any{"type": "response.create", "model": "public", "input": "hello", "store": false}); err != nil {
+	if err := conn.WriteJSON(map[string]any{"type": "response.create", "model": "public", "input": "hello " + history, "store": false}); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
@@ -355,7 +361,7 @@ func TestRedactionReviewCustomToolSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	restored, err := restoreUnaryBusinessFields(list, protocol.OpenAIResponses, cipher.RestoreText, true)
+	restored, err := restoreUnaryBusinessFields(list, protocol.OpenAIResponses, cipher.RestoreText, true, nil)
 	if err != nil || gjson.GetBytes(restored, "data.0.input").Str != "+alice@example.invalid" {
 		t.Fatalf("stored custom input not restored: %v", err)
 	}
@@ -372,7 +378,7 @@ func TestRedactionReviewRestoresEscapedTokenInTruncatedStructuredText(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := restoreUnaryBusinessFields(body, protocol.OpenAICompletions, cipher.RestoreText, true)
+	got, err := restoreUnaryBusinessFields(body, protocol.OpenAICompletions, cipher.RestoreText, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

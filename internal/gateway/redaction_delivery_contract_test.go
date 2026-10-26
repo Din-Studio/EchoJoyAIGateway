@@ -14,15 +14,30 @@ import (
 func TestRedactionDeliveryContract(t *testing.T) {
 	c := websocketRedactionTestCipher(t)
 	t.Run("usage-handler-log", func(t *testing.T) {
+		var body []byte
 		executor := fakeExecutionExecutor{unary: func(context.Context, execution.AttemptSpec) execution.AttemptResult {
-			return execution.AttemptResult{DispatchState: execution.DispatchMaybeSent, ResponseStarted: true, StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"choices":[{"message":{"content":"gld1_3_abc"}}]}`), Usage: &execution.UsageEvidence{Normalized: usage.Result{State: usage.StateComplete, Tokens: usage.Tokens{UncachedInput: 1000000, Output: 20}}}}
+			return execution.AttemptResult{DispatchState: execution.DispatchMaybeSent, ResponseStarted: true, StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: body, Usage: &execution.UsageEvidence{Normalized: usage.Result{State: usage.StateComplete, Tokens: usage.Tokens{UncachedInput: 1000000, Output: 20}}}}
 		}}
 		sink := &recordingRequestLogSink{}
 		engine, h, _, _ := newRequestLogHandlerTestRuntime(t, NewExecutionForwarder(executor), &recordingAccessKeyRPMLimiter{}, sink, "sk-synthetic-usage")
+		// 还原结果含上游凭据时必须拒绝，用它触发还原失败。
+		keyCipher, err := h.encryption.NewRedactionCipher(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		token, err := keyCipher.EncryptToken("sk-synthetic-usage")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body = []byte(`{"choices":[{"message":{"content":"` + token + `"}}]}`)
+		history, err := keyCipher.EncryptToken("history")
+		if err != nil {
+			t.Fatal(err)
+		}
 		quota := &scriptedAccessQuotaGate{}
 		h.accessQuota = quota
 		h.priceTables = &mutableGatewayPriceTableProvider{table: mustGatewayPriceTable(t, 2000000000, false)}
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}`))
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"`+history+`"}]}`))
 		req.Header.Set("Authorization", "Bearer gl-client")
 		recorder := httptest.NewRecorder()
 		engine.ServeHTTP(recorder, req)
@@ -75,17 +90,15 @@ func TestRedactionDeliveryContract(t *testing.T) {
 		}
 	})
 	t.Run("uncommitted-stream-handler", func(t *testing.T) {
-		// 整段流在一次读取内到达时，伪造令牌在提交前就会失败；执行层此时只报告消费方中止。
-		forged := "gld1_44_" + strings.Repeat("A", 44)
-		data := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"x\"}}]}\n\n" +
-			"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" " + forged + "\"}}]}\n\ndata: [DONE]\n\n"
+		// 整段流在一次读取内到达时，还原出上游凭据在提交前就会失败；执行层此时只报告消费方中止。
+		var data string
 		executor := fakeExecutionExecutor{stream: func(_ context.Context, _ execution.AttemptSpec, sink execution.StreamSink) execution.StreamResult {
 			header := http.Header{"Content-Type": {"text/event-stream"}}
 			if err := sink(execution.StreamEvent{Sequence: 1, Kind: execution.StreamEventReady, StatusCode: 200, Header: header}); err != nil {
 				t.Fatal(err)
 			}
 			if err := sink(execution.StreamEvent{Sequence: 2, Kind: execution.StreamEventData, Data: []byte(data)}); err == nil {
-				t.Fatal("forged token was accepted")
+				t.Fatal("restored credential was accepted")
 			}
 			return execution.StreamResult{
 				DispatchState: execution.DispatchMaybeSent, ResponseStarted: true, StatusCode: 200, Header: header,
@@ -93,8 +106,22 @@ func TestRedactionDeliveryContract(t *testing.T) {
 			}
 		}}
 		sink := &recordingRequestLogSink{}
-		engine, _, _, _ := newRequestLogHandlerTestRuntime(t, NewExecutionForwarder(executor), &recordingAccessKeyRPMLimiter{}, sink, "sk-synthetic-stream")
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"hello"}]}`))
+		engine, h, _, _ := newRequestLogHandlerTestRuntime(t, NewExecutionForwarder(executor), &recordingAccessKeyRPMLimiter{}, sink, "sk-synthetic-stream")
+		keyCipher, err := h.encryption.NewRedactionCipher(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		token, err := keyCipher.EncryptToken("sk-synthetic-stream")
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"x\"}}]}\n\n" +
+			"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" " + token + "\"}}]}\n\ndata: [DONE]\n\n"
+		history, err := keyCipher.EncryptToken("history")
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"`+history+`"}]}`))
 		req.Header.Set("Authorization", "Bearer gl-client")
 		recorder := httptest.NewRecorder()
 		engine.ServeHTTP(recorder, req)
