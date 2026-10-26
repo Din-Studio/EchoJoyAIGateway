@@ -51,8 +51,9 @@ func Extract(body []byte) (Document, string) {
 					return doc, "unsupported_content"
 				}
 			}
-			if unsupported(item) {
-				return doc, "unsupported_content"
+			item, ok := reviewable(item)
+			if !ok {
+				continue
 			}
 			encoded, err := json.Marshal(map[string]any{"field": key, "content": item})
 			if err != nil {
@@ -76,9 +77,7 @@ func Extract(body []byte) (Document, string) {
 			initial = initial || role == "user"
 		}
 	}
-	if unsupported(root) {
-		return doc, "unsupported_content"
-	}
+	reviewable(root)
 	doc.Context, err = json.Marshal(root)
 	if err != nil {
 		return doc, "unsupported_content"
@@ -122,24 +121,28 @@ func Extract(body []byte) (Document, string) {
 	return doc, ""
 }
 
-func unsupported(value any) bool {
+// reviewable 就地去掉附件与不透明载荷，剩余文本送 JEV 审查；附件随原请求直接放行。
+// ok=false 表示 value 本身就是附件。
+func reviewable(value any) (any, bool) {
 	switch v := value.(type) {
 	case []any:
+		kept := make([]any, 0, len(v))
 		for _, item := range v {
-			if unsupported(item) {
-				return true
+			if item, ok := reviewable(item); ok {
+				kept = append(kept, item)
 			}
 		}
+		return kept, true
 	case map[string]any:
 		kind, _ := v["type"].(string)
 		switch kind {
 		case "image", "image_url", "audio_url", "file_url", "input_image", "input_audio", "audio", "video", "input_video", "input_file", "file", "document", "item_reference":
-			return true
+			return nil, false
 		}
 		for key, item := range v {
 			switch key {
 			case "parameters", "input_schema", "schema", "responseSchema", "response_schema":
-				// Schema 中的 file_id 等只是字段定义；正文仍完整送给 JEV。
+				// Schema 中的 file_id 等只是字段定义，原样送审。
 				continue
 			case "input":
 				if kind == "tool_use" {
@@ -147,29 +150,27 @@ func unsupported(value any) bool {
 				}
 			case "functionResponse", "function_response":
 				if response, ok := item.(map[string]any); ok {
-					// 结构化工具返回是文本数据，parts 中的实际附件继续检查。
-					envelope := make(map[string]any, len(response))
-					for field, value := range response {
-						if field != "response" {
-							envelope[field] = value
-						}
-					}
-					if unsupported(envelope) {
-						return true
+					// 结构化工具返回是文本数据，原样送审；parts 中的实际附件照常去除。
+					data, found := response["response"]
+					delete(response, "response")
+					reviewable(response)
+					if found {
+						response["response"] = data
 					}
 					continue
 				}
 			case "encrypted_content", "inlineData", "inline_data", "fileData", "file_data", "file_id":
-				if item != nil && item != "" {
-					return true
-				}
+				delete(v, key)
+				continue
 			}
-			if unsupported(item) {
-				return true
+			if item, ok := reviewable(item); ok {
+				v[key] = item
+			} else {
+				delete(v, key)
 			}
 		}
 	}
-	return false
+	return value, true
 }
 
 // 不使用整数专用 canonicaljson；保留 JSON 数值原文并拒绝重复键。

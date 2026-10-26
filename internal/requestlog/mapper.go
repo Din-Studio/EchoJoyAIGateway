@@ -544,6 +544,9 @@ type mappedAudit struct {
 	completeness string
 }
 
+// mapAuditCall 把一个请求的护栏 JEV 调用合并成一行用量：分批审查会多次调用，
+// 它们来自同一份配置快照，模型、分组、渠道相同；费用求和，定价完整度不一致时记为 partial。
+// 凭据按第一次实际调用归属；逐次明细保留在 request_audit 里。
 func mapAuditCall(calls []jev.Observation) (mappedAudit, error) {
 	audit := mappedAudit{completeness: "not_applicable"}
 	called := false
@@ -554,13 +557,21 @@ func mapAuditCall(calls []jev.Observation) (mappedAudit, error) {
 		if !call.Called {
 			continue
 		}
-		if called {
-			return mappedAudit{}, fmt.Errorf("multiple guardrail calls in one request")
+		if !called {
+			called = true
+			audit = mappedAudit{
+				model: call.UpstreamModel, groupID: call.GroupID, channelID: call.ChannelID, credentialID: call.CredentialID,
+				costNanoUSD: call.EstimatedCostNanoUSD, completeness: call.PricingCompleteness,
+			}
+			continue
 		}
-		called = true
-		audit = mappedAudit{
-			model: call.UpstreamModel, groupID: call.GroupID, channelID: call.ChannelID, credentialID: call.CredentialID,
-			costNanoUSD: call.EstimatedCostNanoUSD, completeness: call.PricingCompleteness,
+		cost, ok := usage.CheckedAdd(audit.costNanoUSD, call.EstimatedCostNanoUSD)
+		if !ok {
+			return mappedAudit{}, fmt.Errorf("guardrail cost overflows int64")
+		}
+		audit.costNanoUSD = cost
+		if call.PricingCompleteness != audit.completeness {
+			audit.completeness = "partial"
 		}
 	}
 	return audit, nil

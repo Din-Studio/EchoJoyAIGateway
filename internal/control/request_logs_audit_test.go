@@ -7,8 +7,27 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"gpt-load/internal/jev"
 	"gpt-load/internal/platform/config"
+	"gpt-load/internal/pricing"
+	"gpt-load/internal/requestaudit"
+	"gpt-load/internal/requestlog"
 )
+
+// 分批审查的每次调用按冻结汇率各自换算，不把整条请求的护栏费用重复记到每一批。
+func TestRequestAuditCallsSettleEachBatchSeparately(t *testing.T) {
+	cny, err := pricing.NewCurrency(pricing.CurrencyCNY, 7_000_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := requestlog.Record{Settlement: cny, AuditCostNano: 21, RequestAudit: &requestaudit.Result{Status: "passed", Calls: []jev.Observation{
+		{Called: true, EstimatedCostNanoUSD: 1}, {Called: true, EstimatedCostNanoUSD: 2}, {Reason: "no_candidate"},
+	}}}
+	calls := mapRequestAudit(record).Calls
+	if calls[0].EstimatedCostNano != "7" || calls[1].EstimatedCostNano != "14" || calls[2].EstimatedCostNano != "0" {
+		t.Fatalf("per-batch settled costs = %+v", calls)
+	}
+}
 
 func TestRequestAuditLogQueryValidation(t *testing.T) {
 	for _, status := range []string{"warned", "blocked", "incomplete"} {

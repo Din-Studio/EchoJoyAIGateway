@@ -31,8 +31,8 @@ var requestAuditColumns0025 = columnSet0021{
 	checks: []string{"chk_request_log_audit_cost", "chk_request_log_audit_cost_local"},
 }
 
-// Up0025 records guardrail review results on the request log. A request makes
-// at most one guardrail JEV call, so its route and cost sit beside the
+// Up0025 records guardrail review results on the request log. A request's
+// guardrail JEV calls share one route, so their summed cost sits beside the
 // automatic decision columns instead of in a separate table.
 func Up0025(db *gorm.DB) error {
 	if err := addColumnSet0021(db, requestAuditColumns0025); err != nil {
