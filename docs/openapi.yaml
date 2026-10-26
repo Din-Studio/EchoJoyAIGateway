@@ -1281,6 +1281,7 @@ components:
         - rerank
         - anthropic
         - gemini
+        - gemini-embeddings
         - decisions
 
     AccessKeyPlaintext:
