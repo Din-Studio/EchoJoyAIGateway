@@ -74,12 +74,16 @@ func TestGeminiEmbeddingsInspectRequestRejectsInvalidContract(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := NewGeminiEmbeddings().InspectRequest(&ParsedRequest{
+			request := &ParsedRequest{
 				Method: test.method,
 				Path:   test.path,
 				Body:   []byte(test.body),
-			}); err == nil {
+			}
+			if _, err := NewGeminiEmbeddings().InspectRequest(request); err == nil {
 				t.Fatal("InspectRequest() error = nil")
+			}
+			if _, err := NewGeminiEmbeddings().SanitizeRequestForAttempt(request, "upstream"); err == nil {
+				t.Fatal("SanitizeRequestForAttempt() error = nil")
 			}
 		})
 	}

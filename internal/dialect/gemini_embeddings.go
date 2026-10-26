@@ -93,8 +93,11 @@ func (d *GeminiEmbeddings) rewriteRequest(
 	if err := validateModelRewriteTarget(model, true); err != nil {
 		return nil, err
 	}
-	if _, err := d.InspectRequest(request); err != nil {
-		return nil, err
+	if request == nil {
+		return nil, fmt.Errorf("parsed request is required")
+	}
+	if request.Method != http.MethodPost {
+		return nil, fmt.Errorf("%s only supports POST", d.Protocol())
 	}
 	_, batch, err := parseGeminiEmbeddingsPath(request.Path)
 	if err != nil {
