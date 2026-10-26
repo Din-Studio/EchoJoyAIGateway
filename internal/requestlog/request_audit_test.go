@@ -32,9 +32,12 @@ func TestGuardrailCallIsMappedBesideDecisionInSettlementCurrency(t *testing.T) {
 		t.Fatalf("guardrail call columns = %#v", row)
 	}
 
-	event.RequestAudit.Calls = append(event.RequestAudit.Calls, guardrailCall(10, 1, "complete"))
-	if _, err := mapEvent(redact.New(), event); err == nil {
-		t.Fatal("two guardrail calls in one request were accepted")
+	// 分批审查的后续调用并入同一行：费用求和，凭据归第一次调用，完整度不一致记为 partial。
+	event.RequestAudit.Calls = append(event.RequestAudit.Calls, guardrailCall(10, 2_000_000, "complete"), guardrailCall(9, 1, "unavailable"))
+	row = mustMapEvent(t, redact.New(), event)
+	if row.AuditGroupID != 9 || row.AuditCredentialID != 9 || row.AuditCostNanoUSD != 3_000_001 || row.AuditCostNano != 21_300_007 ||
+		row.AuditPricingCompleteness != "partial" {
+		t.Fatalf("batched guardrail calls = %#v", row)
 	}
 }
 

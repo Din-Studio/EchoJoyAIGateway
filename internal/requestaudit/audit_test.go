@@ -298,14 +298,10 @@ func TestActionsAndAggregateHitsAreNotAssignedToIndividualMessages(t *testing.T)
 	}
 }
 
-func TestSingleReviewBudgetAndInvalidResultsNeverCreateProofs(t *testing.T) {
+func TestInvalidResultsNeverCreateProofs(t *testing.T) {
 	var cache testCache
 	now := time.Now()
 	rules := DefaultConfig().Rules
-	large := document(t, `{"input":"`+strings.Repeat("x", MaxStateBytes)+`"}`)
-	if review := cache.Prepare(nil, "jev", large, rules, now); review.Reason != "content_too_large" || len(review.Payload) != 0 {
-		t.Fatal("oversized content was truncated or split")
-	}
 	doc := document(t, `{"input":"hello"}`)
 	for _, body := range []string{`{"answers":{}}`, `{"answers":{"personal_data":{"type":"noul","noul":2},"prompt_injection":{"type":"noul","noul":0},"credential_leakage":{"type":"noul","noul":0}}}`, `{"answers":{"personal_data":{"type":"noul","noul":0},"personal_data":{"type":"noul","noul":1},"prompt_injection":{"type":"noul","noul":0},"credential_leakage":{"type":"noul","noul":0}}}`} {
 		review := cache.Prepare(nil, "jev", doc, rules, now)
