@@ -129,12 +129,20 @@ func TestTextSchemasAndStructuredToolDataAreNotAttachments(t *testing.T) {
 			t.Fatal("textual data was dropped from the review")
 		}
 	}
+}
+
+func TestAttachmentsPassWhileTextIsReviewed(t *testing.T) {
 	for _, body := range []string{
-		`{"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_a","content":[{"type":"image","source":{"type":"base64","data":"opaque"}}]}]}]}`,
-		`{"contents":[{"parts":[{"functionResponse":{"name":"tool","response":{"ok":true},"parts":[{"inlineData":{"mimeType":"image/png","data":"opaque"}}]}}]}]}`,
+		`{"messages":[{"role":"user","content":[{"type":"text","text":"reviewed-text"},{"type":"image_url","image_url":{"url":"https://example.com/opaque"}}]}]}`,
+		`{"messages":[{"role":"user","content":[{"type":"text","text":"reviewed-text"},{"type":"tool_result","tool_use_id":"call_a","content":[{"type":"image","source":{"type":"base64","data":"opaque"}}]}]}]}`,
+		`{"contents":[{"parts":[{"text":"reviewed-text"},{"functionResponse":{"name":"tool","response":{"ok":true},"parts":[{"inlineData":{"mimeType":"image/png","data":"opaque"}}]}}]}]}`,
+		`{"input":[{"role":"user","content":[{"type":"input_text","text":"reviewed-text"}]},{"type":"reasoning","summary":[],"encrypted_content":"opaque"},{"type":"input_image","image_url":"https://example.com/opaque"},{"type":"item_reference","id":"opaque"}]}`,
 	} {
-		if _, reason := Extract([]byte(body)); reason != "unsupported_content" {
-			t.Fatal("real tool attachment was accepted as text")
+		doc := document(t, body)
+		var cache testCache
+		review := cache.Prepare(nil, "jev", doc, DefaultConfig().Rules, time.Now())
+		if !bytes.Contains(review.Payload, []byte("reviewed-text")) || bytes.Contains(review.Payload, []byte("opaque")) || review.Reason != "" {
+			t.Fatalf("attachments must pass unreviewed while text is still reviewed: %s", review.Payload)
 		}
 	}
 }
@@ -269,9 +277,9 @@ func TestCanonicalIdentityAndIsolation(t *testing.T) {
 	if len(cache.Prepare([]byte("key2/model1"), "jev", first, rules, now).Payload) == 0 || len(cache.Prepare([]byte("key1/model2"), "jev", first, rules, now).Payload) == 0 {
 		t.Fatal("cache crossed identity/model boundary")
 	}
-	for _, body := range []string{`{"input":"a","input":"b"}`, `{"input":"a"}{}`, `{"input":[{"type":"input_image","image_url":"https://example.com/x"}]}`} {
+	for _, body := range []string{`{"input":"a","input":"b"}`, `{"input":"a"}{}`} {
 		if _, reason := Extract([]byte(body)); reason == "" {
-			t.Fatal("ambiguous or unsupported content accepted")
+			t.Fatal("ambiguous content accepted")
 		}
 	}
 }
