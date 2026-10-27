@@ -100,17 +100,14 @@ func openAIUsagePatch(root map[string]json.RawMessage, final bool) (usage.Patch,
 	diagnostics.Merge(totalDiagnostics)
 
 	var cached *int64
-	var cacheWriteUnknown *int64
+	var cacheWrite *int64
 	if details, detailDiagnostics := usageOptionalObject(usageObject, "prompt_tokens_details"); details != nil {
 		diagnostics.Merge(detailDiagnostics)
 		cached, detailDiagnostics = usageInteger(details, "cached_tokens", false)
 		diagnostics.Merge(detailDiagnostics)
-		cacheWrite, cacheWriteDiagnostics := usageInteger(details, "cache_write_tokens", false)
-		diagnostics.Merge(cacheWriteDiagnostics)
-		if cacheWrite != nil && *cacheWrite > 0 {
-			cacheWriteUnknown = cacheWrite
-			diagnostics.Add(usage.DiagnosticUnsupportedBillableDetail)
-		}
+		// OpenAI prompt caching has a single write tier, so writes bill at the base cache-write rate.
+		cacheWrite, detailDiagnostics = usageInteger(details, "cache_write_tokens", false)
+		diagnostics.Merge(detailDiagnostics)
 		diagnostics.Merge(usageUnsupportedPositiveIntegerDetails(details, "audio_tokens"))
 	} else {
 		diagnostics.Merge(detailDiagnostics)
@@ -133,9 +130,9 @@ func openAIUsagePatch(root map[string]json.RawMessage, final bool) (usage.Patch,
 		patch.CacheRead = &cacheValue
 	}
 	cacheWriteValue := int64(0)
-	if cacheWriteUnknown != nil {
-		cacheWriteValue = *cacheWriteUnknown
-		patch.CacheWriteUnknown = &cacheWriteValue
+	if cacheWrite != nil && *cacheWrite > 0 {
+		cacheWriteValue = *cacheWrite
+		patch.CacheWrite5M = &cacheWriteValue
 	}
 	if prompt != nil {
 		if cached == nil {
@@ -164,8 +161,8 @@ func openAIUsagePatch(root map[string]json.RawMessage, final bool) (usage.Patch,
 	if patch.CacheRead != nil {
 		tokens.CacheRead = *patch.CacheRead
 	}
-	if patch.CacheWriteUnknown != nil {
-		tokens.CacheWriteUnknown = *patch.CacheWriteUnknown
+	if patch.CacheWrite5M != nil {
+		tokens.CacheWrite5M = *patch.CacheWrite5M
 	}
 	if patch.Output != nil {
 		tokens.Output = *patch.Output
