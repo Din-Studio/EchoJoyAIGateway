@@ -17,7 +17,28 @@ import (
 	"gpt-load/internal/usage"
 )
 
-func TestPassthroughUsageKeepsAnthropicCacheWriteTTL(t *testing.T) {
+func TestUsageEvidenceKeepsAnthropicCacheWriteTTL(t *testing.T) {
+	chatUsage := func(details *schemas.ChatCachedWriteTokenDetails) *schemas.BifrostLLMUsage {
+		return &schemas.BifrostLLMUsage{
+			PromptTokens: 130, CompletionTokens: 5, TotalTokens: 135,
+			PromptTokensDetails: &schemas.ChatPromptTokensDetails{CachedReadTokens: 10, CachedWriteTokens: 100, CachedWriteTokenDetails: details},
+		}
+	}
+	sources := map[string]func(*schemas.ChatCachedWriteTokenDetails) (*execution.UsageEvidence, error){
+		"passthrough": func(details *schemas.ChatCachedWriteTokenDetails) (*execution.UsageEvidence, error) {
+			return usageEvidenceFromPassthrough(&schemas.BifrostPassthroughUsage{LLMUsage: chatUsage(details)})
+		},
+		"converted chat": func(details *schemas.ChatCachedWriteTokenDetails) (*execution.UsageEvidence, error) {
+			_, evidence, err := encodeChatResponse(&schemas.BifrostChatResponse{Usage: chatUsage(details)})
+			return evidence, err
+		},
+		"converted responses": func(details *schemas.ChatCachedWriteTokenDetails) (*execution.UsageEvidence, error) {
+			return usageEvidenceFromResponses(&schemas.ResponsesResponseUsage{
+				InputTokens: 130, OutputTokens: 5, TotalTokens: 135,
+				InputTokensDetails: &schemas.ResponsesResponseInputTokens{CachedReadTokens: 10, CachedWriteTokens: 100, CachedWriteTokenDetails: details},
+			})
+		},
+	}
 	for _, test := range []struct {
 		name    string
 		details *schemas.ChatCachedWriteTokenDetails
@@ -28,15 +49,14 @@ func TestPassthroughUsageKeepsAnthropicCacheWriteTTL(t *testing.T) {
 		{"no ttl details bills base rate", nil,
 			usage.Tokens{UncachedInput: 20, CacheRead: 10, CacheWrite5M: 100, Output: 5}},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			evidence, err := usageEvidenceFromPassthrough(&schemas.BifrostPassthroughUsage{LLMUsage: &schemas.BifrostLLMUsage{
-				PromptTokens: 130, CompletionTokens: 5, TotalTokens: 135,
-				PromptTokensDetails: &schemas.ChatPromptTokensDetails{CachedReadTokens: 10, CachedWriteTokens: 100, CachedWriteTokenDetails: test.details},
-			}})
-			if err != nil || evidence.Normalized.State != usage.StateComplete || evidence.Normalized.Tokens != test.want {
-				t.Fatalf("evidence = %#v, %v; want %#v", evidence, err, test.want)
-			}
-		})
+		for source, evidenceFor := range sources {
+			t.Run(source+"/"+test.name, func(t *testing.T) {
+				evidence, err := evidenceFor(test.details)
+				if err != nil || evidence.Normalized.State != usage.StateComplete || evidence.Normalized.Tokens != test.want {
+					t.Fatalf("evidence = %#v, %v; want %#v", evidence, err, test.want)
+				}
+			})
+		}
 	}
 }
 
