@@ -105,7 +105,6 @@ func openAIUsagePatch(root map[string]json.RawMessage, final bool) (usage.Patch,
 		diagnostics.Merge(detailDiagnostics)
 		cached, detailDiagnostics = usageInteger(details, "cached_tokens", false)
 		diagnostics.Merge(detailDiagnostics)
-		// OpenAI prompt caching has a single write tier, so writes bill at the base cache-write rate.
 		cacheWrite, detailDiagnostics = usageInteger(details, "cache_write_tokens", false)
 		diagnostics.Merge(detailDiagnostics)
 		diagnostics.Merge(usageUnsupportedPositiveIntegerDetails(details, "audio_tokens"))
@@ -123,52 +122,7 @@ func openAIUsagePatch(root map[string]json.RawMessage, final bool) (usage.Patch,
 		diagnostics.Merge(detailDiagnostics)
 	}
 
-	patch := usage.Patch{Final: final, Diagnostics: diagnostics}
-	cacheValue := int64(0)
-	if cached != nil {
-		cacheValue = *cached
-		patch.CacheRead = &cacheValue
-	}
-	cacheWriteValue := int64(0)
-	if cacheWrite != nil && *cacheWrite > 0 {
-		cacheWriteValue = *cacheWrite
-		patch.CacheWrite5M = &cacheWriteValue
-	}
-	if prompt != nil {
-		if cached == nil {
-			patch.CacheRead = &cacheValue
-		}
-		uncached := int64(0)
-		classifiedInput, classified := usage.CheckedAdd(cacheValue, cacheWriteValue)
-		if !classified {
-			patch.Diagnostics.Add(usage.DiagnosticInvalidNumber)
-			patch.Diagnostics.Add(usage.DiagnosticNegativeValue)
-		} else if derived, ok := usage.SubtractCached(*prompt, classifiedInput); ok {
-			uncached = derived
-		} else {
-			patch.Diagnostics.Add(usage.DiagnosticNegativeValue)
-		}
-		patch.UncachedInput = &uncached
-	}
-	if completion != nil {
-		patch.Output = completion
-	}
-
-	tokens := usage.Tokens{}
-	if patch.UncachedInput != nil {
-		tokens.UncachedInput = *patch.UncachedInput
-	}
-	if patch.CacheRead != nil {
-		tokens.CacheRead = *patch.CacheRead
-	}
-	if patch.CacheWrite5M != nil {
-		tokens.CacheWrite5M = *patch.CacheWrite5M
-	}
-	if patch.Output != nil {
-		tokens.Output = *patch.Output
-	}
-	usageNormalizedTotal(total, tokens, &patch.Diagnostics)
-	return patch, true
+	return openAICountsPatch(final, diagnostics, prompt, completion, total, cached, cacheWrite), true
 }
 
 func openAIUsageFinal(root map[string]json.RawMessage) bool {
@@ -194,4 +148,59 @@ func openAIUsageFinal(root map[string]json.RawMessage) bool {
 		}
 	}
 	return false
+}
+
+// openAICountsPatch classifies OpenAI-shaped input counts. OpenAI prompt caching has a
+// single write tier, so cache writes bill at the base cache-write rate.
+func openAICountsPatch(
+	final bool,
+	diagnostics usage.Diagnostics,
+	input, output, total, cached, cacheWrite *int64,
+) usage.Patch {
+	patch := usage.Patch{Final: final, Diagnostics: diagnostics}
+	cacheValue := int64(0)
+	if cached != nil {
+		cacheValue = *cached
+		patch.CacheRead = &cacheValue
+	}
+	cacheWriteValue := int64(0)
+	if cacheWrite != nil && *cacheWrite > 0 {
+		cacheWriteValue = *cacheWrite
+		patch.CacheWrite5M = &cacheWriteValue
+	}
+	if input != nil {
+		if cached == nil {
+			patch.CacheRead = &cacheValue
+		}
+		uncached := int64(0)
+		classifiedInput, classified := usage.CheckedAdd(cacheValue, cacheWriteValue)
+		if !classified {
+			patch.Diagnostics.Add(usage.DiagnosticInvalidNumber)
+			patch.Diagnostics.Add(usage.DiagnosticNegativeValue)
+		} else if derived, ok := usage.SubtractCached(*input, classifiedInput); ok {
+			uncached = derived
+		} else {
+			patch.Diagnostics.Add(usage.DiagnosticNegativeValue)
+		}
+		patch.UncachedInput = &uncached
+	}
+	if output != nil {
+		patch.Output = output
+	}
+
+	tokens := usage.Tokens{}
+	if patch.UncachedInput != nil {
+		tokens.UncachedInput = *patch.UncachedInput
+	}
+	if patch.CacheRead != nil {
+		tokens.CacheRead = *patch.CacheRead
+	}
+	if patch.CacheWrite5M != nil {
+		tokens.CacheWrite5M = *patch.CacheWrite5M
+	}
+	if patch.Output != nil {
+		tokens.Output = *patch.Output
+	}
+	usageNormalizedTotal(total, tokens, &patch.Diagnostics)
+	return patch
 }
