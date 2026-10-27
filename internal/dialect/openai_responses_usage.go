@@ -155,7 +155,7 @@ func openAIResponsesUsagePatch(
 	)
 	diagnostics.Merge(totalDiagnostics)
 
-	var cached *int64
+	var cached, cacheWrite *int64
 	if details, detailDiagnostics := usageOptionalObject(
 		usageObject,
 		"input_tokens_details",
@@ -166,6 +166,9 @@ func openAIResponsesUsagePatch(
 			"cached_tokens",
 			false,
 		)
+		diagnostics.Merge(detailDiagnostics)
+		// OpenAI prompt caching has a single write tier, so writes bill at the base cache-write rate.
+		cacheWrite, detailDiagnostics = usageInteger(details, "cache_write_tokens", false)
 		diagnostics.Merge(detailDiagnostics)
 		diagnostics.Merge(usageUnsupportedPositiveIntegerDetails(details, "audio_tokens"))
 	} else {
@@ -191,13 +194,23 @@ func openAIResponsesUsagePatch(
 		cacheValue = *cached
 		patch.CacheRead = &cacheValue
 	}
+	cacheWriteValue := int64(0)
+	if cacheWrite != nil && *cacheWrite > 0 {
+		cacheWriteValue = *cacheWrite
+		patch.CacheWrite5M = &cacheWriteValue
+	}
 	if input != nil {
 		if cached == nil {
 			patch.CacheRead = &cacheValue
 		}
-		uncached, ok := usage.SubtractCached(*input, cacheValue)
-		if !ok {
-			uncached = 0
+		uncached := int64(0)
+		classifiedInput, classified := usage.CheckedAdd(cacheValue, cacheWriteValue)
+		if !classified {
+			patch.Diagnostics.Add(usage.DiagnosticInvalidNumber)
+			patch.Diagnostics.Add(usage.DiagnosticNegativeValue)
+		} else if derived, ok := usage.SubtractCached(*input, classifiedInput); ok {
+			uncached = derived
+		} else {
 			patch.Diagnostics.Add(usage.DiagnosticNegativeValue)
 		}
 		patch.UncachedInput = &uncached
@@ -212,6 +225,9 @@ func openAIResponsesUsagePatch(
 	}
 	if patch.CacheRead != nil {
 		tokens.CacheRead = *patch.CacheRead
+	}
+	if patch.CacheWrite5M != nil {
+		tokens.CacheWrite5M = *patch.CacheWrite5M
 	}
 	if patch.Output != nil {
 		tokens.Output = *patch.Output
