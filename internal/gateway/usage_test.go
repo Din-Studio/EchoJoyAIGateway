@@ -193,3 +193,19 @@ func TestUsageRejectsDisabledAndExpiredKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestResponseBodyShapeReportsKeysWithoutContent(t *testing.T) {
+	for _, test := range []struct {
+		body, keys, usageType string
+	}{
+		{`{"id":"x","choices":[{"message":{"content":"secret"}}]}`, "choices,id", "absent"},
+		{`{"usage":null,"id":"x"}`, "id,usage", "null"},
+		{`{"usage":{"prompt_tokens":1}}`, "usage", "object"},
+		{`data: not json`, "", "non_json"},
+	} {
+		keys, usageType := responseBodyShape([]byte(test.body))
+		if keys != test.keys || usageType != test.usageType {
+			t.Errorf("responseBodyShape(%s) = %q/%q, want %q/%q", test.body, keys, usageType, test.keys, test.usageType)
+		}
+	}
+}
