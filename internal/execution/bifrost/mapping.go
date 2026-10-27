@@ -19,6 +19,7 @@ import (
 	"gpt-load/internal/execution"
 	platformheader "gpt-load/internal/platform/httpheader"
 	platformredact "gpt-load/internal/platform/redact"
+	"gpt-load/internal/usage"
 )
 
 type openAIChatResponse struct {
@@ -76,6 +77,9 @@ func encodeChatResponse(response *schemas.BifrostChatResponse) ([]byte, *executi
 	if err != nil {
 		return nil, nil, fmt.Errorf("normalize OpenAI usage")
 	}
+	if details := response.Usage.PromptTokensDetails; details != nil {
+		splitOneHourCacheWrite(&normalized.Tokens, details.CachedWriteTokenDetails)
+	}
 	return body, &execution.UsageEvidence{Normalized: normalized, Raw: rawUsage}, nil
 }
 
@@ -118,7 +122,22 @@ func usageEvidenceFromPassthrough(source *schemas.BifrostPassthroughUsage) (*exe
 	if err != nil {
 		return nil, fmt.Errorf("normalize OpenAI usage")
 	}
+	if details := source.LLMUsage.PromptTokensDetails; details != nil {
+		splitOneHourCacheWrite(&normalized.Tokens, details.CachedWriteTokenDetails)
+	}
 	return &execution.UsageEvidence{Normalized: normalized, Raw: rawUsage}, nil
+}
+
+// splitOneHourCacheWrite restores the TTL split that the OpenAI wire shape drops:
+// it has one cache-write bucket, while Anthropic reports 1h writes separately and
+// bills them at a higher rate.
+func splitOneHourCacheWrite(tokens *usage.Tokens, details *schemas.ChatCachedWriteTokenDetails) {
+	if details == nil {
+		return
+	}
+	oneHour := min(max(int64(details.CachedWriteTokens1h), 0), tokens.CacheWrite5M)
+	tokens.CacheWrite1H = oneHour
+	tokens.CacheWrite5M -= oneHour
 }
 
 func usageEvidenceFromResponses(source *schemas.ResponsesResponseUsage) (*execution.UsageEvidence, error) {
@@ -138,6 +157,9 @@ func usageEvidenceFromResponses(source *schemas.ResponsesResponseUsage) (*execut
 	normalized, err := dialect.NewOpenAIResponses().ExtractUsage(syntheticBody)
 	if err != nil {
 		return nil, fmt.Errorf("normalize Responses usage")
+	}
+	if details := source.InputTokensDetails; details != nil {
+		splitOneHourCacheWrite(&normalized.Tokens, details.CachedWriteTokenDetails)
 	}
 	return &execution.UsageEvidence{Normalized: normalized, Raw: rawUsage}, nil
 }
