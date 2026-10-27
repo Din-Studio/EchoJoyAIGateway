@@ -40,6 +40,11 @@ func Vercel() spec.Module {
 				UsageKeys:      []string{"cost", "market_cost", "gateway_cost", "is_byok", "cost_details"},
 				HeaderPrefixes: []string{"X-Vercel-", "X-Matched-Path"},
 			},
+			// WS frames carry only standard Responses events (no billing keys), and the
+			// upstream handshake headers never reach the client, so ResponseScrub is not
+			// needed on this path. Vercel accepts only OpenAI models over WS and keeps
+			// store:true responses per connection.
+			ResponsesWebsocket: execution.WebsocketCapabilities{Native: true, Continuation: true, Prewarm: true, StoredResponses: false, Multiplex: true},
 			Routes: []spec.Route{
 				spec.NewRoute(protocol.OpenAICompletions, execution.OperationChatCompletion, execution.RouteNative),
 				spec.NewRoute(protocol.OpenAICompletions, execution.OperationListModels, execution.RouteNative),
