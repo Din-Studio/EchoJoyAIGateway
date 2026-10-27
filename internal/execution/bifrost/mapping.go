@@ -118,6 +118,13 @@ func usageEvidenceFromPassthrough(source *schemas.BifrostPassthroughUsage) (*exe
 	if err != nil {
 		return nil, fmt.Errorf("normalize OpenAI usage")
 	}
+	// The OpenAI wire shape has one cache-write bucket; Anthropic reports 1h writes
+	// separately and bills them at a higher rate.
+	if details := source.LLMUsage.PromptTokensDetails; details != nil && details.CachedWriteTokenDetails != nil {
+		oneHour := min(max(int64(details.CachedWriteTokenDetails.CachedWriteTokens1h), 0), normalized.Tokens.CacheWrite5M)
+		normalized.Tokens.CacheWrite1H = oneHour
+		normalized.Tokens.CacheWrite5M -= oneHour
+	}
 	return &execution.UsageEvidence{Normalized: normalized, Raw: rawUsage}, nil
 }
 
