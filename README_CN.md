@@ -290,10 +290,10 @@ Codex、Claude、Antigravity 的 OAuth 自动回调发往固定端口的 `localh
 - 每笔请求同时计算两笔钱：**费用**按请求模型（ClientModel）的统一价乘以 AccessKey 倍率，用于成本额度与用量统计；**上游费用**按渠道上游模型的价格乘以分组倍率，是网关付给上游的成本，只对管理员可见。统一价在「模型」页为每个请求模型单独设置，对所有分组和渠道生效，支持阶梯价与 Fast、Ultrafast 模式价；未设置统一价的模型按未定价处理，不回退到上游价格。auto 模型按选中的目标模型收费。
 - 订阅渠道依赖上游 OAuth 与兼容协议，可能随上游变化调整。请只接入自己有权使用的账号，并遵守对应服务商条款。
 - HTTP Responses 的 `previous_response_id` 续接按协议及现有存储能力自动接入：原生 Responses 且声明由上游管理状态的渠道目前包括 `openai`、`gpt_load`、`xai`、`newapi`、`cliproxyapi`、`sub2api`。按 AccessKey 隔离归属，在当前路由允许时固定原凭据，不受软亲和开关影响；实际状态可用性由上游决定。无状态及转换响应不登记为持久状态。未知 ID（包括升级前或网关外创建的 ID）直接拒绝；Group 参数覆盖不能改写该字段。
-- 原生 Responses WebSocket 使用同端口 `GET /v1/responses`，按渠道声明的实际能力准入，支持 OpenAI、xAI、Codex 及符合原生合同的 CPA/sub2api、GPT-Load 端点。兼容客户端携带布尔参数 `stream:true/false`，两者均按 WS 事件流返回。每轮独立检查权限、限流、额度与当前路由，并记录用量及成本。同一连接固定上游身份；不回退 HTTP、不缓存或重放聊天历史。
+- 原生 Responses WebSocket 使用同端口 `GET /v1/responses`，按渠道声明的实际能力准入，支持 OpenAI、xAI、Codex、Vercel AI Gateway 及符合原生合同的 CPA/sub2api、GPT-Load 端点。兼容客户端携带布尔参数 `stream:true/false`，两者均按 WS 事件流返回。每轮独立检查权限、限流、额度与当前路由，并记录用量及成本。同一连接固定上游身份；不回退 HTTP、不缓存或重放聊天历史。
 - `responses_websocket_enabled` 默认开启，分组显式设置优先于全局，未覆盖时继承全局。关闭会立即断开受影响的 WS 连接并中断生成；HTTP/SSE 不受影响。重新开启不会恢复旧连接的临时状态。
 - `empty_response_retry` 默认关闭，分组显式设置优先于全局。开启后，流式对话请求在提交给客户端前会先确认上游是否产出内容；上游自然结束却没有任何产出时算作一次失败并换下一个候选重试，但不冷却也不拉黑凭据。重试用尽后仍把上游返回的空响应原样交给客户端。输出预算耗尽、内容过滤、拒答等由终止原因解释的空结果不重试，照常交付。预热（`generate:false`）、带 `previous_response_id` 或 `conversation` 的请求、非对话端点与 WebSocket 均不参与判定；上游持续发出无产出事件时按内置上限照常提交，不会一直压着响应。被重试掉的空回尝试已在上游产生计费，但用量与成本估算只记录最终交付的那次尝试。
-- 完整 `stream_id` 多流与分叉用于 OpenAI 和满足端到端条件的 GPT-Load 级联；其余上述渠道串行执行并明确拒绝命名流。预热实际发送 `generate:false`。Codex 只支持原连接内续接，不能使用 `store:true` 或凭旧 ID 跨连接恢复；其他渠道的持久续接仍取决于存储能力与有效归属。[Codex SDK 的代理、读取和关闭边界](third_party/cpaembedded/README.md#codex-websocket-session)继续适用。
+- 完整 `stream_id` 多流与分叉用于 OpenAI、Vercel AI Gateway 和满足端到端条件的 GPT-Load 级联；其余上述渠道串行执行并明确拒绝命名流。预热实际发送 `generate:false`。Codex 与 Vercel AI Gateway 只支持原连接内续接，不能凭旧 ID 跨连接恢复，Codex 还不能使用 `store:true`；Vercel 的 WebSocket 只接受 OpenAI 模型，同一连接换模型会被断开，开启 WebSocket 的 Vercel 分组应只配置 OpenAI 模型；其他渠道的持久续接仍取决于存储能力与有效归属。[Codex SDK 的代理、读取和关闭边界](third_party/cpaembedded/README.md#codex-websocket-session)继续适用。
 - `conversation` 与其他既有资源 ID 不在上述归属路由范围内，仍依赖单凭据或上游跨凭据共享资源。
 
 ## 从 1.x 切换
