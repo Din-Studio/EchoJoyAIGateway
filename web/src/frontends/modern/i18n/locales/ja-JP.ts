@@ -52,7 +52,6 @@ export default {
   shell: {
     refresh: '更新',
     refreshedAt: '{time} 更新',
-    importCredentials: 'キーをインポート',
     goHome: 'GPT-Load の概要',
     mascotHint:
       'マスコットを長押し、またはフォーカス中にスペースで遊べます。Enter で概要へ戻ります。',
