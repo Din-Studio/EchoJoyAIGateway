@@ -1,12 +1,15 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +38,7 @@ import (
 	subscriptionproviders "gpt-load/internal/subscription/providers"
 	subscriptionruntime "gpt-load/internal/subscription/runtime"
 	"gpt-load/internal/telemetry"
+	"gpt-load/internal/usage"
 )
 
 const (
@@ -473,6 +477,53 @@ func (handler *Handler) applySharedDecisionEffect(
 		}
 	}
 	return true
+}
+
+// completeResponse records a buffered upstream response. A success that should
+// have carried usage but did not is served unbilled, so it logs the body shape
+// (top-level keys and the usage value's JSON type, never content) for diagnosis.
+func (handler *Handler) completeResponse(
+	recorder *requestRecorder,
+	result UpstreamResult,
+	decision health.Decision,
+	upstreamModel string,
+	attemptIndex int,
+) {
+	recorder.completeResponse(result, decision, upstreamModel, attemptIndex)
+	if result.StatusCode < 200 || result.StatusCode >= 300 || result.Usage.State != usage.StateMissing {
+		return
+	}
+	keys, usageType := responseBodyShape(result.Body)
+	utils.LogPlaneBestEffort(handler.logger, logrus.WarnLevel, utils.LogPlaneData,
+		logrus.Fields{"event": "usage.missing", "request_id": recorder.requestID, "up_model": upstreamModel,
+			"status": result.StatusCode, "body_bytes": len(result.Body), "body_keys": keys, "usage_type": usageType},
+		"Successful upstream response carried no usage; the request was not billed")
+}
+
+// responseBodyShape reports a JSON object's sorted top-level keys and the JSON
+// type of its usage member ("absent" when missing, "non_json" for other bodies).
+func responseBodyShape(body []byte) (string, string) {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(body, &object) != nil {
+		return "", "non_json"
+	}
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	usageType := "absent"
+	if raw, ok := object["usage"]; ok {
+		switch trimmed := bytes.TrimSpace(raw); {
+		case len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")):
+			usageType = "null"
+		case trimmed[0] == '{':
+			usageType = "object"
+		default:
+			usageType = "other"
+		}
+	}
+	return strings.Join(keys, ","), usageType
 }
 
 func (handler *Handler) logSharedHealthUnavailable(credentialID uint, op string, err error) {
@@ -1557,7 +1608,7 @@ func (handler *Handler) executeAttempts(
 				recorder.retryIfAnotherForward(recordedAttempt)
 				continue
 			}
-			recorder.completeResponse(result, decision, optionalModelValue(selection.UpstreamModelID), recordedAttempt)
+			handler.completeResponse(recorder, result, decision, optionalModelValue(selection.UpstreamModelID), recordedAttempt)
 			if err := handler.writeUpstreamResponse(ginContext, result); err != nil {
 				handler.completeWriteTerminal(ginContext, recorder, result.StatusCode)
 				return
@@ -1624,7 +1675,8 @@ func (handler *Handler) executeAttempts(
 		return
 	}
 	if lastResponse != nil {
-		recorder.completeResponse(
+		handler.completeResponse(
+			recorder,
 			lastResponse.result,
 			lastResponse.decision,
 			lastResponse.upstreamModel,
@@ -1777,7 +1829,7 @@ func (handler *Handler) completeEmptyResponse(
 	upstreamModel string,
 	attemptIndex int,
 ) {
-	recorder.completeResponse(result, decision, upstreamModel, attemptIndex)
+	handler.completeResponse(recorder, result, decision, upstreamModel, attemptIndex)
 	if err := handler.writeBufferedResponse(
 		ginContext,
 		result.StatusCode,

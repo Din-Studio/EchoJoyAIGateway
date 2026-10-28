@@ -30,8 +30,9 @@ func projectProcessLog(
 	groupID, channelID, credentialID := attributedAttempt(event)
 
 	level := logrus.WarnLevel
-	if event.Status == telemetry.RequestStatusSuccess ||
+	if (event.Status == telemetry.RequestStatusSuccess && row.UsageState != string(usage.StateMissing)) ||
 		event.Status == telemetry.RequestStatusCanceled {
+		// A success without usage was served but not billed, so it stays a warning.
 		level = logrus.InfoLevel
 	}
 
