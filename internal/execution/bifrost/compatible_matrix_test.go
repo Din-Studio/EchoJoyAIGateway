@@ -345,3 +345,43 @@ func TestListModelsConvertsProviderResultToClientProtocol(t *testing.T) {
 		t.Fatalf("internal provider leaked: %s", result.Body)
 	}
 }
+
+func TestOpenAICompatibleConvertedGeminiStreamEndsWithUsage(t *testing.T) {
+	t.Parallel()
+
+	// Chat providers send the finish chunk and then a usage-only chunk with empty choices.
+	const chatStream = "data: {\"id\":\"chat_1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"served\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"id\":\"chat_1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"served\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}\n\n" +
+		"data: {\"id\":\"chat_1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"served\",\"choices\":[],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":2,\"total_tokens\":10,\"prompt_tokens_details\":{\"cached_tokens\":3,\"cache_write_tokens\":4}}}\n\n" +
+		"data: [DONE]\n\n"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, chatStream)
+	}))
+	defer server.Close()
+
+	runtime := newProtocolTestRuntime(t, testRuntimeOptions{allowPrivateNetwork: true})
+	target, _ := json.Marshal(map[string]string{"base_url": server.URL + "/v1"})
+	spec := convertedSpec(channel.OpenAICompatible, protocol.Gemini, execution.OperationChatCompletion,
+		"/v1beta/models/client-model:streamGenerateContent", []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`))
+	spec.TargetConfig = target
+	spec = freezeTestAttempt(spec)
+	var data bytes.Buffer
+	result := runtime.ExecuteStream(context.Background(), spec, func(event execution.StreamEvent) error {
+		if event.Kind == execution.StreamEventData {
+			data.Write(event.Data)
+		}
+		return nil
+	})
+	if err := result.Validate(); err != nil || result.Error != nil || result.Usage == nil {
+		t.Fatalf("result = %+v err=%v data=%s", result, err, data.String())
+	}
+	for _, fragment := range []string{"hello", `"finishReason":"MAX_TOKENS"`, `"usageMetadata"`, `"promptTokenCount":8`} {
+		if !strings.Contains(data.String(), fragment) {
+			t.Errorf("stream missing %q: %s", fragment, data.String())
+		}
+	}
+	if got := result.Usage.Normalized.Tokens; got.CacheRead != 3 || got.CacheWrite5M != 4 || got.UncachedInput != 1 || got.Output != 2 {
+		t.Errorf("usage tokens = %+v", got)
+	}
+}
