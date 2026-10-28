@@ -94,7 +94,7 @@ func TestWebsocketIdleUpstreamDisconnectClosesClient(t *testing.T) {
 		<-closeUpstream
 	}))
 	defer upstream.Close()
-	h, engine, _ := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
+	h, engine, _ := websocketTestHandler(t, upstream.URL, channel.OpenAI)
 	sink := &recordingRequestLogSink{}
 	h.requestLogSink = sink
 	server := httptest.NewServer(engine)
@@ -141,7 +141,7 @@ func TestWebsocketQuotaCountsConcurrentTurnsOnceWithoutReservation(t *testing.T)
 		_, _, _ = conn.ReadMessage()
 	}))
 	defer upstream.Close()
-	h, engine, input := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
+	h, engine, input := websocketTestHandler(t, upstream.URL, channel.OpenAI)
 	sink := &recordingRequestLogSink{}
 	h.requestLogSink = sink
 	limiter := &recordingAccessKeyRPMLimiter{}
@@ -206,7 +206,7 @@ func TestWebsocketHandlerRemainsTrackedUntilShutdown(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	h, _, _ := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
+	h, _, _ := websocketTestHandler(t, upstream.URL, channel.OpenAI)
 	h.lifecycle = httplifecycle.NewCoordinator()
 	engine := gin.New()
 	bindGatewayRoutesForTest(t, engine, h)
@@ -257,7 +257,7 @@ func TestWebsocketStoredAndTemporaryOwnershipRemainSeparate(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	h, engine, _ := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
+	h, engine, _ := websocketTestHandler(t, upstream.URL, channel.OpenAI)
 	sink := &recordingRequestLogSink{}
 	h.requestLogSink = sink
 	server := httptest.NewServer(engine)
@@ -323,7 +323,7 @@ func TestWebsocketBoundSerialTargetRejectsNamedFlow(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	_, engine, _ := websocketTestHandler(t, upstream.URL+"/v1", channel.XAI)
+	_, engine, _ := websocketTestHandler(t, upstream.URL, channel.XAI)
 	server := httptest.NewServer(engine)
 	defer server.Close()
 	conn := dialGatewayWebsocket(t, server.URL)
@@ -356,7 +356,7 @@ func TestWebsocketUpgradeValidationAndHTTPBoundary(t *testing.T) {
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
 	defer upstream.Close()
-	_, engine, _ := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
+	_, engine, _ := websocketTestHandler(t, upstream.URL, channel.OpenAI)
 	for _, test := range []struct {
 		name, auth, key, upgrade string
 		status                   int
@@ -413,7 +413,7 @@ func TestWebsocketTerminalEvidence(t *testing.T) {
 				_, _, _ = conn.ReadMessage()
 			}))
 			defer upstream.Close()
-			h, engine, _ := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
+			h, engine, _ := websocketTestHandler(t, upstream.URL, channel.OpenAI)
 			sink := &recordingRequestLogSink{}
 			h.requestLogSink = sink
 			server := httptest.NewServer(engine)
@@ -659,7 +659,7 @@ func TestWebsocketForkAndParentCacheErrorBoundaries(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	_, engine, _ := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
+	_, engine, _ := websocketTestHandler(t, upstream.URL, channel.OpenAI)
 	server := httptest.NewServer(engine)
 	defer server.Close()
 	conn := dialGatewayWebsocket(t, server.URL)
@@ -722,7 +722,7 @@ func TestWebsocketQueuedTurnUsesCurrentModelAndRevocation(t *testing.T) {
 		_, _, _ = conn.ReadMessage()
 	}))
 	defer upstream.Close()
-	h, engine, input := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
+	h, engine, input := websocketTestHandler(t, upstream.URL, channel.OpenAI)
 	server := httptest.NewServer(engine)
 	defer server.Close()
 	conn := dialGatewayWebsocket(t, server.URL)
@@ -776,7 +776,7 @@ func TestWebsocketCascadePreservesNativeFlow(t *testing.T) {
 		_, _, _ = conn.ReadMessage()
 	}))
 	defer upstream.Close()
-	_, innerEngine, _ := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
+	_, innerEngine, _ := websocketTestHandler(t, upstream.URL, channel.OpenAI)
 	inner := httptest.NewServer(innerEngine)
 	defer inner.Close()
 	h, outerEngine, input := websocketTestHandler(t, inner.URL, channel.GPTLoad)
@@ -824,7 +824,7 @@ func TestWebsocketBoundsNormalizedInputBeforeDispatch(t *testing.T) {
 		_, _, _ = conn.ReadMessage()
 	}))
 	defer upstream.Close()
-	h, engine, _ := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
+	h, engine, _ := websocketTestHandler(t, upstream.URL, channel.OpenAI)
 	h.websocketLimits.input = 1024
 	h.websocketLimits.globalInput = 2048
 	rules, err := parameteroverride.Compile([]any{map[string]any{"set": map[string]any{"instructions": strings.Repeat("x", 4096)}}})
@@ -867,7 +867,7 @@ func TestWebsocketQueueOverflowClosesWithoutInjectingSameLaneError(t *testing.T)
 		}
 	}))
 	defer upstream.Close()
-	h, engine, _ := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
+	h, engine, _ := websocketTestHandler(t, upstream.URL, channel.OpenAI)
 	h.websocketLimits.pending = 1
 	server := httptest.NewServer(engine)
 	defer server.Close()
@@ -1004,7 +1004,7 @@ func TestWebsocketDefaultLaneFIFOAndContinuation(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	_, engine, _ := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
+	_, engine, _ := websocketTestHandler(t, upstream.URL, channel.OpenAI)
 	server := httptest.NewServer(engine)
 	defer server.Close()
 	conn := dialGatewayWebsocket(t, server.URL)
@@ -1068,7 +1068,7 @@ func TestWebsocketConcurrentFirstTurnsShareOneSession(t *testing.T) {
 		_, _, _ = conn.ReadMessage()
 	}))
 	defer upstream.Close()
-	_, engine, _ := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
+	_, engine, _ := websocketTestHandler(t, upstream.URL, channel.OpenAI)
 	server := httptest.NewServer(engine)
 	defer server.Close()
 	conn := dialGatewayWebsocket(t, server.URL)
@@ -1108,7 +1108,7 @@ func TestWebsocketFirstEventTimeoutClosesSession(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	h, engine, _ := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
+	h, engine, _ := websocketTestHandler(t, upstream.URL, channel.OpenAI)
 	group := h.manager.Current().Groups[1]
 	group.Timeouts.FirstByte = 30 * time.Millisecond
 	h.manager.Current().Groups[1] = group
@@ -1141,7 +1141,7 @@ func TestWebsocketCacheAffinityAndConnectionBindingKinds(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	h, engine, _ := websocketTestHandler(t, upstream.URL+"/v1", channel.OpenAI)
+	h, engine, _ := websocketTestHandler(t, upstream.URL, channel.OpenAI)
 	sink := &recordingRequestLogSink{}
 	h.requestLogSink = sink
 	server := httptest.NewServer(engine)

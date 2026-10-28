@@ -45,6 +45,7 @@
 - 测试：新增 `live_control_test.go`、`live_lifecycle_test.go`，改了 `live_teardown_test.go`、`live_routing_test.go`、`codex_live_test.go`。
 - 恢复时要过架构闸门：hangup 重试和容量槽都是按副本持有的状态，3 副本部署下要确认 hangup 请求能落到持有会话的那个副本。
 - 2026-10-28：已用 `git merge -s ours` 记录祖先关系（dev 提交 `a55a9b63`），内容没有带入。恢复 `03e1da48` 之后再 `git cherry-pick 41339ae9`，或手工移植。
+- 2026-10-28：`1d8232eb`（#781）把 `TestCodexLiveFailedSetupRetainsKnownUpstreamForCleanup` 从 `httptest.NewServer` 改成 `httptest.NewRecorder` 直接调 `engine.ServeHTTP`，以消除 race 模式下的抖动。该提交的其余部分已合入 dev，这个 hunk 没有带入；恢复 `41339ae9` 后再执行 `git show 1d8232eb -- internal/gateway/live_lifecycle_test.go | git apply`，或手工补上。
 
 ## 已恢复
 
