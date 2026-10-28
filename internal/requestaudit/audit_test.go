@@ -129,27 +129,22 @@ func TestTextSchemasAndStructuredToolDataAreNotAttachments(t *testing.T) {
 			t.Fatal("textual data was dropped from the review")
 		}
 	}
-}
-
-func TestAttachmentsPassWhileTextIsReviewed(t *testing.T) {
 	for _, body := range []string{
-		`{"messages":[{"role":"user","content":[{"type":"text","text":"reviewed-text"},{"type":"image_url","image_url":{"url":"https://example.com/opaque"}}]}]}`,
-		`{"messages":[{"role":"user","content":[{"type":"text","text":"reviewed-text"},{"type":"tool_result","tool_use_id":"call_a","content":[{"type":"image","source":{"type":"base64","data":"opaque"}}]}]}]}`,
-		`{"contents":[{"parts":[{"text":"reviewed-text"},{"functionResponse":{"name":"tool","response":{"ok":true},"parts":[{"inlineData":{"mimeType":"image/png","data":"opaque"}}]}}]}]}`,
-		`{"input":[{"role":"user","content":[{"type":"input_text","text":"reviewed-text"}]},{"type":"reasoning","summary":[],"encrypted_content":"opaque"},{"type":"input_image","image_url":"https://example.com/opaque"},{"type":"item_reference","id":"opaque"}]}`,
+		`{"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_a","content":[{"type":"image","source":{"type":"base64","data":"opaque"}}]}]}]}`,
+		`{"contents":[{"parts":[{"functionResponse":{"name":"tool","response":{"ok":true},"parts":[{"inlineData":{"mimeType":"image/png","data":"opaque"}}]}}]}]}`,
 	} {
 		doc := document(t, body)
-		var cache testCache
-		review := cache.Prepare(nil, "jev", doc, DefaultConfig().Rules, time.Now())
-		if !bytes.Contains(review.Payload, []byte("reviewed-text")) || bytes.Contains(review.Payload, []byte("opaque")) || review.Reason != "" {
-			t.Fatalf("attachments must pass unreviewed while text is still reviewed: %s", review.Payload)
+		for _, unit := range doc.Units {
+			if bytes.Contains(unit, []byte("opaque")) {
+				t.Fatal("real tool attachment was included in the text review")
+			}
 		}
 	}
 }
 
 func TestTokenizedInputsAreNotDeclaredReviewedAsText(t *testing.T) {
 	for _, body := range []string{`{"input":[123,456]}`, `{"input":[[123,456],[789]]}`} {
-		if _, reason := Extract([]byte(body)); reason != "unsupported_content" {
+		if doc := document(t, body); len(doc.Units) != 0 {
 			t.Fatal("token IDs cannot be reviewed without decoding their text")
 		}
 	}

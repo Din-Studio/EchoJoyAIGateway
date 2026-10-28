@@ -1342,6 +1342,10 @@ func (handler *Handler) executeAttempts(
 			handler.completeReason(ginContext, recorder, *failure)
 			return
 		}
+		if ginContext.Request.Context().Err() != nil {
+			recorder.completeCanceled(ginContext.Request.Context(), 0, lastAttemptIndex)
+			return
+		}
 		// A full credential is skipped without spending a forward attempt; the
 		// iterator never returns it again for this request.
 		release, acquired, err := handler.concurrency.Acquire(
