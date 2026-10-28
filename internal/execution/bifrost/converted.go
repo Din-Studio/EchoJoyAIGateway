@@ -384,6 +384,18 @@ func encodeConvertedResponsesResponse(
 	return body, usageEvidence, nil
 }
 
+func stripResponsesSDKMetadata(object map[string]json.RawMessage) {
+	delete(object, "extra_fields")
+	delete(object, "provider_extra_fields")
+	if rawUsage := object["usage"]; len(rawUsage) > 0 {
+		var usageObject map[string]json.RawMessage
+		if json.Unmarshal(rawUsage, &usageObject) == nil {
+			delete(usageObject, "cost")
+			object["usage"], _ = json.Marshal(usageObject)
+		}
+	}
+}
+
 func marshalClientWire(clientProtocol protocol.Protocol, value any) ([]byte, error) {
 	body, err := json.Marshal(value)
 	if err != nil {
@@ -396,13 +408,13 @@ func marshalClientWire(clientProtocol protocol.Protocol, value any) ([]byte, err
 	if err := json.Unmarshal(body, &object); err != nil {
 		return nil, fmt.Errorf("sanitize converted OpenAI response")
 	}
-	delete(object, "extra_fields")
-	delete(object, "provider_extra_fields")
-	if rawUsage := object["usage"]; len(rawUsage) > 0 {
-		var usageObject map[string]json.RawMessage
-		if json.Unmarshal(rawUsage, &usageObject) == nil {
-			delete(usageObject, "cost")
-			object["usage"], _ = json.Marshal(usageObject)
+	stripResponsesSDKMetadata(object)
+	// 流事件把完整 response 嵌在 response 字段里，同样不能带出 SDK 元数据。
+	if rawResponse := object["response"]; len(rawResponse) > 0 {
+		var nested map[string]json.RawMessage
+		if json.Unmarshal(rawResponse, &nested) == nil && nested != nil {
+			stripResponsesSDKMetadata(nested)
+			object["response"], _ = json.Marshal(nested)
 		}
 	}
 	body, err = json.Marshal(object)

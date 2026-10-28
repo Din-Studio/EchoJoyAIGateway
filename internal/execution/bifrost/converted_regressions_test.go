@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"gpt-load/internal/channel"
@@ -201,5 +202,41 @@ func TestConvertedAnthropicPreservesNamespaceTools(t *testing.T) {
 	if len(response.Output) != 1 || response.Output[0].Type != "function_call" ||
 		response.Output[0].Name != "clock" || response.Output[0].Namespace != "demo" {
 		t.Fatalf("namespace tool response not restored: %s", result.Body)
+	}
+}
+
+// 流事件嵌套的 response 与顶层一样不能带出 SDK 元数据或上游成本。
+func TestConvertedResponsesStreamStripsNestedSDKMetadata(t *testing.T) {
+	const stream = "data: {\"id\":\"c\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"pong\"}}]}\n\n" +
+		"data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: {\"id\":\"c\",\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5,\"cost\":0.01}}\n\n" +
+		"data: [DONE]\n\n"
+	for _, id := range []channel.ID{channel.OpenAICompatible, channel.Groq} {
+		t.Run(string(id), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, stream)
+			}))
+			defer server.Close()
+			runtime := newRuntimeForTest(t, testRuntimeOptions{allowPrivateNetwork: true})
+			spec := openAIChatAttempt(t, id, server.URL+"/v1", "test-key")
+			spec.UpstreamModel = "m"
+			spec.ClientProtocol = protocol.OpenAIResponses
+			spec.Operation = execution.OperationResponsesCreate
+			spec.Path = "/v1/responses"
+			spec.Body = []byte(`{"model":"client-model","input":"ping","stream":true}`)
+			var output strings.Builder
+			result := runtime.ExecuteStream(t.Context(), freezeTestAttempt(spec), func(event execution.StreamEvent) error {
+				output.Write(event.Data)
+				return nil
+			})
+			body := output.String()
+			if result.Error != nil || !strings.Contains(body, "response.completed") {
+				t.Fatalf("stream result = %+v, body=%s", result, body)
+			}
+			if strings.Contains(body, `"extra_fields"`) || strings.Contains(body, `"cost"`) {
+				t.Fatalf("SDK metadata leaked: %s", body)
+			}
+		})
 	}
 }

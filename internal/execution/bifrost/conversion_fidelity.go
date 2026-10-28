@@ -29,8 +29,7 @@ func finishConvertedPreparation(spec execution.AttemptSpec, providerKind channel
 		providerKind == channel.ProviderAWSBedrock || (providerKind == channel.ProviderGoogleVertex && !vertexChat) {
 		preserveResponsesGlobalInstructions(prepared.responsesRequest)
 	}
-	chatFallback := providerKind == channel.ProviderOpenAICompatible || providerKind == channel.ProviderGroq ||
-		providerKind == channel.ProviderDeepSeek || vertexChat
+	chatFallback := targetUsesChatFallback(providerKind, spec.UpstreamModel)
 	if chatFallback {
 		dropsTools, newlyAllowed := chatFallbackToolCompatibility(prepared.responsesRequest)
 		needsToolHistoryCheck = needsToolHistoryCheck || newlyAllowed
