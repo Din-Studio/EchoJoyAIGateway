@@ -217,6 +217,33 @@ func TestClineNativeKeepsGatewayParameters(t *testing.T) {
 	}
 }
 
+func TestClineConvertedUsesModelTokenField(t *testing.T) {
+	for model, field := range map[string]string{"deepseek/deepseek-v4.1-flash": "max_tokens", "openai/gpt-5.4": "max_completion_tokens"} {
+		t.Run(model, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				var body map[string]json.RawMessage
+				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				other := map[string]string{"max_tokens": "max_completion_tokens", "max_completion_tokens": "max_tokens"}[field]
+				if string(body[field]) != "4096" || body[other] != nil {
+					t.Errorf("token budget = %s", body)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, clineCompletionFixture)
+			}))
+			defer server.Close()
+			runtime := newRuntimeForTest(t, testRuntimeOptions{allowPrivateNetwork: true})
+			spec := clineTestSpec(t, server.URL, protocol.OpenAIResponses)
+			spec.UpstreamModel = model
+			spec.Body = []byte(`{"model":"client-model","input":"ping","max_output_tokens":4096,"stream":false}`)
+			if result := runtime.Execute(t.Context(), freezeTestAttempt(spec)); result.Error != nil {
+				t.Fatalf("Cline result = %+v", result)
+			}
+		})
+	}
+}
+
 func TestClineStreamParallelTools(t *testing.T) {
 	stream := "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"call-a\",\"type\":\"function\",\"function\":{\"name\":\"first_tool\",\"arguments\":\"{}\"}},{\"index\":1,\"id\":\"call-b\",\"type\":\"function\",\"function\":{\"name\":\"second_tool\",\"arguments\":\"{}\"}}]}}]}\n\n" +
 		"data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"

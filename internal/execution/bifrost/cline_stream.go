@@ -53,9 +53,6 @@ func (r *Runtime) executeClineStream(parent context.Context, spec execution.Atte
 	if stream.converted {
 		result.AppliedReasoning = inspectWireAppliedReasoning(prepared.passthrough.Body)
 	}
-	if stream.headers != nil {
-		result.Header = stream.headers
-	}
 	return result
 }
 
@@ -243,28 +240,6 @@ func (s *clineStream) encode(response *schemas.BifrostResponsesStreamResponse) e
 		response.Response.Store = schemas.Ptr(false)
 		if response.Type == schemas.ResponsesStreamResponseTypeCreated || response.Type == schemas.ResponsesStreamResponseTypeInProgress {
 			response.Response.Status = schemas.Ptr("in_progress")
-		}
-		if s.spec.ClientProtocol == protocol.OpenAIResponses {
-			wire := response.WithDefaults()
-			ensureResponsesReasoningSummary(wire)
-			inner, err := marshalClientWire(protocol.OpenAIResponses, wire.Response)
-			if err != nil {
-				return err
-			}
-			body, err := marshalClientWire(protocol.OpenAIResponses, wire)
-			if err != nil {
-				return err
-			}
-			var object map[string]json.RawMessage
-			if err := json.Unmarshal(body, &object); err != nil {
-				return err
-			}
-			object["response"] = inner
-			body, err = json.Marshal(object)
-			if err != nil {
-				return err
-			}
-			return s.data(frameNamedSSE(string(wire.Type), body))
 		}
 	}
 	frames, err := s.encoder.encode(s.ctx, response, nil)

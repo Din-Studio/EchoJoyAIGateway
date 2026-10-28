@@ -144,7 +144,6 @@ func (r *Runtime) executeCline(parent context.Context, spec execution.AttemptSpe
 	result.Body = body
 	result.Header = result.Header.Clone()
 	httpheader.StripRepresentationMetadata(result.Header)
-	result.Header.Del("Content-Encoding")
 	result.Header.Set("Content-Type", "application/json")
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
 		result.Body = redactSecrets(body, prepared.secrets)
@@ -206,10 +205,9 @@ func clineConvertedRequest(request *schemas.BifrostResponsesRequest) ([]byte, er
 		return nil, fmt.Errorf("missing Chat request")
 	}
 	// Cline 是聚合网关，不能套用直连 DeepSeek 的禁用思考或字段删除策略。
-	if !clineUsesMaxCompletionTokens(request.Model) {
-		wire.MaxTokens = wire.MaxCompletionTokens
-		wire.MaxCompletionTokens = nil
-	}
+	// 统一写 max_tokens；需要 max_completion_tokens 的模型由 prepareCline 统一改写。
+	wire.MaxTokens = wire.MaxCompletionTokens
+	wire.MaxCompletionTokens = nil
 	body, err := json.Marshal(wire)
 	if err != nil {
 		return nil, err
