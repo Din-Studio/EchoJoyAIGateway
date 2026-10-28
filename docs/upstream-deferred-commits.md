@@ -9,6 +9,7 @@
 | `0a01cdde504062c2810eb095c5e3bda00aae260c` | feat(gateway): add Codex live voice relay (#756) | 2026-09-25 | 2026-10-26 | 待补充 | 待补充 |
 | `c4a895ad61382a1960de72c7f9d9d2756e9dbc7f` | test(gateway): wait for live teardown before checking key rotation log (#761) | 2026-09-25 | 2026-10-26 | 只改 `0a01cdde` 引入的 live 集成测试，dev 没有该文件 | 随 `0a01cdde` 一起恢复 |
 | `03e1da4824f9ccf37410fba069560addd6420534` | feat(gateway): add voice modes and live call retries (#765) | 2026-09-26 | 2026-10-26 | 在 `0a01cdde` 的 live 中继上扩展语音模式与通话重试，dev 没有 live 代码 | 随 `0a01cdde` 一起恢复 |
+| `41339ae935e89f68d342273711a5e91a5f4617bf` | fix(gateway): Restore live logs and bound teardown (#774) | 2026-09-26 | 2026-10-28 | 修 `0a01cdde`/`03e1da48` 引入的 live 会话日志与拆除流程，dev 没有 live 代码 | 在 `03e1da48` 之后恢复 |
 
 ### `0a01cdde` 改动范围
 
@@ -33,6 +34,17 @@
 - 其他：路由检查（`internal/scheduler/inspect.go`）展示语音模式；classic 与 modern 前端都有设置项和 i18n；三份 README 都补了语音章节。
 - 恢复时要过架构闸门：`codex_live_mode` 属于控制面运行时设置，会走配置 reload；relay 模式的 UDP 端口和媒体 IP 是按副本配置的，3 副本部署下要重新设计。
 - 2026-10-26：已用 `git merge -s ours` 记录祖先关系（dev 提交 `2d0effd2`），内容没有带入。恢复 `0a01cdde` 之后再 `git cherry-pick 03e1da48`，或手工移植。
+
+### `41339ae9` 改动范围
+
+- 规模：16 个文件，+459 / -54。
+- live 会话日志：本地关闭且第一次上游 hangup 尝试之后写一条会话日志；第一次 hangup 失败时返回 HTTP 502，并立即记为未完成，不等后台清理。后续重试不再改写或重复写这条日志（`internal/gateway/live.go`、`live_session.go`）。
+- hangup 重试有上限：每 5 秒重试一次，连同首次和手动尝试最多 3 次。重试期间保留容量槽并拒绝重新接入控制连接；成功或次数用尽后释放本地槽。用尽并不代表上游已终止，服务端告警会带上失败类别和 HTTP 状态。
+- 创建后解析失败时，`LiveCall` 也会返回已知的 CallID 和 Session，交给调用方清理（`internal/execution/live.go`、`internal/execution/cpa/live.go`、`internal/subscription/providers/codex/live.go`、`third_party/cpaembedded/embedded/codex_live.go`）。
+- 对外契约：新增兼容路由 `POST /v1/live/:call_id/hangup`（`data.codex.live.legacy.hangup`，在 `internal/gateway/router.go` 及其路由契约测试中）。三份 README 改写了语音章节的升级说明。
+- 测试：新增 `live_control_test.go`、`live_lifecycle_test.go`，改了 `live_teardown_test.go`、`live_routing_test.go`、`codex_live_test.go`。
+- 恢复时要过架构闸门：hangup 重试和容量槽都是按副本持有的状态，3 副本部署下要确认 hangup 请求能落到持有会话的那个副本。
+- 2026-10-28：已用 `git merge -s ours` 记录祖先关系（dev 提交 `a55a9b63`），内容没有带入。恢复 `03e1da48` 之后再 `git cherry-pick 41339ae9`，或手工移植。
 
 ## 已恢复
 
