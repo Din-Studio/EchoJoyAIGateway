@@ -68,7 +68,7 @@ export function createModernRouter(
       {
         path: pagePath('import'),
         name: 'modern-import',
-        redirect: { name: 'modern-groups', query: { import: '1' } },
+        redirect: { name: 'modern-groups', query: { panel: 'create' } },
         meta: {
           primaryNav: 'modern-groups',
           titleKey: 'pages.import.title',

@@ -52,7 +52,6 @@ export default {
   shell: {
     refresh: '刷新',
     refreshedAt: '更新于 {time}',
-    importCredentials: '导入密钥',
     goHome: 'GPT-Load 总览',
     mascotHint: '长按吉祥物或聚焦后按空格与它互动，按回车返回总览。',
     collapseSidebar: '收起侧栏',
