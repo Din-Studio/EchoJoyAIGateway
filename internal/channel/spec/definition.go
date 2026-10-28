@@ -39,6 +39,13 @@ const (
 	Groq             ID = "groq"
 	Vercel           ID = "vercel"
 	XAI              ID = "xai"
+	Cerebras         ID = "cerebras"
+	Mistral          ID = "mistral"
+	Nebius           ID = "nebius"
+	Parasail         ID = "parasail"
+	Wafer            ID = "wafer"
+	HuggingFace      ID = "huggingface"
+	Cohere           ID = "cohere"
 )
 
 // ProviderKind is the single dispatch key used to resolve a ProviderAdapter.
