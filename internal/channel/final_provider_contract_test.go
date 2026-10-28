@@ -40,6 +40,8 @@ func TestFinalRegistryContainsOnlyApprovedChannels(t *testing.T) {
 		Wafer,
 		HuggingFace,
 		Cohere,
+		OpenCodeGo,
+		OpenCodeZen,
 		GPTLoad,
 		NewAPI,
 		CLIProxyAPI,
