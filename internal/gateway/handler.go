@@ -1048,6 +1048,7 @@ func (handler *Handler) executeAttempts(
 	defer func() { attemptRelease() }()
 	concurrencySaturated := false
 	type preparedRequest struct {
+		configuredParameters  []string
 		request               *dialect.ParsedRequest
 		observations          dialect.RequestMetadata
 		observationsAvailable bool
@@ -1092,6 +1093,7 @@ func (handler *Handler) executeAttempts(
 			cachedPrepared = &prepared
 			return prepared
 		}
+		prepared.configuredParameters = selection.Group.ParameterOverrides.ConfiguredFields(selectedDialect.Protocol(), originalMetadata.Operation, routeModel)
 		if int64(len(body)) > maxRequestBodyBytes {
 			prepared.err = errRequestTooLarge
 			cachedPrepared = &prepared
@@ -1399,7 +1401,8 @@ func (handler *Handler) executeAttempts(
 			restoreCipher = nil
 		}
 		input := ForwardInput{
-			Dialect: selectedDialect, ObserveUsage: attemptObservations.ObserveUsage,
+			ConfiguredParameters: prepared.configuredParameters,
+			Dialect:              selectedDialect, ObserveUsage: attemptObservations.ObserveUsage,
 			RedactionCipher: restoreCipher,
 			Group:           selection.Group, APIKey: normalizedCredential.apiKey,
 			CredentialSecrets: normalizedCredential.secrets, Request: prepared.request,

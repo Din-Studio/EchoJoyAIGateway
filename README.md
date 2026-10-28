@@ -156,6 +156,18 @@ Rerank uses the independent `rerank` protocol through `POST /v1/rerank` on the O
 
 OpenCode Go / Zen use API keys and the existing multi-protocol gateway adapter for native Chat Completions, stateless Responses creation, and Anthropic Messages, including streaming and model discovery. Choose the protocol supported by the upstream model; these presets do not convert protocols automatically. Custom Base URLs use the gateway root without `/v1`. Gemini-native requests and Responses resource operations are not enabled. Go clients should preserve their coding-client identity and conversation session headers.
 
+### Parameter overrides and protocol conversion
+
+Group parameter overrides run before protocol conversion. Use client-protocol names for ordinary parameters: the SDK converts Responses `max_output_tokens` to Anthropic `max_tokens`, for example. For Bifrost conversation conversions, top-level fields explicitly set by an override but absent from the SDK's client request schema are supplied as SDK extra parameters. The SDK still determines whether the target protocol supports them; arbitrary parameter passthrough is not enabled. Unknown client-supplied fields are not automatically forwarded, and existing content-block cache markers retain their behavior.
+
+For example, configure an Anthropic group to supply top-level caching for Responses requests:
+
+```json
+[{"match":{"protocol":"openai-responses"},"set":{"cache_control":{"type":"ephemeral"}}}]
+```
+
+This forwards the cache configuration without guaranteeing an upstream cache hit.
+
 ## Deployment and data
 
 GPT-Load runs as a container that depends on PostgreSQL and Redis. `docker-compose.yml` starts one GPT-Load replica, PostgreSQL, and a single Redis node; for several replicas behind a load balancer, see [Multi-replica deployment](#multi-replica-deployment-experimental).

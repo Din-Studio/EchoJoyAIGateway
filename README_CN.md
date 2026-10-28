@@ -156,6 +156,18 @@ Rerank 使用独立的 `rerank` 协议，在 OpenAI Compatible、New API、GPT-L
 
 OpenCode Go / Zen 使用 API Key，通过现有多协议网关适配器接入原生 Chat Completions、无状态 Responses 创建和 Anthropic Messages，支持流式请求及模型发现。客户端需要选择上游模型支持的协议，这两个预设不自动转换协议。自定义 Base URL 填写不含 `/v1` 的网关根地址；暂不开放 Gemini 原生请求和 Responses 资源操作。Go 客户端应保留编程工具身份及对话会话头。
 
+### 参数覆盖与协议转换
+
+分组参数覆盖在协议转换前应用。普通参数按客户端协议填写，例如 Responses 的 `max_output_tokens` 会由 SDK 转换成 Anthropic 的 `max_tokens`。对于 Bifrost 对话转换，覆盖规则明确设置、但 SDK 客户端请求结构未定义的顶层字段，会作为扩展参数交给 SDK；是否保留仍取决于 SDK 对目标协议的支持，不会开启任意字段透传。客户端自行附加的未知字段不因此获得透传能力，内容块内已有的缓存标记保持原有行为。
+
+例如，在 Anthropic 分组中为 Responses 请求设置顶层缓存参数：
+
+```json
+[{"match":{"protocol":"openai-responses"},"set":{"cache_control":{"type":"ephemeral"}}}]
+```
+
+这会传递缓存配置，不保证上游实际缓存命中。
+
 ## 部署与数据
 
 GPT-Load 以容器运行，依赖 PostgreSQL 与 Redis。`docker-compose.yml` 启动 1 个 GPT-Load 副本、PostgreSQL 和单节点 Redis；需要在负载均衡后运行多个副本时，见[多副本部署](#多副本部署实验性)。
