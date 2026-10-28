@@ -919,11 +919,16 @@ func (r *Runtime) prepare(spec execution.AttemptSpec, stream bool) (preparedAtte
 	request.Model = spec.UpstreamModel
 	request.Fallbacks = nil
 	request.RawRequestBody = nil
-	if request.Params != nil && request.Params.ExtraParams != nil {
-		delete(request.Params.ExtraParams, "provider")
-		delete(request.Params.ExtraParams, "fallback")
-		delete(request.Params.ExtraParams, "fallbacks")
+	if request.Params == nil {
+		request.Params = &schemas.ChatParameters{}
 	}
+	if err := mergeConvertedParameterOverrides(spec, &request.Params.ExtraParams); err != nil {
+		failure := notSentUnaryFailure(execution.ErrorKindInvalidRequest, err.Error())
+		return preparedAttempt{}, &failure
+	}
+	delete(request.Params.ExtraParams, "provider")
+	delete(request.Params.ExtraParams, "fallback")
+	delete(request.Params.ExtraParams, "fallbacks")
 	typedURL, upstreamProtocol, err := convertedTypedTarget(providerKind, customTargetBaseURL, spec.UpstreamModel, false, stream, safeQuery)
 	if err != nil {
 		failure := notSentUnaryFailure(execution.ErrorKindInvalidRequest, "invalid compatible channel target")
