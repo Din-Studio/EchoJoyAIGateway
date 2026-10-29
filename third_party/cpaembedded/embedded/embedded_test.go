@@ -328,6 +328,7 @@ func TestRefreshCodexCredentialOnce(t *testing.T) {
 
 	credential, err := RefreshCodexCredentialOnce(context.Background(), CodexCredential{
 		Type:         ProviderCodex,
+		PlanType:     "pro",
 		AccessToken:  "old-access",
 		RefreshToken: "old-refresh",
 		AccountID:    "account-123",
@@ -341,6 +342,9 @@ func TestRefreshCodexCredentialOnce(t *testing.T) {
 	}
 	if credential.AccessToken != "new-access" || credential.RefreshToken != "new-refresh" {
 		t.Fatalf("credential = %#v", credential)
+	}
+	if credential.PlanType != "pro" {
+		t.Fatalf("刷新丢失套餐提示：%q", credential.PlanType)
 	}
 	if credential.AccountID != "account-123" || credential.Email != "admin@example.com" {
 		t.Fatalf("identity changed: %#v", credential)
