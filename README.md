@@ -168,6 +168,12 @@ For example, configure an Anthropic group to supply top-level caching for Respon
 
 This forwards the cache configuration without guaranteeing an upstream cache hit.
 
+### Data-plane concurrency limits
+
+Global, access key, and group limits can be enabled together; all default to unlimited. System settings provide the global limit and default access key and group limits. Individual access keys and groups may override their defaults: leave an access key value blank or restore group inheritance to use the default; explicitly set `0` for unlimited. Reaching any applicable limit immediately returns `concurrency_limit_exceeded`, without queueing or switching groups or credentials to bypass the limit.
+
+Global and access key counters track unfinished logical requests; group counters track active upstream calls. Streaming holds its slots until forwarding finishes, and Responses WebSocket counts executing turns. Cancelling an existing response remains available. Counters live in Redis and are shared by every replica, so each limit applies to the whole deployment; a scope without a limit is not counted. Settings updates preserve counters and running work. Management requests and background jobs are excluded. When Redis is unavailable, a request under a configured limit is rejected with `503 cluster_state_unavailable`. The console shows current counts and effective limits on the home, access key, and group pages.
+
 ## Deployment and data
 
 GPT-Load runs as a container that depends on PostgreSQL and Redis. `docker-compose.yml` starts one GPT-Load replica, PostgreSQL, and a single Redis node; for several replicas behind a load balancer, see [Multi-replica deployment](#multi-replica-deployment-experimental).

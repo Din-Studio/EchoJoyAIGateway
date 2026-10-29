@@ -283,6 +283,7 @@ func TestAutoMigrateCreatesSchemaAndMigrationLedger(t *testing.T) {
 		"0023_auto_decision_attribution",
 		"0024_client_model_overrides",
 		"0025_request_audit",
+		"0026_access_key_concurrency",
 	}
 	if !reflect.DeepEqual(migrationIDs, wantMigrationIDs) {
 		t.Fatalf("schema_migrations IDs = %v, want %v", migrationIDs, wantMigrationIDs)

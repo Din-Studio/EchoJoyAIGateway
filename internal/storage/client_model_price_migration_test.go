@@ -18,7 +18,7 @@ func testClientModelPriceUpgrade(t *testing.T, db *gorm.DB) {
 		t.Fatal(err)
 	}
 	key := models.AccessKey{Name: "existing", KeyValue: "cipher", KeyHash: "client-price-hash", KeySuffix: "cafe", Status: "active", Filters: models.JSON(`{}`)}
-	if err := db.Omit("KeyPrefix").Create(&key).Error; err != nil {
+	if err := db.Omit("KeyPrefix", "ConcurrencyLimit").Create(&key).Error; err != nil {
 		t.Fatal(err)
 	}
 	legacyRequest := models.RequestLog{ID: "00000000-0000-4000-8000-000000000022", CompletedAtMS: 1000, AccessKeyID: key.ID,

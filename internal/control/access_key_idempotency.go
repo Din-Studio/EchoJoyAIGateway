@@ -24,15 +24,16 @@ type accessKeyFilterDigestBody struct {
 }
 
 type accessKeyCreateDigestBody struct {
-	KeyHash         string                          `json:"key_hash,omitempty"`
-	PriceMultiplier string                          `json:"price_multiplier,omitempty"`
-	Name            string                          `json:"name"`
-	Note            string                          `json:"note,omitempty"`
-	Status          *state.AccessKeyStatus          `json:"status,omitempty"`
-	Filters         accessKeyFilterDigestBody       `json:"filters"`
-	RPMLimit        int64                           `json:"rpm_limit"`
-	CostLimitRules  []AccessKeyCostLimitRuleRequest `json:"cost_limit_rules,omitempty"`
-	ExpiresAtMS     *int64                          `json:"expires_at_ms,omitempty"`
+	ConcurrencyLimit *int64                          `json:"concurrency_limit,omitempty"`
+	KeyHash          string                          `json:"key_hash,omitempty"`
+	PriceMultiplier  string                          `json:"price_multiplier,omitempty"`
+	Name             string                          `json:"name"`
+	Note             string                          `json:"note,omitempty"`
+	Status           *state.AccessKeyStatus          `json:"status,omitempty"`
+	Filters          accessKeyFilterDigestBody       `json:"filters"`
+	RPMLimit         int64                           `json:"rpm_limit"`
+	CostLimitRules   []AccessKeyCostLimitRuleRequest `json:"cost_limit_rules,omitempty"`
+	ExpiresAtMS      *int64                          `json:"expires_at_ms,omitempty"`
 }
 
 func (s *Service) CreateAccessKeyIdempotent(
@@ -64,6 +65,10 @@ func (s *Service) CreateAccessKeyIdempotent(
 	if err != nil {
 		return AccessKeyCreateResult{}, err
 	}
+	concurrencyLimit, err := normalizeConcurrencyLimit(request.ConcurrencyLimit)
+	if err != nil {
+		return AccessKeyCreateResult{}, err
+	}
 	costLimitRules, err := normalizeAccessKeyCostLimitRules(request.CostLimitRules, false)
 	if err != nil {
 		return AccessKeyCreateResult{}, err
@@ -88,9 +93,10 @@ func (s *Service) CreateAccessKeyIdempotent(
 	}
 	digestFilters := canonicalAccessKeyFilterSet(filters)
 	canonicalBody, err := canonicalIdempotencyBody(accessKeyCreateDigestBody{
-		KeyHash:         keyHash,
-		PriceMultiplier: priceMultiplierDigest(priceMultiplier),
-		Name:            name, Note: note, Status: digestStatus, Filters: digestFilters, RPMLimit: rpmLimit,
+		ConcurrencyLimit: concurrencyLimit,
+		KeyHash:          keyHash,
+		PriceMultiplier:  priceMultiplierDigest(priceMultiplier),
+		Name:             name, Note: note, Status: digestStatus, Filters: digestFilters, RPMLimit: rpmLimit,
 		CostLimitRules: costLimitRuleRequestsForDigest(costLimitRules),
 		ExpiresAtMS:    request.ExpiresAtMS,
 	})
@@ -132,6 +138,7 @@ func (s *Service) CreateAccessKeyIdempotent(
 			}
 			row.PriceMultiplierMicros = priceMultiplierStorage(priceMultiplier)
 			row.Note = note
+			row.ConcurrencyLimit = concurrencyLimit
 			row.Status = string(status)
 			row.ExpiresAtMS = cloneOptionalInt64(request.ExpiresAtMS)
 			if err := tx.Create(&row).Error; err != nil {
@@ -196,6 +203,9 @@ func (s *Service) CreateAccessKeyIdempotent(
 	if plaintext, ok := operationResult.Ephemeral.(string); ok &&
 		!operationResult.Replayed {
 		result.Key = plaintext
+	}
+	if err := s.fillAccessKeyConcurrency(ctx, &result.AccessKeyMetadata); err != nil {
+		return AccessKeyCreateResult{}, err
 	}
 	return result, nil
 }

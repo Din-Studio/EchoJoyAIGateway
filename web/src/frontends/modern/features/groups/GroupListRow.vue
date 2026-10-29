@@ -22,6 +22,7 @@ import {
 } from '@modern/components/ui'
 import { formatCompactNumber, formatMoneyNano } from '@modern/components/ui/format'
 import type { SemanticTone } from '@modern/components/ui/types'
+import { formatConcurrency, type ConcurrencyView } from '@shared/concurrency'
 import { useApiClient } from '@shared/http/client-context'
 
 const props = defineProps<{
@@ -43,6 +44,7 @@ const emit = defineEmits<{
   clearWeightError: []
 }>()
 const { t, n, locale } = useI18n()
+const concurrencyText = (value: ConcurrencyView) => formatConcurrency(value, t)
 const client = useApiClient()
 const route = useRoute()
 const addCredentialsLabel = computed(() =>
@@ -202,6 +204,7 @@ const lastActive = computed(() =>
               :label="t('groups.copyURL')"
             />
             <span v-else>{{ t('groups.defaultEndpoint') }}</span>
+            <span>{{ concurrencyText(group.concurrency) }}</span>
           </div>
         </div>
       </div>

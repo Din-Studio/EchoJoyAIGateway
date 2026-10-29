@@ -117,6 +117,9 @@ func (s *websocketConnection) newTurnRecorder(turn websocketTurn) *requestRecord
 }
 
 func (s *websocketConnection) executeTurn(turn websocketTurn) {
+	// The request slot is released after the turn's log is emitted.
+	releaseRequest := func() {}
+	defer func() { releaseRequest() }()
 	h := s.handler
 	recorder := s.newTurnRecorder(turn)
 	requestID := recorder.requestID
@@ -157,6 +160,16 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		s.cancel()
 		return
 	}
+	release, failure, err := h.acquireRequestConcurrency(s.ctx, key.ID)
+	if err != nil {
+		reject(limitStateFailureReason(err))
+		return
+	}
+	if failure != nil {
+		reject(*failure)
+		return
+	}
+	releaseRequest = release
 	recorder.accessKeyMultiplier = key.PriceMultiplier
 	recorder.currency = snapshot.Settings.Currency
 	decision, err := h.accessQuota.Check(s.ctx, snapshot, key.ID, h.quotaNow())
@@ -526,6 +539,16 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 			}
 			recorder.setAffinityHit(requiredRef != nil || selection.CredentialID == affinity.preferredCredentialID, kind)
 		}
+		releaseGroup, failure, err := h.acquireGroupConcurrency(requestCtx, selection.GroupID)
+		if err != nil {
+			reject(limitStateFailureReason(err))
+			return
+		}
+		if failure != nil {
+			reject(*failure)
+			return
+		}
+		defer releaseGroup()
 		started := recorder.beforeForward()
 		forwardAttempts++
 		ctx, cancel := context.WithTimeout(requestCtx, selection.Group.Timeouts.Request)
@@ -593,6 +616,7 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		}
 		cancel()
 		releaseInput()
+		releaseGroup()
 		for _, name := range []string{"X-Request-Id", "Request-Id", "Openai-Request-Id", "X-Oai-Request-Id"} {
 			if value := result.Header.Get(name); value != "" && len(value) <= 1024 {
 				result.UpstreamRequestID = recorder.redactor.String(value, credential.secrets...)

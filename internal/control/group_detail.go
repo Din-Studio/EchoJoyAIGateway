@@ -15,6 +15,7 @@ import (
 )
 
 type GroupEffectiveConfigResponse struct {
+	ConcurrencyLimit          int64               `json:"concurrency_limit"`
 	FirstByteTimeout          int64               `json:"first_byte_timeout"`
 	RequestTimeout            int64               `json:"request_timeout"`
 	StreamIdleTimeout         int64               `json:"stream_idle_timeout"`
@@ -91,6 +92,7 @@ func effectiveGroupConfig(
 		AffinityEnabled:           resolved.AffinityEnabled,
 		ResponsesWebsocketEnabled: resolved.ResponsesWebsocketEnabled,
 		EmptyResponseRetry:        resolved.EmptyResponseRetry,
+		ConcurrencyLimit:          resolved.ConcurrencyLimit,
 	}, nil
 }
 

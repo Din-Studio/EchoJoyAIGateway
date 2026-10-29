@@ -53,6 +53,9 @@ export const zhCN = {
     system: '版本与部署信息',
   },
   fields: {
+    global_concurrency_limit: '全局并发上限',
+    default_access_key_concurrency_limit: '访问密钥默认并发上限',
+    default_group_concurrency_limit: '分组默认并发上限',
     request_redaction: '请求脱敏',
     jev: 'JEV 公共配置',
     request_audit: '智能护栏',
@@ -81,6 +84,10 @@ export const zhCN = {
     exchange_rate: '汇率',
   },
   hints: {
+    global_concurrency_limit: '0 表示不限，按整个集群计数。仅限制数据面并发，满额立即拒绝。',
+    default_access_key_concurrency_limit:
+      '0 表示不限，按整个集群计数。仅限制数据面并发，满额立即拒绝。',
+    default_group_concurrency_limit: '0 表示不限，按整个集群计数。仅限制数据面并发，满额立即拒绝。',
     request_redaction: '配置发送给上游与 JEV 的文本脱敏规则',
     jev: '自动模型与语义审计共用。请求文本会发送到所选分组；语义审计需要明确指定分组。',
     request_audit: '使用 JEV 按自定义规则拦截或告警。',
@@ -239,6 +246,9 @@ export const enUS = {
     system: 'Version and deployment',
   },
   fields: {
+    global_concurrency_limit: 'Global concurrency limit',
+    default_access_key_concurrency_limit: 'Default access key concurrency limit',
+    default_group_concurrency_limit: 'Default group concurrency limit',
     request_redaction: 'Request redaction',
     jev: 'Shared JEV configuration',
     request_audit: 'AI Guardrails',
@@ -267,6 +277,12 @@ export const enUS = {
     exchange_rate: 'Exchange rate',
   },
   hints: {
+    global_concurrency_limit:
+      '0 means unlimited; counted across the whole cluster. Applies to data-plane concurrency; reject immediately when full.',
+    default_access_key_concurrency_limit:
+      '0 means unlimited; counted across the whole cluster. Applies to data-plane concurrency; reject immediately when full.',
+    default_group_concurrency_limit:
+      '0 means unlimited; counted across the whole cluster. Applies to data-plane concurrency; reject immediately when full.',
     request_redaction: 'Configure text redaction for upstream providers and JEV',
     jev: 'Used by automatic models and semantic auditing. Request text is sent to this route; semantic auditing requires an explicit group.',
     request_audit: 'Use JEV to block or warn on custom rules.',
@@ -434,6 +450,9 @@ export const jaJP = {
     system: 'バージョンと配置情報',
   },
   fields: {
+    global_concurrency_limit: '全体の同時実行数上限',
+    default_access_key_concurrency_limit: 'アクセスキーのデフォルト同時実行数上限',
+    default_group_concurrency_limit: 'グループのデフォルト同時実行数上限',
     request_redaction: 'リクエストのマスキング',
     jev: 'JEV 共通設定',
     request_audit: 'AI ガードレール',
@@ -462,6 +481,12 @@ export const jaJP = {
     exchange_rate: '為替レート',
   },
   hints: {
+    global_concurrency_limit:
+      '0 は無制限。クラスター全体で集計します。データプレーンの同時実行を制限し、上限到達時は即座に拒否します。',
+    default_access_key_concurrency_limit:
+      '0 は無制限。クラスター全体で集計します。データプレーンの同時実行を制限し、上限到達時は即座に拒否します。',
+    default_group_concurrency_limit:
+      '0 は無制限。クラスター全体で集計します。データプレーンの同時実行を制限し、上限到達時は即座に拒否します。',
     request_redaction: '上流と JEV に送信するテキストのマスキングルールを設定',
     jev: '自動モデルと意味監査で共用します。リクエスト本文を選択したグループに送信します。意味監査にはグループの指定が必要です。',
     request_audit: 'JEV が独自ルールでブロックまたは警告します。',

@@ -131,6 +131,7 @@ type serviceFixture struct {
 	redis           *miniredis.Miniredis
 	cluster         *cluster.Client
 	accessQuota     *cluster.AccessQuota
+	concurrency     *cluster.Concurrency
 	sharedHealth    *cluster.CredentialHealth
 	service         *Service
 }
@@ -228,6 +229,7 @@ func newServiceFixtureWithDatabase(t *testing.T, db *gorm.DB) serviceFixture {
 	requestLogStats := &staticRequestLogStatsReader{}
 	priceRuntime := NewPriceRuntime()
 	catalogRuntime := &catalog.Runtime{}
+	concurrency := cluster.NewConcurrency(clusterClient)
 	service := NewService(
 		db,
 		manager,
@@ -246,6 +248,7 @@ func newServiceFixtureWithDatabase(t *testing.T, db *gorm.DB) serviceFixture {
 		mutations,
 		requestLogStats,
 		accessQuota,
+		concurrency,
 		sharedHealth,
 		refreshLease,
 		cluster.NewRPMStats(clusterClient),
@@ -260,7 +263,7 @@ func newServiceFixtureWithDatabase(t *testing.T, db *gorm.DB) serviceFixture {
 		db: db, manager: manager, registry: registry, channelRegistry: channelRegistry, encryption: keyService,
 		priceRuntime: priceRuntime, catalogRuntime: catalogRuntime,
 		stats: stats, mutations: mutations, requestLogStats: requestLogStats,
-		redis: redisServer, cluster: clusterClient, accessQuota: accessQuota, sharedHealth: sharedHealth,
+		redis: redisServer, cluster: clusterClient, accessQuota: accessQuota, concurrency: concurrency, sharedHealth: sharedHealth,
 		service: service,
 	}
 }
@@ -277,12 +280,12 @@ func newTestServer(t testing.TB, cfg *config.Config, service *Service) *Server {
 // the fixture's Redis.
 func newTestGatewaySharedState(fixture serviceFixture) gateway.SharedState {
 	return gateway.SharedState{
-		AccessQuota:           fixture.accessQuota,
-		Health:                fixture.sharedHealth,
-		ResponseBindings:      cluster.NewResponseBindings(fixture.cluster, time.Hour),
-		Affinity:              cluster.NewAffinity(fixture.cluster),
-		CredentialConcurrency: cluster.NewCredentialConcurrency(fixture.cluster),
-		GuardrailEvidence:     cluster.NewGuardrailVerdicts(fixture.cluster, requestaudit.EvidenceTTL),
+		AccessQuota:       fixture.accessQuota,
+		Health:            fixture.sharedHealth,
+		ResponseBindings:  cluster.NewResponseBindings(fixture.cluster, time.Hour),
+		Affinity:          cluster.NewAffinity(fixture.cluster),
+		Concurrency:       fixture.concurrency,
+		GuardrailEvidence: cluster.NewGuardrailVerdicts(fixture.cluster, requestaudit.EvidenceTTL),
 	}
 }
 
