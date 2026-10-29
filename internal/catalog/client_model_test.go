@@ -167,3 +167,20 @@ func assertCodexInstructionFields(t *testing.T, model map[string]any) {
 }
 
 func ptr(value string) *string { return &value }
+
+func TestCodexClientUpdateCapabilities(t *testing.T) {
+	for _, id := range []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6-astra"} {
+		model, _, _, err := BuildCodexClientModel(id, 0, ClientModelOverrides{})
+		if err != nil || model["supports_reasoning_effort_updates"] != true {
+			t.Errorf("%s capability = %v, %v", id, model["supports_reasoning_effort_updates"], err)
+		}
+	}
+	model, err := BuildCodexFallbackClientModel("gpt-6.1-sol", 0)
+	if err != nil || model["supports_reasoning_effort_updates"] == true {
+		t.Fatalf("虚拟回退模型不应声明更新能力：%v, %v", model["supports_reasoning_effort_updates"], err)
+	}
+	model, _, _, _ = BuildCodexClientModel("unknown-model", 0, ClientModelOverrides{})
+	if model["supports_reasoning_effort_updates"] == true {
+		t.Fatal("unknown model advertises updates")
+	}
+}

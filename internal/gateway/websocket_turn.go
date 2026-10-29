@@ -1123,6 +1123,9 @@ func (s *websocketConnection) runWebsocketAttempt(ctx context.Context, cancel co
 		}
 		return emitRestored(ctx, frames)
 	})
+	if wsResult.AppliedReasoning != nil {
+		result.AppliedReasoning = wsResult.AppliedReasoning.Clone()
+	}
 	if restored != nil && wsResult.Error == nil && restoreFailure == nil {
 		frames, err := restored.Finish()
 		if err != nil {

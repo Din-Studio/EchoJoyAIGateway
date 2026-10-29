@@ -598,6 +598,9 @@ func (recorder *requestRecorder) bindUsage(
 		pricingMode = frozen.pricingMode
 		recorder.setReasoning(frozen.reasoning)
 	}
+	if attempt.Reasoning.Present() {
+		recorder.setReasoning(attempt.Reasoning)
+	}
 	if !applicable || !usageApplicable {
 		result = usage.Result{State: usage.StateNotApplicable}
 	} else if !validCapturedUsage(result) {
