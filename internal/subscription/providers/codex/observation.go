@@ -29,7 +29,7 @@ func NormalizeQuota(primary, details []byte) ([]byte, error) {
 		return nil, errors.New("invalid subscription quota observation")
 	}
 	result := quotaSnapshot{QuotaWindows: []quotaWindow{}}
-	result.Plan = codexPlan(cleanString(firstValue(payload, "plan_type", "planType")))
+	result.Plan = NormalizePlan(cleanString(firstValue(payload, "plan_type", "planType")))
 	if credits, ok := object(firstValue(payload, "rate_limit_reset_credits", "rateLimitResetCredits")); ok {
 		if value, ok := integer(firstValue(credits, "available_count", "availableCount")); ok {
 			result.ResetCreditsAvailable = &value
@@ -512,7 +512,8 @@ func windowLabel(window map[string]any, fallback, scope string) string {
 	return providerobservation.WindowLabel(subject, seconds)
 }
 
-func codexPlan(value string) quotaPlanSummary {
+// NormalizePlan 为实时观测和凭据提示提供一致的套餐展示。
+func NormalizePlan(value string) quotaPlanSummary {
 	normalized := strings.NewReplacer("_", "", "-", "", " ", "").Replace(strings.ToLower(strings.TrimSpace(value)))
 	switch normalized {
 	case "pro":
