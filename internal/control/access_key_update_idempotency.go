@@ -113,5 +113,8 @@ func (s *Service) UpdateAccessKeyIdempotent(ctx context.Context, idempotencyKey 
 	if err := json.Unmarshal(operation.CanonicalResult, &result); err != nil {
 		return AccessKeyMetadata{}, app_errors.ErrInternalServer
 	}
+	if err := s.fillAccessKeyConcurrency(ctx, &result); err != nil {
+		return AccessKeyMetadata{}, err
+	}
 	return result, nil
 }

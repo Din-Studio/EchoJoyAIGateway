@@ -97,6 +97,9 @@ func (s *Service) ListAccessKeyCollection(
 			records[index].CostLimitStatus = &status
 		}
 	}
+	if err := s.fillAccessKeyCollectionConcurrency(ctx, snapshot, records); err != nil {
+		return AccessKeyCollectionResponse{}, err
+	}
 	if query.modern {
 		ids := make([]uint, len(records))
 		for i, record := range records {

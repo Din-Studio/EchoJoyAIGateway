@@ -1452,6 +1452,10 @@ components:
           minimum: 0
           default: 0
           description: 每分钟请求上限，0 表示不限；不可为 `null`。
+        concurrency_limit:
+          type: [integer, 'null']
+          minimum: 0
+          description: 该密钥的并发上限（整个集群计数）；省略或 `null` 继承系统默认值，`0` 表示不限。
         cost_limit_rules:
           type: array
           description: 不可带 `id`；不可为 `null`。
@@ -1478,6 +1482,10 @@ components:
         price_multiplier: { $ref: '#/components/schemas/PriceMultiplier' }
         filters: { $ref: '#/components/schemas/AccessKeyFilters' }
         rpm_limit: { type: integer, minimum: 0 }
+        concurrency_limit:
+          type: [integer, 'null']
+          minimum: 0
+          description: 并发上限；`null` 表示改为继承系统默认值，`0` 表示不限。
         cost_limit_rules:
           type: array
           items: { $ref: '#/components/schemas/CostLimitRuleInput' }
@@ -1496,6 +1504,8 @@ components:
         - price_multiplier
         - filters
         - rpm_limit
+        - concurrency_limit
+        - concurrency
         - cost_limit_rules
         - expires_at_ms
         - created_at_ms
@@ -1516,6 +1526,10 @@ components:
         price_multiplier: { $ref: '#/components/schemas/PriceMultiplier' }
         filters: { $ref: '#/components/schemas/AccessKeyFiltersOutput' }
         rpm_limit: { type: integer }
+        concurrency_limit:
+          type: [integer, 'null']
+          description: 配置的并发上限；`null` 表示继承系统默认值。
+        concurrency: { $ref: '#/components/schemas/ConcurrencyView' }
         cost_limit_rules:
           type: array
           items: { $ref: '#/components/schemas/CostLimitRule' }
@@ -1526,6 +1540,19 @@ components:
         expires_at_ms: { type: [integer, 'null'] }
         created_at_ms: { type: integer }
         updated_at_ms: { type: integer }
+
+    ConcurrencyView:
+      type: object
+      required: [current, limit]
+      properties:
+        current:
+          type: integer
+          minimum: 0
+          description: 当前跨所有副本持有的并发数；未配置上限（`limit` 为 0）时不计数，恒为 0。
+        limit:
+          type: integer
+          minimum: 0
+          description: 生效的并发上限，0 表示不限。
 
     AccessKeySecretResult:
       description: 创建或轮换结果。

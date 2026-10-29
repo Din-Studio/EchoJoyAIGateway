@@ -299,7 +299,7 @@ func TestCredentialConcurrencyUnlimitedCredentialNeverTouchesRedis(t *testing.T)
 			)
 			setCredentialConcurrencyLimits(t, registry, map[uint]int{1: test.limit})
 			server := miniredis.RunT(t)
-			handler.concurrency = cluster.NewCredentialConcurrency(clustertest.Connect(t, server, "node-down"))
+			handler.concurrency = cluster.NewConcurrency(clustertest.Connect(t, server, "node-down"))
 			server.Close()
 
 			response := serveConcurrencyRequest(engine, `{"model":"gpt-4o"}`)
@@ -309,4 +309,14 @@ func TestCredentialConcurrencyUnlimitedCredentialNeverTouchesRedis(t *testing.T)
 			}
 		})
 	}
+}
+
+// The scripted limiter only models credential slots; request and group
+// scopes stay unlimited.
+func (limiter *scriptedConcurrencyLimiter) AcquireRequest(context.Context, uint, int64, int64) (func(), bool, error) {
+	return func() {}, true, nil
+}
+
+func (limiter *scriptedConcurrencyLimiter) AcquireGroup(context.Context, uint, int64) (func(), bool, error) {
+	return func() {}, true, nil
 }

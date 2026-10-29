@@ -18,7 +18,7 @@ func testBillingCurrencyUpgrade(t *testing.T, db *gorm.DB) {
 		t.Fatal(err)
 	}
 	key := models.AccessKey{Name: "existing", KeyValue: "cipher", KeyHash: "billing-hash", KeySuffix: "cafe", Status: "active", Filters: models.JSON(`{}`)}
-	if err := db.Omit("KeyPrefix").Create(&key).Error; err != nil {
+	if err := db.Omit("KeyPrefix", "ConcurrencyLimit").Create(&key).Error; err != nil {
 		t.Fatal(err)
 	}
 	var ruleID uint

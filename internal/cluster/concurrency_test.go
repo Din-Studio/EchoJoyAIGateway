@@ -7,7 +7,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 )
 
-func newConcurrencyInstance(t *testing.T, server *miniredis.Miniredis, instanceID string) *CredentialConcurrency {
+func newConcurrencyInstance(t *testing.T, server *miniredis.Miniredis, instanceID string) *Concurrency {
 	t.Helper()
 	cfg := clusterTestConfig(t, server.Addr())
 	cfg.Cluster.InstanceID = instanceID
@@ -16,13 +16,13 @@ func newConcurrencyInstance(t *testing.T, server *miniredis.Miniredis, instanceI
 		t.Fatalf("NewClient() error = %v", err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	limiter := NewCredentialConcurrency(client)
+	limiter := NewConcurrency(client)
 	// Tests drive renewal explicitly through renewHeld.
 	limiter.renewInterval = time.Hour
 	return limiter
 }
 
-func mustAcquireSlot(t *testing.T, limiter *CredentialConcurrency, credentialID uint, limit int, want bool) func() {
+func mustAcquireSlot(t *testing.T, limiter *Concurrency, credentialID uint, limit int, want bool) func() {
 	t.Helper()
 	release, acquired, err := limiter.Acquire(t.Context(), credentialID, limit)
 	if err != nil {
@@ -116,5 +116,88 @@ func TestCredentialConcurrencyFailsWhenRedisIsDown(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("Acquire() with Redis down took %v, want about %v", elapsed, stateTimeout)
+	}
+}
+
+func mustAcquireRequest(t *testing.T, limiter *Concurrency, accessKeyID uint, globalLimit, keyLimit int64, want bool) func() {
+	t.Helper()
+	release, acquired, err := limiter.AcquireRequest(t.Context(), accessKeyID, globalLimit, keyLimit)
+	if err != nil {
+		t.Fatalf("AcquireRequest(%d, %d, %d) error = %v", accessKeyID, globalLimit, keyLimit, err)
+	}
+	if acquired != want {
+		t.Fatalf("AcquireRequest(%d, %d, %d) acquired = %v, want %v", accessKeyID, globalLimit, keyLimit, acquired, want)
+	}
+	return release
+}
+
+func TestConcurrencyRequestLimitsAreSharedAndRolledBack(t *testing.T) {
+	server := miniredis.RunT(t)
+	first := newConcurrencyInstance(t, server, "node-a")
+	second := newConcurrencyInstance(t, server, "node-b")
+
+	// Global 2, key 1: the second instance sees the first instance's slots.
+	releaseA := mustAcquireRequest(t, first, 1, 2, 1, true)
+	mustAcquireRequest(t, second, 1, 2, 1, false)
+	releaseB := mustAcquireRequest(t, second, 2, 2, 1, true)
+	mustAcquireRequest(t, second, 3, 2, 1, false)
+	global, err := first.GlobalInflight(t.Context())
+	if err != nil || global != 2 {
+		t.Fatalf("GlobalInflight() = %d, %v", global, err)
+	}
+	keys, err := second.AccessKeyInflight(t.Context(), []uint{1, 2, 3})
+	if err != nil || keys[1] != 1 || keys[2] != 1 || keys[3] != 0 {
+		t.Fatalf("AccessKeyInflight() = %v, %v", keys, err)
+	}
+
+	releaseA()
+	releaseA()
+	releaseB()
+	// A full access key gives the global slot back: key 1 is full, so key 2
+	// still fits under a global limit of 1.
+	releaseC := mustAcquireRequest(t, first, 1, 2, 1, true)
+	mustAcquireRequest(t, second, 1, 1, 1, false)
+	mustAcquireRequest(t, second, 2, 2, 1, true)
+	releaseC()
+}
+
+func TestConcurrencyGroupLimitIsSharedAcrossInstances(t *testing.T) {
+	server := miniredis.RunT(t)
+	first := newConcurrencyInstance(t, server, "node-a")
+	second := newConcurrencyInstance(t, server, "node-b")
+	release, acquired, err := first.AcquireGroup(t.Context(), 9, 1)
+	if err != nil || !acquired {
+		t.Fatalf("AcquireGroup() = %v, %v", acquired, err)
+	}
+	if _, acquired, err := second.AcquireGroup(t.Context(), 9, 1); err != nil || acquired {
+		t.Fatalf("second AcquireGroup() = %v, %v, want full", acquired, err)
+	}
+	groups, err := second.GroupInflight(t.Context(), []uint{9, 10})
+	if err != nil || groups[9] != 1 || groups[10] != 0 {
+		t.Fatalf("GroupInflight() = %v, %v", groups, err)
+	}
+	release()
+	if _, acquired, err := second.AcquireGroup(t.Context(), 9, 1); err != nil || !acquired {
+		t.Fatalf("AcquireGroup() after release = %v, %v", acquired, err)
+	}
+}
+
+func TestConcurrencyUnlimitedScopesSkipRedis(t *testing.T) {
+	server := miniredis.RunT(t)
+	limiter := newConcurrencyInstance(t, server, "node-a")
+	server.Close()
+	release, acquired, err := limiter.AcquireRequest(t.Context(), 4, 0, 0)
+	if err != nil || !acquired || release == nil {
+		t.Fatalf("AcquireRequest(unlimited, Redis down) = %v, %v", acquired, err)
+	}
+	release()
+	if _, _, err := limiter.AcquireRequest(t.Context(), 4, 1, 0); err == nil {
+		t.Fatal("AcquireRequest(global limit, Redis down) error = nil")
+	}
+	if _, _, err := limiter.AcquireGroup(t.Context(), 4, 1); err == nil {
+		t.Fatal("AcquireGroup(Redis down) error = nil")
+	}
+	if _, err := limiter.GlobalInflight(t.Context()); err == nil {
+		t.Fatal("GlobalInflight(Redis down) error = nil")
 	}
 }

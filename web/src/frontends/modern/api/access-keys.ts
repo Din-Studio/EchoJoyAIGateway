@@ -1,3 +1,4 @@
+import { readConcurrency, type ConcurrencyView } from '@shared/concurrency'
 import type { ApiClient } from '@shared/http/client'
 import { InvalidResponseError } from '@shared/http/errors'
 import { boolean, integer, list, oneOf, record, text } from './response'
@@ -29,6 +30,7 @@ export interface CostWindow extends CostRule {
   window_ends_at_ms: number | null
 }
 export interface AccessKey {
+  concurrency: ConcurrencyView
   id: number
   name: string
   note: string
@@ -36,6 +38,7 @@ export interface AccessKey {
   status: 'active' | 'disabled'
   filters: AccessScope
   expires_at_ms: number | null
+  concurrency_limit: number | null
   rpm_limit: number
   price_multiplier: string
   cost_limit_rules: CostRule[]
@@ -82,6 +85,7 @@ export interface AccessInput {
   status: AccessKey['status']
   filters: AccessScope
   expires_at_ms: number | null
+  concurrency_limit: number | null
   rpm_limit: number
   price_multiplier: string
   cost_limit_rules: CostRule[]
@@ -135,6 +139,8 @@ function readAccessKey(value: unknown): AccessKey {
       allowed_cidrs: list(scope.allowed_cidrs).map(text),
     },
     expires_at_ms: timestamp(row.expires_at_ms),
+    concurrency_limit: row.concurrency_limit == null ? null : integer(row.concurrency_limit),
+    concurrency: readConcurrency(row.concurrency),
     rpm_limit: integer(row.rpm_limit),
     price_multiplier: decimal(row.price_multiplier),
     cost_limit_rules: list(row.cost_limit_rules).map(readRule),

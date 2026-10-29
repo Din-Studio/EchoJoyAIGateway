@@ -72,6 +72,7 @@ func BuildContainer() (*dig.Container, error) {
 		cluster.NewCredentialHealth,
 		cluster.NewRefreshLease,
 		cluster.NewRPMStats,
+		cluster.NewConcurrency,
 		cluster.NewJobLease,
 		cluster.NewCatalogStore,
 		cluster.NewAuthFailures,
@@ -289,14 +290,15 @@ func newGatewaySharedState(
 	client *cluster.Client,
 	quota *cluster.AccessQuota,
 	credentialHealth *cluster.CredentialHealth,
+	concurrency *cluster.Concurrency,
 ) gateway.SharedState {
 	return gateway.SharedState{
-		AccessQuota:           quota,
-		Health:                credentialHealth,
-		ResponseBindings:      cluster.NewResponseBindings(client, cfg.Cluster.ResponseBindingTTL),
-		Affinity:              cluster.NewAffinity(client),
-		CredentialConcurrency: cluster.NewCredentialConcurrency(client),
-		GuardrailEvidence:     cluster.NewGuardrailVerdicts(client, requestaudit.EvidenceTTL),
+		AccessQuota:       quota,
+		Health:            credentialHealth,
+		ResponseBindings:  cluster.NewResponseBindings(client, cfg.Cluster.ResponseBindingTTL),
+		Affinity:          cluster.NewAffinity(client),
+		Concurrency:       concurrency,
+		GuardrailEvidence: cluster.NewGuardrailVerdicts(client, requestaudit.EvidenceTTL),
 	}
 }
 

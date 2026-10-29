@@ -71,12 +71,15 @@ type AccessKeyRPMLimiter interface {
 	Allow(ctx context.Context, accessKeyID uint, limit int64) (ratelimit.LimitDecision, error)
 }
 
-// CredentialConcurrencyLimiter caps the upstream requests in flight per
-// credential across every instance. A non-positive limit is unlimited. When
-// acquired, release must be called once the upstream exchange has finished;
-// an error means the shared state is unavailable.
-type CredentialConcurrencyLimiter interface {
+// ConcurrencyLimiter caps the work in flight across every instance: upstream
+// requests per credential, upstream calls per group, and logical requests per
+// access key and cluster-wide. A non-positive limit is unlimited. When
+// acquired, release must be called once the work has finished; an error means
+// the shared state is unavailable.
+type ConcurrencyLimiter interface {
 	Acquire(ctx context.Context, credentialID uint, limit int) (release func(), acquired bool, err error)
+	AcquireRequest(ctx context.Context, accessKeyID uint, globalLimit, keyLimit int64) (release func(), acquired bool, err error)
+	AcquireGroup(ctx context.Context, groupID uint, limit int64) (release func(), acquired bool, err error)
 }
 
 // ResponseBindingStore owns Responses ownership, shared through Redis.
@@ -145,7 +148,7 @@ type Handler struct {
 	lifecycle           *httplifecycle.Coordinator
 	affinity            AffinityStore
 	responseBindings    ResponseBindingStore
-	concurrency         CredentialConcurrencyLimiter
+	concurrency         ConcurrencyLimiter
 	websocketLimits     websocketLimits
 	websocketBudget     websocketBudget
 }
@@ -179,12 +182,12 @@ func (handler *Handler) freezeAttemptPricing(
 // SharedState groups the Redis-backed request state every gateway instance
 // shares. Every field is required.
 type SharedState struct {
-	AccessQuota           AccessQuotaGate
-	Health                state.SharedCredentialHealthStore
-	ResponseBindings      ResponseBindingStore
-	Affinity              AffinityStore
-	CredentialConcurrency CredentialConcurrencyLimiter
-	GuardrailEvidence     GuardrailEvidenceStore
+	AccessQuota       AccessQuotaGate
+	Health            state.SharedCredentialHealthStore
+	ResponseBindings  ResponseBindingStore
+	Affinity          AffinityStore
+	Concurrency       ConcurrencyLimiter
+	GuardrailEvidence GuardrailEvidenceStore
 }
 
 func NewHandler(
@@ -217,7 +220,7 @@ func NewHandler(
 		sharedHealth:     shared.Health,
 		affinity:         shared.Affinity,
 		responseBindings: shared.ResponseBindings,
-		concurrency:      shared.CredentialConcurrency,
+		concurrency:      shared.Concurrency,
 		guardrails:       shared.GuardrailEvidence,
 		websocketLimits:  defaultWebsocketLimits(),
 		newRequestID:     newRequestID,
@@ -592,6 +595,16 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 		return
 	}
 	if requestContext.selectedRoute.Kind == endpointUsage {
+		release, failure, err := handler.acquireRequestConcurrency(ginContext.Request.Context(), requestContext.accessKey.ID)
+		if err != nil {
+			handler.completeLimitStateFailure(ginContext, nil, "concurrency.acquire_request", err)
+			return
+		}
+		if failure != nil {
+			_ = handler.writeReason(ginContext, *failure)
+			return
+		}
+		defer release()
 		handler.handleUsage(ginContext, requestContext)
 		return
 	}
@@ -625,6 +638,10 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 	if quotaAdmission != nil && len(accessKey.CostLimitRules) > 0 {
 		quotaAdmission.snapshot = snapshot
 	}
+	// The request slot outlives the recorder: it is released after the log is
+	// emitted, so the whole logical request is counted.
+	releaseRequest := func() {}
+	defer func() { releaseRequest() }()
 	var recorder *requestRecorder
 	if selectedRoute.Kind == endpointForward {
 		recorder = newRequestRecorder(
@@ -652,6 +669,19 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 			}
 			recorder.emit()
 		}()
+	}
+
+	if !concurrencyControlRequest(ginContext.Request, selectedRoute) {
+		release, failure, err := handler.acquireRequestConcurrency(ginContext.Request.Context(), accessKey.ID)
+		if err != nil {
+			handler.completeLimitStateFailure(ginContext, recorder, "concurrency.acquire_request", err)
+			return
+		}
+		if failure != nil {
+			handler.completeReason(ginContext, recorder, *failure)
+			return
+		}
+		releaseRequest = release
 	}
 
 	if quotaAdmission != nil {
@@ -1046,6 +1076,9 @@ func (handler *Handler) executeAttempts(
 	// return between acquisition and dispatch.
 	attemptRelease := func() {}
 	defer func() { attemptRelease() }()
+	// groupRelease frees the current attempt's group concurrency slot.
+	groupRelease := func() {}
+	defer func() { groupRelease() }()
 	concurrencySaturated := false
 	type preparedRequest struct {
 		configuredParameters  []string
@@ -1338,15 +1371,32 @@ func (handler *Handler) executeAttempts(
 			continue
 		}
 		// 护栏在占用业务凭据并发槽之前审查最终内容；同一内容的结果在本请求内复用。
-		if failure := handler.checkRequestAudit(ginContext.Request.Context(), snapshot, snapshot.AccessKeysByID[recorder.accessKeyID], prepared.request.Body, recorder, func() *reason {
-			return handler.admitAutoQuota(ginContext.Request.Context(), snapshot, quotaAdmission)
-		}); failure != nil {
-			handler.completeReason(ginContext, recorder, *failure)
-			return
+		// 取消已有响应不创建内容，不能启动新的审查调用或被审查组满额阻止。
+		if operation != execution.OperationResponsesCancel {
+			if failure := handler.checkRequestAudit(ginContext.Request.Context(), snapshot, snapshot.AccessKeysByID[recorder.accessKeyID], prepared.request.Body, recorder, func() *reason {
+				return handler.admitAutoQuota(ginContext.Request.Context(), snapshot, quotaAdmission)
+			}); failure != nil {
+				handler.completeReason(ginContext, recorder, *failure)
+				return
+			}
 		}
 		if ginContext.Request.Context().Err() != nil {
 			recorder.completeCanceled(ginContext.Request.Context(), 0, lastAttemptIndex)
 			return
+		}
+		// A full group rejects the request outright: no other group or
+		// credential is tried to get around the limit.
+		if operation != execution.OperationResponsesCancel {
+			release, failure, err := handler.acquireGroupConcurrency(ginContext.Request.Context(), selection.GroupID)
+			if err != nil {
+				handler.completeLimitStateFailure(ginContext, recorder, "concurrency.acquire_group", err)
+				return
+			}
+			if failure != nil {
+				handler.completeReason(ginContext, recorder, *failure)
+				return
+			}
+			groupRelease = release
 		}
 		// A full credential is skipped without spending a forward attempt; the
 		// iterator never returns it again for this request.
@@ -1358,6 +1408,7 @@ func (handler *Handler) executeAttempts(
 			return
 		}
 		if !acquired {
+			groupRelease()
 			concurrencySaturated = true
 			continue
 		}
@@ -1456,6 +1507,7 @@ func (handler *Handler) executeAttempts(
 			result = handler.forwarder.Forward(ginContext.Request.Context(), input)
 		}
 		attemptRelease()
+		groupRelease()
 		result = normalizeUpstreamResultContract(result)
 		if !stream && result.HasResponse() && !result.ProviderErrorBeforeCommit &&
 			result.DispatchState != execution.DispatchLocal &&
