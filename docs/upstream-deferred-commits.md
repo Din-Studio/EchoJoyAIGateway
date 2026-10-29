@@ -18,6 +18,7 @@
 - 牵动的公共部分：`go.mod`/`go.sum`、`.env.example`、`internal/platform/config`、`internal/channel`、`internal/control`（分组、模型、路由检查）、`internal/state/snapshot.go`、classic 与 modern 前端（协议标签、路由检查、首页网关配置）。
 - 后续上游提交如果依赖这次的 live 相关代码，合并时要一并评估。
 - 2026-10-26：它是 `7587c60f`（#760）的前置提交，已用 `git merge -s ours` 记录祖先关系（dev 提交 `909b67b6`），内容没有带入。`merge-base` 已越过它，**恢复时不能再走 merge**，要用 `git cherry-pick 0a01cdde`，或按当时的 dev 架构手工移植，并走一次架构闸门。
+- 2026-10-29：`7ceb5976`（#791）把 CPA 升到 v8，模块路径从 `CLIProxyAPI/v7` 改成 `CLIProxyAPI/v8`，同时修改了 `live_media.go`、`codex/live.go`、`codex_live.go` 三个 live 文件的 import。该提交的其余部分已合入 dev，这三个文件仍保持删除。恢复时 import 一律改用 v8 路径，go.mod 里还要重新加上 `pion/*` 依赖，并复核 `DisableCodexCloaking` 和 `codex_headers.go` 里 registry 的头覆写在 live 的 WebSocket 握手上是否同样生效。
 
 ### `c4a895ad` 改动范围
 
