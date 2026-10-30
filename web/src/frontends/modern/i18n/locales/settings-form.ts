@@ -84,10 +84,12 @@ export const zhCN = {
     exchange_rate: '汇率',
   },
   hints: {
-    global_concurrency_limit: '0 表示不限，按整个集群计数。仅限制数据面并发，满额立即拒绝。',
+    global_concurrency_limit:
+      '限制整个集群所有访问密钥的并发请求总量，与密钥、分组上限同时生效。0 表示不限，满额立即拒绝。',
     default_access_key_concurrency_limit:
-      '0 表示不限，按整个集群计数。仅限制数据面并发，满额立即拒绝。',
-    default_group_concurrency_limit: '0 表示不限，按整个集群计数。仅限制数据面并发，满额立即拒绝。',
+      '每个访问密钥独立继承此值，跨分组和副本合计；密钥可单独覆盖。0 表示不限，满额立即拒绝。',
+    default_group_concurrency_limit:
+      '每个分组独立继承此值，按整个集群计数；分组可单独覆盖。0 表示不限，满额立即拒绝。',
     request_redaction: '配置发送给上游与 JEV 的文本脱敏规则',
     jev: '自动模型与语义审计共用。请求文本会发送到所选分组；语义审计需要明确指定分组。',
     request_audit: '使用 JEV 按自定义规则拦截或告警。',
@@ -278,11 +280,11 @@ export const enUS = {
   },
   hints: {
     global_concurrency_limit:
-      '0 means unlimited; counted across the whole cluster. Applies to data-plane concurrency; reject immediately when full.',
+      'Caps total active requests across all access keys and replicas, alongside key and group limits. 0 means unlimited; reject immediately when full.',
     default_access_key_concurrency_limit:
-      '0 means unlimited; counted across the whole cluster. Applies to data-plane concurrency; reject immediately when full.',
+      'Each access key inherits this limit independently across its groups and replicas and may override it. 0 means unlimited; reject immediately when full.',
     default_group_concurrency_limit:
-      '0 means unlimited; counted across the whole cluster. Applies to data-plane concurrency; reject immediately when full.',
+      'Each group inherits this cluster-wide limit independently and may override it. 0 means unlimited; reject immediately when full.',
     request_redaction: 'Configure text redaction for upstream providers and JEV',
     jev: 'Used by automatic models and semantic auditing. Request text is sent to this route; semantic auditing requires an explicit group.',
     request_audit: 'Use JEV to block or warn on custom rules.',
@@ -482,11 +484,11 @@ export const jaJP = {
   },
   hints: {
     global_concurrency_limit:
-      '0 は無制限。クラスター全体で集計します。データプレーンの同時実行を制限し、上限到達時は即座に拒否します。',
+      'クラスター全体の全アクセスキーの実行中リクエストの合計を制限します。キー・グループ上限も同時に適用されます。0 は無制限で、上限到達時は即座に拒否します。',
     default_access_key_concurrency_limit:
-      '0 は無制限。クラスター全体で集計します。データプレーンの同時実行を制限し、上限到達時は即座に拒否します。',
+      '各アクセスキーが個別に継承する上限です。グループとレプリカをまたいで合計し、キーごとに上書きできます。0 は無制限で、上限到達時は即座に拒否します。',
     default_group_concurrency_limit:
-      '0 は無制限。クラスター全体で集計します。データプレーンの同時実行を制限し、上限到達時は即座に拒否します。',
+      '各グループが個別に継承するクラスター全体の上限です。グループごとに上書きできます。0 は無制限で、上限到達時は即座に拒否します。',
     request_redaction: '上流と JEV に送信するテキストのマスキングルールを設定',
     jev: '自動モデルと意味監査で共用します。リクエスト本文を選択したグループに送信します。意味監査にはグループの指定が必要です。',
     request_audit: 'JEV が独自ルールでブロックまたは警告します。',

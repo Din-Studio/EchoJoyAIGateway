@@ -54,7 +54,6 @@ import {
   AppTooltip,
 } from '@modern/components/ui'
 import { useLoadingActivity } from '@modern/components/ui/loading'
-import { formatConcurrency, type ConcurrencyView } from '@shared/concurrency'
 import { useApiClient } from '@shared/http/client-context'
 import { ApiError } from '@shared/http/errors'
 import AccessKeyRestrictions from './AccessKeyRestrictions.vue'
@@ -64,7 +63,6 @@ import AccessKeyQuotaResetDialog from './AccessKeyQuotaResetDialog.vue'
 import { accessState, accessTime } from './access-key-display'
 
 const { t, n, locale } = useI18n()
-const concurrencyText = (value: ConcurrencyView) => formatConcurrency(value, t)
 const route = useRoute()
 const router = useRouter()
 const client = useApiClient()
@@ -489,7 +487,6 @@ onScopeDispose(() => {
             ><AppOverflowText :text="row.name"
           /></AppButton>
           <AppOverflowText v-if="row.note" class="modern-access-note-text" :text="row.note" />
-          <div class="modern-access-concurrency">{{ concurrencyText(row.concurrency) }}</div>
         </div>
         <div class="modern-access-key">
           <AppCopyValue
@@ -677,11 +674,6 @@ onScopeDispose(() => {
 .modern-access-name {
   display: grid;
   justify-items: start;
-}
-.modern-access-concurrency {
-  color: var(--modern-muted);
-  font-size: var(--modern-font-size-small);
-  white-space: nowrap;
 }
 .modern-access-name :deep(.modern-button) {
   max-width: 100%;
