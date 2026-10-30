@@ -66,7 +66,15 @@ func (s *Service) ListGroupCollection(
 	if err != nil {
 		return GroupCollectionResponse{}, err
 	}
-	return queryGroupCollectionRecords(observedAtMS, records, query), nil
+	response := queryGroupCollectionRecords(observedAtMS, records, query)
+	items := make([]*GroupCollectionItem, len(response.Items))
+	for i := range response.Items {
+		items[i] = &response.Items[i]
+	}
+	if err := s.fillGroupConcurrency(ctx, items); err != nil {
+		return GroupCollectionResponse{}, err
+	}
+	return response, nil
 }
 
 func groupCollectionSortUsesActivity(sortBy GroupCollectionSort) bool {

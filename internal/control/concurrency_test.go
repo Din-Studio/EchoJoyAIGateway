@@ -145,11 +145,37 @@ func TestConcurrencySettingsPublishAndPreserveCounts(t *testing.T) {
 	if len(items) != 1 || items[0].Concurrency == nil || *items[0].Concurrency != (ConcurrencyView{Current: 1, Limit: 2}) {
 		t.Fatalf("modern group view must report current concurrency and effective limit: %+v", items)
 	}
+	collection, err := fixture.service.ListGroupCollection(t.Context(), GroupCollectionQuery{Page: 1, PageSize: 10})
+	if err != nil || len(collection.Items) != 1 || collection.Items[0].Concurrency != (ConcurrencyView{Current: 1, Limit: 2}) {
+		t.Fatalf("group collection page must report current concurrency: %+v err=%v", collection.Items, err)
+	}
+	// 摘要不展示并发计数，Redis 不可用时不应失败。
+	fixture.redis.SetError("store unavailable")
+	if _, err := fixture.service.GetGroupSummary(t.Context(), group.ID); err != nil {
+		t.Fatalf("group summary must not depend on concurrency state: %v", err)
+	}
+	fixture.redis.SetError("")
 	home, err := fixture.service.ReadHomeBase(t.Context(), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if home.Concurrency == nil || *home.Concurrency != (ConcurrencyView{Current: 0, Limit: 9}) {
 		t.Fatalf("home must report the global limit: %+v", home.Concurrency)
+	}
+}
+
+// 变更已提交后读不到集群计数时，响应仍须成功并带回一次性明文：
+// 否则客户端重试只会命中不含明文的幂等回放，新密钥（或轮换后的密钥）永久丢失。
+func TestAccessKeyMutationsSurviveConcurrencyReadFailure(t *testing.T) {
+	fixture, _ := newAccessKeyCostLimitHTTPFixture(t)
+	request := AccessKeyCreateRequest{Name: "limited", ConcurrencyLimit: optionalField[int64]{Set: true, Value: 3}}
+	fixture.redis.SetError("store unavailable")
+	created, err := fixture.service.CreateAccessKeyIdempotent(t.Context(), "00000000-0000-4000-8000-000000009951", request)
+	if err != nil || created.Key == "" || created.Concurrency != (ConcurrencyView{Limit: 3}) {
+		t.Fatalf("create = key %t concurrency %+v err %v", created.Key != "", created.Concurrency, err)
+	}
+	rotated, err := fixture.service.RotateAccessKeyIdempotent(t.Context(), "00000000-0000-4000-8000-000000009952", created.ID)
+	if err != nil || rotated.Key == "" || rotated.Concurrency != (ConcurrencyView{Limit: 3}) {
+		t.Fatalf("rotate = key %t concurrency %+v err %v", rotated.Key != "", rotated.Concurrency, err)
 	}
 }

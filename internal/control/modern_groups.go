@@ -45,6 +45,13 @@ func (s *Service) ListModernGroups(ctx context.Context) (ModernGroupsResponse, e
 	if err != nil {
 		return ModernGroupsResponse{}, err
 	}
+	items := make([]*GroupCollectionItem, len(records))
+	for i := range records {
+		items[i] = &records[i].GroupCollectionItem
+	}
+	if err := s.fillGroupConcurrency(ctx, items); err != nil {
+		return ModernGroupsResponse{}, err
+	}
 	channels, err := s.ListChannels(ctx, "")
 	if err != nil {
 		return ModernGroupsResponse{}, err

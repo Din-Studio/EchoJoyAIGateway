@@ -1,21 +1,14 @@
 package control
 
-import (
-	"gpt-load/internal/storage/models"
-	"gpt-load/internal/subscription/providers/codex"
-)
+import "gpt-load/internal/storage/models"
 
 // 仅补充展示；不制造额度观测成功、观测时间或任何可用额度。
-func withCredentialPlan(current *CredentialObservationResponse, plan string) *CredentialObservationResponse {
-	if plan == "" || current != nil && current.Snapshot != nil && current.Snapshot.Plan.Name != "" {
-		return current
-	}
-	summary := codex.NormalizePlan(plan)
-	if summary.Name == "" {
+func withCredentialPlan(current *CredentialObservationResponse, plan ObservationPlanSummary) *CredentialObservationResponse {
+	if plan.Name == "" || current != nil && current.Snapshot != nil && current.Snapshot.Plan.Name != "" {
 		return current
 	}
 	hint := CredentialObservationSnapshot{
-		Plan:         ObservationPlanSummary{Name: summary.Name, Level: string(summary.Level)},
+		Plan:         plan,
 		QuotaWindows: []ObservationQuotaWindow{},
 	}
 	result := CredentialObservationResponse{State: string(models.CredentialObservationUnavailable)}

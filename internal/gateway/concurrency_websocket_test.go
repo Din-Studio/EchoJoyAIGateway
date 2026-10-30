@@ -110,9 +110,7 @@ func TestConcurrencyWebsocketTurnsAndHotLimits(t *testing.T) {
 				t.Fatal(err)
 			}
 			waitWebsocketLogs(t, sink, 2)
-			if !concurrencySnapshot(t, h).empty() {
-				t.Fatal("finished turn retained capacity")
-			}
+			waitConcurrencyEmpty(t, h)
 			if err := second.WriteMessage(websocket.TextMessage, payload); err != nil {
 				t.Fatal(err)
 			}
@@ -186,4 +184,31 @@ func TestConcurrencyWebsocketMultiplexRejectsOnlyNewTurn(t *testing.T) {
 		t.Fatalf("active turn corrupted: %+v", event)
 	}
 	waitWebsocketLogs(t, sink, 2)
+}
+
+// 选中的上游不支持 WebSocket 时提前拒绝，已占的分组槽也必须归还。
+func TestConcurrencyWebsocketCapabilityRejectReleasesGroup(t *testing.T) {
+	h, engine, input := websocketTestHandler(t, "http://127.0.0.1:1", channel.OpenAI)
+	input.Groups[0].Settings = config.Settings{"concurrency_limit": 1}
+	if _, err := h.manager.Publish(input); err != nil {
+		t.Fatal(err)
+	}
+	// 只嵌入 AttemptForwarder，隐藏 OpenWebsocket。
+	h.forwarder = struct{ AttemptForwarder }{h.forwarder}
+	server := httptest.NewServer(engine)
+	defer server.Close()
+	conn := dialGatewayWebsocket(t, server.URL)
+	defer conn.Close()
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","model":"public","input":"hello"}`)); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var event struct {
+		Type  string
+		Error struct{ Code string }
+	}
+	if err := conn.ReadJSON(&event); err != nil || event.Error.Code != "websocket_capability_unavailable" {
+		t.Fatalf("event = %+v err=%v", event, err)
+	}
+	waitConcurrencyEmpty(t, h)
 }

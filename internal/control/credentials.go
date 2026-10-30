@@ -76,11 +76,11 @@ type CredentialSummaryResponse struct {
 }
 
 type CredentialAccountResponse struct {
-	PlanType        string `json:"-"`
-	Email           string `json:"email,omitempty"`
-	EmailMask       string `json:"email_mask,omitempty"`
-	ExpiresAtMS     *int64 `json:"expires_at_ms,omitempty"`
-	LastRefreshAtMS *int64 `json:"last_refresh_at_ms,omitempty"`
+	Plan            ObservationPlanSummary `json:"-"`
+	Email           string                 `json:"email,omitempty"`
+	EmailMask       string                 `json:"email_mask,omitempty"`
+	ExpiresAtMS     *int64                 `json:"expires_at_ms,omitempty"`
+	LastRefreshAtMS *int64                 `json:"last_refresh_at_ms,omitempty"`
 }
 
 type CredentialItemResponse struct {
@@ -202,7 +202,7 @@ func (s *Service) credentialPresentation(
 		}
 		stagedAccount := subscriptionCredentialAccount(credential)
 		account := CredentialAccountResponse{
-			PlanType: credential.Account().PlanType, Email: strings.TrimSpace(credential.Account().Email), EmailMask: stagedAccount.EmailMask,
+			Plan: ObservationPlanSummary{Name: credential.Account().PlanName, Level: credential.Account().PlanLevel}, Email: strings.TrimSpace(credential.Account().Email), EmailMask: stagedAccount.EmailMask,
 			ExpiresAtMS: stagedAccount.ExpiresAtMS, LastRefreshAtMS: stagedAccount.LastRefreshAtMS,
 		}
 		mask := account.EmailMask
@@ -452,7 +452,7 @@ func (s *Service) mapCredentialCollection(
 		item.Proxy = proxyViews[row.ID]
 		if item.ConnectionType == string(models.ConnectionTypeSubscription) {
 			item.Observation = presentCredentialObservation(observation.subscription[row.ID], row.IdentityFingerprint)
-			item.Observation = withCredentialPlan(item.Observation, account.PlanType)
+			item.Observation = withCredentialPlan(item.Observation, account.Plan)
 		}
 		var filterKey string
 		if query.modern != nil && query.modern.credentialKey != "" {

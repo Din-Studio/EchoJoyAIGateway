@@ -97,6 +97,20 @@ func (recorder *requestRecorder) freezeNextAttemptPricing(frozen frozenAttemptPr
 	recorder.pricingPending = true
 }
 
+// applyWebsocketReasoning records the reasoning a websocket turn actually sent.
+// A turn may inherit its parent's effort, so unlike HTTP the request value does
+// not describe it; the frozen copy is updated too because bindUsage restores
+// request-level reasoning from it.
+func (recorder *requestRecorder) applyWebsocketReasoning(config reasoning.Config) {
+	if recorder == nil {
+		return
+	}
+	if recorder.pricingPending {
+		recorder.pendingPricing.reasoning = config.Clone()
+	}
+	recorder.setReasoning(config)
+}
+
 func newRequestRecorder(
 	sink telemetry.RequestLogSink,
 	requestID string,
@@ -597,9 +611,6 @@ func (recorder *requestRecorder) bindUsage(
 		requestDiagnostics = frozen.usageDiagnostics
 		pricingMode = frozen.pricingMode
 		recorder.setReasoning(frozen.reasoning)
-	}
-	if attempt.Reasoning.Present() {
-		recorder.setReasoning(attempt.Reasoning)
 	}
 	if !applicable || !usageApplicable {
 		result = usage.Result{State: usage.StateNotApplicable}

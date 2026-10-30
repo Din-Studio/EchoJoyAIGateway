@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/sirupsen/logrus"
+
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/state"
 )
@@ -49,6 +51,16 @@ func (s *Service) fillAccessKeyConcurrency(ctx context.Context, value *AccessKey
 	return nil
 }
 
+// fillCommittedAccessKeyConcurrency serves responses of already committed
+// mutations. A failed read only logs and reports zero held slots: returning an
+// error would make clients retry into an idempotent replay, which never
+// carries the one-time plaintext key again.
+func (s *Service) fillCommittedAccessKeyConcurrency(ctx context.Context, value *AccessKeyMetadata) {
+	if err := s.fillAccessKeyConcurrency(ctx, value); err != nil {
+		logrus.WithError(err).WithField("access_key_id", value.ID).Warn("Access key concurrency unavailable after commit")
+	}
+}
+
 // fillAccessKeyCollectionConcurrency reads every limited key's held slots in
 // one round trip.
 func (s *Service) fillAccessKeyCollectionConcurrency(ctx context.Context, snapshot *state.ConfigSnapshot, records []accessKeyCollectionRecord) error {
@@ -68,6 +80,28 @@ func (s *Service) fillAccessKeyCollectionConcurrency(ctx context.Context, snapsh
 	}
 	for index := range records {
 		records[index].Concurrency.Current = counts[records[index].ID]
+	}
+	return nil
+}
+
+// fillGroupConcurrency reads the held slots of the limited groups among items
+// in one round trip; Limit must already come from the snapshot.
+func (s *Service) fillGroupConcurrency(ctx context.Context, items []*GroupCollectionItem) error {
+	limited := make([]uint, 0, len(items))
+	for _, item := range items {
+		if item.Concurrency.Limit > 0 {
+			limited = append(limited, item.ID)
+		}
+	}
+	if len(limited) == 0 {
+		return nil
+	}
+	counts, err := s.clusterConcurrency.GroupInflight(ctx, limited)
+	if err != nil {
+		return concurrencyStateError("group", err)
+	}
+	for _, item := range items {
+		item.Concurrency.Current = counts[item.ID]
 	}
 	return nil
 }

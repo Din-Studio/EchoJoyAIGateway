@@ -1066,7 +1066,8 @@ func TestCodexWSSessionPreservesDoneErrorCode(t *testing.T) {
 
 func TestCodexWSSessionFixedIdentity(t *testing.T) {
 	const wantUA = "codex-tui/0.159.2 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.159.2)"
-	for _, model := range []string{"gpt-6.1-sol", "gpt-6-astra", "gpt-5.6-luna"} {
+	// gpt-5.4 不在模型目录内：确认固定身份不依赖目录内的 header override。
+	for _, model := range []string{"gpt-6.1-sol", "gpt-6-astra", "gpt-5.6-luna", "gpt-5.4"} {
 		for _, test := range []struct {
 			name        string
 			headers     http.Header
@@ -1081,6 +1082,8 @@ func TestCodexWSSessionFixedIdentity(t *testing.T) {
 			{name: "cache session", cacheKey: "cache-session", wantSession: "cache-session"},
 			{name: "cache retains SDK precedence", headers: http.Header{"Session-Id": {"client-session"}}, cacheKey: "cache-session", wantSession: "cache-session"},
 			{name: "native cache session", headers: http.Header{"X-Openai-Internal-Codex-Responses-Lite": {"true"}}, cacheKey: "cache-session", wantSession: "cache-session"},
+			{name: "native explicit session", headers: http.Header{"X-Openai-Internal-Codex-Responses-Lite": {"true"}, "Session-Id": {"client-session"}}, wantSession: "client-session"},
+			{name: "native without session", headers: http.Header{"X-Openai-Internal-Codex-Responses-Lite": {"true"}}},
 		} {
 			t.Run(model+"/"+test.name, func(t *testing.T) {
 				var handshakes atomic.Int32

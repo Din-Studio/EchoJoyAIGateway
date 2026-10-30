@@ -79,6 +79,19 @@ func (c concurrencyCounts) empty() bool {
 	return c.Global == 0 && c.AccessKeys[1] == 0 && c.AccessKeys[2] == 0 && c.Groups[1] == 0 && c.Groups[2] == 0
 }
 
+// waitConcurrencyEmpty polls because a websocket turn releases its request
+// slot only after emitting its log.
+func waitConcurrencyEmpty(t *testing.T, h *Handler) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !concurrencySnapshot(t, h).empty() {
+		if time.Now().After(deadline) {
+			t.Fatalf("slots still held: %+v", concurrencySnapshot(t, h))
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // occupy takes slots directly in Redis, as another instance would.
 func occupyRequest(t *testing.T, h *Handler, keyID uint, globalLimit, keyLimit int64) {
 	t.Helper()

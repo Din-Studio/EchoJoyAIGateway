@@ -538,7 +538,7 @@ func (s *Service) mapCredentialItem(
 		if result.Error != nil && !errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return CredentialItemResponse{}, app_errors.ParseDBError(result.Error)
 		}
-		item.Observation = withCredentialPlan(presentCredentialObservation(observation, row.IdentityFingerprint), account.PlanType)
+		item.Observation = withCredentialPlan(presentCredentialObservation(observation, row.IdentityFingerprint), account.Plan)
 	}
 	return item, nil
 }
