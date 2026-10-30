@@ -106,6 +106,8 @@ GPT-Load 连上 PostgreSQL 与 Redis 后，响应中会包含 `"checks": {"datab
 2. **创建 Group** — 选择渠道，配置可用模型与运行策略。
 3. **创建 AccessKey** — 设置允许访问的 Group 与客户端协议，把生成的 AccessKey 交给应用使用。
 
+在分组的**全量操作 → 从文件导入**中选择 UTF-8 编码的 TXT、JSON 或 JSONL 文件。每行填写一个 API Key，或使用字段值均为字符串的凭据对象（例如 `{"api_key":"sk-example"}`）。格式化的 JSON 对象算一条凭据。**下载全部**生成的文件可以再次导入。每次最多导入 500 条，文件总大小及请求大小均不得超过 32 MiB；超出时请手动拆分。新凭据的并发上限为不限（`0`），已有重复凭据会跳过。订阅账号继续使用原授权流程。
+
 <details>
 <summary>订阅渠道的 OAuth 回调端口</summary>
 

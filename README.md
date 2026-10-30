@@ -106,6 +106,8 @@ Initial setup takes three steps:
 2. **Create a group** — Pick a channel, then configure available models and runtime policy.
 3. **Create an AccessKey** — Set the groups and client protocols it may use, then give the generated AccessKey to your application.
 
+In a group’s **All credentials → Import from files** menu, select UTF-8 TXT, JSON or JSONL files. Use one API key per line, or a credential field object with string values (for example, `{"api_key":"sk-example"}`). A formatted JSON object counts as one credential. Files from **Download all** can be imported again. Each import accepts at most 500 credentials and 32 MiB of files/request data; split larger imports manually. New credentials have unlimited concurrency (`0`); existing duplicates are skipped. Subscription accounts continue to use their authorization flow.
+
 <details>
 <summary>OAuth callback ports for subscription channels</summary>
 

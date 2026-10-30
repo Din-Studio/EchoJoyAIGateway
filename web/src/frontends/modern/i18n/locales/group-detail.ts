@@ -24,6 +24,7 @@ export const zhCN = {
   noUsage: '暂无请求统计',
   full: {
     actions: '全量操作',
+    import: '从文件导入',
     enable: '启用全部',
     disable: '停用全部',
     restore: '恢复全部',
@@ -37,6 +38,15 @@ export const zhCN = {
       restore: '已恢复 {count} 个凭据',
       download: '已下载 {count} 个凭据',
     },
+  },
+  fileImport: {
+    description:
+      '将文件中的 {count} 条凭据添加到当前分组，新凭据的并发上限为不限，已有重复凭据会自动跳过。',
+    empty: '所选文件中没有凭据。',
+    too_large: '导入内容超过 32 MiB，请拆分后导入。',
+    too_many: '单次最多导入 500 条凭据，请拆分后导入。',
+    read_failed:
+      '无法读取文件。请使用 UTF-8 编码，每行一个 API Key，或字段值均为字符串的 JSON 对象。',
   },
   scheduling: '调度',
   modelsAndAliases: '模型与别名',
@@ -176,6 +186,7 @@ export const enUS: typeof zhCN = {
   noUsage: 'No request statistics',
   full: {
     actions: 'All credentials',
+    import: 'Import from files',
     enable: 'Enable all',
     disable: 'Disable all',
     restore: 'Restore all',
@@ -190,6 +201,15 @@ export const enUS: typeof zhCN = {
       restore: 'Restored {count} credentials',
       download: 'Downloaded {count} credentials',
     },
+  },
+  fileImport: {
+    description:
+      'Add {count} credentials from the files to this group with unlimited concurrency. Existing duplicates will be skipped.',
+    empty: 'The selected files contain no credentials.',
+    too_large: 'The import exceeds 32 MiB. Split it into smaller files.',
+    too_many: 'Import up to 500 credentials at a time. Split the files and retry.',
+    read_failed:
+      'Unable to read the files. Use UTF-8 with one API key per line or JSON objects with string field values.',
   },
   scheduling: 'Routing',
   modelsAndAliases: 'Models and aliases',
@@ -327,6 +347,7 @@ export const jaJP: typeof zhCN = {
   noUsage: 'リクエスト統計はありません',
   full: {
     actions: '全件操作',
+    import: 'ファイルからインポート',
     enable: 'すべて有効化',
     disable: 'すべて無効化',
     restore: 'すべて復旧',
@@ -340,6 +361,15 @@ export const jaJP: typeof zhCN = {
       restore: '{count} 件を復旧しました',
       download: '{count} 件をダウンロードしました',
     },
+  },
+  fileImport: {
+    description:
+      'ファイル内の {count} 件の認証情報を同時実行数の制限なしでこのグループに追加します。既存の重複はスキップします。',
+    empty: '選択したファイルに認証情報がありません。',
+    too_large: 'インポート内容が 32 MiB を超えています。ファイルを分割してください。',
+    too_many: '一度にインポートできる認証情報は 500 件までです。ファイルを分割してください。',
+    read_failed:
+      'ファイルを読み込めません。UTF-8 で、1 行に 1 つの API キー、またはフィールド値がすべて文字列の JSON オブジェクトを指定してください。',
   },
   scheduling: 'ルーティング',
   modelsAndAliases: 'モデルとエイリアス',
