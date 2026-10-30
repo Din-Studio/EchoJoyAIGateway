@@ -60,3 +60,5 @@ internal/webui/dist/*
 !internal/webui/dist/assets/
 internal/webui/dist/assets/*
 !internal/webui/dist/assets/embed-placeholder.txt
+
+.agents/
