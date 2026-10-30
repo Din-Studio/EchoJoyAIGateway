@@ -11,9 +11,9 @@ func TestCodexPlanClaimsPreserveCanonicalCredential(t *testing.T) {
 	for _, test := range []struct {
 		name, idToken, accessToken, storedPlan, wantPlan string
 	}{
-		{"ID token claim", token, "access", "", "plus"},
-		{"access token claim", "", token, "", "plus"},
-		{"explicit plan takes precedence", token, "access", "pro", "pro"},
+		{"ID token claim", token, "access", "", "Plus"},
+		{"access token claim", "", token, "", "Plus"},
+		{"explicit plan takes precedence", token, "access", "pro", "Pro 20x"},
 		{"missing plan stays unknown", "", "access", "", ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -30,7 +30,7 @@ func TestCodexPlanClaimsPreserveCanonicalCredential(t *testing.T) {
 			if string(credential.Canonical()) != string(raw) {
 				t.Fatal("plan derivation changed canonical credential bytes")
 			}
-			if got := credential.Account().PlanType; got != test.wantPlan {
+			if got := credential.Account().PlanName; got != test.wantPlan {
 				t.Fatalf("account plan = %q, want %q", got, test.wantPlan)
 			}
 		})

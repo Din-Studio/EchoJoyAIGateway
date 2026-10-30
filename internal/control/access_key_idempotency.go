@@ -204,9 +204,7 @@ func (s *Service) CreateAccessKeyIdempotent(
 		!operationResult.Replayed {
 		result.Key = plaintext
 	}
-	if err := s.fillAccessKeyConcurrency(ctx, &result.AccessKeyMetadata); err != nil {
-		return AccessKeyCreateResult{}, err
-	}
+	s.fillCommittedAccessKeyConcurrency(ctx, &result.AccessKeyMetadata)
 	return result, nil
 }
 

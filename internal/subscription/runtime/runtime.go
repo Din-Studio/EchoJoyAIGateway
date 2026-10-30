@@ -40,7 +40,8 @@ type Credential struct {
 
 // Account contains the safe account information shared by subscription UIs.
 type Account struct {
-	PlanType         string
+	PlanName         string
+	PlanLevel        string
 	Email            string
 	ExpiresAt        time.Time
 	ExpiresAtKnown   bool

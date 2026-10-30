@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 
 	"gpt-load/internal/channel"
@@ -574,18 +575,29 @@ func (s *Service) GetCredentialObservation(ctx context.Context, groupID, credent
 	if err != nil {
 		return CredentialObservationResponse{}, err
 	}
+	observation := presentCredentialObservation(row, credential.IdentityFingerprint)
+	if observation == nil || observation.Snapshot == nil || observation.Snapshot.Plan.Name == "" {
+		observation = withCredentialPlan(observation, s.credentialPlanHint(group, credential))
+	}
+	response := observationResponseValue(observation)
+	s.enrichCredentialObservationUsage(ctx, credentialID, &response)
+	return response, nil
+}
+
+// credentialPlanHint 只补充展示：凭据无法解码时不给提示，也不让观测查询失败。
+func (s *Service) credentialPlanHint(group models.Group, credential models.Credential) ObservationPlanSummary {
 	canonical, identity, err := s.decodeCredential(group, credential)
 	if err != nil {
-		return CredentialObservationResponse{}, err
+		logrus.WithError(err).WithField("credential_id", credential.ID).Warn("Credential plan hint unavailable")
+		return ObservationPlanSummary{}
 	}
 	defer clear(canonical)
 	_, account, err := s.credentialPresentation(group, credential, canonical, identity)
 	if err != nil {
-		return CredentialObservationResponse{}, err
+		logrus.WithError(err).WithField("credential_id", credential.ID).Warn("Credential plan hint unavailable")
+		return ObservationPlanSummary{}
 	}
-	response := observationResponseValue(withCredentialPlan(presentCredentialObservation(row, credential.IdentityFingerprint), account.PlanType))
-	s.enrichCredentialObservationUsage(ctx, credentialID, &response)
-	return response, nil
+	return account.Plan
 }
 
 func (s *Service) GetCredentialDetail(ctx context.Context, groupID, credentialID uint) (CredentialDetailResponse, error) {
