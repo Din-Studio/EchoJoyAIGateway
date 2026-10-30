@@ -12,11 +12,3 @@ export function readConcurrency(value: unknown): ConcurrencyView {
       throw new InvalidResponseError()
   return { current: row.current as number, limit: row.limit as number }
 }
-// Unlimited scopes are not counted, so only a limited scope shows its current value.
-export function formatConcurrency(
-  value: ConcurrencyView,
-  t: (key: string, values?: Record<string, unknown>) => string,
-): string {
-  if (value.limit === 0) return t('concurrency.valueUnlimited')
-  return t('concurrency.value', { current: value.current, limit: value.limit })
-}
