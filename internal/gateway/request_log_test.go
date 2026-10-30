@@ -2155,7 +2155,10 @@ func TestRequestRecorderEmitsOperationAndAppliedAttemptObservation(t *testing.T)
 	recorder.setOperation(execution.OperationResponsesCreate)
 	selection := requestLogSelection(7, 8, "converted")
 	selection.RouteMode = channel.RouteConverted
-	recorder.appendAttempt(
+	requested := reasoning.Config{Effort: "high"}
+	recorder.setReasoning(requested)
+	recorder.freezeNextAttemptPricing(frozenAttemptPricing{metadataSet: true, reasoning: requested})
+	index := recorder.appendAttempt(
 		selection,
 		UpstreamResult{
 			UpstreamProtocol: protocol.Anthropic,
@@ -2170,9 +2173,7 @@ func TestRequestRecorderEmitsOperationAndAppliedAttemptObservation(t *testing.T)
 		startedAt,
 		startedAt.Add(500*time.Millisecond),
 	)
-	recorder.outcome = requestOutcome{
-		status: telemetry.RequestStatusSuccess, statusCode: http.StatusOK,
-	}
+	recorder.completeResponse(UpstreamResult{StatusCode: http.StatusOK}, health.Decision{}, "upstream", index)
 	budget = 1
 	recorder.emit()
 
@@ -2180,6 +2181,10 @@ func TestRequestRecorderEmitsOperationAndAppliedAttemptObservation(t *testing.T)
 	if len(events) != 1 || events[0].Operation != execution.OperationResponsesCreate ||
 		len(events[0].Attempts) != 1 {
 		t.Fatalf("events = %#v, want one responses_create attempt", events)
+	}
+	// 请求级保留客户端请求值；转换后的实际下发只记在 attempt 上。
+	if !reflect.DeepEqual(events[0].Reasoning, requested) {
+		t.Fatalf("request reasoning = %#v, want requested %#v", events[0].Reasoning, requested)
 	}
 	attempt := events[0].Attempts[0]
 	if attempt.UpstreamProtocol != protocol.Anthropic ||

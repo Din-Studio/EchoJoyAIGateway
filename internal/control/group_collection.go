@@ -139,22 +139,9 @@ func (s *Service) captureGroupCollectionRecords(
 	if err != nil {
 		return 0, nil, err
 	}
-	// Only limited groups hold Redis slots; unlimited groups report 0 without a read.
-	limited := make([]uint, 0, len(records))
+	// Held slots live in Redis; only callers that report them read them.
 	for i := range records {
 		records[i].Concurrency = ConcurrencyView{Limit: snapshot.Groups[records[i].ID].ConcurrencyLimit}
-		if records[i].Concurrency.Limit > 0 {
-			limited = append(limited, records[i].ID)
-		}
-	}
-	if len(limited) > 0 {
-		counts, err := s.clusterConcurrency.GroupInflight(ctx, limited)
-		if err != nil {
-			return 0, nil, concurrencyStateError("group", err)
-		}
-		for i := range records {
-			records[i].Concurrency.Current = counts[records[i].ID]
-		}
 	}
 	return observedAt.UnixMilli(), records, nil
 }

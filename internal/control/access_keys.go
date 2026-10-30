@@ -420,9 +420,7 @@ func (s *Service) CreateAccessKey(
 	if err != nil {
 		return AccessKeyCreateResult{}, err
 	}
-	if err := s.fillAccessKeyConcurrency(ctx, &result.AccessKeyMetadata); err != nil {
-		return AccessKeyCreateResult{}, err
-	}
+	s.fillCommittedAccessKeyConcurrency(ctx, &result.AccessKeyMetadata)
 	return result, nil
 }
 
@@ -444,9 +442,7 @@ func (s *Service) UpdateAccessKey(
 	if err != nil {
 		return AccessKeyMetadata{}, err
 	}
-	if err := s.fillAccessKeyConcurrency(ctx, &result); err != nil {
-		return AccessKeyMetadata{}, err
-	}
+	s.fillCommittedAccessKeyConcurrency(ctx, &result)
 	return result, nil
 }
 

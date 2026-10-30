@@ -30,6 +30,7 @@ type scriptedConcurrencyLimiter struct {
 	err         error
 	calls       []concurrencyCall
 	held        map[uint]int
+	groupsHeld  int
 }
 
 func (limiter *scriptedConcurrencyLimiter) Acquire(
@@ -139,6 +140,13 @@ func TestCredentialConcurrencySkipsFullCredentialWithoutSpendingRetry(t *testing
 	}
 	if held := limiter.totalHeld(); held != 0 {
 		t.Fatalf("slots held after the request = %d, want 0", held)
+	}
+	// 跳过已满凭据时必须先归还本轮的分组槽，否则下一轮覆盖 release 后它永不释放。
+	limiter.mu.Lock()
+	groupsHeld := limiter.groupsHeld
+	limiter.mu.Unlock()
+	if groupsHeld != 0 {
+		t.Fatalf("group slots held after the request = %d, want 0", groupsHeld)
 	}
 }
 
@@ -311,12 +319,19 @@ func TestCredentialConcurrencyUnlimitedCredentialNeverTouchesRedis(t *testing.T)
 	}
 }
 
-// The scripted limiter only models credential slots; request and group
-// scopes stay unlimited.
+// The scripted limiter models credential slots; the request scope stays
+// unlimited and group slots are only counted, never refused.
 func (limiter *scriptedConcurrencyLimiter) AcquireRequest(context.Context, uint, int64, int64) (func(), bool, error) {
 	return func() {}, true, nil
 }
 
 func (limiter *scriptedConcurrencyLimiter) AcquireGroup(context.Context, uint, int64) (func(), bool, error) {
-	return func() {}, true, nil
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	limiter.groupsHeld++
+	return sync.OnceFunc(func() {
+		limiter.mu.Lock()
+		limiter.groupsHeld--
+		limiter.mu.Unlock()
+	}), true, nil
 }
