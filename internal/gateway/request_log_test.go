@@ -2182,13 +2182,13 @@ func TestRequestRecorderEmitsOperationAndAppliedAttemptObservation(t *testing.T)
 		len(events[0].Attempts) != 1 {
 		t.Fatalf("events = %#v, want one responses_create attempt", events)
 	}
-	// 请求级保留客户端请求值；转换后的实际下发只记在 attempt 上。
-	if !reflect.DeepEqual(events[0].Reasoning, requested) {
-		t.Fatalf("request reasoning = %#v, want requested %#v", events[0].Reasoning, requested)
-	}
+	// 请求与尝试均记录最终下发值，不混入源协议的强度。
 	attempt := events[0].Attempts[0]
+	if !reflect.DeepEqual(events[0].Reasoning, attempt.Reasoning) {
+		t.Fatalf("request reasoning = %#v, want applied %#v", events[0].Reasoning, attempt.Reasoning)
+	}
 	if attempt.UpstreamProtocol != protocol.Anthropic ||
-		attempt.Reasoning.Mode != "enabled" || attempt.Reasoning.BudgetTokens == nil ||
+		attempt.Reasoning.Effort != "" || attempt.Reasoning.Mode != "enabled" || attempt.Reasoning.BudgetTokens == nil ||
 		*attempt.Reasoning.BudgetTokens != 4096 {
 		t.Fatalf("attempt observation = %#v", attempt)
 	}

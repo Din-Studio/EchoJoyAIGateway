@@ -113,7 +113,9 @@ func (bridge *codexProviderBridge) CountTokensLocal(
 	headers.Set(localTokenCountHeader, "local-estimate")
 	return providerResponse{
 		Payload: append([]byte(nil), response.Payload...), Headers: headers,
-		AppliedReasoningEffort: response.AppliedReasoningEffort,
+		AppliedReasoningEffort:       response.AppliedReasoningEffort,
+		AppliedReasoningMode:         response.AppliedReasoningMode,
+		AppliedReasoningBudgetTokens: response.AppliedReasoningBudgetTokens,
 	}, err
 }
 
@@ -315,10 +317,12 @@ func (bridge *codexProviderBridge) Execute(
 	return providerResponse{
 		StatusCode: response.StatusCode,
 		Payload:    append([]byte(nil), response.Payload...), Headers: response.Headers.Clone(),
-		AppliedReasoningEffort: response.AppliedReasoningEffort,
-		UpstreamProtocol:       codexUpstreamProtocol(response.UpstreamRequestPath),
-		QuotaObservedAt:        response.QuotaObservedAt,
-		QuotaWindows:           codex.NormalizePassiveQuotaWindows(response.QuotaSignals, response.QuotaObservedAt),
+		AppliedReasoningEffort:       response.AppliedReasoningEffort,
+		AppliedReasoningMode:         response.AppliedReasoningMode,
+		AppliedReasoningBudgetTokens: response.AppliedReasoningBudgetTokens,
+		UpstreamProtocol:             codexUpstreamProtocol(response.UpstreamRequestPath),
+		QuotaObservedAt:              response.QuotaObservedAt,
+		QuotaWindows:                 codex.NormalizePassiveQuotaWindows(response.QuotaSignals, response.QuotaObservedAt),
 	}, err
 }
 
@@ -346,11 +350,13 @@ func (bridge *codexProviderBridge) ExecuteStream(
 		return nil, err
 	}
 	convertedResponse := &providerStreamResponse{
-		Headers:                response.Headers.Clone(),
-		AppliedReasoningEffort: response.AppliedReasoningEffort,
-		UpstreamProtocol:       codexUpstreamProtocol(response.UpstreamRequestPath),
-		QuotaObservedAt:        response.QuotaObservedAt,
-		QuotaWindows:           codex.NormalizePassiveQuotaWindows(response.QuotaSignals, response.QuotaObservedAt),
+		Headers:                      response.Headers.Clone(),
+		AppliedReasoningEffort:       response.AppliedReasoningEffort,
+		AppliedReasoningMode:         response.AppliedReasoningMode,
+		AppliedReasoningBudgetTokens: response.AppliedReasoningBudgetTokens,
+		UpstreamProtocol:             codexUpstreamProtocol(response.UpstreamRequestPath),
+		QuotaObservedAt:              response.QuotaObservedAt,
+		QuotaWindows:                 codex.NormalizePassiveQuotaWindows(response.QuotaSignals, response.QuotaObservedAt),
 	}
 	if err != nil {
 		if codexBootstrapCapacityRejection(err) {
