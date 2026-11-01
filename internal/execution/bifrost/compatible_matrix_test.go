@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/maximhq/bifrost/core/schemas"
+
 	"gpt-load/internal/channel"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/protocol"
@@ -343,6 +345,49 @@ func TestListModelsConvertsProviderResultToClientProtocol(t *testing.T) {
 	}
 	if strings.Contains(string(result.Body), "gptload-custom-") || strings.Contains(string(result.Body), "openai/model-1") {
 		t.Fatalf("internal provider leaked: %s", result.Body)
+	}
+}
+
+func TestConvertedGeminiTerminalEvents(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		reason string
+		want   string
+	}{
+		{"completed", "", "STOP"},
+		{"output-limit", "max_output_tokens", "MAX_TOKENS"},
+		{"content-filter", "content_filter", "SAFETY"},
+		{"unknown-reason", "unknown", "OTHER"},
+		{"missing-reason", "", "OTHER"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var event schemas.BifrostResponsesStreamResponse
+			if err := json.Unmarshal([]byte(`{"type":"response.incomplete","response":{"status":"incomplete","model":"served","usage":{"input_tokens":8,"output_tokens":2,"total_tokens":10}}}`), &event); err != nil {
+				t.Fatal(err)
+			}
+			if tc.name == "completed" {
+				event.Type = schemas.ResponsesStreamResponseTypeCompleted
+				event.Response.Status = schemas.Ptr(schemas.ResponsesResponseStatusCompleted)
+			} else if tc.reason != "" {
+				event.Response.IncompleteDetails = &schemas.ResponsesResponseIncompleteDetails{Reason: tc.reason}
+			}
+			originalType := event.Type
+			encoder := newConvertedResponsesStreamEncoder(protocol.Gemini)
+			frames, err := encoder.encode(nil, &event, nil)
+			if err != nil || len(frames) != 1 {
+				t.Fatalf("terminal frames = %q, error = %v", frames, err)
+			}
+			for _, fragment := range []string{`"finishReason":"` + tc.want + `"`, `"promptTokenCount":8`, `"candidatesTokenCount":2`, `"totalTokenCount":10`} {
+				if !bytes.Contains(frames[0], []byte(fragment)) {
+					t.Errorf("terminal frame missing %s: %s", fragment, frames[0])
+				}
+			}
+			if event.Type != originalType {
+				t.Errorf("encoder changed source event type: %s -> %s", originalType, event.Type)
+			}
+		})
 	}
 }
 
