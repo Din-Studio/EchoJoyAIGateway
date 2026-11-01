@@ -884,7 +884,7 @@ func (e *convertedResponsesStreamEncoder) encode(
 		}
 		return frames, nil
 	case protocol.Gemini:
-		wire := gemini.ToGeminiResponsesStreamResponse(geminiTerminalEvent(response), e.geminiState)
+		wire := gemini.ToGeminiResponsesStreamResponse(response, e.geminiState)
 		if wire == nil {
 			return nil, nil
 		}
@@ -896,19 +896,6 @@ func (e *convertedResponsesStreamEncoder) encode(
 	default:
 		return nil, fmt.Errorf("unsupported converted stream protocol")
 	}
-}
-
-// geminiTerminalEvent maps response.incomplete onto response.completed, the only
-// terminal the SDK's Gemini stream converter emits. Without it a length-limited or
-// filtered stream loses its final chunk (finishReason and usageMetadata). The
-// incomplete response already carries its stop reason (length → MAX_TOKENS).
-func geminiTerminalEvent(response *schemas.BifrostResponsesStreamResponse) *schemas.BifrostResponsesStreamResponse {
-	if response.Type != schemas.ResponsesStreamResponseTypeIncomplete {
-		return response
-	}
-	completed := *response
-	completed.Type = schemas.ResponsesStreamResponseTypeCompleted
-	return &completed
 }
 
 func frameNamedSSE(eventName string, payload []byte) []byte {

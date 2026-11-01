@@ -227,7 +227,6 @@ const summary = computed(() => [
 async function refresh(): Promise<void> {
   // 刷新查看最新日志；先切回第一页，让查询使用新的分页状态。
   if (state.value.page !== 1) state.value = { ...state.value, page: 1 }
-  await nextTick()
   await Promise.allSettled([
     query.refetch({ cancelRefetch: false }),
     cache.refetchQueries({ queryKey: ['modern', 'log-detail'], type: 'active' }),
