@@ -1488,6 +1488,7 @@ func (handler *Handler) executeAttempts(
 			OnFirstResponse: func() {
 				recorder.recordFirstResponse()
 			},
+			OnOutput: recorder.recordOutput,
 		}
 		if recorder != nil {
 			recorder.freezeNextAttemptPricing(

@@ -161,6 +161,7 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 	}
 	controller := newStreamWriteController(downstream, writeTimeout)
 	defer func() { _ = controller.clear() }()
+	outputDelivered := outputTimingSink(input.ClientProtocol, input.OnOutput)
 	usageCapture := forwarder.usageCapture
 	if usageCapture == nil {
 		usageCapture = newUsageCaptureBoundary()
@@ -265,6 +266,7 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 			}
 			return
 		}
+		outputDelivered(held)
 		if input.OnStreamReady != nil {
 			input.OnStreamReady()
 		}
@@ -385,6 +387,7 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 					downstreamErr = err
 					return err
 				}
+				outputDelivered(payload)
 				if input.OnStreamReady != nil {
 					input.OnStreamReady()
 				}
@@ -415,6 +418,7 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 				}
 				return downstreamErr
 			}
+			outputDelivered(forwardData)
 			if terminalInChunk {
 				streamEvents.markTerminalForwarded()
 			}
@@ -471,6 +475,9 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 					tail = append(held, tail...)
 					committed = true
 					downstreamErr = commitStream(controller, ready.StatusCode, ready.Header, tail)
+					if downstreamErr == nil {
+						outputDelivered(tail)
+					}
 					if downstreamErr == nil && input.OnStreamReady != nil {
 						input.OnStreamReady()
 					}
@@ -484,6 +491,8 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 					}
 					if writeErr != nil {
 						downstreamErr = &streamFailure{kind: streamFailureDownstreamWrite, err: writeErr}
+					} else {
+						outputDelivered(tail)
 					}
 				}
 			}

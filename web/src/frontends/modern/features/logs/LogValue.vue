@@ -109,7 +109,7 @@ const display = computed(() => {
     case 'affinity_hit':
       return t(row[column] ? 'logs.yes' : 'logs.no')
     case 'first_response_ms':
-      return row.stream ? logDuration(row.first_response_ms, locale.value) : '—'
+      return row.stream ? logDuration(row.first_output_ms, locale.value) : '—'
     case 'duration_ms':
       return logDuration(row.duration_ms, locale.value)
     case 'attempt_count':
@@ -257,6 +257,7 @@ const hint = computed(() => {
     v-else
     :text="display"
     :full-text="hint"
+    :hint="column === 'first_response_ms' ? t('logs.firstOutputHint') : undefined"
     :class="{
       'modern-log-empty': table && display === '—',
       'modern-log-amount': table && costCell?.cost_state === 'priced',

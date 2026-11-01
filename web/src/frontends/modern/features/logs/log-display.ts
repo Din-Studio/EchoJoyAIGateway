@@ -61,16 +61,33 @@ export function logDuration(ms: number | null, locale: string): string {
   )
 }
 export function logOutputRate(row: LogEntry, locale: string): string {
+  const tokens = Number(row.output_tokens)
   if (
-    !row.stream ||
+    !['openai-completions', 'openai-responses', 'anthropic', 'gemini'].includes(row.protocol) ||
     !logHasUsage(row) ||
-    row.first_response_ms === null ||
-    row.duration_ms <= row.first_response_ms
+    !Number.isSafeInteger(tokens) ||
+    tokens <= 0
   )
     return '—'
-  const output = Number(row.output_tokens)
-  if (!Number.isSafeInteger(output) || output <= 0) return '—'
-  const rate = output / ((row.duration_ms - row.first_response_ms) / 1000)
+  let rate: number
+  if (!row.stream) {
+    if (!Number.isSafeInteger(row.duration_ms) || row.duration_ms <= 0) return '—'
+    rate = tokens / (row.duration_ms / 1000)
+  } else {
+    const first = row.first_output_ms
+    const last = row.last_output_ms
+    if (
+      first == null ||
+      last == null ||
+      !Number.isSafeInteger(first) ||
+      !Number.isSafeInteger(last) ||
+      first < 0 ||
+      last <= first ||
+      tokens <= 1
+    )
+      return '—'
+    rate = (tokens - 1) / ((last - first) / 1000)
+  }
   return Number.isFinite(rate)
     ? numberFormatter(locale, { maximumFractionDigits: 1 }).format(rate) + ' t/s'
     : '—'
