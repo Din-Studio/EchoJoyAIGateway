@@ -25,7 +25,8 @@ import {
 import { useApiClient } from '@shared/http/client-context'
 import { credentialStatus, credentialTime } from './credential-presentation'
 import { concurrencyLimitInvalid } from './group-create-rules'
-import { validProxyURL } from '@modern/app/proxy'
+import { validProxySelection } from '@modern/api/proxies'
+import ProxySelect from '../proxies/ProxySelect.vue'
 import GroupWorkspacePanel from './GroupWorkspacePanel.vue'
 import CredentialAccountInfo from './CredentialAccountInfo.vue'
 import CredentialTrends from './CredentialTrends.vue'
@@ -47,7 +48,7 @@ const saved = ref<CredentialRow>()
 const weight = ref('')
 const concurrency = ref('')
 const proxyMode = ref('inherit')
-const proxyURL = ref('')
+const proxyID = ref('')
 const saving = ref(false)
 const completed = ref(false)
 const attempted = ref(false)
@@ -60,7 +61,7 @@ const dirty = computed(
     (weight.value !== String(saved.value!.weightManual ?? '') ||
       concurrency.value !== concurrencyText(saved.value!) ||
       proxyMode.value !== saved.value!.proxy.mode ||
-      Boolean(proxyURL.value)),
+      (Boolean(proxyID.value) && Number(proxyID.value) !== saved.value?.proxy.id)),
 )
 watch(
   query.data,
@@ -70,7 +71,7 @@ watch(
     weight.value = String(value.weightManual ?? '')
     concurrency.value = concurrencyText(value)
     proxyMode.value = value.proxy.mode
-    proxyURL.value = ''
+    proxyID.value = ''
   },
   { immediate: true },
 )
@@ -87,15 +88,20 @@ function concurrencyText(row: CredentialRow): string {
 }
 const concurrencyInvalid = computed(() => concurrencyLimitInvalid(concurrency.value))
 const proxyChanged = computed(
-  () => proxyMode.value !== saved.value?.proxy.mode || Boolean(proxyURL.value),
+  () =>
+    proxyMode.value !== saved.value?.proxy.mode ||
+    (Boolean(proxyID.value) && Number(proxyID.value) !== saved.value?.proxy.id),
 )
 const proxyInvalid = computed(
-  () => proxyChanged.value && proxyMode.value === 'custom' && !validProxyURL(proxyURL.value.trim()),
+  () =>
+    proxyChanged.value &&
+    proxyMode.value === 'custom' &&
+    !validProxySelection(proxyID.value.trim()),
 )
 const proxyOptions = computed(() => [
   { value: 'inherit', label: t('credentialCards.proxyMode.inherit') },
   { value: 'direct', label: t('groupCreate.proxyDirect') },
-  { value: 'custom', label: t('groupCreate.proxyCustom') },
+  { value: 'custom', label: t('proxies.select') },
 ])
 function failure(): string {
   if (!item.value.failures) return '—'
@@ -119,7 +125,7 @@ async function save(): Promise<void> {
         ? null
         : proxyMode.value === 'direct'
           ? { mode: 'direct' }
-          : { mode: 'custom', url: proxyURL.value.trim() }
+          : { mode: 'custom', proxy_id: Number(proxyID.value) }
   saving.value = true
   error.value = ''
   try {
@@ -300,18 +306,15 @@ useMessageSource(() =>
             attempted && concurrencyInvalid ? t('groups.edit.concurrencyLimitError') : undefined
           "
         />
-        <AppTextField
+        <ProxySelect
           v-if="channel?.proxy && proxyMode === 'custom'"
-          v-model="proxyURL"
-          :label="t('groupCreate.proxyURL')"
-          :placeholder="saved?.proxy.mode === 'custom' ? saved.proxy.display : undefined"
-          :description="
-            saved?.proxy.mode === 'custom' ? t('groupDetail.proxyUnchanged') : undefined
-          "
-          size="sm"
+          v-model="proxyID"
+          :saved-id="saved?.proxy.id"
+          :saved-name="saved?.proxy.name"
+          :saved-address="saved?.proxy.display"
+          :reference-state="saved?.proxy.referenceState"
           :disabled="saving"
-          :error="attempted && proxyInvalid ? t('groupCreate.proxyError') : undefined"
-          autocomplete="off"
+          :error="attempted && proxyInvalid ? t('proxies.selectHelp') : undefined"
         />
       </section>
     </template>

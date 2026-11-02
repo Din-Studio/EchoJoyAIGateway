@@ -85,6 +85,13 @@ func operationRequiredStages(kind operationKind) ([]operationStage, error) {
 			operationStageSnapshotPublished,
 			operationStageCompleted,
 		}
+	case operationKindProxyCreate, operationKindProxyUpdate, operationKindProxyImport:
+		stages = []operationStage{
+			operationStageDBCommitted,
+			operationStageRegistryApplied,
+			operationStageSnapshotPublished,
+			operationStageCompleted,
+		}
 	case operationKindCredentialImport:
 		stages = []operationStage{
 			operationStageDBCommitted,
@@ -424,6 +431,22 @@ func (s *Service) recoverRegistryOperation(
 	ctx context.Context,
 	operation *models.ControlOperation,
 ) error {
+	switch operationKind(operation.OperationKind) {
+	case operationKindProxyCreate, operationKindProxyUpdate, operationKindProxyImport:
+		// Reuse peer reload: reconcile all expanded proxy identities, preserve
+		// runtime health, and retire provider runtimes whose proxy changed.
+		ids, err := s.allKnownCredentialIDs(ctx)
+		if err != nil {
+			return err
+		}
+		var reloadErr error
+		if err := s.doCredentialMutations(ids, func() {
+			_, reloadErr = s.reloadCommittedConfigLocked(ctx)
+		}); err != nil {
+			return err
+		}
+		return reloadErr
+	}
 	groupID, err := operationGroupID(operation)
 	if err != nil {
 		return err

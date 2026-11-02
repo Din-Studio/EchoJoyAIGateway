@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ProxySelect from '../proxies/ProxySelect.vue'
 import {
   Banknote,
   Cable,
@@ -213,7 +214,7 @@ const switchingCurrency = computed(() =>
 const proxyOptions = computed(() =>
   ['inherit', 'direct', 'custom'].map((value) => ({
     value,
-    label: t('settingsForm.proxy.' + value),
+    label: value === 'custom' ? t('proxies.select') : t('settingsForm.proxy.' + value),
   })),
 )
 function settingState(key: SettingKey) {
@@ -560,19 +561,15 @@ onScopeDispose(() => {
                 />
                 <template #details>
                   <div class="modern-settings-proxy">
-                    <AppTextField
+                    <ProxySelect
                       v-if="draft.proxy_config.mode === 'custom'"
-                      v-model="draft.proxy_config.url"
-                      :label="t('settingsForm.proxy.url')"
+                      v-model="draft.proxy_config.id"
+                      :saved-id="base.values.proxy_config.proxy_id"
+                      :saved-name="base.values.proxy_config.proxy_name"
+                      :saved-address="base.values.proxy_config.display_url"
+                      :reference-state="base.values.proxy_config.reference_state"
                       :disabled="disabled('proxy_config')"
                       :error="fieldErrors.proxy_config"
-                      :placeholder="
-                        base.values.proxy_config.configured_mode === 'custom'
-                          ? t('settingsForm.proxy.existing')
-                          : t('settingsForm.proxy.placeholder')
-                      "
-                      autocomplete="off"
-                      spellcheck="false"
                     />
                     <p class="modern-settings-proxy-effective">
                       <span>{{ t('settingsForm.proxy.effective') }}</span>

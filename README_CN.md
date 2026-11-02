@@ -176,6 +176,12 @@ OpenCode Go / Zen 使用 API Key，通过现有多协议网关适配器接入原
 
 全局和访问密钥按未结束的逻辑请求计数，分组按实际执行的上游调用计数。流式响应持有到转发结束；Responses WebSocket 按执行中的轮次计数。已有响应的取消不受并发限制。计数保存在 Redis 中、所有副本共享，因此每个上限都按整个部署计数；未配置上限的层级不计数。热更新不清零、不打断已有执行，管理请求与后台任务不受限制。Redis 不可用时，受上限约束的请求返回 `503 cluster_state_unavailable`。管理界面首页显示全局当前值与生效上限。访问密钥列表仅在生效上限大于 0 时显示并发限制标签；访问密钥和分组列表不显示实时并发数。
 
+### 集中管理出站代理
+
+管理员在控制台管理 PostgreSQL 中的加密代理目录：新增、编辑、导入、启用、禁用、删除、查询引用及测试连通性。支持 HTTP 与 SOCKS5 代理及用户名密码认证。全局设置、分组和凭据通过 ID 选择目录中的代理；AccessKey 无权访问代理管理 API。
+
+出站选择顺序为凭据 → 分组 → 全局 → 环境代理 → 直连。禁用或删除代理后，原引用保留，但出站继承上一级，因此流量最终可以直连。目录解密失败会报错，不按继承处理。手动测试直接使用指定代理，包括禁用的代理；测试单独使用 Redis 中的 8 个集群共享槽，不占数据面名额。满额返回 429，共享状态不可用返回 503。保存的测试 URL 只是管理偏好，不是运行时路由设置。
+
 ## 部署与数据
 
 GPT-Load 以容器运行，依赖 PostgreSQL 与 Redis。`docker-compose.yml` 启动 1 个 GPT-Load 副本、PostgreSQL 和单节点 Redis；需要在负载均衡后运行多个副本时，见[多副本部署](#多副本部署实验性)。
@@ -183,9 +189,12 @@ GPT-Load 以容器运行，依赖 PostgreSQL 与 Redis。`docker-compose.yml` �
 GPT-Load 容器无状态，不挂载任何卷：配置与用量保存在 PostgreSQL，共享运行状态保存在 Redis。Compose 把两者分别放在 `postgres-data` 与 `redis-data` 具名卷中，Redis 开启 AOF 持久化并使用 `maxmemory-policy noeviction`。
 
 > [!IMPORTANT]
-> `ENCRYPTION_KEY` 用于解密渠道凭据。PostgreSQL 与 `ENCRYPTION_KEY` **必须一起备份**；密钥丢失或被替换后，已有加密凭据无法恢复，且当前版本不支持主密钥轮换。
+> `ENCRYPTION_KEY` 用于解密渠道凭据、代理目录和代理引用。PostgreSQL 与 `ENCRYPTION_KEY` **必须一起备份**；密钥丢失或被替换后，已有加密凭据无法恢复，且当前版本不支持主密钥轮换。
 
 如需使用已有的 PostgreSQL 或 Redis 代替内置服务，在 `gpt-load` 服务中覆盖 `DATABASE_DSN`（例如 `postgres://user:password@db.example:5432/gpt_load?sslmode=require`）与 `REDIS_ADDRS`。
+
+> [!WARNING]
+> 升级到集中代理目录前，必须同时备份 PostgreSQL 与 `ENCRYPTION_KEY`，并在独立数据库演练恢复。迁移 `0028_proxy_catalog` 创建目录；控制面启动时把旧加密代理 URL 转为加密 ID 引用。表结构和加密引用格式与旧版本不兼容。必须停止所有旧网关副本后再启动新版本，不得混合新旧版本滚动升级。仅回退镜像不足以恢复旧版本；回退必须使用演练通过的升级前数据库备份、原密钥和匹配的镜像。
 
 常用运维命令：
 
@@ -218,7 +227,7 @@ Compose 会把 `.env` 传入容器，Compose 文件中设置的值优先。除�
 | `DATABASE_MAX_OPEN_CONNECTIONS` | `10`                                        | 每个副本的 PostgreSQL 最大打开连接数，必须为正整数。 |
 | `DATABASE_MAX_IDLE_CONNECTIONS` | `5`                                         | 每个副本的 PostgreSQL 最大空闲连接数，必须为正整数且不大于 `DATABASE_MAX_OPEN_CONNECTIONS`。 |
 | `AUTH_KEY`                      | 必填                                        | 管理界面和 `/api` 管理接口的 Bearer 密钥，不是数据面 AccessKey。所有副本必须相同。 |
-| `ENCRYPTION_KEY`                | 必填                                        | 用于加密渠道凭据；更换或丢失后无法解密已有凭据，必须与 PostgreSQL 一起备份。所有副本必须相同。 |
+| `ENCRYPTION_KEY`                | 必填                                        | 用于加密渠道凭据、代理目录和代理引用；更换或丢失后无法解密这些数据，必须与 PostgreSQL 一起备份。所有副本必须相同。 |
 | `HTTP_PROXY`                    | 空                                          | HTTP 上游请求的环境代理。                                                                                                                                |
 | `HTTPS_PROXY`                   | 空                                          | HTTPS 上游请求的环境代理。                                                                                                                               |
 | `NO_PROXY`                      | 空                                          | 逗号分隔的不经过环境代理的主机、域名或 IP。                                                                                                              |

@@ -176,6 +176,12 @@ Global, access key, and group limits can be enabled together; all default to unl
 
 Global and access key counters track unfinished logical requests; group counters track active upstream calls. Streaming holds its slots until forwarding finishes, and Responses WebSocket counts executing turns. Cancelling an existing response remains available. Counters live in Redis and are shared by every replica, so each limit applies to the whole deployment; a scope without a limit is not counted. Settings updates preserve counters and running work. Management requests and background jobs are excluded. When Redis is unavailable, a request under a configured limit is rejected with `503 cluster_state_unavailable`. The console home shows the global current count and effective limit. The access key list shows a concurrency limit tag only when the effective limit is positive; access key and group lists do not show live concurrency counts.
 
+### Centralized outbound proxies
+
+Administrators manage an encrypted PostgreSQL proxy catalog in the console: add, edit, import, enable, disable, delete, inspect references, and test connectivity. HTTP and SOCKS5 proxies support username/password authentication. Global settings, groups, and credentials select catalog entries by ID; AccessKeys cannot access the proxy management API.
+
+Outbound selection follows credential → group → global → environment proxy → direct. Disabling or deleting an entry preserves its references but makes them inherit the next level; traffic can therefore become direct. Catalog decryption failures are errors, not inheritance. Manual tests use the selected proxy even when disabled, with eight Redis-backed slots shared across all replicas, separate from data-plane limits. Full capacity returns 429; unavailable shared state returns 503. The saved test URL is a management preference, not a runtime routing setting.
+
 ## Deployment and data
 
 GPT-Load runs as a container that depends on PostgreSQL and Redis. `docker-compose.yml` starts one GPT-Load replica, PostgreSQL, and a single Redis node; for several replicas behind a load balancer, see [Multi-replica deployment](#multi-replica-deployment-experimental).
@@ -183,9 +189,12 @@ GPT-Load runs as a container that depends on PostgreSQL and Redis. `docker-compo
 The GPT-Load container is stateless and mounts no volume: configuration and usage live in PostgreSQL, and shared runtime state lives in Redis. Compose keeps both in the `postgres-data` and `redis-data` named volumes, and Redis runs with AOF persistence and `maxmemory-policy noeviction`.
 
 > [!IMPORTANT]
-> `ENCRYPTION_KEY` decrypts channel credentials. Back up PostgreSQL and `ENCRYPTION_KEY` **together**. Once the key is lost or replaced, existing encrypted credentials cannot be recovered, and this version does not support master key rotation.
+> `ENCRYPTION_KEY` decrypts channel credentials and the proxy catalog and references. Back up PostgreSQL and `ENCRYPTION_KEY` **together**. Once the key is lost or replaced, existing encrypted credentials cannot be recovered, and this version does not support master key rotation.
 
 To use an existing PostgreSQL or Redis instead of the bundled services, override `DATABASE_DSN` (for example `postgres://user:password@db.example:5432/gpt_load?sslmode=require`) and `REDIS_ADDRS` in the `gpt-load` service.
+
+> [!WARNING]
+> Before upgrading to the centralized proxy catalog, back up PostgreSQL and `ENCRYPTION_KEY` together and test restoration in an isolated database. Migration `0028_proxy_catalog` creates the catalog; control-plane startup converts legacy encrypted proxy URLs to encrypted ID references. The schema and encrypted reference format are incompatible with older versions. Stop all old gateway replicas before starting the new version; do not use a mixed-version rolling upgrade. Rolling back the image alone is not sufficient: use a tested pre-upgrade database backup with its original key and matching image.
 
 Common operations:
 
@@ -218,7 +227,7 @@ Compose passes `.env` to the container, and the values set in the Compose file t
 | `DATABASE_MAX_OPEN_CONNECTIONS` | `10` | Maximum open PostgreSQL connections per replica, positive integer. |
 | `DATABASE_MAX_IDLE_CONNECTIONS` | `5` | Maximum idle PostgreSQL connections per replica, positive integer and no greater than `DATABASE_MAX_OPEN_CONNECTIONS`. |
 | `AUTH_KEY` | Required | Bearer key for the management UI and `/api` management API, not a data-plane AccessKey. Every replica must share it. |
-| `ENCRYPTION_KEY` | Required | Encrypts channel credentials; changing or losing it makes existing credentials undecryptable, so back it up with PostgreSQL. Every replica must share it. |
+| `ENCRYPTION_KEY` | Required | Encrypts channel credentials, proxy catalog entries, and proxy references; changing or losing it makes them undecryptable, so back it up with PostgreSQL. Every replica must share it. |
 | `HTTP_PROXY` | Empty | Environment proxy for HTTP upstream requests. |
 | `HTTPS_PROXY` | Empty | Environment proxy for HTTPS upstream requests. |
 | `NO_PROXY` | Empty | Comma-separated hosts, domains, or IPs that bypass the environment proxy. |

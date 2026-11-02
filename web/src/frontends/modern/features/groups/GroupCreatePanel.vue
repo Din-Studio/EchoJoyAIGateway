@@ -38,7 +38,8 @@ import GroupEditorSurface from './GroupEditorSurface.vue'
 import SubscriptionCredentialStager from './SubscriptionCredentialStager.vue'
 import CredentialEntryList from './CredentialEntryList.vue'
 import { useGroupCreateOperation } from './group-create-operation'
-import { validProxyURL } from '@modern/app/proxy'
+import { validProxySelection } from '@modern/api/proxies'
+import ProxySelect from '../proxies/ProxySelect.vue'
 import {
   credentialEntriesInvalid,
   credentialFieldError,
@@ -83,7 +84,7 @@ const stagingDirty = ref(false)
 const stager = ref<InstanceType<typeof SubscriptionCredentialStager>>()
 const models = ref<GroupDraftModel[]>([])
 const proxyMode = ref('inherit')
-const proxyURL = ref('')
+const proxyID = ref('')
 const advanced = ref(false)
 const secretsVisible = ref(new Set<string>())
 const candidates = ref<ModelCandidate[]>([])
@@ -111,7 +112,7 @@ const completed = ref(false)
 const channelInput = ref<InstanceType<typeof AppSearchSelect>>()
 const nameInput = ref<InstanceType<typeof AppTextField>>()
 const priceInput = ref<InstanceType<typeof AppTextField>>()
-const proxyInput = ref<InstanceType<typeof AppTextField>>()
+const proxyInput = ref<InstanceType<typeof ProxySelect>>()
 const credentialInput = ref<InstanceType<typeof CredentialEntryList>>()
 const paramInputs = new Map<string, { focus(): void }>()
 const modelPicker = ref<InstanceType<typeof GroupModelPicker>>()
@@ -133,7 +134,7 @@ function snapshot(): string {
     stages: stages.value.map((stage) => stage.id),
     models: models.value,
     proxyMode: proxyMode.value,
-    proxyURL: proxyURL.value,
+    proxyID: proxyID.value,
   })
 }
 const dirty = computed(
@@ -175,8 +176,8 @@ const priceError = computed(() =>
     : '',
 )
 const proxyError = computed(() =>
-  channel.value?.proxy && proxyMode.value === 'custom' && !validProxyURL(proxyURL.value.trim())
-    ? t('groupCreate.proxyError')
+  channel.value?.proxy && proxyMode.value === 'custom' && !validProxySelection(proxyID.value.trim())
+    ? t('proxies.selectHelp')
     : '',
 )
 const proxyOverride = computed<ProxyOverride | undefined>(() =>
@@ -184,7 +185,7 @@ const proxyOverride = computed<ProxyOverride | undefined>(() =>
     ? undefined
     : proxyMode.value === 'direct'
       ? { mode: 'direct' }
-      : { mode: 'custom', url: proxyURL.value.trim() },
+      : { mode: 'custom', proxy_id: Number(proxyID.value) },
 )
 const paramErrors = computed(() =>
   Object.fromEntries(
@@ -203,7 +204,7 @@ const paramErrors = computed(() =>
 const proxyOptions = computed(() => [
   { value: 'inherit', label: t('groupCreate.proxyInherit') },
   { value: 'direct', label: t('groupCreate.proxyDirect') },
-  { value: 'custom', label: t('groupCreate.proxyCustom') },
+  { value: 'custom', label: t('proxies.select') },
 ])
 function cancelDiscovery(): void {
   discoveryController?.abort()
@@ -222,7 +223,7 @@ function selectChannel(value: string): void {
   models.value = []
   candidates.value = []
   proxyMode.value = 'inherit'
-  proxyURL.value = ''
+  proxyID.value = ''
   secretsVisible.value.clear()
   attempted.value = false
   errorText.value = ''
@@ -252,7 +253,7 @@ function invalidateDiscovery(): void {
   candidates.value = []
   discoveryError.value = ''
 }
-watch([channelID, params, proxyMode, proxyURL], invalidateDiscovery, { deep: true })
+watch([channelID, params, proxyMode, proxyID], invalidateDiscovery, { deep: true })
 // 只有凭据内容影响模型发现；并发上限和空行不打断当前选择。
 watch(
   () => JSON.stringify(credentialEntriesPayload(credentials.value).map((entry) => entry.fields)),
@@ -680,16 +681,12 @@ useMessageSource(() => (errorText.value ? { text: errorText.value, tone: 'danger
                 :disabled="inputLocked || stages.length > 0"
                 :description="stages.length ? t('subscriptions.proxyLocked') : undefined"
               />
-              <AppTextField
+              <ProxySelect
                 v-if="channel.proxy && proxyMode === 'custom'"
                 ref="proxyInput"
-                v-model="proxyURL"
-                :label="t('groupCreate.proxyURL')"
+                v-model="proxyID"
                 :disabled="inputLocked || stages.length > 0"
                 :error="attempted ? proxyError : undefined"
-                placeholder="http://127.0.0.1:7890"
-                autocomplete="off"
-                spellcheck="false"
               />
             </div>
           </details>

@@ -265,6 +265,11 @@ func (s *Service) UpdateGroupSettings(
 	var targetEntries []state.CredentialEntry
 	targetChanged := false
 	snapshot, err := s.writeGroupConfig(ctx, func(tx *gorm.DB) error {
+		if normalized.proxySet {
+			if err := lockProxyCatalog(tx); err != nil {
+				return err
+			}
+		}
 		group, err := loadGroupRow(tx, groupID)
 		if err != nil {
 			return err
@@ -327,6 +332,10 @@ func (s *Service) UpdateGroupSettings(
 			updates["overrides"] = group.Overrides
 		}
 		if normalized.proxySet {
+			normalized.proxyConfig, err = s.managedProxyOverride(ctx, tx, normalized.proxyConfig)
+			if err != nil {
+				return err
+			}
 			group.ProxyConfig = normalized.proxyConfig
 			updates["proxy_config"] = normalized.proxyConfig
 		}

@@ -240,6 +240,7 @@ func TestAutoMigrateCreatesSchemaAndMigrationLedger(t *testing.T) {
 		"credential_reset_operations",
 		"credential_attempt_stats",
 		"schema_migrations",
+		"proxies",
 	}
 	for _, table := range wantTables {
 		if !db.Migrator().HasTable(table) {
@@ -285,6 +286,7 @@ func TestAutoMigrateCreatesSchemaAndMigrationLedger(t *testing.T) {
 		"0025_request_audit",
 		"0026_access_key_concurrency",
 		"0027_request_log_output_timing",
+		"0028_proxy_catalog",
 	}
 	if !reflect.DeepEqual(migrationIDs, wantMigrationIDs) {
 		t.Fatalf("schema_migrations IDs = %v, want %v", migrationIDs, wantMigrationIDs)

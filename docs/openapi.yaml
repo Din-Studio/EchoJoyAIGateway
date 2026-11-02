@@ -6,7 +6,7 @@ info:
     name: MIT
     identifier: MIT
   description: |
-    控制面 HTTP 接口，路由前缀为 `/api`。当前收录范围：AccessKey 管理；模型总览、模型价格、分组模型与模型发现。
+    控制面 HTTP 接口，路由前缀为 `/api`。当前收录范围：AccessKey 管理；模型总览、模型价格、分组模型与模型发现；集中代理管理。
     数据面接口（`/v1/*`、`/v1beta/*`）不在本文档内。
 
     ## 鉴权
@@ -26,9 +26,10 @@ info:
     `Accept-Language` 本地化。
 
     ## 幂等
-    会生成或替换密钥明文的写操作要求 `Idempotency-Key` 请求头（小写规范 UUID v4）。
-    相同 key + 相同请求体重放时返回首次结果，`replayed=true`，且**不再返回明文 `key`**。
-    相同 key + 不同请求体返回 `409 IDEMPOTENCY_KEY_REUSED`。
+    会生成或替换密钥明文的写操作，以及代理新增、修改、导入，要求 `Idempotency-Key` 请求头（小写规范 UUID v4）。
+    AccessKey 写操作重放时返回首次结果，`replayed=true`，且**不再返回明文 `key`**。
+    代理写操作重放返回首次脱敏 DTO，不增加 `replayed` 或操作账本字段。
+    相同 key + 不同规范化请求返回 `409 IDEMPOTENCY_KEY_REUSED`。
 
     ## 灵影镜像密钥
     灵影通过 `/api/access-keys` 把用户的个人 API Key 镜像为 AccessKey，并通过 `GET /api/models` 读取模型目录。
@@ -77,8 +78,308 @@ tags:
     description: 从上游发现可用模型（仅 admin）
   - name: Currency
     description: 系统货币（admin 与 AccessKey 均可调用）
+  - name: Proxies
+    description: |
+      加密代理目录，仅 admin，AccessKey 不可访问。全局、分组、凭据通过 ID 引用。
+      禁用或删除保留引用，但出站继承上一级，最终可以使用环境代理或直连；解密失败不按继承处理。
+      修改目录走配置发布；测试观测和测试 URL 偏好仅写 bookkeeping，不更新配置 revision，不触发运行时 reload。
 
 paths:
+  /api/proxies:
+    get:
+      tags: [Proxies]
+      operationId: listProxies
+      summary: 分页查询脱敏代理目录
+      description: |
+        默认按名称（空名称使用 display_url）、ID 升序；latency 先按耗时升序，未测试项排后。
+        all=true 返回全部匹配项，但响应 page_size 仍为 20。
+      parameters:
+        - { name: q, in: query, schema: { type: string }, description: 名称或脱敏地址的大小写不敏感包含匹配 }
+        - { name: state, in: query, schema: { type: string, enum: [enabled, disabled] } }
+        - { name: scheme, in: query, schema: { type: string, enum: [http, socks5] } }
+        - { name: used, in: query, schema: { type: string, enum: [used, unused] } }
+        - { name: test, in: query, schema: { type: string, enum: [untested, success, failed] }, description: success 指无连接错误且 HTTP 状态为 2xx }
+        - { name: sort, in: query, schema: { type: string, enum: [latency] } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: all, in: query, schema: { type: boolean, default: false } }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - properties:
+                      data: { $ref: '#/components/schemas/ProxyList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [Proxies]
+      operationId: createProxy
+      summary: 创建启用中的代理
+      description: 名称可空；url 必填。同一规范化连接（包括认证信息）不能重复。重放返回首次脱敏结果。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/ProxySaveRequest'
+                - required: [url]
+      responses:
+        '200': { $ref: '#/components/responses/ProxyItemResult' }
+        '400': { $ref: '#/components/responses/ProxyWriteBadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/ProxyWriteConflict' }
+        '410': { $ref: '#/components/responses/IdempotencyExpired' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '428': { $ref: '#/components/responses/IdempotencyKeyRequired' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/OperationIncomplete' }
+
+  /api/proxies/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ProxyID'
+    put:
+      tags: [Proxies]
+      operationId: updateProxy
+      summary: 更新代理名称或连接
+      description: |
+        url 省略或去除首尾空白后为空时保留原连接；name 省略或为空时清空名称。
+        提交非空 url 会重置测试观测。重放返回首次脱敏结果，不读取当前条目。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProxySaveRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/ProxyItemResult' }
+        '400': { $ref: '#/components/responses/ProxyWriteBadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/ProxyWriteConflict' }
+        '410': { $ref: '#/components/responses/IdempotencyExpired' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '428': { $ref: '#/components/responses/IdempotencyKeyRequired' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/OperationIncomplete' }
+
+  /api/proxies/{id}/reveal:
+    parameters:
+      - $ref: '#/components/parameters/ProxyID'
+    post:
+      tags: [Proxies]
+      operationId: revealProxy
+      summary: 读取含认证信息的代理原始地址
+      description: 无需 Idempotency-Key；通过鉴权后，处理器的成功与错误响应均带 Cache-Control no-store 和 Pragma no-cache。
+      responses:
+        '200':
+          description: 成功
+          headers:
+            Cache-Control: { $ref: '#/components/headers/NoStore' }
+            Pragma: { schema: { type: string, const: no-cache } }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [id, name, url]
+                        properties:
+                          id: { type: integer }
+                          name: { type: string }
+                          url: { type: string, description: 未脱敏的完整地址，含已配置的认证信息 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/proxies/impact:
+    post:
+      tags: [Proxies]
+      operationId: proxyImpact
+      summary: 查询代理的直接引用
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/ProxyIDs'
+              unevaluatedProperties: false
+      responses:
+        '200':
+          description: 合并并去重代理 ID 后的直接引用；不计算继承影响，不存在的 ID 不报错
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - properties:
+                      data: { $ref: '#/components/schemas/ProxyReferences' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/proxies/batch:
+    post:
+      tags: [Proxies]
+      operationId: batchProxies
+      summary: 批量启用、禁用或删除代理
+      description: 无需 Idempotency-Key；不存在的 ID 忽略。禁用或删除不清除引用，出站改为继承。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/ProxyIDs'
+                - required: [ids, action]
+                  properties:
+                    ids: { minItems: 1 }
+                    action: { type: string, enum: [enable, disable, delete] }
+              unevaluatedProperties: false
+      responses:
+        '200': { $ref: '#/components/responses/ProxyNoDataResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503':
+          description: '`CONTROL_RECOVERY_PENDING` / `CONTROL_OPERATION_INCOMPLETE`（配置已提交但运行时恢复未完成）'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/proxies/import:
+    post:
+      tags: [Proxies]
+      operationId: importProxies
+      summary: 按行导入代理地址
+      description: 最多 1000 行（去除末尾换行后计算），忽略空行，跳过重复连接；新条目启用，按主机生成名称。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                entries: { type: string, description: 每行一个 HTTP 或 SOCKS5 代理 URL }
+      responses:
+        '200':
+          description: 成功或首次结果的幂等重放
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [imported, duplicates, invalid_lines]
+                        properties:
+                          imported: { type: integer, minimum: 0 }
+                          duplicates: { type: integer, minimum: 0 }
+                          invalid_lines: { type: array, items: { type: integer, minimum: 1 }, description: 无效行号从 1 开始 }
+        '400': { $ref: '#/components/responses/ProxyWriteBadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/IdempotencyKeyReused' }
+        '410': { $ref: '#/components/responses/IdempotencyExpired' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '428': { $ref: '#/components/responses/IdempotencyKeyRequired' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/OperationIncomplete' }
+
+  /api/proxies/{id}/test:
+    parameters:
+      - $ref: '#/components/parameters/ProxyID'
+    post:
+      tags: [Proxies]
+      operationId: testProxy
+      summary: 手动测试指定代理
+      description: |
+        无需 Idempotency-Key；直接使用指定代理，即使代理已禁用，不使用继承链。
+        发起 GET，10 秒超时；Redis 中独立的 8 个槽由所有副本共享，不占业务全局槽。
+        满额立即返回 429，Redis 不可用返回 503，不等待；结束或取消释放名额。
+        连接失败与超时写入观测并返回 HTTP 200，不作为 API 错误；观测只在连接身份和顺序守卫通过时保存。
+        返回当前目录条目，防止旧测试结果覆盖新连接。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProxyTestURLRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/ProxyItemResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429':
+          description: '`PROXY_TEST_CONCURRENCY_LIMITED`：8 个共享测试槽已满；认证锁定时为 AUTH_LOCKED'
+          headers:
+            Retry-After: { schema: { type: integer, minimum: 1 }, description: 测试槽已满时为 1 }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503':
+          description: '`CLUSTER_STATE_UNAVAILABLE`：Redis 测试槽不可用'
+          headers:
+            Retry-After: { schema: { type: string, const: '1' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/proxies/test-url:
+    put:
+      tags: [Proxies]
+      operationId: saveProxyTestURL
+      summary: 保存管理用测试 URL 偏好
+      description: |
+        无需 Idempotency-Key。不发起测试，不改变运行时路由设置，不触发配置 reload。
+        列表的 test_url 返回该偏好，未保存时为 https://www.gstatic.com/generate_204。
+        手动测试仍须在请求体中显式传入 url。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProxyTestURLRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/ProxyNoDataResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
   /api/currency:
     get:
       tags: [Currency]
@@ -689,6 +990,8 @@ paths:
 
         - `api_key` 连接：传 `credentials`，按顺序逐个尝试，第一个成功的结果即返回；不可传 `staged_credential_id`。
         - `subscription` 连接：传 `staged_credential_id`（已完成授权的暂存凭据），不可传 `credentials`。
+        - `proxy` 省略或 null：继承全局。显式配置只接受 direct 或 custom；custom 使用 URL 或已启用的目录 ID，二选一。
+          目录 ID 不存在或已禁用、显式 inherit、渠道不支持代理时返回 `400 VALIDATION_FAILED`。
 
         上游请求总超时 30 秒，最多翻 20 页、20000 个模型；全部凭据都失败时返回 `502 BAD_GATEWAY`。
       requestBody:
@@ -1141,6 +1444,12 @@ components:
       in: path
       required: true
       schema: { type: integer, minimum: 1 }
+    ProxyID:
+      name: id
+      in: path
+      required: true
+      description: 规范十进制正整数代理 ID。
+      schema: { type: integer, minimum: 1, maximum: 9007199254740991 }
     ModelPriceID:
       name: id
       in: path
@@ -1164,6 +1473,30 @@ components:
       schema: { type: string, const: no-store }
 
   responses:
+    ProxyItemResult:
+      description: 脱敏代理条目（不含密码明文）
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SuccessEnvelope'
+              - properties:
+                  data: { $ref: '#/components/schemas/ProxyItem' }
+    ProxyNoDataResult:
+      description: 成功，无 data
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+    ProxyWriteBadRequest:
+      description: '`BAD_REQUEST` / `INVALID_JSON` / `VALIDATION_FAILED` / `INVALID_IDEMPOTENCY_KEY`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    ProxyWriteConflict:
+      description: '`DUPLICATE_RESOURCE`（规范化连接重复）/ `IDEMPOTENCY_KEY_REUSED`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     BadRequest:
       description: '`BAD_REQUEST` / `INVALID_JSON` / `VALIDATION_FAILED`'
       content:
@@ -2204,16 +2537,99 @@ components:
           default: 0
           description: 单凭据并发上限，0 表示不限。
 
+    ProxySaveRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, description: 去除首尾空白后最多 255 个 Unicode 字符 }
+        url:
+          type: string
+          description: |
+            创建时必填；更新时空值保留连接。仅 http 或 socks5，SOCKS5 必须带端口，端口范围 1–65535。
+            无路径（允许末尾 /）、查询或片段；认证必须同时提供非空用户名和密码。去除首尾空白并规范化连接后去重。
+    ProxyIDs:
+      type: object
+      properties:
+        ids: { type: array, maxItems: 10000, items: { type: integer, minimum: 0 } }
+    ProxyTestURLRequest:
+      type: object
+      additionalProperties: false
+      required: [url]
+      properties:
+        url:
+          type: string
+          description: 去除首尾空白后最多 2048 字节；http 或 https，必须有主机，不得包含认证信息或片段。
+    ProxyItem:
+      type: object
+      required: [id, name, display_url, scheme, has_auth, enabled, group_count, credential_count, global, last_test_url, last_test_at_ms, last_test_duration_ms, last_test_status_code, last_test_error]
+      properties:
+        id: { type: integer, minimum: 1 }
+        name: { type: string }
+        display_url: { type: string, description: 保留用户名，密码替换为六个星号 }
+        scheme: { type: string, enum: [http, socks5] }
+        has_auth: { type: boolean }
+        enabled: { type: boolean }
+        group_count: { type: integer, minimum: 0, description: 直接引用的分组数 }
+        credential_count: { type: integer, minimum: 0, description: 直接引用的凭据数 }
+        global: { type: boolean, description: 全局设置是否直接引用 }
+        last_test_url: { type: string }
+        last_test_at_ms: { type: [integer, 'null'] }
+        last_test_duration_ms: { type: [integer, 'null'] }
+        last_test_status_code: { type: [integer, 'null'], description: 连接失败时为 0，未测试时为 null }
+        last_test_error: { type: string, enum: ['', connection_failed, timeout] }
+    ProxyList:
+      type: object
+      required: [items, total, page, page_size, test_url]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ProxyItem' } }
+        total: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1, maximum: 100 }
+        test_url: { type: string }
+    ProxyReferences:
+      type: object
+      required: [groups, credentials, global]
+      properties:
+        global: { type: boolean }
+        groups: { type: array, items: { $ref: '#/components/schemas/ProxyReference' } }
+        credentials: { type: array, items: { $ref: '#/components/schemas/ProxyReference' } }
+    ProxyReference:
+      type: object
+      required: [group_id, group_name]
+      properties:
+        group_id: { type: integer }
+        group_name: { type: string }
+        credential_id: { type: integer, description: 仅凭据引用返回 }
+        connection_type: { type: string, description: 仅凭据引用返回 }
+        label: { type: string, description: 非空时返回脱敏凭据或账号标签 }
+
     OutboundProxyConfig:
       type: object
       additionalProperties: false
       required: [mode]
-      description: 出站代理。发现接口只接受 `direct` 与 `custom`；仅支持代理的渠道可传。
+      description: |
+        发现接口只接受 direct 或 custom；只有支持出站代理的渠道可传。省略或 null 时继承全局代理。
+        custom 必须在有效 url 与正整数 proxy_id 中二选一。引用必须存在且启用，否则返回 VALIDATION_FAILED。
+        不接受显式 inherit。URL 发现仅用于草稿连接，不创建目录条目。
       properties:
         mode: { type: string, enum: [direct, custom] }
-        url:
-          type: string
-          description: '`custom` 时必填的代理地址；`direct` 时不可传。'
+        url: { type: string, description: HTTP 或 SOCKS5 代理地址，连接格式同 ProxySaveRequest.url }
+        proxy_id: { type: integer, minimum: 0, description: 集中代理目录 ID；0 等同未选择引用 }
+      oneOf:
+        - properties:
+            mode: { const: direct }
+            url: { const: '' }
+            proxy_id: { const: 0 }
+        - required: [url]
+          properties:
+            mode: { const: custom }
+            url: { type: string, minLength: 1 }
+            proxy_id: { const: 0 }
+        - required: [proxy_id]
+          properties:
+            mode: { const: custom }
+            url: { const: '' }
+            proxy_id: { type: integer, minimum: 1 }
 
     ModelDiscoveryRequest:
       type: object
@@ -2239,7 +2655,10 @@ components:
         staged_credential_id:
           type: string
           description: '`subscription` 连接必填：已完成授权的暂存凭据 ID。'
-        proxy: { $ref: '#/components/schemas/OutboundProxyConfig' }
+        proxy:
+          oneOf:
+            - $ref: '#/components/schemas/OutboundProxyConfig'
+            - type: 'null'
 
     CredentialValidationData:
       type: object

@@ -170,6 +170,11 @@ func (s *Service) UpdateGroupCredential(
 	var committedProxy, committedProxyFingerprint string
 	committedProxyUpdate := false
 	err = s.writeCredentialConfig(ctx, groupID, credentialID, func(tx *gorm.DB) error {
+		if update.proxySet {
+			if err := lockProxyCatalog(tx); err != nil {
+				return err
+			}
+		}
 		group, err := loadGroupRow(tx, groupID)
 		if err != nil {
 			return err
@@ -210,11 +215,15 @@ func (s *Service) UpdateGroupCredential(
 			updates["concurrency_limit"] = committed.ConcurrencyLimit
 		}
 		if update.proxySet {
+			update.proxy, err = s.managedProxyOverride(ctx, tx, update.proxy)
+			if err != nil {
+				return err
+			}
 			committed.ProxyConfig = update.proxy
 			updates["proxy_config"] = update.proxy
 		}
 		committed.UpdatedAtMS = updatedAtMS
-		committedProxy, committedProxyFingerprint, err = storedProxyIdentity(s.encryption, committed.ProxyConfig)
+		committedProxy, committedProxyFingerprint, err = s.storedProxyIdentity(ctx, tx, committed.ProxyConfig)
 		if err != nil {
 			return err
 		}

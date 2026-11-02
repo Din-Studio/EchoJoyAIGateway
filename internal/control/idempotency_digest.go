@@ -29,6 +29,9 @@ const (
 	operationKindAccessKeyUpdate  operationKind = "access_key_update"
 	operationKindGroupCreate      operationKind = "group_create"
 	operationKindCredentialImport operationKind = "credential_import"
+	operationKindProxyCreate      operationKind = "proxy_create"
+	operationKindProxyUpdate      operationKind = "proxy_update"
+	operationKindProxyImport      operationKind = "proxy_import"
 )
 
 type idempotencyDigestInput struct {
@@ -108,7 +111,7 @@ func buildIdempotencyDigest(
 func (kind operationKind) valid() bool {
 	switch kind {
 	case operationKindAccessKeyCreate, operationKindAccessKeyRotate, operationKindAccessKeyUpdate, operationKindGroupCreate,
-		operationKindCredentialImport:
+		operationKindCredentialImport, operationKindProxyCreate, operationKindProxyUpdate, operationKindProxyImport:
 		return true
 	default:
 		return false
