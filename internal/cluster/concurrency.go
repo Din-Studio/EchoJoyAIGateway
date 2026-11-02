@@ -132,6 +132,12 @@ func (limiter *Concurrency) AcquireGroup(
 	return limiter.acquire(ctx, limiter.groupKey(groupID), limit, "group", groupID)
 }
 
+// AcquireProxyTest takes one of eight cluster-wide manual proxy test slots.
+// This scope is independent of every data-plane concurrency limit.
+func (limiter *Concurrency) AcquireProxyTest(ctx context.Context) (func(), bool, error) {
+	return limiter.acquire(ctx, limiter.client.Key("concurrency", "{proxy-test}", "inflight"), 8, "proxy_test", 0)
+}
+
 // GlobalInflight reports the cluster-wide slots currently held.
 func (limiter *Concurrency) GlobalInflight(ctx context.Context) (int64, error) {
 	counts, err := limiter.inflight(ctx, []string{limiter.globalKey()})

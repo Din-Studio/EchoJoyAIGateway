@@ -103,6 +103,9 @@ func (s *Service) CreateGroupIdempotent(
 			}
 		},
 		Mutate: func(tx *gorm.DB) (idempotentMutationResult, error) {
+			if err := lockProxyCatalog(tx); err != nil {
+				return idempotentMutationResult{}, err
+			}
 			if !normalized.confirmSameTarget {
 				conflicts, err := findGroupsByTarget(tx, normalized.channelID, normalized.connectionType, normalized.params)
 				if err != nil {
@@ -135,6 +138,10 @@ func (s *Service) CreateGroupIdempotent(
 				Enabled:               true,
 			}
 			if err := s.initializeValidationProtocol(&group); err != nil {
+				return idempotentMutationResult{}, err
+			}
+			group.ProxyConfig, err = s.managedProxyOverride(ctx, tx, group.ProxyConfig)
+			if err != nil {
 				return idempotentMutationResult{}, err
 			}
 			if err := tx.Create(&group).Error; err != nil {

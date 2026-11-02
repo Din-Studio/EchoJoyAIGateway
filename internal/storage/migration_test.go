@@ -39,6 +39,8 @@ func TestMigrationRegistryContainsOrderedMigrations(t *testing.T) {
 		migrationfiles.ID0025,
 		migrationfiles.ID0026,
 		migrationfiles.ID0027,
+		migrationfiles.ID0028,
+		migrationfiles.ID0029,
 	}
 	if len(migrations) != len(wantIDs) {
 		t.Fatalf("migration registry length = %d, want %d", len(migrations), len(wantIDs))
