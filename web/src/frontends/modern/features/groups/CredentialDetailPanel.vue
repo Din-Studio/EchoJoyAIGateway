@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import CredentialDisplay from '@modern/components/CredentialDisplay.vue'
 import { Info } from '@lucide/vue'
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { computed, onScopeDispose, ref, watch } from 'vue'
@@ -45,6 +46,8 @@ const query = useQuery({
 const item = computed(() => query.data.value ?? props.row)
 const state = computed(() => credentialStatus(item.value))
 const saved = ref<CredentialRow>()
+const nameDirty = ref(false)
+const namePending = ref(false)
 const weight = ref('')
 const concurrency = ref('')
 const proxyMode = ref('inherit')
@@ -58,7 +61,8 @@ const dirty = computed(
   () =>
     !completed.value &&
     Boolean(saved.value) &&
-    (weight.value !== String(saved.value!.weightManual ?? '') ||
+    (nameDirty.value ||
+      weight.value !== String(saved.value!.weightManual ?? '') ||
       concurrency.value !== concurrencyText(saved.value!) ||
       proxyMode.value !== saved.value!.proxy.mode ||
       (Boolean(proxyID.value) && Number(proxyID.value) !== saved.value?.proxy.id)),
@@ -147,6 +151,24 @@ async function save(): Promise<void> {
     saving.value = false
   }
 }
+async function saveName(name: string): Promise<void> {
+  await cache.cancelQueries({ queryKey: credentialDetailKey(props.group.id, props.row.id) })
+  const result = await updateCredential(
+    client,
+    props.group.id,
+    props.row.id,
+    { name },
+    controller.signal,
+  )
+  if (controller.signal.aborted) return
+  if (saved.value) saved.value = { ...saved.value, name: result.name, label: result.label }
+  cache.setQueryData(credentialDetailKey(props.group.id, props.row.id), {
+    ...item.value,
+    name: result.name,
+    label: result.label,
+  })
+  emit('saved', result)
+}
 onScopeDispose(() => controller.abort())
 useMessageSource(() => (error.value ? { text: error.value, tone: 'danger' } : undefined))
 useMessageSource(() =>
@@ -162,11 +184,12 @@ useMessageSource(() =>
 <template>
   <GroupWorkspacePanel
     :title="t('groupDetail.credentialDetails')"
-    :description="row.account || row.mask"
+    :description="item.label"
+    hide-description
     :dirty="dirty"
-    :pending="saving"
+    :pending="saving || namePending"
     :loading="query.isFetching.value"
-    :save-disabled="!saved"
+    :save-disabled="!saved || nameDirty"
     @close="emit('close')"
     @save="save"
   >
@@ -178,6 +201,17 @@ useMessageSource(() =>
       ><AppButton @click="query.refetch()">{{ t('ui.retry') }}</AppButton></AppCollectionState
     >
     <template v-else>
+      <CredentialDisplay
+        :name="item.name"
+        :value="item.account || item.mask"
+        :subscription="group.connectionType === 'subscription'"
+        :reveal="group.connectionType === 'subscription'"
+        :save-name="saveName"
+        edit-button
+        :disabled="saving"
+        @dirty="nameDirty = $event"
+        @pending="namePending = $event"
+      />
       <CredentialTrends
         :subscription="group.connectionType === 'subscription'"
         :group="group.id"

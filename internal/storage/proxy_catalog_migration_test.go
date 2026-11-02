@@ -15,7 +15,7 @@ func TestProxyCatalogMigrationContract(t *testing.T) {
 	for _, scenario := range []string{"fresh", "upgrade", "existing_table", "missing_indexes", "interrupted"} {
 		t.Run(scenario, func(t *testing.T) {
 			db := openEmptyTestDatabase(t)
-			if len(migrations) != 28 || migrations[27].ID != migrationfiles.ID0028 {
+			if len(migrations) < 28 || migrations[27].ID != migrationfiles.ID0028 {
 				t.Fatal("proxy catalog must be dev migration 0028")
 			}
 			if scenario != "fresh" {

@@ -25,6 +25,7 @@ export async function updateCredential(
   group: number,
   id: number,
   patch: {
+    name?: string
     weight_manual?: number | null
     concurrency_limit?: number
     proxy?: ProxyOverride | null

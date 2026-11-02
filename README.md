@@ -108,6 +108,8 @@ Initial setup takes three steps:
 
 In a group’s **All credentials → Import from files** menu, select UTF-8 TXT, JSON or JSONL files. Use one API key per line, or a credential field object with string values (for example, `{"api_key":"sk-example"}`). A formatted JSON object counts as one credential. Files from **Download all** can be imported again. Each import accepts at most 500 credentials and 32 MiB of files/request data; split larger imports manually. New credentials have unlimited concurrency (`0`); existing duplicates are skipped. Subscription accounts continue to use their authorization flow.
 
+Credentials support optional display aliases (up to 255 Unicode characters). Clear the name to remove an alias. Names are per credential record and do not change credential identity, scheduling, or concurrency limits; updates propagate across replicas. Logs display the current alias. Subscription accounts are masked by default in the UI, with explicit reveal controls on cards and details. This is display masking, not API redaction: administrator responses still contain the original account.
+
 <details>
 <summary>OAuth callback ports for subscription channels</summary>
 

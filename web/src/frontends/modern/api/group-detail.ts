@@ -1,3 +1,4 @@
+import { credentialDisplayText } from '@shared/credential-display'
 import type { ApiClient } from '@shared/http/client'
 import { ApiError, InvalidResponseError } from '@shared/http/errors'
 import { boolean, integer, list, oneOf, record, text } from './response'
@@ -248,6 +249,8 @@ export async function discoverGroupModels(client: ApiClient, id: number, signal:
 }
 
 export interface CredentialRow {
+  name: string
+  label: string
   rpmPeakHour?: number
   id: number
   mask: string
@@ -303,6 +306,12 @@ export function readCredential(value: unknown): CredentialRow {
   return {
     id: integer(row.credential_id, 1),
     rpmPeakHour: row.rpm_peak_hour == null ? undefined : integer(row.rpm_peak_hour),
+    name: text(row.name ?? ''),
+    label: credentialDisplayText(
+      text(row.name ?? ''),
+      account ? text(account.email ?? account.email_mask ?? '') || text(row.mask) : text(row.mask),
+      text(row.connection_type),
+    ),
     mask: text(row.mask),
     account: account ? text(account.email ?? account.email_mask ?? '') : '',
     state: oneOf(row.effective_status, credentialStates),
