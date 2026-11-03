@@ -82,6 +82,16 @@ func testOutputTimingMigration(t *testing.T, open func(*testing.T) *gorm.DB) {
 			if err := AutoMigrate(db); err != nil {
 				t.Fatal(err)
 			}
+			// Retired runtime fields must not remove historical samples on restart.
+			if scenario != "fresh" {
+				var row struct{ FirstOutputMs, LastOutputMs int64 }
+				if err := db.Table("request_logs").Where("id = ?", "existing").Take(&row).Error; err != nil {
+					t.Fatal(err)
+				}
+				if row.FirstOutputMs != 100 || row.LastOutputMs != 800 {
+					t.Fatalf("retired timing history changed: %+v", row)
+				}
+			}
 		})
 	}
 }

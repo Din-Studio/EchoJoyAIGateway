@@ -174,6 +174,8 @@ function identityIcon(field: LogColumnId) {
 function fieldFilter(field: LogColumnId): LogQuery | undefined {
   const row = props.row
   switch (field) {
+    case 'client_ip':
+      return row.client_ip ? { client_ip: row.client_ip } : undefined
     case 'group':
       return row.group_id ? { group_id: String(row.group_id) } : undefined
     case 'channel':
@@ -236,6 +238,8 @@ function fieldFilterValue(field: LogColumnId): string {
       return `HTTP ${row.status_code}`
     case 'stream':
       return t(row.stream ? 'logs.yes' : 'logs.no')
+    case 'client_ip':
+      return row.client_ip || '—'
     case 'error_code':
       return row.error_code
     case 'operation':
@@ -387,15 +391,12 @@ function fieldFilterValue(field: LogColumnId): string {
         <LogValue :row="row" column="first_response_ms" table />
       </template>
     </div>
-    <AppTooltip :label="t(row.stream ? 'logs.outputRateHint' : 'logs.nonStreamOutputRateHint')">
-      <div
-        class="modern-log-cell-value modern-log-speed"
-        tabindex="0"
-        :aria-label="t('logs.outputRate') + ': ' + logOutputRate(row, locale)"
-      >
-        <AppOverflowText :text="logOutputRate(row, locale)" />
-      </div>
-    </AppTooltip>
+    <div
+      class="modern-log-cell-value modern-log-speed"
+      :aria-label="t('logs.outputRate') + ': ' + logOutputRate(row, locale)"
+    >
+      {{ logOutputRate(row, locale) }}
+    </div>
   </div>
   <div v-else-if="fields[0] === 'estimated_cost_nano'" class="modern-log-cell-stack">
     <div class="modern-log-cell-value">

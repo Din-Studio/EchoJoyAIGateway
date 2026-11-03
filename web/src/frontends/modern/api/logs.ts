@@ -32,6 +32,7 @@ export const logFilterNames = [
   'group_id',
   'channel_id',
   'credential_id',
+  'client_ip',
   'client_model',
   'upstream_model',
   'model_consistency',
@@ -100,6 +101,7 @@ export interface LogEntry {
   protocol: string
   operation: string | null
   upstream_protocol: string | null
+  client_ip: string | null
   client_model: string | null
   upstream_model: string | null
   upstream_reported_model: string | null
@@ -109,8 +111,6 @@ export interface LogEntry {
   status_code: number
   stream: boolean
   first_response_ms: number | null
-  first_output_ms: number | null
-  last_output_ms: number | null
   duration_ms: number
   attempt_count: number
   error_code: string
@@ -320,6 +320,7 @@ function entry(value: unknown): LogEntry {
     protocol: text(row.protocol),
     operation: optionalText(row.operation),
     upstream_protocol: optionalText(row.upstream_protocol),
+    client_ip: optionalText(row.client_ip),
     client_model: optionalText(row.client_model),
     upstream_model: optionalText(row.upstream_model),
     upstream_reported_model: optionalText(row.upstream_reported_model),
@@ -329,8 +330,6 @@ function entry(value: unknown): LogEntry {
     status_code: integer(row.status_code),
     stream: boolean(row.stream),
     first_response_ms: optionalNumber(row.first_response_ms),
-    first_output_ms: optionalNumber(row.first_output_ms),
-    last_output_ms: optionalNumber(row.last_output_ms),
     duration_ms: integer(row.duration_ms),
     attempt_count: integer(row.attempt_count),
     error_code: text(row.error_code),

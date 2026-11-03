@@ -79,6 +79,7 @@ type ListQuery struct {
 	ToMS                *int64
 	GroupID             *uint
 	ChannelID           channel.ID
+	ClientIP            string
 	ClientModel         string
 	UpstreamModel       string
 	ModelConsistency    telemetry.ModelConsistency
@@ -136,6 +137,7 @@ type Record struct {
 	Protocol                protocol.Protocol
 	Operation               execution.Operation
 	UpstreamProtocol        protocol.Protocol
+	ClientIP                string
 	ClientModel             string
 	UpstreamModel           string
 	UpstreamReportedModel   string
@@ -144,8 +146,6 @@ type Record struct {
 	StatusCode              int
 	Stream                  bool
 	FirstResponseMs         *int64
-	FirstOutputMs           *int64
-	LastOutputMs            *int64
 	DurationMs              int64
 	AttemptCount            int
 	ErrorCode               string

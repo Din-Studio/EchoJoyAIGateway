@@ -1690,6 +1690,9 @@ components:
           description: |
             允许的来源 IP 或 CIDR，最多 64 条；单个 IP 视为 /32 或 /128。
             同时约束数据面调用和该 AccessKey 登录控制台。输出为规范化后排序的 CIDR。
+            使用入口解析的客户端 IP，与请求日志一致。默认使用连接 IP。
+            设置 CLIENT_IP_HEADER 后按 TRUSTED_PROXIES 信任规则解析；缺失或无效时回退到连接 IP。
+            代理名单为空时直接信任所选头，部署方必须清洗该头。修改环境变量后须重启所有副本。
           maxItems: 64
           items: { type: string, examples: [10.0.0.0/8, 203.0.113.7] }
 

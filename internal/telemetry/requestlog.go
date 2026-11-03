@@ -151,6 +151,7 @@ type RequestEvent struct {
 	AccessKeyID           uint
 	Protocol              protocol.Protocol
 	Operation             execution.Operation
+	ClientIP              string
 	ClientModel           string
 	UpstreamModel         string
 	UpstreamReportedModel string
@@ -161,8 +162,6 @@ type RequestEvent struct {
 	ErrorSummary          string
 	Stream                bool
 	FirstResponseMs       *int64
-	FirstOutputMs         *int64
-	LastOutputMs          *int64
 	DurationMs            int64
 	AffinityHit           bool
 	AffinityKind          string
