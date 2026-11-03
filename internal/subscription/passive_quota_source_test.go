@@ -34,7 +34,7 @@ func TestPassiveQuotaMatchesSourceAndPeriodAcrossSlots(t *testing.T) {
 		"X-Codex-Bengalfox-Secondary-Window-Minutes": "300",
 		"X-Codex-Bengalfox-Secondary-Reset-At":       "1799900600",
 	}, time.Unix(1799890000, 0))
-	merged, err := mergePassiveQuotaSnapshot(raw, patches)
+	merged, err := mergePassiveQuotaSnapshot(raw, patches, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestPassiveQuotaSourceMatchingRejectsUncertainTargets(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			merged, err := mergePassiveQuotaSnapshot(raw, patches)
+			merged, err := mergePassiveQuotaSnapshot(raw, patches, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -143,7 +143,7 @@ func TestPassiveQuotaMeteredRequestDoesNotRefillAccountWeekly(t *testing.T) {
 		"X-Codex-Secondary-Window-Minutes": "10080",
 		"X-Codex-Secondary-Reset-At":       "1789222487",
 	}, time.Unix(1788660000, 0))
-	merged, err := mergePassiveQuotaSnapshot(raw, patches)
+	merged, err := mergePassiveQuotaSnapshot(raw, patches, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

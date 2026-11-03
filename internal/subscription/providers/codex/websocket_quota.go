@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/buger/jsonparser"
+
+	providerobservation "gpt-load/internal/subscription/providers/observation"
 )
 
 // 原始绝对时间与同一事件中的倒计时分别比较，不能混入本地接收时间。
@@ -25,18 +27,26 @@ type websocketQuotaRateObservation struct {
 	comparisonIncomplete bool
 }
 
-// NormalizeWebsocketQuotaWindows 读取 Codex 原生额度事件，不改动发给客户端的消息。
-// WS 的具名附加额度由已有快照解析来源，不能按 HTTP 响应头命名空间推导 SourceID。
-func NormalizeWebsocketQuotaWindows(payload []byte, observedAt time.Time) []quotaWindow {
+// NormalizeWebsocketQuota 解码一次额度事件，同时读取窗口和账号点数。
+// 不改动发给客户端的消息，也不将账号点数计入具名窗口。
+func NormalizeWebsocketQuota(payload []byte, observedAt time.Time) ([]quotaWindow, *providerobservation.CreditSummary) {
 	kind, err := jsonparser.GetString(payload, "type")
 	if err != nil || kind != "codex.rate_limits" {
-		return nil
+		return nil, nil
 	}
 	event, ok := decodeWebsocketQuotaEvent(payload)
 	if !ok || cleanString(event["type"]) != "codex.rate_limits" {
-		return nil
+		return nil, nil
 	}
+	var credits *providerobservation.CreditSummary
+	if value, ok := object(event["credits"]); ok {
+		credits = stampCredits(normalizeCredits(value), observedAt)
+	}
+	return normalizeWebsocketQuotaWindows(event, observedAt), credits
+}
 
+// WS 的具名附加额度由已有快照解析来源，不使用 HTTP 头命名空间。
+func normalizeWebsocketQuotaWindows(event map[string]any, observedAt time.Time) []quotaWindow {
 	var additionalRates map[string]any
 	additionalValid := true
 	if rawAdditional, present := event["additional_rate_limits"]; present && rawAdditional != nil {

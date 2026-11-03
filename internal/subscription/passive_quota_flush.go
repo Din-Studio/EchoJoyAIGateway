@@ -27,7 +27,7 @@ const passiveQuotaFlushBatchSize = 20
 // only ever touches snapshot_json, observed_at_ms, and updated_at_ms. State,
 // plan/account summaries, reset credits, and the most recent active
 // attempt/error metadata are always left untouched. A credential with no
-// existing observation row, a stale identity generation, or no matching window
+// existing observation row, a stale identity generation, or neither credits nor a matching window
 // in the row is discarded without writing anything, since manual
 // or automatic active observation remains the sole owner of window creation.
 func (manager *CredentialManager) FlushPassiveQuotaObservations(ctx context.Context) (bool, error) {
@@ -81,18 +81,6 @@ func (manager *CredentialManager) flushOnePassiveQuotaObservationLocked(
 			}
 			return fmt.Errorf("read credential observation %d: %w", observation.CredentialID, err)
 		}
-		if row.ObservedAtMS != nil && observation.ObservedAtMS <= *row.ObservedAtMS {
-			// An observation at least as new -- typically a manual refresh --
-			// was persisted while this sample sat pending. Writing it now would
-			// rewind observed_at_ms and overwrite newer quota values with older
-			// ones. The tie is included on purpose: a passive header captured
-			// just before an active refresh that completed within the same
-			// millisecond truncates to the same value, and the active result is
-			// the authoritative one. The CAS below only catches writes that land
-			// after this read.
-			manager.passiveQuota.ack(observation.CredentialID, observation.Version)
-			return nil
-		}
 		merge, observedAtMS, mergeErr := mergePassiveQuotaSamples(row.SnapshotJSON, row.ObservedAtMS, observation)
 		if mergeErr != nil {
 			// A snapshot this malformed cannot be repaired by retrying the
@@ -101,7 +89,7 @@ func (manager *CredentialManager) flushOnePassiveQuotaObservationLocked(
 			return nil
 		}
 		if !merge.Matched {
-			// 未能唯一匹配已有窗口的样本不能推进同步时间。
+			// 没有点数、也未能唯一匹配已有窗口的样本不能推进同步时间。
 			// 窗口创建和身份变更仍由主动观测负责。
 			manager.passiveQuota.ack(observation.CredentialID, observation.Version)
 			return nil
@@ -116,16 +104,13 @@ func (manager *CredentialManager) flushOnePassiveQuotaObservationLocked(
 		if merge.Changed {
 			updates["snapshot_json"] = models.JSON(merge.Encoded)
 		}
-		// observation_version is the concurrency token: every successful active
-		// observation increments it. A timestamp cannot serve here because two
-		// writes can land in the same millisecond, leaving updated_at_ms
-		// numerically unchanged and letting this update slip past. updated_at_ms
-		// stays in the predicate to also catch the metadata-only writes from the
-		// active failure and reset paths, which do not move the version.
+		// Active writes change the version; passive writes can share both that
+		// version and updated_at_ms. Compare the snapshot and observation time
+		// too, so another replica's same-millisecond write forces a fresh merge.
 		result := manager.db.WithContext(ctx).Model(&models.CredentialObservation{}).
 			Where(
-				"credential_id = ? AND observation_version = ? AND updated_at_ms = ?",
-				observation.CredentialID, row.ObservationVersion, row.UpdatedAtMS,
+				"credential_id = ? AND observation_version = ? AND updated_at_ms = ? AND snapshot_json::jsonb = ?::jsonb AND observed_at_ms IS NOT DISTINCT FROM ?",
+				observation.CredentialID, row.ObservationVersion, row.UpdatedAtMS, string(row.SnapshotJSON), row.ObservedAtMS,
 			).
 			Updates(updates)
 		if result.Error != nil {
@@ -145,28 +130,88 @@ func (manager *CredentialManager) flushOnePassiveQuotaObservationLocked(
 }
 
 // mergePassiveQuotaSamples 按原始时间处理握手和事件，再通过同一次 CAS 写入。
-// 每份样本都与数据库中的时间比较，避免把旧握手改记为事件时间、覆盖期间的主动刷新。
+// 窗口和点数分别比较原始时间；旧快照回退到总时间，同毫秒保留已落盘值。
 func mergePassiveQuotaSamples(raw []byte, storedAtMS *int64, observation PassiveQuotaObservation) (passiveQuotaMerge, int64, error) {
 	result := passiveQuotaMerge{Encoded: raw}
 	var observedAtMS int64
+	if storedAtMS != nil {
+		observedAtMS = *storedAtMS
+	}
+	var snapshot struct {
+		Credits           *providerobservation.CreditSummary `json:"credits"`
+		QuotaObservedAtMS *int64                             `json:"quota_observed_at_ms"`
+	}
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return passiveQuotaMerge{}, 0, fmt.Errorf("decode credential observation snapshot: %w", err)
+	}
+	windowAtMS := observedAtMS
+	if snapshot.QuotaObservedAtMS != nil {
+		windowAtMS = *snapshot.QuotaObservedAtMS
+	}
+	storedWindowAtMS := windowAtMS
+	creditAccepted := false
+	creditAtMS := storedAtMS
+	if snapshot.Credits != nil && snapshot.Credits.ObservedAtMS != nil {
+		creditAtMS = snapshot.Credits.ObservedAtMS
+	}
 	samples := [2]*PassiveQuotaSample{
 		observation.Preceding,
-		{ObservedAtMS: observation.ObservedAtMS, Windows: observation.Windows},
+		{ObservedAtMS: observation.ObservedAtMS, Windows: observation.Windows, Credits: observation.Credits},
 	}
 	for _, sample := range samples {
-		if sample == nil || (storedAtMS != nil && sample.ObservedAtMS <= *storedAtMS) {
+		if sample == nil {
 			continue
 		}
-		merged, err := mergePassiveQuotaSnapshot(result.Encoded, sample.Windows)
+		windows := sample.Windows
+		if sample.ObservedAtMS <= storedWindowAtMS {
+			windows = nil
+		}
+		credits := cloneCreditSummary(sample.Credits)
+		if credits != nil {
+			if credits.ObservedAtMS == nil {
+				credits.ObservedAtMS = cloneInt64(&sample.ObservedAtMS)
+			}
+			// Compare with the stored floor, not the preceding handshake: an
+			// event in the same millisecond supersedes its uncommitted handshake.
+			// 旧快照没有点数时间时沿用总时间，避免恢复主动刷新已清除的旧余额。
+			if creditAtMS != nil && *credits.ObservedAtMS <= *creditAtMS {
+				credits = nil
+			}
+		}
+		if len(windows) == 0 && credits == nil {
+			continue
+		}
+		merged, err := mergePassiveQuotaSnapshot(result.Encoded, windows, credits)
 		if err != nil {
 			return passiveQuotaMerge{}, 0, err
 		}
-		if merged.Matched {
-			observedAtMS = sample.ObservedAtMS
+		if merged.WindowMatched {
+			windowAtMS = sample.ObservedAtMS
+			observedAtMS = max(observedAtMS, windowAtMS)
+		}
+		if credits != nil {
+			creditAccepted = true
+			observedAtMS = max(observedAtMS, *credits.ObservedAtMS)
 		}
 		merged.Matched = merged.Matched || result.Matched
 		merged.Changed = merged.Changed || result.Changed
 		result = merged
+	}
+	// A credit-only write advances the total time, not the window time. Keep
+	// the latter inside the stored JSON; the public snapshot omits this field.
+	// Active refresh replaces the JSON and establishes a new fallback time.
+	if result.Matched && (creditAccepted || snapshot.QuotaObservedAtMS != nil) &&
+		(snapshot.QuotaObservedAtMS == nil || *snapshot.QuotaObservedAtMS != windowAtMS) {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(result.Encoded, &fields); err != nil {
+			return passiveQuotaMerge{}, 0, err
+		}
+		fields["quota_observed_at_ms"], _ = json.Marshal(windowAtMS)
+		encoded, err := json.Marshal(fields)
+		if err != nil {
+			return passiveQuotaMerge{}, 0, err
+		}
+		result.Encoded, result.Changed = encoded, true
 	}
 	return result, observedAtMS, nil
 }
@@ -177,18 +222,20 @@ func mergePassiveQuotaSamples(raw []byte, storedAtMS *int64, observation Passive
 // observation of that credential, while a response naming no tracked window
 // is no observation of this snapshot at all.
 type passiveQuotaMerge struct {
-	Encoded []byte
-	Windows []providerobservation.QuotaWindow
-	Matched bool
-	Changed bool
+	Encoded       []byte
+	Windows       []providerobservation.QuotaWindow
+	Matched       bool
+	WindowMatched bool
+	Changed       bool
 }
 
-// mergePassiveQuotaSnapshot 仅更新已有且唯一匹配的窗口，不创建或改换窗口。
-// 无变化时直接返回原始 raw，保持字节不变；仅在窗口数据变化时重新编码，
+// mergePassiveQuotaSnapshot 更新已有且唯一匹配的窗口及已通过时间校验的点数。
+// 无变化时直接返回原始 raw，保持字节不变；仅在观测数据变化时重新编码，
 // 此时保留其他字段的值，但不保证原始键顺序或格式。
 func mergePassiveQuotaSnapshot(
 	raw []byte,
 	patches []providerobservation.QuotaWindow,
+	credits *providerobservation.CreditSummary,
 ) (result passiveQuotaMerge, err error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
@@ -239,6 +286,7 @@ func mergePassiveQuotaSnapshot(
 			continue
 		}
 		outcome.Matched = true
+		outcome.WindowMatched = true
 		patch.ID = previous.ID // 响应槽位可以变化，卡片窗口身份不变。
 		next := providerobservation.MergeQuotaWindow(previous, patch)
 		if !reflect.DeepEqual(next, previous) {
@@ -246,14 +294,49 @@ func mergePassiveQuotaSnapshot(
 		}
 		merged[position] = next
 	}
+	windowsChanged := outcome.Changed
+	if credits != nil {
+		var previous *providerobservation.CreditSummary
+		if encoded, present := fields["credits"]; present {
+			if err := json.Unmarshal(encoded, &previous); err != nil {
+				return passiveQuotaMerge{}, fmt.Errorf("decode credential credit summary: %w", err)
+			}
+		}
+		var next providerobservation.CreditSummary
+		if previous != nil {
+			next = *previous
+		}
+		patch := credits
+		next.ObservedAtMS = patch.ObservedAtMS
+		if patch.Balance != "" {
+			next.Balance = patch.Balance
+		}
+		if patch.HasCredits != nil {
+			next.HasCredits = patch.HasCredits
+		}
+		if patch.Unlimited != nil {
+			next.Unlimited = patch.Unlimited
+		}
+		outcome.Matched = true
+		if !reflect.DeepEqual(previous, &next) {
+			encoded, err := json.Marshal(next)
+			if err != nil {
+				return passiveQuotaMerge{}, fmt.Errorf("encode credential credit summary: %w", err)
+			}
+			fields["credits"] = encoded
+			outcome.Changed = true
+		}
+	}
 	if !outcome.Changed {
 		return outcome, nil
 	}
-	encodedWindows, err := json.Marshal(merged)
-	if err != nil {
-		return passiveQuotaMerge{}, fmt.Errorf("encode credential observation quota windows: %w", err)
+	if windowsChanged {
+		encodedWindows, err := json.Marshal(merged)
+		if err != nil {
+			return passiveQuotaMerge{}, fmt.Errorf("encode credential observation quota windows: %w", err)
+		}
+		fields["quota_windows"] = encodedWindows
 	}
-	fields["quota_windows"] = encodedWindows
 	encoded, err := json.Marshal(fields)
 	if err != nil {
 		return passiveQuotaMerge{}, fmt.Errorf("encode credential observation snapshot: %w", err)

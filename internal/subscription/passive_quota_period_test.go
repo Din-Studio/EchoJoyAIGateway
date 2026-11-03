@@ -54,7 +54,7 @@ func TestMergePassiveQuotaSnapshotChecksWindowPeriod(t *testing.T) {
 				ResetAtMS: &patchResetAt, WindowSeconds: test.patchPeriod, State: "available",
 			}
 
-			merged, err := mergePassiveQuotaSnapshot(raw, []providerobservation.QuotaWindow{patch})
+			merged, err := mergePassiveQuotaSnapshot(raw, []providerobservation.QuotaWindow{patch}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -95,7 +95,7 @@ func TestMergePassiveQuotaSnapshotKeepsCompatibleWindowAlongsideConflict(t *test
 	sparkPatch.ID = "gpt-5-3-codex-spark-primary"
 
 	merged, err := mergePassiveQuotaSnapshot([]byte(passiveQuotaWeeklyAndSparkSnapshot),
-		[]providerobservation.QuotaWindow{patch, sparkPatch})
+		[]providerobservation.QuotaWindow{patch, sparkPatch}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestFlushPassiveQuotaObservationsDiscardsConflictingPeriodWithoutAdvancingF
 	if len(windows) != 1 || windows[0].ID != "primary" {
 		t.Fatalf("unexpected passive windows: %#v", windows)
 	}
-	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, observedAt.UnixMilli(), windows)
+	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, observedAt.UnixMilli(), windows, nil)
 
 	pending, err := manager.FlushPassiveQuotaObservations(t.Context())
 	if err != nil {

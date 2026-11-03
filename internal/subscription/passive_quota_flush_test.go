@@ -48,7 +48,7 @@ func TestFlushPassiveQuotaObservationsUpdatesExistingWindowAndProjectsFreshToReg
 	utilization := 0.55
 	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 2000, []providerobservation.QuotaWindow{
 		{ID: "primary", Label: "Session", Scope: "account", Unit: "percent", State: "available", Used: &used, Utilization: &utilization},
-	})
+	}, nil)
 
 	remaining, err := manager.FlushPassiveQuotaObservations(t.Context())
 	if err != nil {
@@ -103,7 +103,7 @@ func TestFlushPassiveQuotaObservationsDiscardsSampleOlderThanStoredObservation(t
 	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 2000, []providerobservation.QuotaWindow{
 		{ID: "primary", Label: "5h", Scope: "account", Unit: "percent", State: "available",
 			Used: &oldUsed, Utilization: &oldUtilization},
-	})
+	}, nil)
 
 	if _, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil {
 		t.Fatalf("FlushPassiveQuotaObservations() error = %v", err)
@@ -136,7 +136,7 @@ func TestFlushPassiveQuotaObservationsDoesNotResurrectStaleCachedFieldsAfterAck(
 	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 2000, []providerobservation.QuotaWindow{
 		{ID: "primary", Label: "5h", Scope: "account", Unit: "percent", State: "available",
 			Used: &firstUsed, Utilization: &firstUtilization},
-	})
+	}, nil)
 	if _, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil {
 		t.Fatalf("first FlushPassiveQuotaObservations() error = %v", err)
 	}
@@ -156,7 +156,7 @@ func TestFlushPassiveQuotaObservationsDoesNotResurrectStaleCachedFieldsAfterAck(
 	resetAt := int64(9999)
 	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 4000, []providerobservation.QuotaWindow{
 		{ID: "primary", ResetAtMS: &resetAt},
-	})
+	}, nil)
 	if _, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil {
 		t.Fatalf("second FlushPassiveQuotaObservations() error = %v", err)
 	}
@@ -189,7 +189,7 @@ func TestFlushPassiveQuotaObservationsYieldsToStoredObservationAtTheSameMillisec
 	// authoritative one, so the tie goes to what is already stored.
 	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 1000, []providerobservation.QuotaWindow{
 		{ID: "primary", Used: &used, Utilization: &utilization},
-	})
+	}, nil)
 
 	if _, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil {
 		t.Fatalf("FlushPassiveQuotaObservations() error = %v", err)
@@ -223,7 +223,7 @@ func TestFlushPassiveQuotaObservationsDetectsActiveWriteSharingTheSameMillisecon
 	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 6000, []providerobservation.QuotaWindow{
 		{ID: "primary", Scope: "account", Unit: "percent", State: "available",
 			Used: &staleUsed, Utilization: &staleUtilization},
-	})
+	}, nil)
 	// Pin the passive writer's clock to the row's existing updated_at_ms so a
 	// timestamp cannot serve as the concurrency token.
 	manager.now = func() time.Time { return time.UnixMilli(5000) }
@@ -285,7 +285,7 @@ func TestFlushPassiveQuotaObservationsDoesNotCarryFieldsAcrossCoalescedResponses
 	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 1000, []providerobservation.QuotaWindow{
 		{ID: "primary", Scope: "account", Unit: "percent", State: "available",
 			Used: &staleUsed, Utilization: &staleUtilization},
-	})
+	}, nil)
 
 	// t2: an active refresh commits a newer utilization.
 	if err := manager.db.Model(&models.CredentialObservation{}).Where("credential_id = ?", row.ID).
@@ -302,7 +302,7 @@ func TestFlushPassiveQuotaObservationsDoesNotCarryFieldsAcrossCoalescedResponses
 	resetAt := int64(9999)
 	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 3000, []providerobservation.QuotaWindow{
 		{ID: "primary", ResetAtMS: &resetAt},
-	})
+	}, nil)
 
 	if _, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil {
 		t.Fatalf("FlushPassiveQuotaObservations() error = %v", err)
@@ -335,7 +335,7 @@ func TestFlushPassiveQuotaObservationsAdvancesObservedAtWhenValuesAreUnchanged(t
 	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 99999, []providerobservation.QuotaWindow{
 		{ID: "primary", Scope: "account", Unit: "percent", State: "available",
 			Used: &used, Limit: &limit, Remaining: &remaining, Utilization: &utilization},
-	})
+	}, nil)
 
 	if _, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil {
 		t.Fatalf("FlushPassiveQuotaObservations() error = %v", err)
@@ -361,7 +361,7 @@ func TestFlushPassiveQuotaObservationsSkipsUnknownWindowID(t *testing.T) {
 	used := 10.0
 	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 2000, []providerobservation.QuotaWindow{
 		{ID: "secondary", Scope: "account", State: "available", Used: &used},
-	})
+	}, nil)
 
 	if _, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil {
 		t.Fatalf("FlushPassiveQuotaObservations() error = %v", err)
@@ -391,7 +391,7 @@ func TestFlushPassiveQuotaObservationsDiscardsWithoutExistingRow(t *testing.T) {
 	used := 10.0
 	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 2000, []providerobservation.QuotaWindow{
 		{ID: "primary", Scope: "account", State: "available", Used: &used},
-	})
+	}, nil)
 
 	if _, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil {
 		t.Fatalf("FlushPassiveQuotaObservations() error = %v", err)
@@ -420,7 +420,7 @@ func TestFlushPassiveQuotaObservationsDiscardsOnIdentityGenerationMismatch(t *te
 	used := 10.0
 	manager.RecordPassiveQuotaObservation(row.ID, entries[0].IdentityGeneration, 2000, []providerobservation.QuotaWindow{
 		{ID: "primary", Scope: "account", State: "available", Used: &used},
-	})
+	}, nil)
 	// 样本入队时仍属于当前目标，之后的目标切换由 flush 阶段再次拦截。
 	entries[0].IdentityGeneration = 999999
 	if _, err := registry.ReconcileGroup(row.GroupID, entries); err != nil {
@@ -451,7 +451,7 @@ func TestFlushPassiveQuotaObservationsDoesNotProjectStaleStateToRegistry(t *test
 	used := 10.0
 	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 2000, []providerobservation.QuotaWindow{
 		{ID: "primary", Scope: "account", State: "available", Used: &used},
-	})
+	}, nil)
 
 	if _, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil {
 		t.Fatalf("FlushPassiveQuotaObservations() error = %v", err)
@@ -475,7 +475,7 @@ func TestFlushPassiveQuotaObservationsPreservesUntouchedStateAndMetadata(t *test
 	used := 10.0
 	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 2000, []providerobservation.QuotaWindow{
 		{ID: "primary", Scope: "account", State: "available", Used: &used},
-	})
+	}, nil)
 
 	if _, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil {
 		t.Fatalf("FlushPassiveQuotaObservations() error = %v", err)

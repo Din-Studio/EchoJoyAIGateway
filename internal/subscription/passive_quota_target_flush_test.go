@@ -26,7 +26,7 @@ func TestFlushPassiveQuotaObservationsDoesNotPublishOldTargetAfterURLChange(t *t
 	}
 	previousIdentity := entries[0].IdentityGeneration
 	manager.RecordPassiveQuotaObservation(credential.ID, previousIdentity, 2000,
-		[]providerobservation.QuotaWindow{{ID: "primary", State: "exhausted"}})
+		[]providerobservation.QuotaWindow{{ID: "primary", State: "exhausted"}}, nil)
 
 	// 数据库已落盘但额度尚未投影时暂停，复现旧目标结果迟到的窗口。
 	persisted := make(chan struct{})
