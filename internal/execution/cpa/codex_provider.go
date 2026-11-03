@@ -323,6 +323,7 @@ func (bridge *codexProviderBridge) Execute(
 		UpstreamProtocol:             codexUpstreamProtocol(response.UpstreamRequestPath),
 		QuotaObservedAt:              response.QuotaObservedAt,
 		QuotaWindows:                 codex.NormalizePassiveQuotaWindows(response.QuotaSignals, response.QuotaObservedAt),
+		Credits:                      codex.NormalizePassiveCredits(response.QuotaSignals, response.QuotaObservedAt),
 	}, err
 }
 
@@ -357,6 +358,7 @@ func (bridge *codexProviderBridge) ExecuteStream(
 		UpstreamProtocol:             codexUpstreamProtocol(response.UpstreamRequestPath),
 		QuotaObservedAt:              response.QuotaObservedAt,
 		QuotaWindows:                 codex.NormalizePassiveQuotaWindows(response.QuotaSignals, response.QuotaObservedAt),
+		Credits:                      codex.NormalizePassiveCredits(response.QuotaSignals, response.QuotaObservedAt),
 	}
 	if err != nil {
 		if codexBootstrapCapacityRejection(err) {

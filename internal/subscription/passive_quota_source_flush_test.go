@@ -33,7 +33,7 @@ func TestFlushPassiveQuotaSourcesPreservesCardWindowsAndHealth(t *testing.T) {
 		"X-Codex-Bengalfox-Primary-Used-Percent":   "30",
 		"X-Codex-Bengalfox-Primary-Window-Minutes": "300",
 	}, observedAt)
-	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, observedAt.UnixMilli(), patches)
+	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, observedAt.UnixMilli(), patches, nil)
 	pending, err := manager.FlushPassiveQuotaObservations(t.Context())
 	if err != nil || pending || len(manager.DirtyPassiveQuotaObservations(1)) != 0 {
 		t.Fatalf("flush pending=%v error=%v", pending, err)
