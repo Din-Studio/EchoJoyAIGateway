@@ -68,6 +68,7 @@ type requestRecorder struct {
 	currency             pricing.Currency
 	protocol             protocol.Protocol
 	operation            execution.Operation
+	clientIP             string
 	clientModel          string
 	stream               bool
 	firstResponseMs      *int64
@@ -155,6 +156,7 @@ func (recorder *requestRecorder) emit() {
 		CompletedAt:           completedAt.UTC(),
 		AccessKeyID:           recorder.accessKeyID,
 		Protocol:              recorder.protocol,
+		ClientIP:              recorder.clientIP,
 		ClientModel:           recorder.clientModel,
 		UpstreamModel:         recorder.outcome.upstreamModel,
 		UpstreamReportedModel: reportedModel,

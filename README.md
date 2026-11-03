@@ -230,6 +230,8 @@ Compose passes `.env` to the container, and the values set in the Compose file t
 | `DATABASE_MAX_IDLE_CONNECTIONS` | `5` | Maximum idle PostgreSQL connections per replica, positive integer and no greater than `DATABASE_MAX_OPEN_CONNECTIONS`. |
 | `AUTH_KEY` | Required | Bearer key for the management UI and `/api` management API, not a data-plane AccessKey. Every replica must share it. |
 | `ENCRYPTION_KEY` | Required | Encrypts channel credentials, proxy catalog entries, and proxy references; changing or losing it makes them undecryptable, so back it up with PostgreSQL. Every replica must share it. |
+| `CLIENT_IP_HEADER` | Empty, uses the connection IP | Client IP header, such as `X-Forwarded-For` or `CF-Connecting-IP`; missing or invalid values fall back to the connection IP. Shared by logs, AccessKey IP restrictions, and other IP consumers; supports IPv4/IPv6. Restart after changes. |
+| `TRUSTED_PROXIES` | Empty | Optional comma-separated proxy IPs or CIDRs; applies only with `CLIENT_IP_HEADER`. Empty means trusting the selected header directly, with trust enforced by your deployment. When set, only matching connection peers may supply the header; others use their connection IP. For `X-Forwarded-For`, scan right to left for the first untrusted IP (leftmost if all are trusted); without a list, use the leftmost IP. Other headers accept one IP only. Restart after changes. |
 | `HTTP_PROXY` | Empty | Environment proxy for HTTP upstream requests. |
 | `HTTPS_PROXY` | Empty | Environment proxy for HTTPS upstream requests. |
 | `NO_PROXY` | Empty | Comma-separated hosts, domains, or IPs that bypass the environment proxy. |
