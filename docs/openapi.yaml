@@ -6,7 +6,7 @@ info:
     name: MIT
     identifier: MIT
   description: |
-    控制面 HTTP 接口，路由前缀为 `/api`。当前收录范围：AccessKey 管理；模型总览、模型价格、分组模型与模型发现；集中代理管理。
+    控制面 HTTP 接口，路由前缀为 `/api`。当前收录范围：AccessKey 管理；模型总览、客户端目录与资料、模型价格、分组模型与模型发现；集中代理管理。
     数据面接口（`/v1/*`、`/v1beta/*`）不在本文档内。
 
     ## 鉴权
@@ -69,7 +69,7 @@ tags:
   - name: AccessKeys
     description: AccessKey 管理（仅 admin）
   - name: Models
-    description: 模型总览（admin 与 AccessKey 均可调用）
+    description: 模型总览（admin 与 AccessKey 均可调用）；客户端目录与模型资料管理（仅 admin）
   - name: ModelPrices
     description: 上游价格、客户端模型统一价与 models.dev 目录同步（仅 admin）
   - name: GroupModels
@@ -856,6 +856,126 @@ paths:
         '429': { $ref: '#/components/responses/AuthLocked' }
         '500': { $ref: '#/components/responses/InternalError' }
 
+  /api/models/client-catalog:
+    get:
+      tags: [Models]
+      operationId: getClientCatalog
+      summary: 查询 Codex 客户端目录、模型资料与字节预算（仅 admin）
+      description: |
+        返回可通过 Responses create 调用的候选模型资料（`models`）、当前选择及顺序（`selected`）、
+        默认选择及顺序（`defaults`），以及按 `client_version` 生成的真实 JSON 字节预算（`budget`）。
+        AccessKey 不可访问此管理接口。数据面下发目录时仍按 AccessKey 的协议、模型和分组权限过滤候选。
+        默认选择名称以 `gpt-` 开头的候选，但排除 `gpt-image` 和 `gpt-image-*`；
+        手动排序优先，其余按 GPT 数字版本从新到旧排列，同版本或无版本时按名称排列。
+        目录选择只影响 Codex 目录展示，不改变普通模型列表 API、请求路由、调用权限或计费。
+        Codex 目录响应体最多 1 MiB（1048576 字节），包含 JSON 包装、逗号和闭合字符。
+        超限时只返回所选顺序中可容纳的最大完整前缀，不截断条目，也不跳过大条目来填入后续模型。
+        数据面 `client_version` 为三段非负整数且 >= 0.159.2 时省略 `base_instructions`；
+        旧版本或无法识别的版本保留该字段。管理面预算使用返回的固定模板版本，不代表所有客户端版本或密钥的预算。
+      security:
+        - adminBearer: []
+      responses:
+        '200':
+          description: 当前目录与预算
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/ClientCatalogDTO' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    put:
+      tags: [Models]
+      operationId: updateClientCatalog
+      summary: 原子保存 Codex 目录选择、排序与模型资料（仅 admin）
+      description: |
+        严格解析一个 JSON 对象；未知字段、重复字段、多个 JSON 值或错误字段类型均拒绝。请求体上限 32 MiB。
+        `models` 替换当前候选的选择与顺序；`profiles` 中每项整体替换该模型的资料覆盖。
+        `known_models` 可选；提供非 null 值时必须与当前完整候选集合一致且无重复，顺序不限。
+        启用该校验后，候选新增、删除或失去可用路由会使旧草稿返回 `400 VALIDATION_FAILED`；必须重新读取目录。
+        该字段不是配置版本锁，不检测只有资料或排序发生的变化。
+        `reset_directory: true` 只重置目录选择与顺序；不能同时提交非空 `models`。
+        资料的 `overrides: {}` 只重置该模型资料，不重置目录；两种重置可以在同一请求中组合。
+        任一项校验失败均不保存。目录与资料在同一个 PostgreSQL 控制事务中保存，随后通过配置 revision、
+        广播及轮询同步到各副本。提交后的发布失败不代表数据库已回滚，重试前先查询当前配置。
+        不要求 `Idempotency-Key`。超出 Codex 下发预算不会拒绝保存，返回预算标记未下发的后缀。
+        本功能没有数据库结构迁移，只扩展已有 `client_model_overrides.overrides` JSON，
+        包括目录键 `catalog_enabled`、`catalog_order` 和新增资料键。
+        不得混合新旧版本写配置：旧程序严格解析 JSON，会拒绝新增键；保存后仅回退镜像不能保证恢复。
+      security:
+        - adminBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClientCatalogRequest' }
+            example:
+              known_models: [gpt-5.5, gpt-5, custom-model]
+              models: [gpt-5.5, custom-model]
+              profiles:
+                - client_model: custom-model
+                  overrides: { description: Custom model, service_tiers: [priority, ultrafast] }
+      responses:
+        '200':
+          description: 保存后的目录与预算
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/ClientCatalogDTO' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/RecoveryPending' }
+
+  /api/models/client-catalog/preview:
+    post:
+      tags: [Models]
+      operationId: previewClientCatalog
+      summary: 预览 Codex 目录草稿与字节预算（仅 admin，不保存）
+      description: |
+        使用与 `PUT /api/models/client-catalog` 相同的严格 JSON 请求、候选校验、独立重置和序列化规则。
+        在当前配置的副本上应用草稿，不写数据库、不发布配置。预览成功不保证稍后保存时候选仍相同。
+        返回全部候选资料、选择、默认目录及预算；超限时 `budget.entries[].included` 标记最大完整前缀。
+      security:
+        - adminBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClientCatalogRequest' }
+      responses:
+        '200':
+          description: 草稿目录与预算
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/ClientCatalogDTO' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
   /api/models/profile:
     get:
       tags: [Models]
@@ -897,20 +1017,15 @@ paths:
       operationId: updateClientModelProfile
       summary: 保存客户端模型的 Codex 模型目录覆盖（整体替换）
       description: |
-        `overrides` 整体替换已保存的覆盖，省略的字段回到自动值；传 `{}` 即删除全部覆盖。
+        `overrides` 整体替换已保存的资料覆盖，省略的字段回到自动值；传 `{}` 只重置资料。
+        目录选择与排序保持不变；`catalog_enabled`、`catalog_order` 不可通过此接口设置。
         客户端模型必须被某个分组引用，否则返回 `404 NOT_FOUND`。
         保存后立即发布配置，其他实例经集群配置同步重新加载。不接受查询参数。
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [client_model, overrides]
-              properties:
-                client_model: { type: string }
-                overrides: { $ref: '#/components/schemas/ClientModelOverrides' }
+            schema: { $ref: '#/components/schemas/ClientModelProfileUpdateRequest' }
             example:
               client_model: gpt-5.5
               overrides: { display_name: GPT-5.5, context_window: 400000 }
@@ -2372,7 +2487,7 @@ components:
           description: 客户端请求时使用的模型名。
         has_overrides:
           type: boolean
-          description: 是否为该客户端模型保存了 Codex 模型目录的手动覆盖，见 `GET /api/models/profile`。
+          description: 是否保存了客户端模型资料覆盖；不计目录选择与排序覆盖，见 `GET /api/models/profile`。
         price:
           oneOf:
             - $ref: '#/components/schemas/ClientModelPrice'
@@ -2389,26 +2504,48 @@ components:
 
     ClientModelProfile:
       type: object
-      required: [display_name, context_window, supported_reasoning_levels, input_modalities]
+      required: [display_name, description, context_window, auto_compact_token_limit, supported_reasoning_levels, default_reasoning_level, input_modalities, service_tiers]
       properties:
         display_name: { type: string }
+        description: { type: string }
         context_window:
           type: [integer, 'null']
           description: 上下文窗口 tokens；模板未提供时为 `null`。
+        auto_compact_token_limit:
+          type: [integer, 'null']
+          description: 自动压缩阈值 tokens；模板未提供时为 `null`。
         supported_reasoning_levels:
           type: array
           items: { type: string, enum: [none, minimal, low, medium, high, xhigh, max, ultra, persistent] }
+        default_reasoning_level:
+          type: string
+          enum: [none, minimal, low, medium, high, xhigh, max, ultra, persistent]
+          description: 支持列表内的默认推理强度；自动值不在列表时优先 medium，否则取首项。
         input_modalities:
           type: array
           items: { type: string, enum: [text, image, audio] }
+        service_tiers:
+          type: array
+          uniqueItems: true
+          description: 可选加速档位。默认使用标准档位，priority（Fast）与 ultrafast 必须由客户端显式选择。
+          items: { type: string, enum: [priority, ultrafast] }
 
     ClientModelOverrides:
       type: object
       additionalProperties: false
-      description: 只包含被覆盖的字段；省略的字段使用自动值。
+      description: |
+        API 中只包含资料覆盖；省略的字段使用自动值。目录键 catalog_enabled、catalog_order 仅存储在已有 JSON 中，
+        通过 ClientCatalogRequest 的 models/reset_directory 管理，不在资料请求或响应中使用。
+        不接受 default_service_tier；Codex 下发的 default_service_tier 恒为 null，表示默认标准档位。
       properties:
         display_name: { type: string, maxLength: 512, description: '非空白 UTF-8 文本，最长 512 字节。' }
+        description: { type: string, maxLength: 4096, description: 'UTF-8 文本，最长 4096 字节，可以为空。' }
         context_window: { type: integer, minimum: 1, maximum: 9007199254740991 }
+        auto_compact_token_limit: { type: integer, minimum: 1, maximum: 9007199254740991 }
+        default_reasoning_level:
+          type: string
+          enum: [none, minimal, low, medium, high, xhigh, max, ultra, persistent]
+          description: 必须在本次提交的 supported_reasoning_levels 中；未提交该列表时必须在自动列表中。
         supported_reasoning_levels:
           type: array
           minItems: 1
@@ -2419,6 +2556,87 @@ components:
           uniqueItems: true
           description: 必须包含 `text`。
           items: { type: string, enum: [text, image, audio] }
+        service_tiers:
+          type: array
+          uniqueItems: true
+          description: 只管理可选加速档位；空数组隐藏全部加速档位，省略则使用自动值。不填写 standard。
+          items: { type: string, enum: [priority, ultrafast] }
+
+    ClientModelProfileUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [client_model, overrides]
+      properties:
+        client_model: { type: string, minLength: 1 }
+        overrides: { $ref: '#/components/schemas/ClientModelOverrides' }
+
+    ClientCatalogRequest:
+      type: object
+      additionalProperties: false
+      description: |
+        空请求无效。必须提供非 null 的 known_models 或 models、非空 profiles，或 reset_directory=true。
+        未知候选名、重复模型、重复资料条目或无效资料均返回 400 VALIDATION_FAILED。
+        models 省略或为 null 时保持目录；profiles 省略或为空时保持资料。
+      properties:
+        known_models:
+          type: [array, 'null']
+          uniqueItems: true
+          description: 从上次读取的 models[].client_model 收集完整候选集；提供非 null 值时拒绝过期候选集合，非配置版本锁。
+          items: { type: string }
+        models:
+          type: [array, 'null']
+          uniqueItems: true
+          description: 要下发的候选模型名，数组顺序就是目录顺序；空数组清空选择。不改变调用权限。
+          items: { type: string }
+        reset_directory:
+          type: boolean
+          default: false
+          description: 清除全部目录选择与排序覆盖，保留资料覆盖；为 true 时不得同时提交非空 models。
+        profiles:
+          type: [array, 'null']
+          description: 按模型整体替换资料覆盖；同一 client_model 不得重复。overrides 为 {} 时只重置资料。
+          items: { $ref: '#/components/schemas/ClientModelProfileUpdateRequest' }
+
+    ClientCatalogDTO:
+      type: object
+      required: [models, selected, defaults, budget, client_version]
+      properties:
+        models:
+          type: array
+          description: 当前全部 Responses create 候选的资料，不仅包含已选择的模型。
+          items: { $ref: '#/components/schemas/ClientModelProfileResponse' }
+        selected:
+          type: array
+          description: 当前选择及顺序，包含超出下发预算的后缀。
+          items: { type: string }
+        defaults:
+          type: array
+          description: 忽略目录覆盖时的默认选择及顺序。
+          items: { type: string }
+        budget: { $ref: '#/components/schemas/ClientCatalogBudget' }
+        client_version:
+          type: string
+          description: 管理面预算使用的内置 Codex 模板版本，不是请求参数。
+          examples: ['0.159.2']
+
+    ClientCatalogBudget:
+      type: object
+      required: [limit_bytes, response_bytes, selected_bytes, included_count, entries]
+      properties:
+        limit_bytes: { type: integer, const: 1048576, description: 'Codex 目录响应体上限：1 MiB。' }
+        response_bytes: { type: integer, minimum: 13, maximum: 1048576, description: '实际最大完整前缀的 JSON 字节数，含包装。' }
+        selected_bytes: { type: integer, minimum: 13, description: '完整所选目录的 JSON 字节数，含包装和逗号，可以超限。' }
+        included_count: { type: integer, minimum: 0, description: 实际下发的前缀模型数。 }
+        entries:
+          type: array
+          description: 按所选顺序列出全部条目；一项无法容纳时，该项与全部后续项的 included 均为 false。
+          items:
+            type: object
+            required: [client_model, bytes, included]
+            properties:
+              client_model: { type: string }
+              bytes: { type: integer, minimum: 0, description: 单个序列化条目的 UTF-8 字节数，不含分隔逗号或外层包装。 }
+              included: { type: boolean }
 
     ClientModelProfileResponse:
       type: object
@@ -2428,7 +2646,7 @@ components:
         automatic: { $ref: '#/components/schemas/ClientModelProfile' }
         overrides: { $ref: '#/components/schemas/ClientModelOverrides' }
         effective: { $ref: '#/components/schemas/ClientModelProfile' }
-        has_overrides: { type: boolean }
+        has_overrides: { type: boolean, description: 只统计资料覆盖，不计目录选择与排序覆盖。 }
 
     ProjectModelCollection:
       type: object

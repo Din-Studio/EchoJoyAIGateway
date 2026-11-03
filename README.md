@@ -184,6 +184,23 @@ Administrators manage an encrypted PostgreSQL proxy catalog in the console: add,
 
 Outbound selection follows credential → group → global → environment proxy → direct. Disabling or deleting an entry preserves its references but makes them inherit the next level; traffic can therefore become direct. Catalog decryption failures are errors, not inheritance. Manual tests use the selected proxy even when disabled, with eight Redis-backed slots shared across all replicas, separate from data-plane limits. Full capacity returns 429; unavailable shared state returns 503. The saved test URL is a management preference, not a runtime routing setting.
 
+### Codex client model catalog
+
+Administrators can select and reorder the Codex catalog on the Models page. `GET /api/models/client-catalog` returns candidates, selection, defaults, model profiles, and the byte budget. `POST /api/models/client-catalog/preview` previews a draft without saving. `PUT /api/models/client-catalog` saves directory and profile changes atomically in one PostgreSQL control transaction, then propagates configuration to all replicas. These three endpoints are admin-only; AccessKeys cannot use them.
+
+- Candidates must be callable through Responses create. By default, the catalog selects names beginning with `gpt-`, except `gpt-image` and `gpt-image-*`. Manual order comes first; remaining GPT versions sort newest first.
+- Save and preview accept strict JSON: unknown or duplicate fields, multiple JSON values, and invalid field types are rejected. The request limit is 32 MiB. Send `known_models` with the complete candidate set from the last read. A changed candidate set rejects the stale draft with `400 VALIDATION_FAILED`; read it again before saving. This optional guard is not a configuration version lock.
+- `models` replaces selection and order; `[]` selects none. Omit it to keep the directory. `reset_directory: true` restores directory defaults without clearing profiles and cannot accompany nonempty `models`. Each `profiles` entry replaces that model's metadata overrides. `overrides: {}` resets only its profile, including through `PUT /api/models/profile`, without changing selection or order.
+- Profile fields are `display_name`, `description`, `context_window`, `auto_compact_token_limit`, `supported_reasoning_levels`, `default_reasoning_level`, `input_modalities`, and `service_tiers`. Standard is always the default tier. `priority` (Fast) and `ultrafast` are opt-in client choices; `service_tiers: []` hides them. The API does not accept `default_service_tier`.
+- The Codex response is limited to 1 MiB (1048576 bytes), including JSON framing. When it exceeds the limit, it returns the maximal complete prefix in catalog order, never partial entries or later entries after one does not fit. The budget reports full selected bytes, actual response bytes, and inclusion per entry. Saving an oversized selection is allowed.
+- With a valid three-part numeric `client_version >= 0.159.2`, the data-plane catalog omits legacy `base_instructions`. Older or unrecognized versions retain it. Admin previews use the returned pinned `client_version`; actual bytes also depend on the caller's permissions and version.
+- Directory settings affect only Codex catalog presentation. Ordinary model APIs, routing, and authorization are unchanged. Data-plane catalogs still filter by AccessKey protocol, model, and group permissions. System currency, client-model unified pricing, and admin-only upstream cost visibility are unchanged.
+
+See [the control API contract](docs/openapi.yaml) for request and response schemas.
+
+> [!WARNING]
+> Do not write configuration with mixed old and new gateway versions. This feature adds no schema migration; it extends the existing `client_model_overrides.overrides` JSON with directory keys (`catalog_enabled`, `catalog_order`) and metadata keys. Old binaries reject the new keys. After saving, an image-only rollback is not guaranteed; retain a tested compatible configuration/database backup and its matching image.
+
 ## Deployment and data
 
 GPT-Load runs as a container that depends on PostgreSQL and Redis. `docker-compose.yml` starts one GPT-Load replica, PostgreSQL, and a single Redis node; for several replicas behind a load balancer, see [Multi-replica deployment](#multi-replica-deployment-experimental).

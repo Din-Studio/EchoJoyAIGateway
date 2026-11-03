@@ -184,6 +184,23 @@ OpenCode Go / Zen 使用 API Key，通过现有多协议网关适配器接入原
 
 出站选择顺序为凭据 → 分组 → 全局 → 环境代理 → 直连。禁用或删除代理后，原引用保留，但出站继承上一级，因此流量最终可以直连。目录解密失败会报错，不按继承处理。手动测试直接使用指定代理，包括禁用的代理；测试单独使用 Redis 中的 8 个集群共享槽，不占数据面名额。满额返回 429，共享状态不可用返回 503。保存的测试 URL 只是管理偏好，不是运行时路由设置。
 
+### Codex 客户端模型目录
+
+管理员可以在「模型」页选择 Codex 目录模型并排序。`GET /api/models/client-catalog` 返回候选、选择、默认目录、模型资料和字节预算。`POST /api/models/client-catalog/preview` 预览草稿，不保存配置。`PUT /api/models/client-catalog` 在一个 PostgreSQL 控制事务中原子保存目录与资料，再向全部副本传播配置。这三个接口仅限管理员，AccessKey 无权访问。
+
+- 候选必须可以通过 Responses create 调用。默认选择名称以 `gpt-` 开头的模型，但排除 `gpt-image` 和 `gpt-image-*`。手动排序优先，其余 GPT 版本从新到旧排列。
+- 保存与预览严格解析 JSON，拒绝未知字段、重复字段、多个 JSON 值和错误字段类型。请求体上限为 32 MiB。提交 `known_models` 时，必须使用上次读取的完整候选集。候选集变化后，旧草稿返回 `400 VALIDATION_FAILED`，必须重新读取。该可选校验不是配置版本锁。
+- `models` 替换选择与顺序；`[]` 清空选择；省略时保留目录。`reset_directory: true` 恢复目录默认值，但保留资料，且不得与非空 `models` 同时提交。`profiles` 中每项整体替换该模型的资料覆盖。`overrides: {}` 只重置资料，不改变选择与顺序；`PUT /api/models/profile` 同样遵守此规则。
+- 资料字段为 `display_name`、`description`、`context_window`、`auto_compact_token_limit`、`supported_reasoning_levels`、`default_reasoning_level`、`input_modalities` 和 `service_tiers`。标准档位始终为默认值。`priority`（Fast）与 `ultrafast` 必须由客户端显式选择；`service_tiers: []` 隐藏加速档位。API 不接受 `default_service_tier`。
+- Codex 响应体上限为 1 MiB（1048576 字节），包含 JSON 包装。超限时按目录顺序返回可容纳的最大完整前缀，不截断条目，也不跳过大条目来填入后续模型。预算返回完整选择的字节数、实际响应字节数和每项是否下发。可以保存超出下发预算的选择。
+- 数据面 `client_version` 为有效三段数字且 `>= 0.159.2` 时，目录省略旧字段 `base_instructions`。旧版本或无法识别的版本保留该字段。管理面预览使用响应中的固定 `client_version`；实际字节数还取决于调用者权限和版本。
+- 目录设置只影响 Codex 目录展示。普通模型 API、路由与调用权限不变。数据面目录仍按 AccessKey 的协议、模型和分组权限过滤。系统币种、客户端模型统一价和仅管理员可见的上游成本保持不变。
+
+请求与响应结构见[控制面 API 契约](docs/openapi.yaml)。
+
+> [!WARNING]
+> 不得混合新旧网关版本写配置。本功能没有数据库结构迁移，只扩展已有 `client_model_overrides.overrides` JSON，新增目录键（`catalog_enabled`、`catalog_order`）和资料键。旧程序会拒绝新增键。保存后仅回退镜像不能保证恢复；必须保留经过恢复验证的兼容配置或数据库备份及匹配镜像。
+
 ## 部署与数据
 
 GPT-Load 以容器运行，依赖 PostgreSQL 与 Redis。`docker-compose.yml` 启动 1 个 GPT-Load 副本、PostgreSQL 和单节点 Redis；需要在负载均衡后运行多个副本时，见[多副本部署](#多副本部署实验性)。
