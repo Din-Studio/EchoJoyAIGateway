@@ -373,13 +373,13 @@ channel 声明 + state 编译 + scheduler 选择
 
 ### M10. 请求日志、输出计时和报表
 
-**阅读入口**：`internal/gateway/request_log.go`、`output_timing.go`；`internal/dialect/output_timing.go`；`internal/telemetry/requestlog.go`、`auto_model_cost.go`；`internal/requestlog/service.go`、`mapper.go`、`worker.go`、`auto_decision_usage.go`、`usage_query.go`、`usage_query_window.go`；`internal/control/request_logs.go`。
+**阅读入口**：`internal/gateway/request_log.go`、`first_output.go`；`internal/execution/first_response.go`；`internal/dialect/first_output.go`；`internal/telemetry/requestlog.go`、`auto_model_cost.go`；`internal/requestlog/service.go`、`mapper.go`、`worker.go`、`auto_decision_usage.go`、`usage_query.go`、`usage_query_window.go`；`internal/control/request_logs.go`。
 
 **实际流程**：`recorder.emit → Service.Emit → mapEvent → WriteBatch`。Emit 深复制事件，以非阻塞方式入队；队列满可丢弃日志。批次按 ID 去重，在一个写事务内插入明细、attempt 和聚合，不使用 aggregation journal。
 
 短区间报表读明细；长区间使用完整小时聚合与边界明细。自动决策和护栏费用合并时不重复增加答复请求数与 token 数。零 attempt 和独立搜索不进入普通模型用量聚合。
 
-输出计时只观察成功交付的内容。HTTP 在写出并 flush 后观察；WS 有对应交付入口。文本、推理、工具参数属于有效输出；元数据和结束标记不直接算输出。
+HTTP 首响观察转换前的首条非空、非 DONE SSE data 行，WS 首响观察每轮上游响应事件。请求耗时包含重试，排除前期准入与后续记账。自动选模独立观察成功交付的首次文本、推理或工具参数；该观察不用于日志平均速度。
 
 **审查要求**：
 
@@ -387,11 +387,11 @@ channel 声明 + state 编译 + scheduler 选择
 - 新字段必须贯穿事件、复制、映射、冻结校验、迁移、查询投影、API 和前端解析。
 - 共享统计在数据库内自增，upsert 键排序，聚合维度包含 currency。不得恢复 Go 中读—加—写或 journal 重放。
 - 对账区分答复费用、总收费和上游成本。短窗、长窗、边界明细及辅助费用必须口径一致。
-- 流式时间满足 `0 ≤ first_output_ms ≤ last_output_ms ≤ duration_ms`。没有证据或观察超限时保持空值，不影响转发。
-- 旧 `first_response_ms` 字段、旧筛选参数名与当前首输出展示不是同一语义。前端速度公式必须核对实际字段。
-- 流式速度使用 `(output_tokens - 1) / (last - first)`，时间换算为秒；非流式使用 `output_tokens / duration`。无有效分母时不伪造数值。
+- `first_response_ms` 用于首响展示与筛选；没有上游响应证据时保持空值。观察不得改变转发。
+- `first_output_ms`、`last_output_ms` 退出运行时和 API；0027 冻结迁移及物理历史列保留，历史值不回填。
+- 流式与非流式平均速度均为 `output_tokens / duration`，时间换算为秒。仅为支持协议、2xx、有效用量和正耗时展示；历史日志保留原计时口径。
 
-**测试入口**：`internal/requestlog/worker_test.go`、`usage_query_window_test.go`、`output_timing_test.go`；`internal/gateway/output_timing_test.go`。省略前缀的测试同属 `internal/requestlog/`。
+**测试入口**：`internal/requestlog/worker_test.go`、`usage_query_window_test.go`、`first_response_timing_test.go`；`internal/gateway/first_output_test.go`、`internal/gateway/first_response_timing_test.go`。省略前缀的测试同属 `internal/requestlog/`。
 
 ### M11. 迁移、后台任务和目录同步
 
