@@ -47,20 +47,33 @@ func TestMigrationValidationLimitsMetadataQueries(t *testing.T) {
 
 func TestMigrationValidationPropagatesMetadataReadFailure(t *testing.T) {
 	db := openEmptyTestDatabase(t)
-	inspection, err := newMigrationInspection(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	inspection.db = db.WithContext(ctx)
-	err = inspection.validate(func(validationDB *gorm.DB) error {
-		// 对“不存在”的判断可以通过，但元数据读取失败不能被当作不存在。
-		_ = validationDB.Migrator().HasTable("groups")
-		return nil
-	})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("metadata read error = %v, want context cancellation", err)
+	for _, probe := range []struct {
+		name string
+		read func(gorm.Migrator)
+	}{
+		{"table", func(m gorm.Migrator) { _ = m.HasTable("groups") }},
+		{"column", func(m gorm.Migrator) { _ = m.HasColumn("groups", "name") }},
+		{"index", func(m gorm.Migrator) { _ = m.HasIndex("groups", "idx_groups_name") }},
+		{"constraint", func(m gorm.Migrator) { _ = m.HasConstraint("groups", "chk_group_status") }},
+		{"column_types", func(m gorm.Migrator) { _, _ = m.ColumnTypes("groups") }},
+	} {
+		t.Run(probe.name, func(t *testing.T) {
+			inspection, err := newMigrationInspection(db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			inspection.db = db.WithContext(ctx)
+			err = inspection.validate(func(validationDB *gorm.DB) error {
+				// 对“不存在”的判断可以通过，但元数据读取失败不能被当作不存在。
+				probe.read(validationDB.Migrator())
+				return nil
+			})
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("metadata read error = %v, want context cancellation", err)
+			}
+		})
 	}
 }
 
