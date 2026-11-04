@@ -11,7 +11,8 @@
 | `network.yaml` | 3 个安全组、SNS 告警主题、可选的月度预算 |
 | `data.yaml` | 3 台 Redis、1 台 PostgreSQL（固定私有 IP）、数据卷、DLM 快照、备份桶、自动恢复和服务告警 |
 | `gateway.yaml` | ECS 集群、ASG 和容量提供程序、任务定义和服务、两个目标组、两个 ALB 上的新规则（含 alb-internal 上给灵影的控制面入口）、扩缩、告警 |
-| `scripts/deploy.sh` | 部署上面 3 个栈，`--dry-run` 只预览变更集 |
+| `scripts/deploy.sh` | 部署3个栈；gateway默认停机发布，`--mode rolling`用于兼容更新，`--dry-run`只预览 |
+| `scripts/gateway-update.sh` | 停机发布的状态保存、排空等待、启动验证和失败保护；由deploy.sh调用 |
 | `scripts/put-secrets.sh` | 在 SSM 创建密钥，只创建不覆盖 |
 | `scripts/mirror-images.sh` | 同步 amd64 的 postgres 和 redis 到 `docker.echojoy.cn/echojoy-gateway/`，已存在的标签不覆盖 |
 | `scripts/build-push.sh` | 构建 amd64 网关镜像并推送，标签为提交短 SHA |
@@ -64,9 +65,19 @@ scripts/alb-cutover.sh cutover
 
 发布新版本、重启、回滚、修改配置和升级镜像，见 [运维手册](OPERATIONS.md)。
 
+```bash
+# 数据库/持久配置格式变化：默认停机，全部旧任务退出后才启动新版本
+scripts/deploy.sh gateway --image-tag "$TAG" --mode maintenance
+# 纯代码且数据兼容：新旧任务并行，保留自动回退
+scripts/deploy.sh gateway --image-tag "$TAG" --mode rolling
+```
+
+客户端IP默认使用`CLIENT_IP_HEADER=X-Forwarded-For`、`TRUSTED_PROXIES=`。空名单直接信任头；ALB默认追加XFF不能阻止客户端伪造最左IP。入口不能清洗该头时，必须配置真实可信代理范围。详见运维手册第5节。
+
 ## 测试
 
 ```bash
+python3 tests/deploy_test.py # 离线AWS/Docker替身：两种模式、失败保护、配置传递，无账号访问
 tests/static.sh            # shellcheck、bash -n、cfn-lint、validate-template
 tests/aws-readonly.sh      # 对真实账号只读：WAF 目标容量、ALB 规则位置、3 个栈的变更集预览（预览后删除）
 scripts/mirror-images.sh --no-push && scripts/build-push.sh --no-push
@@ -76,4 +87,4 @@ tests/aws-instance.sh      # 临时 t3.micro：SSM 下发、数据卷挂载、�
 
 这些测试不会改动账号里的任何现有资源。`aws-instance.sh` 会新建一台临时实例，借用现有的实例配置文件 `ssm-rule-for-local-dev`，结束时无论成功失败都会终止它。
 
-网关实例的 user data（镜像仓库凭证、CloudWatch Agent）和 ECS 部署本身没有单独的测试，在 P3 部署时验证。
+离线测试验证CLI顺序和失败保护，不代表真实ECS/CloudFormation执行通过。实例user data、真实排空时序、IAM权限和实际回退仍必须在AWS环境验收。

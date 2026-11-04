@@ -14,8 +14,9 @@ docker login docker.echojoy.cn -u admin    # 只需登录一次
 ```bash
 git commit ...                                           # 镜像标签就是提交的短 SHA
 TAG=$(scripts/build-push.sh | tail -1)                   # 构建 amd64 镜像并推送
-scripts/deploy.sh gateway --image-tag "$TAG" --dry-run   # 预览变更
-scripts/deploy.sh gateway --image-tag "$TAG"             # 正式发布
+scripts/deploy.sh gateway --image-tag "$TAG" --mode maintenance --dry-run
+scripts/deploy.sh gateway --image-tag "$TAG" --mode maintenance  # 默认：停机发布
+# 只有确认数据库及持久配置格式兼容时，才改用 --mode rolling
 ```
 
 在仓库根目录执行 `make aws-deploy`，会构建、推送并正式发布，相当于上面的第 2 步和第 4 步，不做预览。
@@ -25,13 +26,28 @@ scripts/deploy.sh gateway --image-tag "$TAG"             # 正式发布
 - 除 `deploy/` 和 `docs/` 外，工作区不能有未提交的改动。这两个目录的内容不会打进镜像。
 - 标签在仓库里已存在时拒绝推送。同一个提交不能发布两次，代码改动要先提交再构建。
 
-`deploy.sh gateway` 会先检查镜像是否已在仓库中，然后更新 CloudFormation 栈。任务定义生成新版本后，ECS 开始滚动部署：
+`deploy.sh gateway` 支持两种模式，不根据 Git 文件名自动猜测兼容性：
 
-1. 新任务和旧任务都要占用 3001 端口，不能放在同一台实例上，所以 ASG 会先扩到 4 台，需要 3 到 5 分钟。
-2. 新任务在两个目标组都通过健康检查后，旧任务从目标组摘除，排空 630 秒。这段时间里正在进行的流式请求不会被截断。
-3. ECS 停止旧任务，容量提供程序回收空闲实例。
+| 模式 | 适用条件 | 失败策略 |
+|---|---|---|
+| `maintenance`（默认） | 数据库结构、迁移账本、持久配置格式变化，或要求停机发布 | 不自动回退旧镜像或数据库；尽力归零任务数并暂停扩缩 |
+| `rolling` | 纯代码更新，且新旧版本能共用当前数据库、Redis与持久配置 | 保留ECS的100%/200%滚动策略及自动回退 |
 
-整个过程约 15 分钟。新任务起不来时，circuit breaker 会自动回滚到旧版本，栈更新也会失败并回滚。
+**停机模式**：
+
+1. 检查镜像、现有服务稳定状态和扩缩目标。保存原任务数、扩缩范围、三个暂停标志到`.backup/gateway-update.XXXXXX/`。
+2. 暂停动态扩容、动态缩容和定时扩缩，把任务扩缩下限降到0，再把服务任务数降到0。等待旧任务实际进入`STOPPED`，不能只看`runningCount=0`。
+3. 使用`MaintenanceWindow=true`更新CloudFormation：任务数和扩缩下限均为0，三个扩缩暂停标志均为true。关闭ECS和CloudFormation的自动回退，防止旧配置重新拉起任务。
+4. 核对新任务定义的镜像，按原任务数启动新版本。应用执行迁移；等待指定任务定义达到目标任务数，并核对这些任务所在EC2实例在两个目标组均为`healthy`。扩容沿用的`rolloutState=COMPLETED`不能代替ALB检查。
+5. 健康后再次更新栈，以同一镜像关闭停机窗口，恢复原扩缩范围及暂停标志。关闭窗口时省略`DesiredCount`，保留已恢复的任务数。
+
+首次创建没有旧任务，先以0任务创建栈，再按`MinTasks`启动。已有服务的原任务数为0或部署尚未完成时拒绝继续，避免把失败现场当成正常基线。停机期间入口可返回503；不自动把流量切回旧灵影。
+
+ALB排空等待为630秒，超过默认ECS waiter的600秒。脚本使用有界等待，`GATEWAY_DEPLOY_TIMEOUT_SECONDS`默认1800秒（每个等待阶段）。超过排空窗口的长连接不能保证不中断。
+
+**滚动模式**：只更新一次栈，不归零任务、不暂停扩缩。新旧任务短暂并行，仍需要额外EC2容量。没有数据库兼容性保证时不得选择此模式。旧停机窗口未关闭时拒绝切到rolling。
+
+`--dry-run`仅查询现状并预览变更集，不停止任务；仍会创建CloudFormation变更集。停机模式预览第一阶段的0任务窗口，正式执行还会在健康后关闭窗口。
 
 线上镜像是 `25eca3c9` 或更早的版本时，第一次升级前要先修迁移账本，见[第 10 节](#10-一次性升级灵影迁移移到-ly-账本)。不修的话，新任务启动时迁移失败。
 
@@ -54,7 +70,7 @@ Redis 没有隧道，因为集群会用 `MOVED` 把客户端重定向到内网 I
 aws ecs update-service --cluster echojoy-gateway-prod --service ai-gateway --force-new-deployment
 ```
 
-过程和第 1 节一样，也是滚动部署，约 15 分钟。
+这条命令保留ECS当前部署策略，不执行脚本的停机流程，只适用于同一任务定义的兼容重启。要求停机重启时，使用第1节的`--mode maintenance`并指定当前镜像标签。
 
 修改 SSM 里的密钥后必须执行这一步，因为任务只在启动时读取一次密钥。`put-secrets.sh` 只创建不存在的参数，不覆盖已有的，所以改密钥要直接用 CLI：
 
@@ -69,9 +85,21 @@ aws ssm put-parameter --name /echojoy-gateway/prod/AUTH_KEY --type SecureString 
 
 | 情况 | 操作 |
 |---|---|
-| 新版本有问题 | 用上一个标签重新发布：`scripts/deploy.sh gateway --image-tag <旧标签>`。旧标签不能是 `25eca3c9` 或更早的版本，见第 10 节 |
-| 新网关整体有问题，文本接口切回旧网关 | `scripts/alb-cutover.sh rollback`，把旧网关规则挪回优先级 2，两个 ALB 一起生效 |
+| 兼容代码更新失败 | rolling模式可以自动回退；手工选择旧标签前仍必须确认数据库和持久配置兼容 |
+| 不兼容升级失败 | 保持停机，使用发布前现场和完整备份制定恢复方案；不得只换旧镜像或删除新增迁移账本 |
+| 文本接口切回旧灵影 | 先验证旧灵影仍提供文本接口，再考虑`scripts/alb-cutover.sh rollback`；该命令不恢复数据库 |
 | WAF 改动有问题 | `scripts/waf-update.sh restore .backup/waf-acl-<时间>.json` |
+
+### 停机发布失败后的人工恢复
+
+脚本保留`.backup/gateway-update.XXXXXX/`中的`service-before.json`、`scaling-before.json`和目标任务定义（若已取得）。它们不是数据库备份。首次创建没有旧服务快照，恢复数量取栈的`MinTasks`。
+
+1. 检查栈事件、ECS任务和数据库迁移状态。先确认没有旧任务进程，服务任务数为0，扩缩下限为0且全部暂停。进程强杀、网络故障或AWS权限不足时，失败保护不能代替人工检查。
+2. 数据库修改前使用经恢复验证的完整生产备份；日常`pg_dump_upload`排除了请求日志数据，不能冒充完整发布快照。保留`ENCRYPTION_KEY`及`ly_usage_reports`。不得自动恢复旧快照覆盖部署后的写入。
+3. CloudFormation处于`CREATE_FAILED`/`UPDATE_FAILED`时，修正原因后用CloudFormation的重试/更新流程完成目标版本，保持`DeploymentMode=maintenance`、`MaintenanceWindow=true`。不得直接使用回退栈操作，它会恢复旧扩缩配置。
+4. 确认数据库和目标镜像兼容后，按原快照的任务数启动新任务，检查任务定义及两个目标组健康。然后用同一模板和镜像关闭`MaintenanceWindow`，将`MinTasks`、`MaxTasks`、`SuspendScaleIn`、`SuspendScaleOut`、`SuspendScheduledScaling`恢复为原快照值。
+
+未恢复到稳定状态前，不得直接重跑发布脚本覆盖原任务数和扩缩状态。脚本不自动更换数据库快照、不自动修正旧迁移账本，也不运行任意数据库维护命令。
 
 查看版本：
 
@@ -89,10 +117,16 @@ curl -u admin https://docker.echojoy.cn/v2/echojoy-gateway/ai-gateway/tags/list
 
 | 改什么 | 怎么做 | 注意 |
 |---|---|---|
-| 网关环境变量、机型、任务数上下限 | 改 `gateway.yaml` 或 `config.env`，执行 `scripts/deploy.sh gateway --image-tag <当前标签>` | 任务定义有变化时会触发第 1 节的滚动部署 |
+| 网关环境变量、机型、任务数上下限 | 改 `gateway.yaml` 或 `config.env`，执行 `scripts/deploy.sh gateway --image-tag <当前标签>` | 默认执行第1节的停机发布；确认兼容后可以显式选择rolling |
 | 安全组、告警主题 | 改 `network.yaml`，执行 `scripts/deploy.sh network` | 宁夏的 SNS 不支持邮件订阅，不要设置 `ALERT_EMAIL` |
 | 数据层实例、数据卷、快照策略、告警 | 改 `data.yaml`，执行 `scripts/deploy.sh data` | 栈开了删除保护。预览里 Replacement 列为 `True` 的实例会被替换：数据卷会保留，但替换后要重新执行对应的 bootstrap 脚本 |
 | Redis 或 PostgreSQL 参数、主机上的定时任务（指标上报、备份） | 改 `remote/` 下的脚本，例如 `redis.sh` 的 `redis_write_conf`、`postgres.sh` 的 `PG_SETTINGS` 或 `pg_report_metrics`，再执行 `scripts/bootstrap-redis.sh` 或 `scripts/bootstrap-pg.sh` | 配置有变化时容器会重建，配置没变时容器不动；定时任务的脚本每次都会重新安装 |
+
+### 客户端 IP
+
+`config.env`新增`CLIENT_IP_HEADER`（默认`X-Forwarded-For`）和`TRUSTED_PROXIES`（默认空），两种发布模式都传入任务定义。环境变量可以覆盖配置默认值，包括将头名称显式设为空以恢复连接IP模式。
+
+空可信代理名单表示直接信任选定转发头；对于XFF取最左IP。这不是开放安全组或取消访问Key的CIDR限制。客户端能够自行提供XFF，ALB默认追加地址不等于清洗客户端的头。只有可信入口清理/重写转发头时才使用此默认值，否则必须填写真实代理IP/CIDR列表（逗号分隔），使应用从右往左识别来源。修改后重新发布任务。
 
 ## 6. 升级 postgres 或 redis 镜像
 
@@ -182,19 +216,14 @@ SELECT request_id, last_error, payload FROM ly_usage_reports WHERE next_attempt_
 
 `25eca3c9` 及更早的版本把灵影的用量表迁移记为核心第 23 号 `0023_ly_usage_reports`。之后的版本把核心第 23 号改为 `0023_auto_decision_attribution`，灵影迁移改名 `ly0001_usage_reports`，记在单独的账本表 `ly_schema_migrations`。新版本启动时发现 `schema_migrations` 里有 `0023_ly_usage_reports`，会报 `unknown or non-contiguous migration` 并退出。
 
-升级时删掉这一行，不需要删库。删掉后，新版本补跑核心的 0023 到 0025，并建立 `ly_schema_migrations`；`ly_usage_reports` 已经存在，所以不会重建，表里的积压也会保留：
+这是一次人工维护，不由发布脚本自动删除账本。必须先取得完整生产备份并验证恢复，再进入停机窗口，确认旧任务全部`STOPPED`且扩缩暂停。新任务因这条旧账本启动失败时，停机发布保持现场，按第4节人工恢复流程继续。
 
-1. 先推送镜像：`TAG=$(scripts/build-push.sh | tail -1)`。
-2. 另开一个终端执行 `make aws-tunnel TUNNEL=pg`。
-3. 删掉账本里的旧记录：
+只在确认账本恰为该历史布局时删除这一条旧记录，不删除表或其他迁移记录：
 
-   ```bash
-   PGPASSWORD=$(aws ssm get-parameter --name /echojoy-gateway/prod/PG_PASSWORD --with-decryption --query Parameter.Value --output text) \
-     psql -h 127.0.0.1 -p 15432 -U gateway -d gateway \
-     -c "DELETE FROM schema_migrations WHERE id = '0023_ly_usage_reports';"
-   ```
+```sql
+DELETE FROM schema_migrations WHERE id = '0023_ly_usage_reports';
+```
 
-4. 马上发布：`scripts/deploy.sh gateway --image-tag "$TAG"`。第 3 步和第 4 步之间如果有旧任务重启，旧任务会把这一行写回去，新任务仍然起不来，circuit breaker 会回滚到旧版本；这时重新执行第 3 步和第 4 步。
-5. 发布完成后在隧道里检查。`SELECT id FROM ly_schema_migrations;` 应返回 `ly0001_usage_reports`；`SELECT max(id) FROM schema_migrations;` 应返回 `0025_request_audit`。
+然后启动目标版本，让应用完成核心迁移并建立独立ly账本。当前代码的目标为核心`0031_group_priority`和`ly0001_usage_reports`，不是旧手册中的0025；`ly_usage_reports`已有数据必须保留。
 
-升级完成后，不能再回滚到 `25eca3c9` 或更早的版本：旧版本不认识新的核心迁移，启动就会失败。
+从核心0025升级还包含代理目录转换：旧URL配置会改为加密proxy_id引用。旧版本既不认识新增迁移账本，也不认识该配置格式，因此不得混跑，失败后不得仅回退镜像。后续版本以其实际迁移集合及配置格式为准。

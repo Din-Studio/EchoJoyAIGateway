@@ -128,6 +128,7 @@ docker run -d --name gwt-gateway "${PLATFORM[@]}" --network "$NET" --ip "$SUBNET
   -p 127.0.0.1:13901:3001 --ulimit nofile=1048576:1048576 "${ENV_ARGS[@]}" \
   -e "REDIS_ADDRS=$SUBNET_PREFIX.11:6379,$SUBNET_PREFIX.12:6379,$SUBNET_PREFIX.13:6379" \
   -e "REDIS_PASSWORD=$REDIS_PASSWORD" \
+  -e "CLIENT_IP_HEADER=$CLIENT_IP_HEADER" -e "TRUSTED_PROXIES=$TRUSTED_PROXIES" \
   -e "AUTH_KEY=$(openssl rand -hex 32)" -e "ENCRYPTION_KEY=$(openssl rand -hex 32)" \
   -e "DATABASE_DSN=postgres://$PG_USER:$PG_PASSWORD@$SUBNET_PREFIX.21:5432/$PG_DB?sslmode=require" \
   "$GATEWAY_IMAGE" >/dev/null

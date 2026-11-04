@@ -4,6 +4,7 @@
 #   scripts/build-push.sh --no-push
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+python3 deploy_test.py
 ./static.sh
 ./aws-readonly.sh
 ./local-integration.sh "$@"

@@ -74,6 +74,34 @@ Parameters:
     Type: String
     Default: ""
     Description: 可选，与灵影的 AUTH_AUDIENCE 一致
+  ClientIPHeader:
+    Type: String
+    Default: X-Forwarded-For
+  TrustedProxies:
+    Type: String
+    Default: ""
+    Description: 空值直接信任转发头；非空为逗号分隔的可信代理 IP/CIDR
+  DeploymentMode:
+    Type: String
+    Default: maintenance
+    AllowedValues: [maintenance, rolling]
+  MaintenanceWindow:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: 由 deploy.sh 管理；true 时任务数及扩缩下限为 0，暂停全部任务扩缩
+  SuspendScaleIn:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  SuspendScaleOut:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  SuspendScheduledScaling:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
   MinTasks:
     Type: Number
     Default: 2
@@ -84,6 +112,13 @@ Parameters:
     Type: Number
     Default: 48
     Description: 任务上限的两倍，给滚动部署留空间
+
+Conditions:
+  RollingDeployment: !Equals [!Ref DeploymentMode, rolling]
+  InMaintenance: !Equals [!Ref MaintenanceWindow, "true"]
+  ScaleInSuspended: !Equals [!Ref SuspendScaleIn, "true"]
+  ScaleOutSuspended: !Equals [!Ref SuspendScaleOut, "true"]
+  ScheduledScalingSuspended: !Equals [!Ref SuspendScheduledScaling, "true"]
 
 Resources:
   # ---------- IAM ----------
@@ -426,6 +461,8 @@ Resources:
               SoftLimit: 1048576
               HardLimit: 1048576
           Environment:
+            - {Name: CLIENT_IP_HEADER, Value: !Ref ClientIPHeader}
+            - {Name: TRUSTED_PROXIES, Value: !Ref TrustedProxies}
             - {Name: HOST, Value: "0.0.0.0"}
             - {Name: PORT, Value: "3001"}
             - {Name: READ_TIMEOUT, Value: "120"}
@@ -474,7 +511,8 @@ Resources:
       ServiceName: ai-gateway
       Cluster: !Ref Cluster
       TaskDefinition: !Ref TaskDefinition
-      # 不设 DesiredCount：创建后由扩缩目标的下限拉到 MinTasks，以后的栈更新也不会把扩出来的任务数重置。
+      # 停机窗口禁止 CFN 拉起任务；关闭窗口时省略 DesiredCount，保留脚本恢复的数量。
+      DesiredCount: !If [InMaintenance, 0, !Ref 'AWS::NoValue']
       CapacityProviderStrategy:
         - CapacityProvider: !Ref CapacityProvider
           Weight: 1
@@ -485,7 +523,7 @@ Resources:
         MaximumPercent: 200
         DeploymentCircuitBreaker:
           Enable: true
-          Rollback: true
+          Rollback: !If [RollingDeployment, true, false]
       PlacementStrategies:
         - Type: spread
           Field: attribute:ecs.availability-zone
@@ -505,8 +543,12 @@ Resources:
       ServiceNamespace: ecs
       ScalableDimension: ecs:service:DesiredCount
       ResourceId: !Sub service/${Cluster}/${Service.Name}
-      MinCapacity: !Ref MinTasks
+      MinCapacity: !If [InMaintenance, 0, !Ref MinTasks]
       MaxCapacity: !Ref MaxTasks
+      SuspendedState:
+        DynamicScalingInSuspended: !If [InMaintenance, true, !If [ScaleInSuspended, true, false]]
+        DynamicScalingOutSuspended: !If [InMaintenance, true, !If [ScaleOutSuspended, true, false]]
+        ScheduledScalingSuspended: !If [InMaintenance, true, !If [ScheduledScalingSuspended, true, false]]
 
   CpuScalingPolicy:
     Type: AWS::ApplicationAutoScaling::ScalingPolicy
