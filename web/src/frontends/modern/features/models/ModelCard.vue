@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronRight, PencilLine, Settings2 } from '@lucide/vue'
+import { ChevronRight, PencilLine } from '@lucide/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RouterLink } from 'vue-router'
@@ -28,7 +28,7 @@ const props = defineProps<{
   selected?: boolean
   disabled?: boolean
 }>()
-const emit = defineEmits<{ open: [source?: number]; settings: [] }>()
+const emit = defineEmits<{ open: [source?: number] }>()
 const { t, n, locale } = useI18n()
 // 协议在同一批模型上重复度接近 100%，折成一行中性摘要，悬浮再看全量列表。
 const protocolsLabel = computed(() =>
@@ -70,51 +70,32 @@ function hiddenGroupsLabel(source: ModelSource): string {
   <article class="modern-model-card" :class="{ 'is-selected': selected }" :aria-label="model.name">
     <header class="modern-model-card-heading">
       <span class="modern-model-card-name"><AppCopyValue :value="model.name" /></span>
-      <AppBadge
-        v-if="model.hasOverrides !== undefined"
-        class="modern-model-card-profile"
-        variant="outline"
-        size="xs"
-        :tone="model.hasOverrides ? 'brand' : 'neutral'"
-        >{{
-          t(
-            model.hasOverrides
-              ? 'modelManager.profile.badgeCustom'
-              : 'modelManager.profile.badgeAutomatic',
-          )
-        }}</AppBadge
-      >
       <AppTooltip :label="protocolsLabel">
         <span tabindex="0" class="modern-model-card-meta">{{
           t('modelManager.protocolCount', { count: n(model.protocols.length) })
         }}</span>
       </AppTooltip>
-      <span class="modern-model-card-meta">{{
+      <span v-if="admin" class="modern-model-card-meta">{{
         t('modelManager.sourceCount', { count: n(model.sources.length) })
       }}</span>
       <span v-if="admin" class="modern-model-card-meta">{{
         t('modelManager.groupCount', { count: n(groupCount) })
       }}</span>
-      <AppIconButton
-        v-if="admin"
-        :icon="Settings2"
-        :label="t('modelManager.profile.action')"
-        size="xxs"
-        class="modern-model-card-profile-action"
-        :disabled="disabled"
-        @click="emit('settings')"
-      />
     </header>
     <!-- 列宽在窄屏下有下限，超出卡片宽度时横向滚动而不是把标签挤到换行。 -->
-    <div class="modern-model-card-table" :style="{ '--modern-model-price-width': priceWidth }">
+    <div
+      class="modern-model-card-table"
+      :class="{ 'is-read-only': !admin }"
+      :style="{ '--modern-model-price-width': priceWidth }"
+    >
       <div class="modern-model-row modern-model-row--head" aria-hidden="true">
         <span>{{ t('modelManager.sourceUnit') }}</span>
-        <span>{{ t('modelManager.groupUnit') }}</span>
+        <span v-if="admin">{{ t('modelManager.groupUnit') }}</span>
         <span class="r">{{ t('modelManager.slots.input') }}</span>
         <span class="r">{{ t('modelManager.slots.output') }}</span>
         <span class="r">{{ t('modelManager.columns.cacheRead') }}</span>
         <span class="r">{{ t('modelManager.columns.cacheWrite') }}</span>
-        <span>{{ t('modelManager.columns.method') }}</span>
+        <span v-if="admin">{{ t('modelManager.columns.method') }}</span>
         <span></span>
       </div>
       <div class="modern-model-card-sources">
@@ -132,7 +113,7 @@ function hiddenGroupsLabel(source: ModelSource): string {
               }}</AppBadge
             >
           </span>
-          <span></span>
+          <span v-if="admin"></span>
           <span
             v-for="field in priceFields"
             :key="field"
@@ -140,7 +121,7 @@ function hiddenGroupsLabel(source: ModelSource): string {
             :class="{ 'is-empty': !model.price || model.price.prices[field] === null }"
             >{{ clientPrice(field) }}</span
           >
-          <span class="modern-model-source-method">
+          <span v-if="admin" class="modern-model-source-method">
             <AppBadge v-if="!model.price" tone="warning" size="xs">{{
               t('modelManager.priceMethods.pending')
             }}</AppBadge>
@@ -180,21 +161,14 @@ function hiddenGroupsLabel(source: ModelSource): string {
               class="modern-model-source-upstream"
             />
           </span>
-          <span class="modern-model-source-groups">
+          <span v-if="admin" class="modern-model-source-groups">
             <template v-for="group in visibleGroups(source)" :key="group.id">
               <RouterLink
-                v-if="admin"
                 :to="{ name: 'modern-group-detail', params: { id: group.id } }"
                 class="modern-model-group-chip"
                 :class="{ 'is-disabled': !group.enabled }"
                 ><AppOverflowText :text="group.name || t('logs.deleted')"
               /></RouterLink>
-              <span
-                v-else
-                class="modern-model-group-chip"
-                :class="{ 'is-disabled': !group.enabled }"
-                ><AppOverflowText :text="group.name || t('logs.deleted')"
-              /></span>
             </template>
             <AppTooltip v-if="source.groups.length > 1" :label="hiddenGroupsLabel(source)">
               <span tabindex="0" class="modern-model-source-more"
@@ -210,9 +184,8 @@ function hiddenGroupsLabel(source: ModelSource): string {
             :class="{ 'is-empty': source.price.prices[field] === null }"
             >{{ admin ? price(source, field) : '' }}</span
           >
-          <span v-if="!admin" class="modern-model-source-method"></span>
           <span
-            v-else
+            v-if="admin"
             class="modern-model-source-method"
             :class="'is-' + priceStatus(source.price)"
           >
@@ -299,11 +272,6 @@ function hiddenGroupsLabel(source: ModelSource): string {
   font-size: var(--modern-font-size-caption);
   letter-spacing: var(--modern-tracking-label);
 }
-.modern-model-card-profile,
-.modern-model-card-profile-action {
-  flex: none;
-  align-self: center;
-}
 /* 摘要读成一句而不是三个孤立标签。 */
 .modern-model-card-meta + .modern-model-card-meta::before {
   content: '·';
@@ -331,6 +299,14 @@ function hiddenGroupsLabel(source: ModelSource): string {
      横向滚动时行的底色与分隔线才会延伸到完整宽度，而不是在容器右边缘断掉。 */
   min-width: min-content;
   padding-inline: var(--modern-space-4);
+}
+.modern-model-card-table.is-read-only .modern-model-row {
+  grid-template-columns:
+    minmax(140px, 1.4fr) repeat(4, max(56px, var(--modern-model-price-width)))
+    var(--modern-control-xs);
+}
+.modern-model-card-table.is-read-only .modern-model-row .r {
+  text-align: left;
 }
 .modern-model-row--head {
   min-height: var(--modern-space-6);

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"gpt-load/internal/integration/ly"
 	"gpt-load/internal/pricing"
@@ -16,7 +17,7 @@ import (
 // *ly.Service implements it.
 type ExternalBilling interface {
 	Admit(context.Context, ly.AdmitInput) ly.Decision
-	Record(admission *ly.Admission, event telemetry.RequestEvent, chargeNano int64)
+	Record(admission *ly.Admission, event telemetry.RequestEvent, chargeNano int64, startedAt time.Time)
 }
 
 const projectIDHeader = "X-Project-Id"
@@ -68,7 +69,7 @@ func (handler *Handler) admitExternalBilling(
 		}
 		billing, admission := handler.billing, decision.Admission
 		recorder.recordBilling = func(event telemetry.RequestEvent, chargeNano int64) {
-			billing.Record(admission, event, chargeNano)
+			billing.Record(admission, event, chargeNano, recorder.startedAt)
 		}
 		return nil
 	case ly.InvalidKey:

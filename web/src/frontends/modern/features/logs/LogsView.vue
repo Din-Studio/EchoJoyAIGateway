@@ -2,7 +2,7 @@
 import { useSystemCurrency } from '@modern/app/currency'
 import { Eye, ScrollText } from '@lucide/vue'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/vue-query'
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import {
@@ -115,7 +115,10 @@ const states = computed(() =>
     label: t(value ? 'logs.values.' + value : 'logs.all'),
   })),
 )
-const requestIdentity = computed(() => JSON.stringify([state.value.filters, state.value.page]))
+const requestIdentity = computed(() =>
+  JSON.stringify([state.value.filters, state.value.preset, state.value.page]),
+)
+watch(requestIdentity, () => frame.value?.scrollToTop(), { flush: 'post' })
 
 function applyFilters(input: LogQuery, preset: DateRangePreset | undefined): void {
   const filters = { ...input }
@@ -129,12 +132,11 @@ function applyFilters(input: LogQuery, preset: DateRangePreset | undefined): voi
   )
     return
   state.value = { ...state.value, filters, preset, page: 1 }
-  frame.value?.scrollToTop()
 }
 function submitFilters(filters: LogQuery, preset: DateRangePreset | undefined): void {
   const previous = state.value
   applyFilters(filters, preset)
-  if (state.value === previous) void query.refetch()
+  if (state.value === previous) void refresh()
 }
 function filterStatus(value: string): void {
   const filters = { ...state.value.filters }
@@ -148,6 +150,10 @@ function filterFromRow(input: LogQuery): void {
     delete filters.credential_id
   applyFilters(filters, state.value.preset)
 }
+function filterFromDetail(input: LogQuery): void {
+  filterFromRow(input)
+  showDetail()
+}
 function setMore(value: boolean): void {
   state.value = { ...state.value, more: value }
 }
@@ -157,7 +163,6 @@ function showDetail(id = ''): void {
 function changePage(value: number): void {
   if (query.isFetching.value) return
   state.value = { ...state.value, page: value }
-  frame.value?.scrollToTop()
 }
 function pageSize(value: number): void {
   applyFilters({ ...state.value.filters, limit: String(value) }, state.value.preset)
@@ -224,11 +229,16 @@ const summary = computed(() => [
     })),
 ])
 async function refresh(): Promise<void> {
+  // 刷新查看最新日志；先切回第一页，让查询使用新的分页状态。
+  if (state.value.page !== 1) state.value = { ...state.value, page: 1 }
   await Promise.allSettled([
     query.refetch({ cancelRefetch: false }),
     cache.refetchQueries({ queryKey: ['modern', 'log-detail'], type: 'active' }),
     ...(admin.value ? [groups.refetch(), channels.refetch(), keys.refetch()] : []),
   ])
+  // 等待新数据渲染后再回到顶部，确保最新记录处于可视区域。
+  await nextTick()
+  frame.value?.scrollToTop()
 }
 onMounted(() => {
   void router.replace({ query: serializeLogState(state.value) })
@@ -299,7 +309,6 @@ useMessageSource(() =>
       role="table"
       :aria-colcount="columns.cells.value.length + 1"
       :label="t('logs.title')"
-      :scroll-key="requestIdentity"
       :loading="query.isFetching.value && Boolean(query.data.value)"
       :style="columns.style.value"
     >
@@ -420,6 +429,7 @@ useMessageSource(() =>
     :to="range.to_ms"
     :preset="state.preset"
     @close="showDetail()"
+    @filter="filterFromDetail"
   />
 </template>
 
@@ -462,6 +472,7 @@ useMessageSource(() =>
   justify-content: flex-end;
 }
 .modern-log-table {
+  margin-bottom: var(--modern-space-3);
   border: var(--modern-line-width) solid var(--modern-border);
   border-radius: var(--modern-radius-panel);
   overflow: hidden;

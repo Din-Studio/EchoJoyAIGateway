@@ -18,14 +18,14 @@ func TestRemoveObservationFreshUntilMigrationDropsColumnAndPreservesRows(t *test
 		ConnectionType: models.ConnectionTypeSubscription,
 		Params:         models.JSON(`{}`), Models: models.JSON(`[]`), Enabled: true,
 	}
-	if err := db.Omit("ProxyConfig", "PriceMultiplierMicros", "ValidationProtocol").Create(&group).Error; err != nil {
+	if err := db.Omit("ProxyConfig", "PriceMultiplierMicros", "ValidationProtocol", "Priority").Create(&group).Error; err != nil {
 		t.Fatalf("create group: %v", err)
 	}
 	credential := models.Credential{
 		GroupID: group.ID, Data: "cipher", Fingerprint: "fingerprint",
 		IdentityFingerprint: "identity", Status: models.CredentialStatusActive,
 	}
-	if err := db.Omit("ProxyConfig", "ConcurrencyLimit").Create(&credential).Error; err != nil {
+	if err := db.Omit("ProxyConfig", "ConcurrencyLimit", "Name").Create(&credential).Error; err != nil {
 		t.Fatalf("create credential: %v", err)
 	}
 	if err := db.Exec(`INSERT INTO credential_observations (

@@ -37,9 +37,11 @@ import {
   AppTextField,
 } from '@modern/components/ui'
 import { useApiClient } from '@shared/http/client-context'
-import { validBaseURL } from './group-create-rules'
-import { validProxyURL } from '@modern/app/proxy'
+import { groupConnectionParams, validBaseURL } from './group-create-rules'
+import { validProxySelection } from '@modern/api/proxies'
+import ProxySelect from '../proxies/ProxySelect.vue'
 import GroupChannelSelect from './GroupChannelSelect.vue'
+import GroupBaseURLField from './GroupBaseURLField.vue'
 import GroupWorkspacePanel from './GroupWorkspacePanel.vue'
 import ParameterRulesEditor from '../config/ParameterRulesEditor.vue'
 import { groupValidationModelOptions } from './group-model-options'
@@ -60,7 +62,7 @@ const validationProtocol = ref('')
 const numbers = ref<Partial<Record<RuntimeNumber, string>>>({})
 const switches = ref<Record<string, string>>({})
 const proxyMode = ref('inherit')
-const proxyURL = ref('')
+const proxyID = ref('')
 const headersMode = ref('inherit')
 const headers = ref<{ key: number; name: string; value: string }[]>([])
 const removeHeaders = ref('')
@@ -81,7 +83,7 @@ function snapshot(): string {
     numbers.value,
     switches.value,
     proxyMode.value,
-    proxyURL.value,
+    proxyID.value,
     headersMode.value,
     headers.value,
     removeHeaders.value,
@@ -112,8 +114,8 @@ watch(
       ]),
     )
     proxyMode.value = data.proxy.mode
-    // display_url 可能脱敏；未编辑时不能把它作为代理凭据重新写回。
-    proxyURL.value = ''
+    // 未改选时保留原关联，包括暂时停用或已删除的代理引用。
+    proxyID.value = ''
     headersMode.value = data.overrides.header_rules === undefined ? 'inherit' : 'custom'
     const value = data.overrides.header_rules ?? data.effective.header_rules
     headers.value = Object.entries(value.set).map(([name, value]) => ({
@@ -140,7 +142,10 @@ const switchOptions = computed(() => [
 const proxyOptions = computed(() =>
   ['inherit', 'direct', 'custom'].map((value) => ({
     value,
-    label: t('groupCreate.proxy' + value[0]!.toUpperCase() + value.slice(1)),
+    label:
+      value === 'custom'
+        ? t('proxies.select')
+        : t('groupCreate.proxy' + value[0]!.toUpperCase() + value.slice(1)),
   })),
 )
 const modelOptions = computed(() => [
@@ -173,14 +178,19 @@ function numberInvalid(key: RuntimeNumber): boolean {
     Boolean(value) &&
     (!/^\d+$/u.test(value) ||
       !Number.isSafeInteger(Number(value)) ||
-      Number(value) < (key === 'blacklist_threshold' ? 0 : 1))
+      Number(value) < (key === 'blacklist_threshold' || key === 'concurrency_limit' ? 0 : 1))
   )
 }
 const proxyChanged = computed(
-  () => proxyMode.value !== saved.value?.proxy.mode || Boolean(proxyURL.value),
+  () =>
+    proxyMode.value !== saved.value?.proxy.mode ||
+    (Boolean(proxyID.value) && Number(proxyID.value) !== saved.value?.proxy.id),
 )
 const proxyInvalid = computed(
-  () => proxyChanged.value && proxyMode.value === 'custom' && !validProxyURL(proxyURL.value.trim()),
+  () =>
+    proxyChanged.value &&
+    proxyMode.value === 'custom' &&
+    !validProxySelection(proxyID.value.trim()),
 )
 const headerInvalid = computed(() => {
   if (headersMode.value !== 'custom') return false
@@ -229,9 +239,7 @@ async function save(): Promise<void> {
   if (rules.value.length) overrides.parameter_overrides = rules.value
   else delete overrides.parameter_overrides
   const patch: AdvancedSettingsPatch = {}
-  const nextParams = Object.fromEntries(
-    Object.entries(params.value).map(([key, value]) => [key, value.trim()]),
-  )
+  const nextParams = groupConnectionParams(params.value, props.channel)
   if (JSON.stringify(nextParams) !== JSON.stringify(base.params)) patch.params = nextParams
   if ((validationModel.value || null) !== base.validationModel)
     patch.validation_model = validationModel.value || null
@@ -244,7 +252,7 @@ async function save(): Promise<void> {
         ? null
         : proxyMode.value === 'direct'
           ? { mode: 'direct' }
-          : { mode: 'custom', url: proxyURL.value.trim() }
+          : { mode: 'custom', proxy_id: Number(proxyID.value) }
   if (!Object.keys(patch).length) {
     emit('close')
     return
@@ -364,19 +372,29 @@ useMessageSource(() => (error.value ? { text: error.value, tone: 'danger' } : un
           @update:model-value="requestChannelSwitch($event)"
         />
         <AppNotice v-if="switchError" tone="danger">{{ switchError }}</AppNotice>
-        <AppTextField
-          v-for="field in channel?.fields ?? []"
-          :key="field.key"
-          :model-value="params[field.key] ?? ''"
-          :label="field.label"
-          :placeholder="field.defaultValue"
-          :type="field.sensitive ? 'password' : 'text'"
-          size="sm"
-          :disabled="busy"
-          :error="attempted ? paramErrors[field.key] : undefined"
-          autocomplete="off"
-          @update:model-value="params[field.key] = $event"
-        />
+        <template v-for="field in channel?.fields ?? []" :key="field.key">
+          <GroupBaseURLField
+            v-if="field.key === 'base_url' && channel"
+            :model-value="params[field.key] ?? ''"
+            :channel="channel"
+            size="sm"
+            :disabled="busy"
+            :error="attempted ? paramErrors[field.key] : undefined"
+            @update:model-value="params[field.key] = $event"
+          />
+          <AppTextField
+            v-else
+            :model-value="params[field.key] ?? ''"
+            :label="field.label"
+            :placeholder="field.defaultValue"
+            :type="field.sensitive ? 'password' : 'text'"
+            size="sm"
+            :disabled="busy"
+            :error="attempted ? paramErrors[field.key] : undefined"
+            autocomplete="off"
+            @update:model-value="params[field.key] = $event"
+          />
+        </template>
         <div v-if="group.connectionType === 'api_key'" class="modern-advanced-columns">
           <AppSearchSelect
             v-model="validationModel"
@@ -415,20 +433,15 @@ useMessageSource(() => (error.value ? { text: error.value, tone: 'danger' } : un
               size="sm"
               :disabled="busy"
             />
-            <AppTextField
+            <ProxySelect
               v-if="proxyMode === 'custom'"
-              v-model="proxyURL"
-              :label="t('groupCreate.proxyURL')"
-              :placeholder="
-                saved.proxy.mode === 'custom' ? saved.proxy.display : 'http://127.0.0.1:7890'
-              "
-              :description="
-                saved.proxy.mode === 'custom' ? t('groupDetail.proxyUnchanged') : undefined
-              "
-              :error="attempted && proxyInvalid ? t('groupCreate.proxyError') : undefined"
-              size="sm"
+              v-model="proxyID"
+              :saved-id="saved?.proxy.id"
+              :saved-name="saved?.proxy.name"
+              :saved-address="saved?.proxy.display"
+              :reference-state="saved?.proxy.referenceState"
               :disabled="busy"
-              autocomplete="off"
+              :error="attempted && proxyInvalid ? t('proxies.selectHelp') : undefined"
             />
           </div>
         </template>
@@ -441,7 +454,11 @@ useMessageSource(() => (error.value ? { text: error.value, tone: 'danger' } : un
             :model-value="numbers[key] ?? ''"
             :label="t('groupDetail.runtimeFields.' + key)"
             :placeholder="String(saved.effective[key])"
-            :description="t('groupDetail.effective', { value: saved.effective[key] })"
+            :description="
+              key === 'concurrency_limit'
+                ? t('concurrency.overrideHelp')
+                : t('groupDetail.effective', { value: saved.effective[key] })
+            "
             :error="attempted && numberInvalid(key) ? t('groupDetail.invalidNumber') : undefined"
             inputmode="numeric"
             size="sm"

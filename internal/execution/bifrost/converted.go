@@ -123,6 +123,12 @@ func buildConvertedResponsesRequest(spec execution.AttemptSpec, provider schemas
 	request.Model = spec.UpstreamModel
 	request.Fallbacks = nil
 	request.RawRequestBody = nil
+	if request.Params == nil {
+		request.Params = &schemas.ResponsesParameters{}
+	}
+	if err := mergeConvertedParameterOverrides(spec, &request.Params.ExtraParams); err != nil {
+		return nil, err
+	}
 	stripResponsesControlParams(request.Params)
 	return request, nil
 }
@@ -297,7 +303,13 @@ func (r *Runtime) executeConvertedResponses(
 	setTypedRequestURL(bifrostContext, prepared.typedURL)
 	outcomeChannel := make(chan responsesUnarySDKResult, 1)
 	go func() {
-		response, bifrostError := r.core.ResponsesRequest(bifrostContext, prepared.responsesRequest)
+		var response *schemas.BifrostResponsesResponse
+		var bifrostError *schemas.BifrostError
+		if r.usesCompatibleChat(spec) {
+			response, bifrostError = r.compatibleResponsesRequest(bifrostContext, prepared.responsesRequest)
+		} else {
+			response, bifrostError = r.core.ResponsesRequest(bifrostContext, prepared.responsesRequest)
+		}
 		outcomeChannel <- responsesUnarySDKResult{response: response, err: bifrostError}
 	}()
 
@@ -384,6 +396,18 @@ func encodeConvertedResponsesResponse(
 	return body, usageEvidence, nil
 }
 
+func stripResponsesSDKMetadata(object map[string]json.RawMessage) {
+	delete(object, "extra_fields")
+	delete(object, "provider_extra_fields")
+	if rawUsage := object["usage"]; len(rawUsage) > 0 {
+		var usageObject map[string]json.RawMessage
+		if json.Unmarshal(rawUsage, &usageObject) == nil {
+			delete(usageObject, "cost")
+			object["usage"], _ = json.Marshal(usageObject)
+		}
+	}
+}
+
 func marshalClientWire(clientProtocol protocol.Protocol, value any) ([]byte, error) {
 	body, err := json.Marshal(value)
 	if err != nil {
@@ -396,13 +420,13 @@ func marshalClientWire(clientProtocol protocol.Protocol, value any) ([]byte, err
 	if err := json.Unmarshal(body, &object); err != nil {
 		return nil, fmt.Errorf("sanitize converted OpenAI response")
 	}
-	delete(object, "extra_fields")
-	delete(object, "provider_extra_fields")
-	if rawUsage := object["usage"]; len(rawUsage) > 0 {
-		var usageObject map[string]json.RawMessage
-		if json.Unmarshal(rawUsage, &usageObject) == nil {
-			delete(usageObject, "cost")
-			object["usage"], _ = json.Marshal(usageObject)
+	stripResponsesSDKMetadata(object)
+	// 流事件把完整 response 嵌在 response 字段里，同样不能带出 SDK 元数据。
+	if rawResponse := object["response"]; len(rawResponse) > 0 {
+		var nested map[string]json.RawMessage
+		if json.Unmarshal(rawResponse, &nested) == nil && nested != nil {
+			stripResponsesSDKMetadata(nested)
+			object["response"], _ = json.Marshal(nested)
 		}
 	}
 	body, err = json.Marshal(object)
@@ -615,7 +639,13 @@ func (r *Runtime) executeConvertedResponsesStream(
 	setTypedRequestURL(bifrostContext, prepared.typedURL)
 	outcomeChannel := make(chan responsesStreamSDKResult, 1)
 	go func() {
-		stream, bifrostError := r.core.ResponsesStreamRequest(bifrostContext, prepared.responsesRequest)
+		var stream chan *schemas.BifrostStreamChunk
+		var bifrostError *schemas.BifrostError
+		if r.usesCompatibleChat(spec) {
+			stream, bifrostError = r.compatibleResponsesStream(bifrostContext, prepared.responsesRequest)
+		} else {
+			stream, bifrostError = r.core.ResponsesStreamRequest(bifrostContext, prepared.responsesRequest)
+		}
 		outcomeChannel <- responsesStreamSDKResult{stream: stream, err: bifrostError}
 	}()
 

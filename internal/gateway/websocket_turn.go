@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/tidwall/gjson"
 
 	"gpt-load/internal/accessquota"
 	"gpt-load/internal/automodel"
@@ -28,6 +29,16 @@ import (
 )
 
 var reasonWebsocketCapability = reason{400, "websocket_capability_unavailable", "The selected upstream does not support this WebSocket capability."}
+
+func websocketFailureReason(result UpstreamResult) reason {
+	if result.Stream.EndReason == StreamEndRedactionFailed {
+		return reasonResponseRedactionFailed
+	}
+	if result.ExecutionError != nil && result.ExecutionError.Kind == execution.ErrorKindHTTP && result.ExecutionError.StatusCode >= 400 {
+		return reason{result.ExecutionError.StatusCode, result.ExecutionError.Code, "Upstream WebSocket request failed."}
+	}
+	return transportReason(result)
+}
 
 type websocketRequest struct {
 	fields   map[string]json.RawMessage
@@ -99,6 +110,7 @@ func (s *websocketConnection) newTurnRecorder(turn websocketTurn) *requestRecord
 		requestID = ""
 	}
 	recorder := newRequestRecorder(h.requestLogSink, requestID, turn.started, s.keyID, protocol.OpenAIResponses, h.requestNow)
+	recorder.clientIP = requestPeerIP(s.request)
 	recorder.setOperation(execution.OperationResponsesCreate)
 	recorder.setStream(true)
 	recorder.setClientModel(turn.model)
@@ -106,6 +118,9 @@ func (s *websocketConnection) newTurnRecorder(turn websocketTurn) *requestRecord
 }
 
 func (s *websocketConnection) executeTurn(turn websocketTurn) {
+	// The request slot is released after the turn's log is emitted.
+	releaseRequest := func() {}
+	defer func() { releaseRequest() }()
 	h := s.handler
 	recorder := s.newTurnRecorder(turn)
 	requestID := recorder.requestID
@@ -146,6 +161,16 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		s.cancel()
 		return
 	}
+	release, failure, err := h.acquireRequestConcurrency(s.ctx, key.ID)
+	if err != nil {
+		reject(limitStateFailureReason(err))
+		return
+	}
+	if failure != nil {
+		reject(*failure)
+		return
+	}
+	releaseRequest = release
 	recorder.accessKeyMultiplier = key.PriceMultiplier
 	recorder.currency = snapshot.Settings.Currency
 	decision, err := h.accessQuota.Check(s.ctx, snapshot, key.ID, h.quotaNow())
@@ -154,7 +179,8 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		return
 	}
 	if !decision.Allowed {
-		reject(reasonAccessKeyCostLimitExceeded)
+		recorder.completeReason(reasonAccessKeyCostLimitExceeded)
+		s.emitAccessQuotaReason(turn.lane, decision)
 		return
 	}
 	if limitDecision, err := h.limiter.Allow(s.ctx, key.ID, key.RPMLimit); err != nil {
@@ -176,6 +202,7 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		reject(*failure)
 		return
 	}
+	recorder.startTiming()
 	s.mu.Lock()
 	binding := s.binding
 	parent, parentFound := s.parents[original.previous]
@@ -281,11 +308,23 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		query.AllowedCredentialRefs[ref.ID] = ref
 	}
 	if len(query.AllowedCredentialIDs) == 0 {
+		value := reasonNoCandidate
 		if binding == nil {
-			reject(reasonWebsocketCapability)
-		} else {
-			reject(reasonNoCandidate)
+			// 只有存在匹配模型和访问范围的候选，却缺少所需 WS 能力时才报能力错误。
+			capabilityQuery := query
+			capabilityQuery.ResponsesWebsocket = nil
+			capabilityQuery.RouteRequirement = execution.RouteRequirementAny
+			capabilityQuery.ResponsesStorePreference = execution.ResponsesStorePreferenceNone
+			for _, ref := range h.registry.CaptureActiveCredentialRefs(scheduler.CandidateGroupIDsForQuery(snapshot, capabilityQuery)) {
+				group := snapshot.Groups[ref.GroupID]
+				if group.ResponsesWebsocketEnabled && (requiredRef == nil || sameWebsocketIdentity(*requiredRef, ref)) &&
+					!group.ResolvedTarget.ResponsesWebsocket.Supports(original.required) {
+					value = reasonWebsocketCapability
+					break
+				}
+			}
 		}
+		reject(value)
 		return
 	}
 	affinity := h.resolveRequestAffinity(s.ctx, snapshot, key.ID, protocol.OpenAIResponses, original.metadata.AffinityPrefix, query.AllowedCredentialRefs, original.metadata.PromptCacheKey)
@@ -293,12 +332,44 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		query.PreferredCredentialID = affinity.preferredCredentialID
 	}
 	iterator := scheduler.New(snapshot, h.registry, query)
+	redactionCipher, err := h.encryption.NewRedactionCipher(key.ID)
+	if err != nil {
+		reject(reasonRedactionFailed)
+		return
+	}
+	defer h.logUnrestoredRedactionTokens(redactionCipher, requestID)
 	limit := retryAttemptLimit(snapshot.Settings.RetryCount)
 	var refreshSelection *scheduler.Selection
 	var refreshRef state.CredentialRef
 	authRefreshUsed := false
 	var finishRejectedAttempt func()
-	for sequence := 1; sequence <= limit; sequence++ {
+	var finishFailedAttempt func()
+	var parameterOverrideFailure *reason
+	recordPreparationFailure := func(selection scheduler.Selection, ref state.CredentialRef, code, summary string, scope execution.ErrorScope) bool {
+		started := recorder.beforeForward()
+		result := UpstreamResult{DispatchState: execution.DispatchNotSent,
+			Err: fmt.Errorf("%w: candidate preparation failed", ErrUpstreamProtocol), ErrorSummary: summary,
+			ExecutionError: &execution.ErrorEvidence{Kind: execution.ErrorKindInternal, OriginHint: execution.ErrorOriginInternal,
+				ScopeHint: scope, Code: code, Summary: summary}}
+		decision := judgeUpstreamResult(result, h.now(), health.DecisionContext{Operation: execution.OperationResponsesCreate, Method: http.MethodPost})
+		index := recorder.recordAttempt(selection, nil, result, decision, started, recorder.now())
+		h.applyGroupDecisionEffect(selection.Group, ref, 0, decision, 0, h.now(), optionalModelValue(selection.UpstreamModelID))
+		if decision.Effect == health.EffectSkipGroup {
+			iterator.SkipGroup(selection.GroupID)
+		}
+		finishFailedAttempt = func() {
+			value := transportReason(result)
+			recorder.completeTransport(value, optionalModelValue(selection.UpstreamModelID), index)
+			s.emitReason(turn.lane, value)
+		}
+		if binding == nil && requiredRef == nil && decision.Retry != health.RetryNone {
+			recorder.retryIfAnotherForward(index)
+			return true
+		}
+		finishFailedAttempt()
+		return false
+	}
+	for forwardAttempts := 0; forwardAttempts < limit; {
 		if s.ctx.Err() != nil {
 			recorder.completeCanceled(s.ctx, 0, -1)
 			return
@@ -329,6 +400,19 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 					finishRejectedAttempt()
 					return
 				}
+				if finishFailedAttempt != nil {
+					finishFailedAttempt()
+					return
+				}
+				if parameterOverrideFailure != nil {
+					reject(*parameterOverrideFailure)
+					return
+				}
+				if until, limited := iterator.CooldownUntil(); limited {
+					recorder.completeReason(reasonUpstreamRateLimited)
+					s.emitReasonUntil(turn.lane, reasonUpstreamRateLimited, until)
+					return
+				}
 				reject(reasonNoCandidate)
 				return
 			}
@@ -336,10 +420,15 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		}
 		payload, effective, err := prepareWebsocketPayload(turn.body, original, selection)
 		if err != nil {
-			reject(reasonParameterOverrideUnavailable)
-			return
+			if binding != nil || requiredRef != nil {
+				reject(reasonParameterOverrideUnavailable)
+				return
+			}
+			parameterOverrideFailure = &reasonParameterOverrideUnavailable
+			iterator.SkipGroup(selection.GroupID)
+			continue
 		}
-		payload, err = snapshot.RequestRedaction.Apply(payload)
+		payload, err = snapshot.RequestRedaction.ApplyWithCipher(payload, redactionCipher)
 		if err != nil || len(payload) > 10<<20 {
 			reject(reasonRedactionFailed)
 			return
@@ -358,24 +447,42 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		}
 		encrypted, ok := h.registry.ActiveEncryptedCredentialDataIfMatch(ref)
 		if !ok {
+			if binding == nil && requiredRef == nil {
+				releaseInput()
+				continue
+			}
 			reject(reasonConfigurationChanged)
 			return
 		}
 		plain, err := h.encryption.Decrypt(encrypted)
 		if err != nil {
-			reject(reasonConfigurationChanged)
+			if recordPreparationFailure(selection, ref, "credential_decrypt_failed", "Stored credential could not be decrypted.", execution.ErrorScopeCredential) {
+				releaseInput()
+				continue
+			}
 			return
 		}
 		credential, err := normalizeChannelCredential(h.channels, h.subscriptions, selection.ChannelID, selection.Group.ConnectionType, plain)
 		if err != nil {
-			reject(reasonConfigurationChanged)
+			if recordPreparationFailure(selection, ref, "credential_normalization_failed", "Stored credential could not be prepared.", execution.ErrorScopeCredential) {
+				releaseInput()
+				continue
+			}
 			return
 		}
 		proxy, fingerprint, err := resolveAttemptProxy(h.encryption, selection.Group.Proxy, ref)
 		if err != nil {
-			reject(reasonConfigurationChanged)
+			code, summary, scope := "group_proxy_prepare_failed", "Group proxy configuration could not be prepared.", execution.ErrorScopeGroup
+			if ref.EncryptedProxy != "" || ref.ProxyFingerprint != "" {
+				code, summary, scope = "credential_proxy_prepare_failed", "Credential proxy configuration could not be prepared.", execution.ErrorScopeCredential
+			}
+			if recordPreparationFailure(selection, ref, code, summary, scope) {
+				releaseInput()
+				continue
+			}
 			return
 		}
+		sequence := len(recorder.attempts) + 1
 		id := requestID
 		if id == "" {
 			id = "untracked"
@@ -384,6 +491,9 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		// 来源校验属于客户端连接；显式上游 HeaderRules 随后照常应用。
 		parsed.Header.Del("Origin")
 		input := ForwardInput{Dialect: dialect.NewOpenAIResponses(), ObserveUsage: effective.metadata.ObserveUsage, Group: selection.Group, APIKey: credential.apiKey, CredentialSecrets: credential.secrets, Request: parsed, ExternalModel: model, UpstreamModelID: optionalModelValue(selection.UpstreamModelID), RequestID: id, AttemptID: id + ":" + strconv.Itoa(sequence), AttemptSequence: uint32(sequence), ClientProtocol: protocol.OpenAIResponses, Operation: execution.OperationResponsesCreate, RouteRequirement: execution.RouteRequirementNative, ResponsesStorePreference: original.metadata.ResponsesStorePreference, ChannelID: string(selection.ChannelID), RouteMode: execution.RouteNative, TargetConfig: selection.ResolvedTarget.TargetConfig, Credential: execution.NewCredentialSnapshot(ref.ID, ref.Version, ref.IdentityGeneration, credential.payload), Proxy: proxy, ProxyFingerprint: fingerprint}
+		if redactionMayRestore(parsed, snapshot.RequestRedaction.Reversible()) {
+			input.RedactionCipher = redactionCipher
+		}
 		input.ForceCredentialRefresh = forceCredentialRefresh
 		spec, err := newExecutionAttemptSpec(input)
 		if err != nil {
@@ -410,13 +520,18 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 				return
 			}
 			if !decision.Allowed {
-				reject(reasonAccessKeyCostLimitExceeded)
+				recorder.completeReason(reasonAccessKeyCostLimitExceeded)
+				s.emitAccessQuotaReason(turn.lane, decision)
 				return
 			}
 			admission.admitted = true
 		}
 		if failure := h.checkRequestAudit(requestCtx, snapshot, key, payload, recorder, func() *reason { return h.admitAutoQuota(requestCtx, snapshot, &admission) }); failure != nil {
 			reject(*failure)
+			return
+		}
+		if requestCtx.Err() != nil {
+			recorder.completeCanceled(requestCtx, 0, -1)
 			return
 		}
 		recorder.setReasoning(effective.metadata.Reasoning)
@@ -431,7 +546,18 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 			}
 			recorder.setAffinityHit(requiredRef != nil || selection.CredentialID == affinity.preferredCredentialID, kind)
 		}
+		releaseGroup, failure, err := h.acquireGroupConcurrency(requestCtx, selection.GroupID)
+		if err != nil {
+			reject(limitStateFailureReason(err))
+			return
+		}
+		if failure != nil {
+			reject(*failure)
+			return
+		}
+		defer releaseGroup()
 		started := recorder.beforeForward()
+		forwardAttempts++
 		ctx, cancel := context.WithTimeout(requestCtx, selection.Group.Timeouts.Request)
 		var firstByteDeadline time.Time
 		if selection.Group.Timeouts.FirstByte > 0 {
@@ -489,9 +615,15 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		} else {
 			result.Err = executionFailureError(ctx, wsResult.Error)
 			result.StatusCode = wsResult.Error.StatusCode
+			result.ErrorSummary = wsResult.Error.Summary
+		}
+		if result.Stream.EndReason == StreamEndNone && result.ExecutionError != nil && result.ExecutionError.Kind == execution.ErrorKindHTTP && s.ctx.Err() == nil {
+			// 握手已收到明确 HTTP 拒绝，沿用 HTTP 响应的分类和日志，不能误记为连接失败。
+			result.Err = nil
 		}
 		cancel()
 		releaseInput()
+		releaseGroup()
 		for _, name := range []string{"X-Request-Id", "Request-Id", "Openai-Request-Id", "X-Oai-Request-Id"} {
 			if value := result.Header.Get(name); value != "" && len(value) <= 1024 {
 				result.UpstreamRequestID = recorder.redactor.String(value, credential.secrets...)
@@ -499,20 +631,32 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 			}
 		}
 		decision := judgeUpstreamResult(result, h.now(), health.DecisionContext{DefaultRateLimitCooldown: fixedCooldown, CredentialRefreshable: selection.Group.ConnectionType == "subscription", Method: http.MethodPost, Operation: execution.OperationResponsesCreate})
-		index := recorder.recordStreamAttempt(selection, credential.secrets, result, decision, started, recorder.now())
+		var index int
+		if result.Stream.EndReason == StreamEndNone {
+			index = recorder.recordAttempt(selection, credential.secrets, result, decision, started, recorder.now())
+		} else {
+			index = recorder.recordStreamAttempt(selection, credential.secrets, result, decision, started, recorder.now())
+		}
 		h.applyGroupDecisionEffect(selection.Group, ref, 0, decision, result.StatusCode, h.now(), input.UpstreamModelID)
 		if decision.Effect == health.EffectSkipGroup {
 			iterator.SkipGroup(selection.GroupID)
 		}
-		if len(result.Body) > 0 {
-			finishRejectedAttempt = func() {
+		finishFailedAttempt = func() {
+			if len(result.Body) > 0 {
 				unlock()
 				if err := s.emit(s.ctx, result.Body); err != nil {
 					recorder.completeCanceled(s.ctx, result.StatusCode, index)
 					return
 				}
 				recorder.completeStream(result, input.UpstreamModelID, index)
+				return
 			}
+			value := websocketFailureReason(result)
+			recorder.completeTransport(value, input.UpstreamModelID, index)
+			s.emitReasonUntil(turn.lane, value, decision.CooldownUntil)
+		}
+		if len(result.Body) > 0 || (result.ExecutionError != nil && result.ExecutionError.Kind == execution.ErrorKindHTTP) {
+			finishRejectedAttempt = finishFailedAttempt
 		}
 		if result.Stream.EndReason == StreamEndCleanEOF {
 			h.recordCredentialSuccess(ref, h.now())
@@ -526,8 +670,9 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 			(len(result.Body) > 0 && result.Stream.EndReason == StreamEndSSEError)
 		if retryableTurn && !result.Committed && newBinding &&
 			(binding == nil || !binding.capabilities.Multiplex) && decision.Retry != health.RetryNone &&
-			sequence < limit && requiredRef == nil && !authRefreshUsed && s.ctx.Err() == nil {
-			if decision.Retry == health.RetryRefreshCredential {
+			forwardAttempts < limit && requiredRef == nil && s.ctx.Err() == nil {
+			iterator.AdvancePriority(selection)
+			if decision.Retry == health.RetryRefreshCredential && !authRefreshUsed {
 				refreshSelection, refreshRef = &selection, ref
 			}
 			if binding != nil {
@@ -543,7 +688,11 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		if retryableTurn && !result.Committed && startedBound && decision.Retry != health.RetryNone &&
 			s.ctx.Err() == nil && s.reserveReconnect() {
 			unlock()
-			recorder.completeStream(result, input.UpstreamModelID, index)
+			if result.Stream.EndReason == StreamEndNone {
+				recorder.completeTransport(websocketFailureReason(result), input.UpstreamModelID, index)
+			} else {
+				recorder.completeStream(result, input.UpstreamModelID, index)
+			}
 			finish()
 			s.requestClientReconnect(requestID, string(decision.RuleID), string(decision.Retry))
 			return
@@ -552,21 +701,11 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 			recorder.completeStream(result, input.UpstreamModelID, index)
 		} else if s.ctx.Err() != nil {
 			recorder.completeCanceled(s.ctx, result.StatusCode, index)
-		} else if len(result.Body) > 0 {
+		} else if result.DispatchState == execution.DispatchNotSent && decision.Retry != health.RetryNone && finishRejectedAttempt != nil {
+			// 预算耗尽与候选耗尽保持相同优先级，未发送的可重试失败不覆盖上游拒绝。
 			finishRejectedAttempt()
 		} else {
-			value := reasonUpstreamConnect
-			if errors.Is(result.Err, errResponseOwnershipUnavailable) {
-				value = reasonClusterStateUnavailable
-			} else if result.ExecutionError != nil {
-				if result.ExecutionError.Kind == execution.ErrorKindTimeout {
-					value = reasonUpstreamTimeout
-				} else if result.ExecutionError.StatusCode >= 400 {
-					value = reason{result.ExecutionError.StatusCode, result.ExecutionError.Code, "Upstream WebSocket request failed."}
-				}
-			}
-			recorder.completeReason(value)
-			s.emitReason(turn.lane, value)
+			finishFailedAttempt()
 		}
 		if binding != nil {
 			s.watchBinding(binding)
@@ -642,6 +781,153 @@ type websocketCancelCloser struct {
 
 func (c websocketCancelCloser) Close() error { c.timedOut.Store(true); c.cancel(); return nil }
 
+// Each WebSocket turn has its own Responses restoration state. Pending frames
+// are retained only for their original bytes; the SSE helper owns parsing and
+// in-order release of deltas, documents and terminal snapshots.
+type websocketRedactionOutput struct {
+	stream       *redactionRestoreSSE
+	pending      [][]byte
+	pendingBytes int
+	failed       bool
+}
+
+const websocketRedactionSSEFramingBytes = len("data: \n\n")
+const websocketRedactionDoneTypeGrowth = len("response.incomplete") - len("response.done")
+
+func newWebsocketRedactionOutput(restore func(string) (string, error), structured bool) *websocketRedactionOutput {
+	return &websocketRedactionOutput{stream: newRedactionRestoreSSEWithLimit(
+		protocol.OpenAIResponses, restore, structured,
+		maxRedactionStreamDocument+websocketRedactionSSEFramingBytes+websocketRedactionDoneTypeGrowth,
+	)}
+}
+
+func rewriteWebsocketEventType(body []byte, kind string) ([]byte, error) {
+	field := gjson.GetBytes(body, "type")
+	if field.Type != gjson.String || field.Index < 0 || field.Index+len(field.Raw) > len(body) {
+		return nil, errRedactionStream
+	}
+	encoded, _ := json.Marshal(kind)
+	result := make([]byte, 0, len(body)-len(field.Raw)+len(encoded))
+	result = append(result, body[:field.Index]...)
+	result = append(result, encoded...)
+	result = append(result, body[field.Index+len(field.Raw):]...)
+	return result, nil
+}
+
+func websocketRedactionDoneType(body []byte) string {
+	if gjson.GetBytes(body, "type").Str != "response.done" {
+		return ""
+	}
+	switch gjson.GetBytes(body, "response.status").Str {
+	case "completed":
+		return "response.completed"
+	case "incomplete":
+		return "response.incomplete"
+	default:
+		return "response.failed"
+	}
+}
+
+func (output *websocketRedactionOutput) Push(body []byte) ([][]byte, error) {
+	if output == nil || output.failed || output.stream == nil ||
+		len(body) > maxRedactionStreamDocument ||
+		output.pendingBytes > maxRedactionStreamPendingBytes/2-len(body) {
+		return nil, errRedactionStream
+	}
+	var compact bytes.Buffer
+	if json.Compact(&compact, body) != nil {
+		return nil, errRedactionStream
+	}
+	payload := compact.Bytes()
+	if normalizedType := websocketRedactionDoneType(payload); normalizedType != "" {
+		var err error
+		payload, err = rewriteWebsocketEventType(payload, normalizedType)
+		if err != nil {
+			return nil, err
+		}
+	}
+	frame := make([]byte, 0, len(payload)+websocketRedactionSSEFramingBytes)
+	frame = append(frame, "data: "...)
+	frame = append(frame, payload...)
+	frame = append(frame, '\n', '\n')
+	output.pending = append(output.pending, bytes.Clone(body))
+	output.pendingBytes += len(body)
+	released, err := output.stream.Push(frame)
+	if err != nil {
+		output.failed = true
+		return nil, err
+	}
+	return output.unpack(released)
+}
+
+func (output *websocketRedactionOutput) Finish() ([][]byte, error) {
+	if output == nil || output.failed || output.stream == nil {
+		return nil, errRedactionStream
+	}
+	released, err := output.stream.Finish()
+	if err != nil {
+		output.failed = true
+		return nil, err
+	}
+	frames, err := output.unpack(released)
+	if err != nil || len(output.pending) != 0 {
+		output.failed = true
+		return nil, errRedactionStream
+	}
+	return frames, nil
+}
+
+func (output *websocketRedactionOutput) unpack(released []byte) ([][]byte, error) {
+	frames := make([][]byte, 0)
+	for len(released) > 0 {
+		end := bytes.Index(released, []byte("\n\n"))
+		if end < 0 || len(output.pending) == 0 || !bytes.HasPrefix(released[:end], []byte("data: ")) {
+			output.failed = true
+			return nil, errRedactionStream
+		}
+		payload := released[len("data: "):end]
+		if !json.Valid(payload) {
+			output.failed = true
+			return nil, errRedactionStream
+		}
+		original := output.pending[0]
+		output.pending[0] = nil
+		output.pending = output.pending[1:]
+		output.pendingBytes -= len(original)
+		var compact bytes.Buffer
+		if json.Compact(&compact, original) != nil {
+			output.failed = true
+			return nil, errRedactionStream
+		}
+		canonical := compact.Bytes()
+		if normalizedType := websocketRedactionDoneType(canonical); normalizedType != "" {
+			var err error
+			canonical, err = rewriteWebsocketEventType(canonical, normalizedType)
+			if err != nil {
+				output.failed = true
+				return nil, err
+			}
+			if !bytes.Equal(payload, canonical) {
+				payload, err = rewriteWebsocketEventType(payload, "response.done")
+				if err != nil {
+					output.failed = true
+					return nil, err
+				}
+			}
+		}
+		if bytes.Equal(payload, canonical) {
+			payload = original
+		}
+		if len(payload) > maxRedactionStreamDocument {
+			output.failed = true
+			return nil, errRedactionStream
+		}
+		frames = append(frames, payload)
+		released = released[end+2:]
+	}
+	return frames, nil
+}
+
 func (s *websocketConnection) runWebsocketAttempt(ctx context.Context, cancel context.CancelFunc, binding *websocketBinding, lane string, selection scheduler.Selection, ref state.CredentialRef, input ForwardInput, recorder *requestRecorder, unlock func(), firstByteDeadline time.Time, bufferFirstError bool) UpstreamResult {
 	observer := newStreamEventObserver(input.Dialect, newUsageCaptureBoundary().newStreamForRequest(input.Dialect, input.ObserveUsage))
 	result := UpstreamResult{UpstreamProtocol: protocol.OpenAIResponses}
@@ -662,9 +948,48 @@ func (s *websocketConnection) runWebsocketAttempt(ctx context.Context, cancel co
 			idle.stop()
 		}
 	}()
+	var restored *websocketRedactionOutput
+	if input.RedactionCipher != nil {
+		restored = newWebsocketRedactionOutput(credentialSafeRestore(input.RedactionCipher.RestoreText, restorationCredentialSecrets(input)), requestDeclaresJSONOutput(protocol.OpenAIResponses, input.Request.Body))
+		restored.stream.signer = newRedactionSigner(input.RedactionCipher)
+	}
+	var restoreFailure error
+	var eventProtocolFailure bool
+	firstOutput := dialect.FirstOutputObserver{Protocol: protocol.OpenAIResponses}
+	emitRestored := func(ctx context.Context, frames [][]byte) error {
+		if len(frames) == 0 {
+			return nil
+		}
+		unlock()
+		for _, frame := range frames {
+			if len(frame) > s.handler.websocketLimits.message {
+				restoreFailure = errRedactionStream
+				return ErrUpstreamProtocol
+			}
+			if err := s.emit(ctx, frame); err != nil {
+				return err
+			}
+			if recorder.autoDecision != nil && firstOutput.Observe(dialect.StreamEvent{Payload: frame}) {
+				recorder.recordFirstOutput()
+			}
+			result.Committed = true
+			result.ResponseStarted = true
+		}
+		if observer.sawTerminal &&
+			(restored == nil || (restored.stream.TerminalReleased() && len(restored.pending) == 0)) {
+			observer.markTerminalForwarded()
+		}
+		return nil
+	}
 	onResponse := s.handler.responseBindingObserver(ctx, s.keyID, selection, ref, input.Request, recorder.autoSelection())
 	var ownershipErr error
-	wsResult := binding.session.ExecuteTurn(ctx, input.Request.Body, func(ctx context.Context, body []byte) error {
+	wsResult := binding.session.ExecuteTurn(ctx, input.Request.Body, func(ctx context.Context, body []byte) (eventErr error) {
+		recorder.recordFirstResponse()
+		defer func() {
+			if errors.Is(eventErr, ErrUpstreamProtocol) {
+				eventProtocolFailure = true
+			}
+		}()
 		var event struct {
 			Type       string          `json:"type"`
 			StreamID   json.RawMessage `json:"stream_id"`
@@ -735,6 +1060,9 @@ func (s *websocketConnection) runWebsocketAttempt(ctx context.Context, cancel co
 			return err
 		}
 		observer.observeUsageEvent(observation)
+		if observer.sawTerminal && !providerError {
+			recorder.finishTiming()
+		}
 		if providerError {
 			observer.observeError(body, "Upstream WebSocket request failed.")
 			body = recorder.redactor.Bytes(body, input.CredentialSecrets...)
@@ -798,18 +1126,27 @@ func (s *websocketConnection) runWebsocketAttempt(ctx context.Context, cancel co
 				}
 			}
 		}
-		if !result.Committed {
-			recorder.recordFirstResponse()
+		frames := [][]byte{body}
+		if restored != nil {
+			frames, err = restored.Push(body)
+			if err != nil {
+				restoreFailure = err
+				return ErrUpstreamProtocol
+			}
 		}
-		unlock()
-		if err = s.emit(ctx, body); err != nil {
-			return err
-		}
-		result.Committed = true
-		result.ResponseStarted = true
-		observer.markTerminalForwarded()
-		return nil
+		return emitRestored(ctx, frames)
 	})
+	if wsResult.AppliedReasoning != nil {
+		result.AppliedReasoning = wsResult.AppliedReasoning.Clone()
+	}
+	if restored != nil && wsResult.Error == nil && restoreFailure == nil {
+		frames, err := restored.Finish()
+		if err != nil {
+			restoreFailure = err
+		} else if err := emitRestored(ctx, frames); err != nil {
+			restoreFailure = err
+		}
+	}
 	first.stop()
 	if idle != nil {
 		idle.stop()
@@ -833,7 +1170,10 @@ func (s *websocketConnection) runWebsocketAttempt(ctx context.Context, cancel co
 		result.ErrorSummary = copy.Summary
 	}
 	result.Stream = observer.endObservation()
-	if !observer.sawTerminal {
+	if eventProtocolFailure || (wsResult.Error != nil && wsResult.Error.Code == "upstream_protocol_error") {
+		result.Err = ErrUpstreamProtocol
+		result.Stream = streamTerminalObservation(StreamEndUpstreamProtocolError)
+	} else if !observer.sawTerminal {
 		if result.DispatchState == execution.DispatchNotSent && result.ExecutionError != nil {
 			// 握手/准备被明确拒绝，尚无业务流；保留原错误供健康和刷新判定。
 			result.Stream = StreamObservation{}
@@ -859,6 +1199,12 @@ func (s *websocketConnection) runWebsocketAttempt(ctx context.Context, cancel co
 	}
 	if s.ctx.Err() != nil && !observer.terminalForwarded {
 		result.Stream = prioritizeStreamObservation(s.ctx, s.ctx.Err(), result.Stream)
+	}
+	if restoreFailure != nil {
+		result.Err = errRedactionStream
+		result.Stream = streamTerminalObservation(StreamEndRedactionFailed)
+		result.ExecutionError = responseRedactionEvidence(0)
+		result.ErrorSummary = result.ExecutionError.Summary
 	}
 	if ownershipErr != nil {
 		result.Err = ownershipErr

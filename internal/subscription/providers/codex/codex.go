@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	cpaembedded "github.com/router-for-me/CLIProxyAPI/v7/gptload-embedded/embedded"
+	cpaembedded "github.com/router-for-me/CLIProxyAPI/v8/gptload-embedded/embedded"
 
 	subscriptionruntime "gpt-load/internal/subscription/runtime"
 )
@@ -28,6 +28,7 @@ var (
 // JSON shape deliberately remains compatible with CPA's exported auth file.
 type Credential struct {
 	Type         string `json:"type"`
+	PlanType     string `json:"plan_type,omitempty"`
 	IDToken      string `json:"id_token,omitempty"`
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
@@ -286,23 +287,27 @@ type ExecuteRequest struct {
 
 // ExecuteResponse is one converted non-streaming bridge response.
 type ExecuteResponse struct {
-	StatusCode             int
-	Payload                []byte
-	Headers                http.Header
-	AppliedReasoningEffort string
-	UpstreamRequestPath    string
-	QuotaObservedAt        time.Time
-	QuotaSignals           map[string]string
+	StatusCode                   int
+	Payload                      []byte
+	Headers                      http.Header
+	AppliedReasoningEffort       string
+	AppliedReasoningMode         string
+	AppliedReasoningBudgetTokens *int64
+	UpstreamRequestPath          string
+	QuotaObservedAt              time.Time
+	QuotaSignals                 map[string]string
 }
 
 // ExecuteStreamResponse contains converted streaming chunks and response metadata.
 type ExecuteStreamResponse struct {
-	Headers                http.Header
-	Chunks                 <-chan ExecuteStreamChunk
-	AppliedReasoningEffort string
-	UpstreamRequestPath    string
-	QuotaObservedAt        time.Time
-	QuotaSignals           map[string]string
+	Headers                      http.Header
+	Chunks                       <-chan ExecuteStreamChunk
+	AppliedReasoningEffort       string
+	AppliedReasoningMode         string
+	AppliedReasoningBudgetTokens *int64
+	UpstreamRequestPath          string
+	QuotaObservedAt              time.Time
+	QuotaSignals                 map[string]string
 }
 
 // ExecuteStreamChunk contains one converted payload or terminal bridge error.
@@ -340,13 +345,15 @@ func (e *executor) Execute(
 		executeRequestToBridge(request),
 	)
 	return ExecuteResponse{
-		StatusCode:             response.StatusCode,
-		Payload:                append([]byte(nil), response.Payload...),
-		Headers:                response.Headers.Clone(),
-		AppliedReasoningEffort: response.AppliedReasoningEffort,
-		UpstreamRequestPath:    response.UpstreamRequestPath,
-		QuotaObservedAt:        response.QuotaSignals.ObservedAt,
-		QuotaSignals:           response.QuotaSignals.Signals,
+		StatusCode:                   response.StatusCode,
+		Payload:                      append([]byte(nil), response.Payload...),
+		Headers:                      response.Headers.Clone(),
+		AppliedReasoningEffort:       response.AppliedReasoningEffort,
+		AppliedReasoningMode:         response.AppliedReasoningMode,
+		AppliedReasoningBudgetTokens: response.AppliedReasoningBudgetTokens,
+		UpstreamRequestPath:          response.UpstreamRequestPath,
+		QuotaObservedAt:              response.QuotaSignals.ObservedAt,
+		QuotaSignals:                 response.QuotaSignals.Signals,
 	}, err
 }
 
@@ -363,10 +370,12 @@ func (e *executor) CountTokens(
 		executeRequestToBridge(request),
 	)
 	return ExecuteResponse{
-		Payload:                append([]byte(nil), response.Payload...),
-		Headers:                response.Headers.Clone(),
-		AppliedReasoningEffort: response.AppliedReasoningEffort,
-		UpstreamRequestPath:    response.UpstreamRequestPath,
+		Payload:                      append([]byte(nil), response.Payload...),
+		Headers:                      response.Headers.Clone(),
+		AppliedReasoningEffort:       response.AppliedReasoningEffort,
+		AppliedReasoningMode:         response.AppliedReasoningMode,
+		AppliedReasoningBudgetTokens: response.AppliedReasoningBudgetTokens,
+		UpstreamRequestPath:          response.UpstreamRequestPath,
 	}, err
 }
 
@@ -386,11 +395,13 @@ func (e *executor) ExecuteStream(
 		return nil, err
 	}
 	convertedResponse := &ExecuteStreamResponse{
-		Headers:                response.Headers.Clone(),
-		AppliedReasoningEffort: response.AppliedReasoningEffort,
-		UpstreamRequestPath:    response.UpstreamRequestPath,
-		QuotaObservedAt:        response.QuotaSignals.ObservedAt,
-		QuotaSignals:           response.QuotaSignals.Signals,
+		Headers:                      response.Headers.Clone(),
+		AppliedReasoningEffort:       response.AppliedReasoningEffort,
+		AppliedReasoningMode:         response.AppliedReasoningMode,
+		AppliedReasoningBudgetTokens: response.AppliedReasoningBudgetTokens,
+		UpstreamRequestPath:          response.UpstreamRequestPath,
+		QuotaObservedAt:              response.QuotaSignals.ObservedAt,
+		QuotaSignals:                 response.QuotaSignals.Signals,
 	}
 	if err != nil {
 		return convertedResponse, err
@@ -432,6 +443,7 @@ func executeRequestToBridge(value ExecuteRequest) cpaembedded.ExecuteRequest {
 func credentialFromBridge(value cpaembedded.CodexCredential) Credential {
 	return Credential{
 		Type:         value.Type,
+		PlanType:     value.PlanType,
 		IDToken:      value.IDToken,
 		AccessToken:  value.AccessToken,
 		RefreshToken: value.RefreshToken,
@@ -445,6 +457,7 @@ func credentialFromBridge(value cpaembedded.CodexCredential) Credential {
 func credentialToBridge(value Credential) cpaembedded.CodexCredential {
 	return cpaembedded.CodexCredential{
 		Type:         value.Type,
+		PlanType:     value.PlanType,
 		IDToken:      value.IDToken,
 		AccessToken:  value.AccessToken,
 		RefreshToken: value.RefreshToken,

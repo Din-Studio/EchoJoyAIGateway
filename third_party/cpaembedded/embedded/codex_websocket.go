@@ -12,12 +12,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	internalexecutor "github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor"
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/proxyutil"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	"github.com/router-for-me/CLIProxyAPI/v8/gptload-embedded/modelcatalog"
+	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	internalexecutor "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/proxyutil"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -45,12 +49,15 @@ type CodexWSSessionOptions struct {
 
 // CodexWSTurnResult 只描述本轮执行，不执行健康、额度或日志记账。
 type CodexWSTurnResult struct {
-	ResponseID       string
-	Status           string
-	Usage            json.RawMessage
-	Headers          http.Header
-	HeaderObservedAt time.Time
-	DispatchState    string
+	AppliedReasoningEffort       string
+	AppliedReasoningMode         string
+	AppliedReasoningBudgetTokens *int64
+	ResponseID                   string
+	Status                       string
+	Usage                        json.RawMessage
+	Headers                      http.Header
+	HeaderObservedAt             time.Time
+	DispatchState                string
 }
 
 // CodexWSError 的文本不包含上游响应、凭据、地址或代理密码。
@@ -73,7 +80,12 @@ func codexWSError(code string) *CodexWSError {
 }
 
 // CodexWSSession 是由调用者独占的 Codex 上游会话。
+// last* 只为原连接内已完成父响应推导日志强度，不修改请求、不跨连接或副本恢复。
 type CodexWSSession struct {
+	lastResponseID    string
+	lastModel         string
+	lastEffort        string
+	lastOverride      bool
 	auth              *cliproxyauth.Auth
 	inner             *internalexecutor.CodexWebsocketsExecutor
 	id                string
@@ -128,7 +140,8 @@ func NewCodexWSSession(options CodexWSSessionOptions) (*CodexWSSession, error) {
 		auth: auth, id: codexWSSessionIDPrefix + uuid.NewString(), options: options, closeDone: make(chan struct{}),
 		inner: internalexecutor.NewCodexWebsocketsExecutor(&internalconfig.Config{
 			// 不启用 SDK 的启动缓冲，确保 ExecuteStream 先返回握手，再交付原生事件。
-			Codex: internalconfig.CodexConfig{ModelLevelCooling: true, StreamBootstrapBuffering: false},
+			// 客户端标识由桥接层固定，避免 CPA 覆写为其内置旧版本。
+			Codex: internalconfig.CodexConfig{ModelLevelCooling: true, StreamBootstrapBuffering: false, DisableCodexCloaking: true},
 		}),
 	}
 	session.resource = &codexWSResource{session: session}
@@ -174,6 +187,22 @@ func (s *CodexWSSession) ExecuteTurn(ctx context.Context, payload json.RawMessag
 	} else {
 		turnCtx, cancel = context.WithTimeout(ctx, s.options.TurnTimeout)
 	}
+	hasReasoningOverride := false
+	// 支持更新的原生 Responses 路径由 CPA 原样保留配置。
+	if modelcatalog.SupportsReasoningUpdates(model) {
+		result.AppliedReasoningEffort = thinking.ExtractTranslatedReasoningEffort(payload, ProviderCodex)
+		result.AppliedReasoningMode, result.AppliedReasoningBudgetTokens = extractReasoningDetails(payload, ProviderCodex)
+		gjson.GetBytes(payload, "input").ForEach(func(_, item gjson.Result) bool {
+			if item.Get("type").String() == "configuration_update" {
+				hasReasoningOverride = true
+			}
+			return true
+		})
+		if !hasReasoningOverride && s.lastOverride && previous != "" && previous == s.lastResponseID && model == s.lastModel {
+			result.AppliedReasoningEffort = s.lastEffort
+			hasReasoningOverride = true
+		}
+	}
 	s.cancel, s.running = cancel, true
 	reuse := s.started
 	s.mu.Unlock()
@@ -209,10 +238,25 @@ func (s *CodexWSSession) ExecuteTurn(ctx context.Context, payload json.RawMessag
 		failSession: func() { s.invalidate(false) },
 	}
 	headersReady := make(chan struct{})
+	headers := normalizedCodexHeaders(s.options.Headers)
+	headers.Set("Originator", "codex-tui")
+	if helps.IsNativeCodexRequest(payload, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, Headers: headers}) {
+		// 关闭 CPA 的旧 UA 覆写后，原生请求只保留显式会话头；补回原有缓存会话语义。
+		sessionID := headers.Get("Session-Id")
+		if cacheKey := strings.TrimSpace(gjson.GetBytes(payload, "prompt_cache_key").String()); cacheKey != "" {
+			sessionID = cacheKey
+			headers.Set("Conversation_id", cacheKey)
+		}
+		if sessionID == "" {
+			sessionID = uuid.NewString()
+		}
+		headers.Del("Session-Id")
+		headers.Set("Session_id", sessionID)
+	}
 	stream, executionErr := s.inner.ExecuteStream(turnCtx, s.auth, cliproxyexecutor.Request{
 		Model: model, Payload: append([]byte(nil), payload...), Format: sdktranslator.FormatOpenAIResponse,
 	}, cliproxyexecutor.Options{
-		Stream: true, Headers: normalizedCodexHeaders(s.options.Headers), SourceFormat: sdktranslator.FormatOpenAIResponse, ResponseFormat: sdktranslator.FormatOpenAIResponse,
+		Stream: true, Headers: headers, SourceFormat: sdktranslator.FormatOpenAIResponse, ResponseFormat: sdktranslator.FormatOpenAIResponse,
 		Metadata:           map[string]any{cliproxyexecutor.ExecutionSessionMetadataKey: s.id},
 		ExecutionLifecycle: s.resource,
 		WebSocketResponseObserver: func(ctx context.Context, event cliproxyexecutor.WebSocketResponseEvent) {
@@ -292,6 +336,8 @@ func (s *CodexWSSession) ExecuteTurn(ctx context.Context, payload json.RawMessag
 	}
 	s.mu.Lock()
 	s.started = true
+	s.lastOverride = hasReasoningOverride
+	s.lastResponseID, s.lastModel, s.lastEffort = result.ResponseID, model, result.AppliedReasoningEffort
 	s.mu.Unlock()
 	return result, nil
 }

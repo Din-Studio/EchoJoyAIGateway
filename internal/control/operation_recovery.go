@@ -261,6 +261,14 @@ func validateOperationResourceIdentity(kind operationKind, identity string) erro
 	case operationKindGroupCreate, operationKindCredentialImport:
 		_, err := parseResourceIdentity(identity, "group")
 		return err
+	case operationKindProxyCreate, operationKindProxyUpdate:
+		_, err := parseResourceIdentity(identity, "proxy")
+		return err
+	case operationKindProxyImport:
+		if identity != "proxy:catalog" {
+			return fmt.Errorf("invalid proxy import identity")
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported operation kind")
 	}

@@ -10,10 +10,12 @@ import {
   RefreshCw,
   Search,
   Trash2,
+  Upload,
 } from '@lucide/vue'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/vue-query'
-import { computed, onScopeDispose, ref, watch } from 'vue'
+import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute, useRouter } from 'vue-router'
 import {
   batchGroupCredentials,
   batchAllGroupCredentials,
@@ -27,7 +29,7 @@ import {
   type CredentialRow,
 } from '@modern/api/group-detail'
 import type { GroupRow } from '@modern/api/groups'
-import type { GroupChannel } from '@modern/api/group-create'
+import type { CredentialEntryInput, GroupChannel } from '@modern/api/group-create'
 import {
   credentialDetailKey,
   getCredentialDetail,
@@ -37,9 +39,11 @@ import {
   resetCredentialQuota,
   revealCredential,
   runCredentialAction,
+  updateCredential,
 } from '@modern/api/credential-actions'
 import { ApiError } from '@shared/http/errors'
-import { createOperationKey } from './group-create-operation'
+import { APIKeyFileImportError, readAPIKeyCredentialFiles } from './api-key-file-import'
+import { createOperationKey, useGroupCreateOperation } from './group-create-operation'
 import APIKeyCredentialCard from './APIKeyCredentialCard.vue'
 import SubscriptionCredentialCard from './SubscriptionCredentialCard.vue'
 import CredentialDetailPanel from './CredentialDetailPanel.vue'
@@ -51,6 +55,7 @@ import {
   AppCheckbox,
   AppCollectionState,
   AppConfirmDialog,
+  AppFileButton,
   AppFilterSummary,
   AppIconButton,
   AppListFrame,
@@ -75,9 +80,13 @@ const emit = defineEmits<{
 const { t, n } = useI18n()
 const client = useApiClient()
 const cache = useQueryClient()
-const filters = useURLState<CredentialFilters>(
-  ['q', 'status', 'page', 'page_size', 'sort', 'proxy', 'reset', 'credential_key'],
-  (query) => ({
+const route = useRoute()
+const router = useRouter()
+const filterKeys = ['q', 'status', 'page', 'page_size', 'sort', 'proxy', 'reset', 'credential_key']
+// 路由保护确认后才更新列表，避免切换条件时提前销毁名称草稿。
+const filters = computed<CredentialFilters>(() => {
+  const query = route.query
+  return {
     credential:
       typeof query.credential_key === 'string' && /^[a-f0-9]{64}$/u.test(query.credential_key)
         ? query.credential_key
@@ -96,27 +105,13 @@ const filters = useURLState<CredentialFilters>(
       (query.reset === 'available' || query.reset === 'none' || query.reset === 'unknown')
         ? query.reset
         : '',
-  }),
-  (value) => ({
-    ...(value.credential ? { credential_key: value.credential } : {}),
-    ...(value.q ? { q: value.q } : {}),
-    ...(value.status ? { status: value.status } : {}),
-    ...(value.page > 1 ? { page: String(value.page) } : {}),
-    ...(value.pageSize !== 20 ? { page_size: String(value.pageSize) } : {}),
-    ...(value.sort !== 'priority' ? { sort: value.sort } : {}),
-    ...(value.proxy ? { proxy: value.proxy } : {}),
-    ...(value.reset ? { reset: value.reset } : {}),
-  }),
-)
+  }
+})
 const search = ref(filters.value.q)
-watch(
-  () => filters.value.q,
-  (value) => {
-    search.value = value
-  },
-)
 const composing = ref(false)
 const selected = ref(new Set<number>())
+const nameDrafts = ref(new Set<number>())
+const cardRevision = ref(0)
 const credentialView = useURLState(
   ['credential', 'credential_view'],
   (query) => ({
@@ -169,8 +164,10 @@ const syncSucceeded = ref(new Set<number>())
 const accountBatchPending = ref(false)
 const pendingAction = ref('')
 const deleting = ref<number[]>([])
-type FullAction = 'download' | 'enable' | 'disable' | 'restore'
+type FullAction = 'download' | 'enable' | 'disable' | 'restore' | 'import'
 const fullTarget = ref<FullAction>()
+const importFile = shallowRef<CredentialEntryInput[]>()
+const importOperation = useGroupCreateOperation(client)
 const error = ref('')
 const notice = ref('')
 type AccountBatchAction = 'sync' | 'download'
@@ -199,12 +196,23 @@ const syncPending = (id: number) => syncing.value.has(id) || queuedSync.value.ha
 const bulkBusy = computed(() => busy.value || accountBatchPending.value || syncing.value.size > 0)
 const stale = computed(() => query.isError.value && Boolean(query.data.value))
 const summary = computed(() => query.data.value?.counts)
-const fullActions = computed(() => [
-  { id: 'enable', label: t('groupDetail.full.enable'), icon: Play },
-  { id: 'disable', label: t('groupDetail.full.disable'), icon: Pause },
-  { id: 'restore', label: t('groupDetail.full.restore'), icon: RotateCcw },
-  { id: 'download', label: t('groupDetail.full.download'), icon: Download },
-])
+const fullActions = computed(() =>
+  [
+    ...(props.group.connectionType === 'api_key'
+      ? [{ id: 'import', label: t('groupDetail.full.import'), icon: Upload }]
+      : []),
+    { id: 'enable', label: t('groupDetail.full.enable'), icon: Play },
+    { id: 'disable', label: t('groupDetail.full.disable'), icon: Pause },
+    { id: 'restore', label: t('groupDetail.full.restore'), icon: RotateCcw },
+    { id: 'download', label: t('groupDetail.full.download'), icon: Download },
+  ].map((item) => ({ ...item, disabled: item.id !== 'import' && !summary.value?.total })),
+)
+const fullActionsDisabled = computed(
+  () => bulkBusy.value || (props.group.connectionType !== 'api_key' && !summary.value?.total),
+)
+const importRetryDisabled = computed(
+  () => Boolean(importOperation.operation.value) && !importOperation.canRetry.value,
+)
 const fullIcon = computed(
   () => fullActions.value.find((item) => item.id === fullTarget.value)?.icon,
 )
@@ -243,10 +251,7 @@ const filterSummary = computed(() => [
           key: 'credential',
           label: t('groups.board.credentialFilter'),
           value: filteredCredential.value
-            ? filteredCredential.value.account ||
-              (props.group.connectionType === 'api_key'
-                ? filteredCredential.value.mask
-                : props.group.channelName)
+            ? filteredCredential.value.label
             : t('groups.board.selectedCredential'),
         },
       ]
@@ -304,20 +309,52 @@ const canSyncSelected = computed(
 )
 watch(bulkBusy, (value) => emit('pending', value), { immediate: true })
 watch(query.dataUpdatedAt, (value) => emit('updatedAt', value), { immediate: true })
-watch(query.data, (data) => {
+watch([query.data, bulkBusy], ([data, pending]) => {
   if (!data || query.isPlaceholderData.value) return
   const max = Math.max(1, Math.ceil(data.total / filters.value.pageSize))
-  if (filters.value.page > max) filters.value = { ...filters.value, page: max }
+  if (!pending && filters.value.page > max) void setFilters({ ...filters.value, page: max })
   selected.value = new Set(
     [...selected.value].filter((id) => data.items.some((row) => row.id === id)),
   )
 })
+watch(
+  () => JSON.stringify(filters.value),
+  () => {
+    clearTimeout(searchTimer)
+    search.value = filters.value.q
+    if (nameDrafts.value.size) {
+      nameDrafts.value.clear()
+      cardRevision.value++
+    }
+    selected.value = new Set()
+    accountBatch.value = undefined
+    list.value?.scrollToTop()
+  },
+)
+async function setFilters(value: CredentialFilters): Promise<void> {
+  const query = { ...route.query }
+  filterKeys.forEach((key) => delete query[key])
+  Object.assign(query, {
+    ...(value.credential ? { credential_key: value.credential } : {}),
+    ...(value.q ? { q: value.q } : {}),
+    ...(value.status ? { status: value.status } : {}),
+    ...(value.page > 1 ? { page: String(value.page) } : {}),
+    ...(value.pageSize !== 20 ? { page_size: String(value.pageSize) } : {}),
+    ...(value.sort !== 'priority' ? { sort: value.sort } : {}),
+    ...(value.proxy ? { proxy: value.proxy } : {}),
+    ...(value.reset ? { reset: value.reset } : {}),
+  })
+  try {
+    await router.replace({ query, hash: route.hash })
+  } catch {
+    search.value = filters.value.q
+    return
+  }
+  search.value = filters.value.q
+}
 function change(value: Partial<typeof filters.value>): void {
   if (mutating.value !== undefined || accountBatchPending.value) return
-  filters.value = { ...filters.value, ...value }
-  selected.value = new Set()
-  accountBatch.value = undefined
-  list.value?.scrollToTop()
+  void setFilters({ ...filters.value, ...value })
 }
 function scheduleSearch(): void {
   clearTimeout(searchTimer)
@@ -565,19 +602,86 @@ function downloadFile(file: { filename: string; content: string; type?: string }
     downloads.delete(url)
   }, 1000)
 }
-function openFullAction(value: string): void {
-  if (
-    bulkBusy.value ||
-    !summary.value?.total ||
-    !fullActions.value.some((item) => item.id === value)
-  )
+function openFullAction(value: string, openFile: () => void): void {
+  if (bulkBusy.value || !fullActions.value.some((item) => item.id === value && !item.disabled))
     return
   error.value = ''
+  if (value === 'import') {
+    if (importFile.value) fullTarget.value = 'import'
+    else openFile()
+    return
+  }
   fullTarget.value = value as FullAction
+}
+async function selectImportFiles(files: File[]): Promise<void> {
+  if (!files.length || bulkBusy.value || props.group.connectionType !== 'api_key') return
+  mutating.value = 'batch'
+  error.value = ''
+  notice.value = ''
+  try {
+    const result = await readAPIKeyCredentialFiles(files)
+    if (controller.signal.aborted) return
+    importFile.value = result
+    fullTarget.value = 'import'
+  } catch (cause) {
+    if (!controller.signal.aborted)
+      error.value = t(
+        'groupDetail.fileImport.' +
+          (cause instanceof APIKeyFileImportError ? cause.code : 'read_failed'),
+      )
+  } finally {
+    mutating.value = undefined
+  }
+}
+function closeFullAction(): void {
+  if (mutating.value !== undefined) return
+  fullTarget.value = undefined
+  if (!importOperation.operation.value) importFile.value = undefined
+}
+async function submitFileImport(): Promise<void> {
+  if (!importFile.value || importRetryDisabled.value) return
+  importOperation.begin({
+    kind: 'append',
+    group: { id: props.group.id, name: props.group.name },
+    credentials: importFile.value,
+  })
+  mutating.value = 'batch'
+  error.value = ''
+  notice.value = ''
+  try {
+    const result = await importOperation.execute()
+    if (!result || controller.signal.aborted) return
+    if (result.kind === 'success') {
+      importOperation.reset()
+      importFile.value = undefined
+      fullTarget.value = undefined
+      notice.value = t('groupDetail.importResult', {
+        added: n(result.result.added),
+        duplicated: n(result.result.duplicated),
+      })
+      await changed()
+    } else if (result.kind === 'rejected') {
+      error.value = result.error.message || t('groupDetail.importFailed')
+      importOperation.reset()
+    } else {
+      error.value = t('groupCreate.outcome.' + result.kind)
+      if (result.kind === 'expired') {
+        importOperation.reset()
+        importFile.value = undefined
+        fullTarget.value = undefined
+      }
+    }
+  } finally {
+    mutating.value = undefined
+  }
 }
 async function applyFullAction(): Promise<void> {
   const value = fullTarget.value
   if (!value || bulkBusy.value) return
+  if (value === 'import') {
+    await submitFileImport()
+    return
+  }
   mutating.value = 'batch'
   error.value = ''
   notice.value = ''
@@ -613,6 +717,30 @@ function saved(row: CredentialRow): void {
   cacheRow(row)
   void changed()
   void cache.invalidateQueries({ queryKey: credentialDetailKey(props.group.id, row.id) })
+}
+function nameDirty(id: number, dirty: boolean): void {
+  if (dirty) nameDrafts.value.add(id)
+  else nameDrafts.value.delete(id)
+}
+async function saveName(row: CredentialRow, name: string): Promise<void> {
+  if (busy.value || syncPending(row.id)) throw new Error('CREDENTIAL_BUSY')
+  mutating.value = row.id
+  pendingAction.value = 'name'
+  try {
+    const result = await updateCredential(
+      client,
+      props.group.id,
+      row.id,
+      { name },
+      controller.signal,
+    )
+    if (controller.signal.aborted) return
+    cacheRow(result)
+    await changed()
+    void cache.invalidateQueries({ queryKey: credentialDetailKey(props.group.id, row.id) })
+  } finally {
+    mutating.value = undefined
+  }
 }
 async function action(row: CredentialRow, value: string): Promise<void> {
   if (busy.value || syncPending(row.id)) return
@@ -721,6 +849,7 @@ async function resetQuota(): Promise<void> {
 }
 onScopeDispose(() => {
   controller.abort()
+  importFile.value = undefined
   clearTimeout(searchTimer)
   syncSuccessTimers.forEach((timer) => clearTimeout(timer))
   downloads.forEach((url) => URL.revokeObjectURL(url))
@@ -911,23 +1040,33 @@ defineExpose({ refresh })
               />
             </template>
           </div>
-          <AppActionMenu
-            :label="t('groupDetail.full.actions')"
-            :items="fullActions"
-            :disabled="bulkBusy || !summary?.total"
-            @select="openFullAction"
+          <AppFileButton
+            :label="t('groupDetail.full.import')"
+            accept=".txt,.json,.jsonl,text/plain,application/json"
+            multiple
+            :disabled="bulkBusy || group.connectionType !== 'api_key'"
+            @select="selectImportFiles"
           >
-            <template #trigger>
-              <AppButton
-                :icon="Layers"
-                variant="ghost"
-                size="sm"
-                :disabled="bulkBusy || !summary?.total"
+            <template #default="{ open }">
+              <AppActionMenu
+                :label="t('groupDetail.full.actions')"
+                :items="fullActions"
+                :disabled="fullActionsDisabled"
+                @select="openFullAction($event, open)"
               >
-                {{ t('groupDetail.full.actions') }}<AppIcon :icon="ChevronDown" size="xs" />
-              </AppButton>
+                <template #trigger>
+                  <AppButton
+                    :icon="Layers"
+                    variant="ghost"
+                    size="sm"
+                    :disabled="fullActionsDisabled"
+                  >
+                    {{ t('groupDetail.full.actions') }}<AppIcon :icon="ChevronDown" size="xs" />
+                  </AppButton>
+                </template>
+              </AppActionMenu>
             </template>
-          </AppActionMenu>
+          </AppFileButton>
         </div>
       </template>
       <AppCollectionState
@@ -947,7 +1086,7 @@ defineExpose({ refresh })
           'modern-credential-cards--subscriptions': group.connectionType === 'subscription',
         }"
       >
-        <template v-for="row in rows" :key="row.id">
+        <template v-for="row in rows" :key="row.id + ':' + cardRevision">
           <SubscriptionCredentialCard
             v-if="group.connectionType === 'subscription'"
             :row="row"
@@ -960,6 +1099,8 @@ defineExpose({ refresh })
             :sync-succeeded="syncSucceeded.has(row.id)"
             :disabled="busy || syncPending(row.id)"
             :error="cardErrors.get(row.id)"
+            :save-name="(name) => saveName(row, name)"
+            @name-dirty="nameDirty(row.id, $event)"
             @select="select(row.id, $event)"
             @toggle="toggle(row, $event)"
             @action="action(row, $event)"
@@ -972,6 +1113,8 @@ defineExpose({ refresh })
             :disabled="busy"
             :error="cardErrors.get(row.id)"
             :resolve-secret="copySecret(row.id)"
+            :save-name="(name) => saveName(row, name)"
+            @name-dirty="nameDirty(row.id, $event)"
             @select="select(row.id, $event)"
             @toggle="toggle(row, $event)"
             @action="action(row, $event)"
@@ -997,17 +1140,25 @@ defineExpose({ refresh })
     :title="fullTarget ? t('groupDetail.full.' + fullTarget) : ''"
     :subject="group.name"
     :description="
-      t(
-        fullTarget === 'restore'
-          ? 'groupDetail.full.restoreDescription'
-          : 'groupDetail.full.description',
-      )
+      fullTarget === 'import'
+        ? t('groupDetail.fileImport.description', { count: n(importFile?.length ?? 0) })
+        : t(
+            fullTarget === 'restore'
+              ? 'groupDetail.full.restoreDescription'
+              : 'groupDetail.full.description',
+          )
     "
-    :confirm-label="fullTarget ? t('groupDetail.full.' + fullTarget) : ''"
+    :confirm-label="
+      fullTarget === 'import' && importOperation.operation.value
+        ? t('groupCreate.checkResult')
+        : fullTarget
+          ? t('groupDetail.full.' + fullTarget)
+          : ''
+    "
     :pending="mutating !== undefined"
-    :disabled="bulkBusy"
+    :disabled="bulkBusy || (fullTarget === 'import' && importRetryDisabled)"
     :error="error"
-    @cancel="fullTarget = undefined"
+    @cancel="closeFullAction"
     @confirm="applyFullAction"
   />
   <AppConfirmDialog
@@ -1027,7 +1178,7 @@ defineExpose({ refresh })
     :open="Boolean(resetTarget)"
     :icon="RotateCcw"
     :title="t('credentialCards.useReset')"
-    :subject="resetTarget?.account || resetTarget?.mask"
+    :subject="resetTarget?.label"
     :description="t('credentialCards.confirmReset')"
     :confirm-label="t('credentialCards.useReset')"
     :pending="mutating !== undefined"
@@ -1054,8 +1205,9 @@ defineExpose({ refresh })
     @changed="changed"
   />
   <AppDraftGuard
-    :dirty="false"
+    :dirty="nameDrafts.size > 0"
     :pending="mutating !== undefined || accountBatchPending || syncing.size > 0"
+    :query-scope="filterKeys"
   />
 </template>
 

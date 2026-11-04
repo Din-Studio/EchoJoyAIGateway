@@ -5,12 +5,66 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"gpt-load/internal/channel"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/protocol"
 )
+
+func TestConvertedResponsesNormalizesAnthropicToolSchema(t *testing.T) {
+	t.Parallel()
+
+	wire := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" {
+			t.Errorf("upstream request = %s %s", r.Method, r.URL.Path)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		wire <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, anthropicResponsesConvertedFixture)
+	}))
+	defer server.Close()
+	runtime := newProtocolTestRuntime(t, testRuntimeOptions{allowPrivateNetwork: true, anthropicBaseURL: server.URL})
+	spec := convertedSpec(channel.Anthropic, protocol.OpenAIResponses, execution.OperationResponsesCreate, "/v1/responses", []byte(`{
+		"model":"client-model","input":"hello","max_output_tokens":32,
+		"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","anyOf":[
+			{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]},
+			{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}
+		]}}]
+	}`))
+	result := runtime.Execute(t.Context(), spec)
+	if err := result.Validate(); err != nil || result.Error != nil || result.UpstreamProtocol != protocol.Anthropic {
+		t.Fatalf("result = %+v; validation = %v", result, err)
+	}
+	var request struct {
+		Tools []struct {
+			Name   string `json:"name"`
+			Schema struct {
+				Type       string                     `json:"type"`
+				AnyOf      json.RawMessage            `json:"anyOf"`
+				Properties map[string]json.RawMessage `json:"properties"`
+			} `json:"input_schema"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(<-wire, &request); err != nil {
+		t.Fatal(err)
+	}
+	if len(request.Tools) != 1 || request.Tools[0].Name != "lookup" {
+		t.Fatalf("upstream tools = %+v", request.Tools)
+	}
+	schema := request.Tools[0].Schema
+	if schema.Type != "object" || len(schema.AnyOf) != 0 || len(schema.Properties["query"]) == 0 || len(schema.Properties["url"]) == 0 {
+		t.Fatalf("Anthropic tool schema was not normalized: %+v", schema)
+	}
+}
 
 func TestConvertedOpenRouterPreservesCacheMarkers(t *testing.T) {
 	t.Parallel()
@@ -148,5 +202,41 @@ func TestConvertedAnthropicPreservesNamespaceTools(t *testing.T) {
 	if len(response.Output) != 1 || response.Output[0].Type != "function_call" ||
 		response.Output[0].Name != "clock" || response.Output[0].Namespace != "demo" {
 		t.Fatalf("namespace tool response not restored: %s", result.Body)
+	}
+}
+
+// 流事件嵌套的 response 与顶层一样不能带出 SDK 元数据或上游成本。
+func TestConvertedResponsesStreamStripsNestedSDKMetadata(t *testing.T) {
+	const stream = "data: {\"id\":\"c\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"pong\"}}]}\n\n" +
+		"data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: {\"id\":\"c\",\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5,\"cost\":0.01}}\n\n" +
+		"data: [DONE]\n\n"
+	for _, id := range []channel.ID{channel.OpenAICompatible, channel.Groq} {
+		t.Run(string(id), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, stream)
+			}))
+			defer server.Close()
+			runtime := newRuntimeForTest(t, testRuntimeOptions{allowPrivateNetwork: true})
+			spec := openAIChatAttempt(t, id, server.URL+"/v1", "test-key")
+			spec.UpstreamModel = "m"
+			spec.ClientProtocol = protocol.OpenAIResponses
+			spec.Operation = execution.OperationResponsesCreate
+			spec.Path = "/v1/responses"
+			spec.Body = []byte(`{"model":"client-model","input":"ping","stream":true}`)
+			var output strings.Builder
+			result := runtime.ExecuteStream(t.Context(), freezeTestAttempt(spec), func(event execution.StreamEvent) error {
+				output.Write(event.Data)
+				return nil
+			})
+			body := output.String()
+			if result.Error != nil || !strings.Contains(body, "response.completed") {
+				t.Fatalf("stream result = %+v, body=%s", result, body)
+			}
+			if strings.Contains(body, `"extra_fields"`) || strings.Contains(body, `"cost"`) {
+				t.Fatalf("SDK metadata leaked: %s", body)
+			}
+		})
 	}
 }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { dateFormatter } from '@modern/components/ui/intl-formatters'
-import { Globe, KeyRound, UserRound } from '@lucide/vue'
+import { Globe, KeyRound, UserRound, Zap } from '@lucide/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { LogEntry, LogQuery } from '@modern/api/logs'
@@ -15,7 +15,7 @@ import {
   AppTooltip,
 } from '@modern/components/ui'
 import type { LogColumnId } from './log-columns'
-import { logOutputRate, logTime } from './log-display'
+import { logNumber, logOutputRate, logTime } from './log-display'
 import LogValue from './LogValue.vue'
 import LogModelWarning from './LogModelWarning.vue'
 import LogFilterLink from './LogFilterLink.vue'
@@ -103,7 +103,43 @@ const date = computed(() =>
     day: '2-digit',
   }).format(props.row.completed_at_ms),
 )
+const pricingMode = computed(() =>
+  props.row.pricing_mode === 'standard' ? '' : (props.row.pricing_mode ?? ''),
+)
+const pricingLabel = computed(() =>
+  [
+    pricingMode.value,
+    props.row.context_threshold_tokens === null
+      ? ''
+      : `≥${logNumber(props.row.context_threshold_tokens, locale.value, true)}`,
+  ]
+    .filter(Boolean)
+    .join(' · '),
+)
+const pricingHint = computed(() =>
+  [
+    pricingMode.value ? t('logs.pricingModeHint', { mode: pricingMode.value }) : '',
+    props.row.context_threshold_tokens === null
+      ? ''
+      : t('logs.contextTierHint', {
+          threshold: logNumber(props.row.context_threshold_tokens, locale.value),
+        }),
+  ]
+    .filter(Boolean)
+    .join(' · '),
+)
 const autoDecisionPreset = computed(() => props.row.auto_decision?.selection.preset_name ?? '')
+const auditTooltip = computed(() => {
+  const audit = props.row.request_audit
+  if (!audit) return ''
+  const details = [
+    audit.findings.map((finding) => finding.name).join(' / '),
+    audit.reason ? t('requestAudit.reasons.' + audit.reason) : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
+  return details ? `${t('requestAudit.title')} · ${details}` : ''
+})
 const autoDecisionTooltip = computed(() => {
   const decision = props.row.auto_decision
   if (!decision) return ''
@@ -138,6 +174,8 @@ function identityIcon(field: LogColumnId) {
 function fieldFilter(field: LogColumnId): LogQuery | undefined {
   const row = props.row
   switch (field) {
+    case 'client_ip':
+      return row.client_ip ? { client_ip: row.client_ip } : undefined
     case 'group':
       return row.group_id ? { group_id: String(row.group_id) } : undefined
     case 'channel':
@@ -200,6 +238,8 @@ function fieldFilterValue(field: LogColumnId): string {
       return `HTTP ${row.status_code}`
     case 'stream':
       return t(row.stream ? 'logs.yes' : 'logs.no')
+    case 'client_ip':
+      return row.client_ip || '—'
     case 'error_code':
       return row.error_code
     case 'operation':
@@ -212,7 +252,7 @@ function fieldFilterValue(field: LogColumnId): string {
 
 <template>
   <div v-if="fields[0] === 'completed_at_ms'" class="modern-log-cell-stack">
-    <AppButton variant="text" class="modern-log-time" @click="$emit('open')">
+    <AppButton variant="text" selectable class="modern-log-time" @click="$emit('open')">
       <AppOverflowText :text="clock" :full-text="logTime(row.completed_at_ms, locale, true)" />
     </AppButton>
     <div class="modern-log-cell-value is-secondary">
@@ -258,17 +298,16 @@ function fieldFilterValue(field: LogColumnId): string {
             :aria-label="line.label ? line.label + ' ' + line.value : undefined"
           />
           <AppTooltip
-            v-if="index === 0 && row.request_audit && row.request_audit.status !== 'passed'"
-            :label="
-              t('requestAudit.title') +
-              ' · ' +
-              row.request_audit.findings.map((finding) => finding.name).join(' / ')
-            "
+            v-if="index === 0 && row.request_audit && row.request_audit.outcome !== 'allowed'"
+            :label="auditTooltip"
             ><small
               class="modern-log-auto-decision"
-              :class="row.request_audit.status === 'warned' ? 'is-warning' : 'is-danger'"
-              tabindex="0"
-              >{{ t('requestAudit.statuses.' + row.request_audit.status) }}</small
+              :class="{
+                'is-danger': row.request_audit.outcome === 'blocked',
+                'is-warning': ['warned', 'failed'].includes(row.request_audit.outcome),
+              }"
+              :tabindex="auditTooltip ? 0 : undefined"
+              >{{ t('requestAudit.statuses.' + row.request_audit.outcome) }}</small
             ></AppTooltip
           >
           <AppTooltip v-if="index === 0 && autoDecisionPreset" :label="autoDecisionTooltip">
@@ -352,14 +391,31 @@ function fieldFilterValue(field: LogColumnId): string {
         <LogValue :row="row" column="first_response_ms" table />
       </template>
     </div>
-    <AppTooltip :label="t('logs.outputRate')">
-      <div
-        class="modern-log-cell-value modern-log-speed"
+    <div
+      class="modern-log-cell-value modern-log-speed"
+      :aria-label="t('logs.outputRate') + ': ' + logOutputRate(row, locale)"
+    >
+      {{ logOutputRate(row, locale) }}
+    </div>
+  </div>
+  <div v-else-if="fields[0] === 'estimated_cost_nano'" class="modern-log-cell-stack">
+    <div class="modern-log-cell-value">
+      <LogValue :row="row" column="estimated_cost_nano" table />
+    </div>
+    <AppTooltip v-if="pricingLabel" :label="pricingHint">
+      <span
+        class="modern-log-pricing"
+        :class="{ 'is-mode': pricingMode }"
         tabindex="0"
-        :aria-label="t('logs.outputRate') + ': ' + logOutputRate(row, locale)"
+        :aria-label="pricingHint"
       >
-        <AppOverflowText :text="logOutputRate(row, locale)" />
-      </div>
+        <AppIcon
+          v-if="pricingMode === 'fast' || pricingMode === 'ultrafast'"
+          :icon="Zap"
+          size="inherit"
+        />
+        <span>{{ pricingLabel }}</span>
+      </span>
     </AppTooltip>
   </div>
   <div v-else class="modern-log-cell-stack" :class="{ 'is-paired': paired }">
@@ -426,6 +482,32 @@ function fieldFilterValue(field: LogColumnId): string {
   gap: var(--modern-space-0-5);
   align-content: center;
 }
+.modern-log-pricing {
+  display: flex;
+  align-items: center;
+  gap: var(--modern-space-1);
+  min-width: 0;
+  width: fit-content;
+  max-width: 100%;
+  color: var(--modern-info);
+  font-size: var(--modern-font-size-caption);
+  font-weight: var(--modern-weight-medium);
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+}
+.modern-log-pricing.is-mode {
+  color: var(--modern-accent);
+}
+.modern-log-pricing > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.modern-log-pricing:focus-visible {
+  outline: var(--modern-focus-width) solid currentColor;
+  outline-offset: var(--modern-focus-offset);
+}
 .modern-log-routing-lines {
   width: 100%;
   max-width: 100%;
@@ -434,7 +516,6 @@ function fieldFilterValue(field: LogColumnId): string {
   min-width: 0;
   max-width: 100%;
 }
-.modern-log-routing-lines :deep(.modern-log-filter-link),
 .modern-log-routing-lines :deep(.modern-log-channel) {
   width: 100%;
   max-width: 100%;

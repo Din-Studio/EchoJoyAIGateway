@@ -1,12 +1,15 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +38,7 @@ import (
 	subscriptionproviders "gpt-load/internal/subscription/providers"
 	subscriptionruntime "gpt-load/internal/subscription/runtime"
 	"gpt-load/internal/telemetry"
+	"gpt-load/internal/usage"
 )
 
 const (
@@ -67,12 +71,15 @@ type AccessKeyRPMLimiter interface {
 	Allow(ctx context.Context, accessKeyID uint, limit int64) (ratelimit.LimitDecision, error)
 }
 
-// CredentialConcurrencyLimiter caps the upstream requests in flight per
-// credential across every instance. A non-positive limit is unlimited. When
-// acquired, release must be called once the upstream exchange has finished;
-// an error means the shared state is unavailable.
-type CredentialConcurrencyLimiter interface {
+// ConcurrencyLimiter caps the work in flight across every instance: upstream
+// requests per credential, upstream calls per group, and logical requests per
+// access key and cluster-wide. A non-positive limit is unlimited. When
+// acquired, release must be called once the work has finished; an error means
+// the shared state is unavailable.
+type ConcurrencyLimiter interface {
 	Acquire(ctx context.Context, credentialID uint, limit int) (release func(), acquired bool, err error)
+	AcquireRequest(ctx context.Context, accessKeyID uint, globalLimit, keyLimit int64) (release func(), acquired bool, err error)
+	AcquireGroup(ctx context.Context, groupID uint, limit int64) (release func(), acquired bool, err error)
 }
 
 // ResponseBindingStore owns Responses ownership, shared through Redis.
@@ -143,7 +150,7 @@ type Handler struct {
 	lifecycle           *httplifecycle.Coordinator
 	affinity            AffinityStore
 	responseBindings    ResponseBindingStore
-	concurrency         CredentialConcurrencyLimiter
+	concurrency         ConcurrencyLimiter
 	websocketLimits     websocketLimits
 	websocketBudget     websocketBudget
 }
@@ -177,12 +184,12 @@ func (handler *Handler) freezeAttemptPricing(
 // SharedState groups the Redis-backed request state every gateway instance
 // shares. Every field is required.
 type SharedState struct {
-	AccessQuota           AccessQuotaGate
-	Health                state.SharedCredentialHealthStore
-	ResponseBindings      ResponseBindingStore
-	Affinity              AffinityStore
-	CredentialConcurrency CredentialConcurrencyLimiter
-	GuardrailEvidence     GuardrailEvidenceStore
+	AccessQuota       AccessQuotaGate
+	Health            state.SharedCredentialHealthStore
+	ResponseBindings  ResponseBindingStore
+	Affinity          AffinityStore
+	Concurrency       ConcurrencyLimiter
+	GuardrailEvidence GuardrailEvidenceStore
 }
 
 func NewHandler(
@@ -215,7 +222,7 @@ func NewHandler(
 		sharedHealth:     shared.Health,
 		affinity:         shared.Affinity,
 		responseBindings: shared.ResponseBindings,
-		concurrency:      shared.CredentialConcurrency,
+		concurrency:      shared.Concurrency,
 		guardrails:       shared.GuardrailEvidence,
 		websocketLimits:  defaultWebsocketLimits(),
 		newRequestID:     newRequestID,
@@ -481,6 +488,53 @@ func (handler *Handler) applySharedDecisionEffect(
 	return true
 }
 
+// completeResponse records a buffered upstream response. A success that should
+// have carried usage but did not is served unbilled, so it logs the body shape
+// (top-level keys and the usage value's JSON type, never content) for diagnosis.
+func (handler *Handler) completeResponse(
+	recorder *requestRecorder,
+	result UpstreamResult,
+	decision health.Decision,
+	upstreamModel string,
+	attemptIndex int,
+) {
+	recorder.completeResponse(result, decision, upstreamModel, attemptIndex)
+	if result.StatusCode < 200 || result.StatusCode >= 300 || result.Usage.State != usage.StateMissing {
+		return
+	}
+	keys, usageType := responseBodyShape(result.Body)
+	utils.LogPlaneBestEffort(handler.logger, logrus.WarnLevel, utils.LogPlaneData,
+		logrus.Fields{"event": "usage.missing", "request_id": recorder.requestID, "up_model": upstreamModel,
+			"status": result.StatusCode, "body_bytes": len(result.Body), "body_keys": keys, "usage_type": usageType},
+		"Successful upstream response carried no usage; the request was not billed")
+}
+
+// responseBodyShape reports a JSON object's sorted top-level keys and the JSON
+// type of its usage member ("absent" when missing, "non_json" for other bodies).
+func responseBodyShape(body []byte) (string, string) {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(body, &object) != nil {
+		return "", "non_json"
+	}
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	usageType := "absent"
+	if raw, ok := object["usage"]; ok {
+		switch trimmed := bytes.TrimSpace(raw); {
+		case len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")):
+			usageType = "null"
+		case trimmed[0] == '{':
+			usageType = "object"
+		default:
+			usageType = "other"
+		}
+	}
+	return strings.Join(keys, ","), usageType
+}
+
 func (handler *Handler) logSharedHealthUnavailable(credentialID uint, op string, err error) {
 	utils.LogPlaneBestEffort(handler.logger, logrus.WarnLevel, utils.LogPlaneData,
 		logrus.Fields{"event": "credential_health.redis_unavailable", "credential_id": credentialID,
@@ -547,6 +601,16 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 		return
 	}
 	if requestContext.selectedRoute.Kind == endpointUsage {
+		release, failure, err := handler.acquireRequestConcurrency(ginContext.Request.Context(), requestContext.accessKey.ID)
+		if err != nil {
+			handler.completeLimitStateFailure(ginContext, nil, "concurrency.acquire_request", err)
+			return
+		}
+		if failure != nil {
+			_ = handler.writeReason(ginContext, *failure)
+			return
+		}
+		defer release()
 		handler.handleUsage(ginContext, requestContext)
 		return
 	}
@@ -580,6 +644,10 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 	if quotaAdmission != nil && len(accessKey.CostLimitRules) > 0 {
 		quotaAdmission.snapshot = snapshot
 	}
+	// The request slot outlives the recorder: it is released after the log is
+	// emitted, so the whole logical request is counted.
+	releaseRequest := func() {}
+	defer func() { releaseRequest() }()
 	var recorder *requestRecorder
 	if selectedRoute.Kind == endpointForward {
 		recorder = newRequestRecorder(
@@ -590,6 +658,7 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 			selectedRoute.Protocol,
 			handler.requestNow,
 		)
+		recorder.clientIP = requestPeerIP(ginContext.Request)
 		recorder.accessKeyMultiplier = accessKey.PriceMultiplier
 		recorder.currency = snapshot.Settings.Currency
 		defer func() {
@@ -607,6 +676,19 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 			}
 			recorder.emit()
 		}()
+	}
+
+	if !concurrencyControlRequest(ginContext.Request, selectedRoute) {
+		release, failure, err := handler.acquireRequestConcurrency(ginContext.Request.Context(), accessKey.ID)
+		if err != nil {
+			handler.completeLimitStateFailure(ginContext, recorder, "concurrency.acquire_request", err)
+			return
+		}
+		if failure != nil {
+			handler.completeReason(ginContext, recorder, *failure)
+			return
+		}
+		releaseRequest = release
 	}
 
 	if quotaAdmission != nil {
@@ -975,6 +1057,16 @@ func (handler *Handler) executeAttempts(
 ) {
 	stream := originalMetadata.Stream
 	operation := originalMetadata.Operation
+	var redactionCipher encryption.RedactionCipher
+	if !snapshot.RequestRedaction.Empty() || redactionBusinessProtocol(selectedDialect.Protocol()) {
+		var err error
+		redactionCipher, err = handler.encryption.NewRedactionCipher(recorder.accessKeyID)
+		if err != nil {
+			handler.completeReason(ginContext, recorder, reasonRedactionFailed)
+			return
+		}
+		defer handler.logUnrestoredRedactionTokens(redactionCipher, recorder.requestID)
+	}
 	type deferredAttempt struct {
 		result        UpstreamResult
 		decision      health.Decision
@@ -985,6 +1077,7 @@ func (handler *Handler) executeAttempts(
 	var lastTransport *deferredAttempt
 	var lastConversion *deferredAttempt
 	var lastProviderError *deferredAttempt
+	var lastEmptyResponse *deferredAttempt
 	lastAttemptIndex := -1
 	attemptSequence := 0
 	forwardAttempts := 0
@@ -999,8 +1092,12 @@ func (handler *Handler) executeAttempts(
 	// return between acquisition and dispatch.
 	attemptRelease := func() {}
 	defer func() { attemptRelease() }()
+	// groupRelease frees the current attempt's group concurrency slot.
+	groupRelease := func() {}
+	defer func() { groupRelease() }()
 	concurrencySaturated := false
 	type preparedRequest struct {
+		configuredParameters  []string
 		request               *dialect.ParsedRequest
 		observations          dialect.RequestMetadata
 		observationsAvailable bool
@@ -1022,7 +1119,7 @@ func (handler *Handler) executeAttempts(
 		}
 		defer func() {
 			if prepared.err == nil {
-				prepared.request, prepared.err = redactOutboundRequest(snapshot.RequestRedaction, selectedDialect.Protocol(), prepared.request)
+				prepared.request, prepared.err = redactOutboundRequest(snapshot.RequestRedaction, selectedDialect.Protocol(), prepared.request, redactionCipher)
 			}
 			cachedPrepared = &prepared
 		}()
@@ -1045,6 +1142,7 @@ func (handler *Handler) executeAttempts(
 			cachedPrepared = &prepared
 			return prepared
 		}
+		prepared.configuredParameters = selection.Group.ParameterOverrides.ConfiguredFields(selectedDialect.Protocol(), originalMetadata.Operation, routeModel)
 		if int64(len(body)) > maxRequestBodyBytes {
 			prepared.err = errRequestTooLarge
 			cachedPrepared = &prepared
@@ -1200,6 +1298,7 @@ func (handler *Handler) executeAttempts(
 		if !active {
 			continue
 		}
+		recorder.startTiming()
 		prepared := prepareRequest(selection)
 		if prepared.err != nil {
 			if errors.Is(prepared.err, requestredact.ErrContent) {
@@ -1289,11 +1388,32 @@ func (handler *Handler) executeAttempts(
 			continue
 		}
 		// 护栏在占用业务凭据并发槽之前审查最终内容；同一内容的结果在本请求内复用。
-		if failure := handler.checkRequestAudit(ginContext.Request.Context(), snapshot, snapshot.AccessKeysByID[recorder.accessKeyID], prepared.request.Body, recorder, func() *reason {
-			return handler.admitAutoQuota(ginContext.Request.Context(), snapshot, quotaAdmission)
-		}); failure != nil {
-			handler.completeReason(ginContext, recorder, *failure)
+		// 取消已有响应不创建内容，不能启动新的审查调用或被审查组满额阻止。
+		if operation != execution.OperationResponsesCancel {
+			if failure := handler.checkRequestAudit(ginContext.Request.Context(), snapshot, snapshot.AccessKeysByID[recorder.accessKeyID], prepared.request.Body, recorder, func() *reason {
+				return handler.admitAutoQuota(ginContext.Request.Context(), snapshot, quotaAdmission)
+			}); failure != nil {
+				handler.completeReason(ginContext, recorder, *failure)
+				return
+			}
+		}
+		if ginContext.Request.Context().Err() != nil {
+			recorder.completeCanceled(ginContext.Request.Context(), 0, lastAttemptIndex)
 			return
+		}
+		// A full group rejects the request outright: no other group or
+		// credential is tried to get around the limit.
+		if operation != execution.OperationResponsesCancel {
+			release, failure, err := handler.acquireGroupConcurrency(ginContext.Request.Context(), selection.GroupID)
+			if err != nil {
+				handler.completeLimitStateFailure(ginContext, recorder, "concurrency.acquire_group", err)
+				return
+			}
+			if failure != nil {
+				handler.completeReason(ginContext, recorder, *failure)
+				return
+			}
+			groupRelease = release
 		}
 		// A full credential is skipped without spending a forward attempt; the
 		// iterator never returns it again for this request.
@@ -1305,6 +1425,7 @@ func (handler *Handler) executeAttempts(
 			return
 		}
 		if !acquired {
+			groupRelease()
 			concurrencySaturated = true
 			continue
 		}
@@ -1343,9 +1464,15 @@ func (handler *Handler) executeAttempts(
 		if recorder != nil && recorder.requestID != "" {
 			executionRequestID = recorder.requestID
 		}
+		restoreCipher := redactionCipher
+		if !redactionMayRestore(prepared.request, snapshot.RequestRedaction.Reversible()) {
+			restoreCipher = nil
+		}
 		input := ForwardInput{
-			Dialect: selectedDialect, ObserveUsage: attemptObservations.ObserveUsage,
-			Group: selection.Group, APIKey: normalizedCredential.apiKey,
+			ConfiguredParameters: prepared.configuredParameters,
+			Dialect:              selectedDialect, ObserveUsage: attemptObservations.ObserveUsage,
+			RedactionCipher: restoreCipher,
+			Group:           selection.Group, APIKey: normalizedCredential.apiKey,
 			CredentialSecrets: normalizedCredential.secrets, Request: prepared.request,
 			ExternalModel:            externalModel,
 			UpstreamModelID:          optionalModelValue(selection.UpstreamModelID),
@@ -1370,12 +1497,19 @@ func (handler *Handler) executeAttempts(
 			ProxyFingerprint:       proxyFingerprint,
 			ForceCredentialRefresh: forceCredentialRefresh,
 			ContinuityKey:          requestAffinity.continuityKey,
-			OnResponse:             handler.responseBindingObserver(ginContext.Request.Context(), recorder.accessKeyID, selection, ref, prepared.request, recorder.autoSelection()),
+			// 豁免依据实际发往上游的请求：分组参数覆盖可能写入 conversation 或 generate。
+			EmptyResponseRetry: stream && emptyResponseRetryEnabled(
+				selection.Group, originalMetadata, prepared.request.Body,
+			),
+			OnResponse: handler.responseBindingObserver(ginContext.Request.Context(), recorder.accessKeyID, selection, ref, prepared.request, recorder.autoSelection()),
 			OnFirstResponse: func() {
 				recorder.recordFirstResponse()
 			},
 		}
 		if recorder != nil {
+			if recorder.autoDecision != nil {
+				input.OnFirstOutput = recorder.recordFirstOutput
+			}
 			recorder.freezeNextAttemptPricing(
 				handler.freezeAttemptPricing(
 					selection,
@@ -1389,10 +1523,15 @@ func (handler *Handler) executeAttempts(
 		var result UpstreamResult
 		if stream {
 			result = handler.forwarder.ForwardStream(ginContext.Request.Context(), input, ginContext.Writer)
+			if result.Committed {
+				// Redis lease release is bookkeeping, not response delivery time.
+				recorder.finishTiming()
+			}
 		} else {
 			result = handler.forwarder.Forward(ginContext.Request.Context(), input)
 		}
 		attemptRelease()
+		groupRelease()
 		result = normalizeUpstreamResultContract(result)
 		if !stream && result.HasResponse() && !result.ProviderErrorBeforeCommit &&
 			result.DispatchState != execution.DispatchLocal &&
@@ -1490,6 +1629,9 @@ func (handler *Handler) executeAttempts(
 			!authRefreshReplayUsed && forwardAttempts < forwardAttemptLimit {
 			refreshRetry = &credentialRefreshRetry{selection: selection, ref: ref}
 		}
+		if decision.Retry != health.RetryNone {
+			iterator.AdvancePriority(selection)
+		}
 		if decision.Effect == health.EffectSkipGroup {
 			iterator.SkipGroup(selection.GroupID)
 		}
@@ -1502,6 +1644,21 @@ func (handler *Handler) executeAttempts(
 			if err := handler.writeReason(ginContext, reasonUpstreamProtocol); err != nil {
 				handler.completeWriteTerminal(ginContext, recorder, reasonUpstreamProtocol.Status)
 			}
+			return
+		}
+		if result.EmptyResponseBeforeCommit {
+			if decision.Retry != health.RetryNone && forwardAttempts < forwardAttemptLimit {
+				lastEmptyResponse = &deferredAttempt{
+					result:        result,
+					decision:      decision,
+					upstreamModel: optionalModelValue(selection.UpstreamModelID),
+					attemptIndex:  recordedAttempt,
+				}
+				recorder.retryIfAnotherForward(recordedAttempt)
+				continue
+			}
+			handler.completeEmptyResponse(ginContext, recorder, result, decision,
+				optionalModelValue(selection.UpstreamModelID), recordedAttempt)
 			return
 		}
 		if result.ProviderErrorBeforeCommit {
@@ -1537,8 +1694,9 @@ func (handler *Handler) executeAttempts(
 				recorder.retryIfAnotherForward(recordedAttempt)
 				continue
 			}
-			recorder.completeResponse(result, decision, optionalModelValue(selection.UpstreamModelID), recordedAttempt)
-			if err := handler.writeUpstreamResponse(ginContext, result); err != nil {
+			writeErr := handler.writeUpstreamResponse(ginContext, result)
+			handler.completeResponse(recorder, result, decision, optionalModelValue(selection.UpstreamModelID), recordedAttempt)
+			if writeErr != nil {
 				handler.completeWriteTerminal(ginContext, recorder, result.StatusCode)
 				return
 			}
@@ -1567,12 +1725,27 @@ func (handler *Handler) executeAttempts(
 		}
 		value := transportReason(result)
 		recorder.completeTransport(value, optionalModelValue(selection.UpstreamModelID), recordedAttempt)
+		if value.Code == reasonResponseRedactionFailed.Code {
+			// 下游还原失败不代表上游未计费；沿用已冻结的该次尝试报价。
+			recorder.bindUsage(recordedAttempt, result.Usage, true)
+		}
 		if err := handler.writeReason(ginContext, value); err != nil {
 			handler.completeWriteTerminal(ginContext, recorder, value.Status)
 		}
 		return
 	}
 
+	if lastEmptyResponse != nil {
+		handler.completeEmptyResponse(
+			ginContext,
+			recorder,
+			lastEmptyResponse.result,
+			lastEmptyResponse.decision,
+			lastEmptyResponse.upstreamModel,
+			lastEmptyResponse.attemptIndex,
+		)
+		return
+	}
 	if lastProviderError != nil {
 		recorder.completeProviderError(
 			lastProviderError.result,
@@ -1589,13 +1762,15 @@ func (handler *Handler) executeAttempts(
 		return
 	}
 	if lastResponse != nil {
-		recorder.completeResponse(
+		writeErr := handler.writeUpstreamResponse(ginContext, lastResponse.result)
+		handler.completeResponse(
+			recorder,
 			lastResponse.result,
 			lastResponse.decision,
 			lastResponse.upstreamModel,
 			lastResponse.attemptIndex,
 		)
-		if err := handler.writeUpstreamResponse(ginContext, lastResponse.result); err != nil {
+		if writeErr != nil {
 			handler.completeWriteTerminal(
 				ginContext,
 				recorder,
@@ -1669,6 +1844,8 @@ func transportReason(result UpstreamResult) reason {
 		return reasonClusterStateUnavailable
 	case errors.Is(result.Err, ErrUpstreamProtocol):
 		return reasonUpstreamProtocol
+	case errors.Is(result.Err, errRedactionStream), errors.Is(result.Err, errUnaryRestore):
+		return reasonResponseRedactionFailed
 	case isTimeoutError(result.Err):
 		return reasonUpstreamTimeout
 	default:
@@ -1728,4 +1905,26 @@ func (handler *Handler) writeBufferedResponse(
 		return fmt.Errorf("flush downstream response: %w", err)
 	}
 	return nil
+}
+
+// completeEmptyResponse 把一次判定为空回的尝试原样交付给客户端。重试已经用尽
+// 或被判定为不可重试时，客户端仍应拿到上游真实返回的那条空流，而不是网关错误。
+func (handler *Handler) completeEmptyResponse(
+	ginContext *gin.Context,
+	recorder *requestRecorder,
+	result UpstreamResult,
+	decision health.Decision,
+	upstreamModel string,
+	attemptIndex int,
+) {
+	writeErr := handler.writeBufferedResponse(
+		ginContext,
+		result.StatusCode,
+		result.Header,
+		result.Body,
+	)
+	handler.completeResponse(recorder, result, decision, upstreamModel, attemptIndex)
+	if writeErr != nil {
+		handler.completeWriteTerminal(ginContext, recorder, result.StatusCode)
+	}
 }

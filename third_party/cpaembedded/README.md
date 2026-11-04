@@ -41,20 +41,19 @@ the existing HTTP executor remains separate.
 ## Codex request identity
 
 Codex HTTP inference (including streaming and images) and WebSocket handshakes
-use the pinned CPA default User-Agent (still `codex-tui/0.154.0` in CPA v7.3.15).
-`Version` is fixed to `CodexClientVersion`, currently `0.155.0`, matching CPA's
-model discovery client version. Downstream and GPT-Load group
+use a pinned `codex-tui/0.159.2` User-Agent with CPA's existing platform signature.
+`Version` is fixed to `CodexClientVersion`, currently `0.159.2`. Downstream and GPT-Load group
 header rules cannot override, clear, or remove these two identity headers.
 This restriction applies only to Codex; other providers retain their header rules.
 HTTP continues to honor explicit `Originator` rules, including empty values and
-removal. WebSocket retains the SDK's existing originator handling.
+removal. WebSocket retains the fixed `codex-tui` originator.
 
 Model and account observation requests use the same version for their User-Agent,
 Version header, and models `client_version` query parameter. The embedded model
-JSON is copied from the pinned CPA release's
-`internal/registry/models/codex_client_models.json`, with its SHA-256 checked by
-tests. CPA's execution UA constant is private and currently differs from its
-model discovery version; retain the SDK's UA rather than rewriting it locally.
+JSON is copied from OpenAI Codex `rust-v0.159.2`,
+`codex-rs/models-manager/models.json`, with its SHA-256 checked by tests.
+CPA `v8.0.8`, the Codex identity, and this model snapshot form one tested version set.
+The bridge pins execution identity because CPA's built-in UA still uses an older version.
 HTTP, image, WebSocket, and observation tests check these outgoing values.
 
 Both `Session-Id` and `Session_id` are accepted, with `Session-Id` taking precedence
@@ -121,7 +120,7 @@ capability to GPT-Load callers. The existing `NewExecutor` remains HTTP-only.
   use updated timeout settings. `Done` closes when the Session is invalidated.
   Request and forwarded-event limits default to 10 MiB each. All three are configurable when creating the Session.
   The facade buffers no conversation history or output queue. Event checks occur
-  **after SDK reading**: CPA v7.3.15 has no exposed raw-frame size limit and has
+  **after SDK reading**: CPA v8.0.8 has no exposed raw-frame size limit and has
   its own internal buffers. These checks do not bound all SDK memory. CPA also
   retains its upstream read-idle timeout; idle connection loss invalidates the
   Session and is not transparently recovered.
@@ -149,17 +148,34 @@ This makes two real model requests and checks that the second can recall a marke
 sent only in the first. `CPA_LIVE_CODEX_WS_PROXY_URL` defaults to `direct`;
 `CPA_LIVE_CODEX_WS_BASE_URL` optionally selects an authorized HTTPS API proxy root.
 
+## Grok request identity
+
+`grokClientVersion` is the single identity pin for execution, model discovery, and
+billing, currently `1.0.44` with CPA `v8.0.8`. Each path retains its own User-Agent
+format. CPA's version constant is not exported, and its default CLI identity only
+applies to the official chat-proxy endpoint; the bridge therefore keeps its
+explicit headers for custom upstreams too. Upgrading CPA does not replace this pin.
+When changing CPA or the Grok identity, review upstream defaults and header
+precedence, then verify the outgoing version and User-Agent for unary and streaming
+execution on official and custom upstreams, model discovery, and billing. A locally
+verified identity may differ from CPA's default. Record the tested pair after
+validation; Grok has no CLI-version-bound model template snapshot to update.
+
 ## Pinned upstream
 
-- Module: `github.com/router-for-me/CLIProxyAPI/v7`
-- Version: `v7.3.15`
+- Module: `github.com/router-for-me/CLIProxyAPI/v8`
+- Version: `v8.0.8`
 
-The bridge keeps Codex's fixed Version, observation identity, and model snapshot
-aligned with CPA's model discovery version, while preserving CPA's execution
-User-Agent as described above. CPA includes Antigravity reasoning tokens in unary
+The bridge keeps Codex's fixed Version, execution and observation identity, and
+model snapshot aligned at `0.159.2`. CPA includes Antigravity reasoning tokens in unary
 OpenAI Chat and OpenAI Responses output totals; the bridge only adds them for OpenAI
 Chat streaming, and retains Anthropic's unary cache-input normalization.
 Antigravity Responses web search is not enabled by this dependency update.
+
+CPA supplies the native Codex `X-Codex-Routing-Hint` to HTTP Responses
+requests and WebSocket handshakes, derived from the resolved model and final
+`service_tier`. Bridge tests verify that the hint matches the normalized request.
+The official Codex snapshot includes GPT-6.1 Sol's native client capabilities.
 
 The root module consumes this bridge through a local `replace`; releases still
 resolve CPA itself at the exact version recorded in both `go.mod` files and
@@ -172,7 +188,9 @@ bumps:
 
 1. Review upstream changes to Codex, Claude, Antigravity, and xAI OAuth, token, HTTP
    executor, translation, headers, identity, model discovery, and usage observation code.
-2. Update the CPA version in this module and run `go mod tidy` here.
+2. Update both modules' CPA pins and any changed major-version import paths, then
+   run `go mod tidy` in both modules. Update the Codex identity, matching official
+   model snapshot, snapshot digest, and version-alignment tests together.
 3. Fix only bridge compatibility issues; keep the execution-only boundary and
    do not adopt CPA Manager, business-request retry, Auto, fallback, or file persistence.
    Revalidate the explicit WS facade's lifecycle, continuation, proxy and cancellation
@@ -236,3 +254,37 @@ CPA_LIVE_GROK_CREDENTIAL_FILE=/absolute/path/to/grok.json \
 CPA_LIVE_GROK_MODEL=optional-grok-model-id \
   go test -count=1 -run '^TestLiveGrokContract$' ./embedded
 ```
+
+## Shared Codex capabilities
+
+`modelcatalog/codex.json` contains the union of Codex records from
+`router-for-me/models` commit `690c37fdbe62dc05f609f3a3e609d07ea4d16bf1`.
+Records are selected in pro, plus, team, free order, keeping the first record
+for each ID, as execution previously used the pro catalog. This describes
+capabilities, not account model availability. Actual model discovery still
+controls availability. The snapshot digest is checked in `modelcatalog` tests.
+
+The client model list and CPA registry consume the same update capability.
+The unchanged official client template snapshot also lives in `modelcatalog`.
+For matching models, CPA's reasoning-level validation uses the exact levels from
+that template, including `ultra`, instead of the narrower CPA snapshot list.
+Models absent from the official template keep their CPA level metadata. The raw
+CPA snapshot stays unchanged and retains its original provenance and digest.
+Unknown models and virtual fallback models do not advertise effort updates.
+Client templates remain pinned to Codex 0.159.2, with CPA v8.0.8; verify all
+version pins and both model snapshots together when updating this set.
+
+HTTP and WebSocket preserve supported `configuration_update` items. WebSocket
+logs inherit effort only from the immediately known completed parent response
+on the same model/session, and only when that history contains an effort update.
+Ordinary request-level changes remain per-request. A fresh history uses its own baseline; failed turns
+do not update the remembered effort. Upstream `response.reasoning.effort`
+reports the baseline and must not overwrite the selected update in logs.
+Clients must enable their effort-update feature (Codex CLI:
+`--enable reasoning_effort_override`); GPT-Load has no server experiment switch.
+
+Service-tier normalization uses CPA's native converters; bridge contract tests
+cover Responses HTTP, WebSocket and Chat. Credential import/OAuth/refresh retain
+explicit plan metadata or extract missing metadata from JWT claims. These are
+presentation hints only. Live account observations take precedence; missing
+claims never imply a free plan or successful quota observation.

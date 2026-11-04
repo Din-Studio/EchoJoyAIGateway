@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	internalexecutor "github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor"
+	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	internalexecutor "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor"
 	"github.com/tidwall/gjson"
 )
 
@@ -23,6 +23,10 @@ func TestGrokExecutorConvertsFourProtocolsUnaryAndStream(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" || r.Header.Get("Authorization") != "Bearer access-secret" {
 			t.Fatalf("request = %s %s, auth %q", r.Method, r.URL.Path, r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("x-grok-client-version") != grokClientVersion ||
+			r.Header.Get("User-Agent") != "xai-grok-workspace/"+grokClientVersion {
+			t.Fatalf("execution identity = %q / %q", r.Header.Get("x-grok-client-version"), r.Header.Get("User-Agent"))
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("event: response.completed\n"))

@@ -52,10 +52,9 @@ func TestUsageOpenAINonStreamOptionalFields(t *testing.T) {
 			want: usage.Tokens{UncachedInput: 100, Output: 30},
 		},
 		{
-			name:        "positive cache write uses unknown bucket",
-			body:        `{"usage":{"prompt_tokens":100,"completion_tokens":30,"total_tokens":130,"prompt_tokens_details":{"cached_tokens":20,"cache_write_tokens":5}}}`,
-			want:        usage.Tokens{UncachedInput: 75, CacheRead: 20, CacheWriteUnknown: 5, Output: 30},
-			diagnostics: []usage.DiagnosticCode{usage.DiagnosticUnsupportedBillableDetail},
+			name: "positive cache write uses base cache-write bucket",
+			body: `{"usage":{"prompt_tokens":100,"completion_tokens":30,"total_tokens":130,"prompt_tokens_details":{"cached_tokens":20,"cache_write_tokens":5}}}`,
+			want: usage.Tokens{UncachedInput: 75, CacheRead: 20, CacheWrite5M: 5, Output: 30},
 		},
 		{
 			name:        "positive input and output audio are unsupported billable details",
@@ -71,9 +70,8 @@ func TestUsageOpenAINonStreamOptionalFields(t *testing.T) {
 		{
 			name: "cache read and write exceeding prompt are diagnosed",
 			body: `{"usage":{"prompt_tokens":100,"completion_tokens":30,"total_tokens":130,"prompt_tokens_details":{"cached_tokens":80,"cache_write_tokens":30}}}`,
-			want: usage.Tokens{CacheRead: 80, CacheWriteUnknown: 30, Output: 30},
+			want: usage.Tokens{CacheRead: 80, CacheWrite5M: 30, Output: 30},
 			diagnostics: []usage.DiagnosticCode{
-				usage.DiagnosticUnsupportedBillableDetail,
 				usage.DiagnosticNegativeValue,
 				usage.DiagnosticInconsistentTotal,
 			},

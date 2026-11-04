@@ -60,16 +60,17 @@ func (m *SchedulingMember) Admit(baseline SchedulingProgress) {
 // SchedulingLedger 只在 SchedulingState.WithLock 回调内访问。
 // 凭据事实属于 Registry；本表独立保存分配历史，不随凭据配置替换而回退。
 type SchedulingLedger struct {
-	Members       map[uint]*SchedulingMember
-	ModelCursors  map[GroupModelKey][]string
-	Groups        map[uint]bool
-	GroupRevision uint64
-	GroupsKnown   bool
-	Started       bool
-	Watermark     SchedulingProgress
-	Sequence      uint64
-	LastMember    uint
-	Consecutive   uint64
+	Members         map[uint]*SchedulingMember
+	ModelCursors    map[GroupModelKey][]string
+	Groups          map[uint]bool
+	GroupPriorities map[uint]int32
+	GroupRevision   uint64
+	GroupsKnown     bool
+	Started         bool
+	Watermark       SchedulingProgress
+	Sequence        uint64
+	LastMember      uint
+	Consecutive     uint64
 	// jitter 返回 [0, n) 内的随机数；nil 表示不错开，保持确定性分配顺序。
 	jitter func(n uint64) uint64
 }
@@ -183,17 +184,24 @@ func (s *SchedulingState) SyncGroups(snapshot *ConfigSnapshot) {
 			return
 		}
 		groups := make(map[uint]bool, len(snapshot.GroupCatalog))
+		priorities := make(map[uint]int32, len(snapshot.GroupCatalog))
+		priorityChanged := false
 		for id, group := range snapshot.GroupCatalog {
+			priorities[id] = group.Priority
+			if previous, exists := d.GroupPriorities[id]; exists && previous != group.Priority {
+				priorityChanged = true
+			}
 			// 与路由编译保持一致：空模型分组整体暂停，普通候选变化仍保留历史。
 			groups[id] = group.Enabled && len(snapshot.Groups[id].Models) > 0 &&
 				(group.WeightManual == nil || *group.WeightManual > 0)
 		}
 		for _, member := range d.Members {
-			if !groups[member.GroupID] {
+			if priorityChanged || !groups[member.GroupID] {
 				member.Pending = true
 			}
 		}
 		d.Groups, d.GroupRevision, d.GroupsKnown = groups, snapshot.Revision, true
+		d.GroupPriorities = priorities
 		s.syncModelCursorsLocked(snapshot)
 	})
 }

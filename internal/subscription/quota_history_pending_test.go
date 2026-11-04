@@ -51,7 +51,7 @@ func TestQuotaHistoryPreservesFourMixedObservations(t *testing.T) {
 					} else {
 						window.SourceID = "codex_bengalfox"
 					}
-					manager.RecordPassiveQuotaObservation(id, identity, int64(index+1)*10000, []providerobservation.QuotaWindow{window})
+					manager.RecordPassiveQuotaObservation(id, identity, int64(index+1)*10000, []providerobservation.QuotaWindow{window}, nil)
 					if index == 0 && mode == "evicted" {
 						drainQuotaHistoryObservations(t, manager)
 						manager.passiveQuota.mu.Lock()
@@ -83,8 +83,8 @@ func TestQuotaHistoryPrefersNamedCopiesAcrossThreeEvents(t *testing.T) {
 			for index, pair := range [][2]int{{2, 2}, {1, 3}, {4, 4}} {
 				at := int64(index+1) * 10000
 				payload := fmt.Sprintf(`{"type":"codex.rate_limits","metered_limit_name":"codex_bengalfox","rate_limits":{"secondary":{"used_percent":%d,"window_minutes":10080,"reset_at":1800000001}},"additional_rate_limits":{"Spark":{"primary":{"used_percent":%d,"window_minutes":10080,"reset_at":1800000000}}}}`, pair[0], pair[1])
-				windows := codex.NormalizeWebsocketQuotaWindows([]byte(payload), time.UnixMilli(at))
-				manager.RecordPassiveQuotaObservation(id, identity, at, windows)
+				windows, _ := codex.NormalizeWebsocketQuota([]byte(payload), time.UnixMilli(at))
+				manager.RecordPassiveQuotaObservation(id, identity, at, windows, nil)
 				if index == 0 && mode == "evicted" {
 					drainQuotaHistoryObservations(t, manager)
 					manager.passiveQuota.mu.Lock()
@@ -109,7 +109,7 @@ func TestQuotaHistoryPendingBufferIsBoundedAndSnapshotsKeepUpdating(t *testing.T
 	seconds, used := int64(604_800), .25
 	for index := 0; index <= quotaHistoryCapacity; index++ {
 		manager.RecordPassiveQuotaObservation(id, identity, 10_000+int64(index),
-			[]providerobservation.QuotaWindow{{ID: "primary", SourceID: "codex_bengalfox", WindowSeconds: &seconds, Utilization: &used}})
+			[]providerobservation.QuotaWindow{{ID: "primary", SourceID: "codex_bengalfox", WindowSeconds: &seconds, Utilization: &used}}, nil)
 	}
 	pending := manager.passiveQuota
 	if pending.historyObservationCount != quotaHistoryCapacity || len(pending.historyStates) != 0 || len(pending.history) != 0 {
@@ -136,7 +136,7 @@ func TestQuotaHistorySourceLookupFailureKeepsCompleteObservations(t *testing.T) 
 		if index == 2 {
 			window.SourceID, window.SourceName = "", "Spark"
 		}
-		manager.RecordPassiveQuotaObservation(id, identity, int64(index+1)*10_000, []providerobservation.QuotaWindow{window})
+		manager.RecordPassiveQuotaObservation(id, identity, int64(index+1)*10_000, []providerobservation.QuotaWindow{window}, nil)
 	}
 	const callbackName = "test:quota_history_source_lookup_failure"
 	if err := manager.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
@@ -170,7 +170,7 @@ func TestQuotaHistoryReplaysArrivalsDuringSourceLookupBeforeDirectSampling(t *te
 		if index == 2 {
 			window.SourceID, window.SourceName = "", "Spark"
 		}
-		manager.RecordPassiveQuotaObservation(id, identity, int64(index+1)*10_000, []providerobservation.QuotaWindow{window})
+		manager.RecordPassiveQuotaObservation(id, identity, int64(index+1)*10_000, []providerobservation.QuotaWindow{window}, nil)
 	}
 	entered, release := make(chan struct{}), make(chan struct{})
 	var once, released sync.Once
@@ -202,7 +202,7 @@ func TestQuotaHistoryReplaysArrivalsDuringSourceLookupBeforeDirectSampling(t *te
 	}
 	used := .23
 	manager.RecordPassiveQuotaObservation(id, identity, 40_000,
-		[]providerobservation.QuotaWindow{{ID: "primary", SourceID: "codex_bengalfox", WindowSeconds: &seconds, Utilization: &used}})
+		[]providerobservation.QuotaWindow{{ID: "primary", SourceID: "codex_bengalfox", WindowSeconds: &seconds, Utilization: &used}}, nil)
 	unblock()
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -243,9 +243,9 @@ func TestQuotaHistoryWaitsForCompleteSourceMapping(t *testing.T) {
 				windows := []providerobservation.QuotaWindow{{ID: "primary", SourceName: "Spark", WindowSeconds: &seconds, Utilization: &used}}
 				if dualCopies {
 					payload := fmt.Sprintf(`{"type":"codex.rate_limits","metered_limit_name":"codex_bengalfox","rate_limits":{"secondary":{"used_percent":%d,"window_minutes":10080,"reset_at":1800000001}},"additional_rate_limits":{"Spark":{"primary":{"used_percent":%d,"window_minutes":10080,"reset_at":1800000000}}}}`, pair[0], pair[1])
-					windows = codex.NormalizeWebsocketQuotaWindows([]byte(payload), time.UnixMilli(at))
+					windows, _ = codex.NormalizeWebsocketQuota([]byte(payload), time.UnixMilli(at))
 				}
-				manager.RecordPassiveQuotaObservation(id, identity, at, windows)
+				manager.RecordPassiveQuotaObservation(id, identity, at, windows, nil)
 			}
 			if remaining, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil || remaining {
 				t.Fatalf("incomplete mapping must wait without a retry loop: remaining=%t error=%v", remaining, err)
@@ -259,7 +259,7 @@ func TestQuotaHistoryWaitsForCompleteSourceMapping(t *testing.T) {
 				t.Fatal(err)
 			}
 			used := .05
-			manager.RecordPassiveQuotaObservation(id, identity, 40000, []providerobservation.QuotaWindow{{ID: "primary", SourceID: "codex_bengalfox", WindowSeconds: &seconds, Utilization: &used}})
+			manager.RecordPassiveQuotaObservation(id, identity, 40000, []providerobservation.QuotaWindow{{ID: "primary", SourceID: "codex_bengalfox", WindowSeconds: &seconds, Utilization: &used}}, nil)
 			// The retry interval must also apply when another request wakes the worker.
 			if _, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil || manager.passiveQuota.historyObservationCount != 4 || lookups != 1 {
 				t.Fatalf("retry interval bypassed: buffered=%d lookups=%d error=%v", manager.passiveQuota.historyObservationCount, lookups, err)
@@ -294,7 +294,7 @@ func TestQuotaHistoryKeepsLaterResolvedEventsBehindUnresolvedEvent(t *testing.T)
 		if index == 2 {
 			window.SourceID, window.SourceName = "", "Spark"
 		}
-		manager.RecordPassiveQuotaObservation(id, identity, int64(index+1)*10000, []providerobservation.QuotaWindow{window})
+		manager.RecordPassiveQuotaObservation(id, identity, int64(index+1)*10000, []providerobservation.QuotaWindow{window}, nil)
 	}
 	if _, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil || manager.passiveQuota.historyObservationCount != 2 {
 		t.Fatalf("unresolved observation and subsequent event must stay in order: buffered=%d error=%v", manager.passiveQuota.historyObservationCount, err)

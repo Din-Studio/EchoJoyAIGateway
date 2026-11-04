@@ -151,6 +151,7 @@ type RequestEvent struct {
 	AccessKeyID           uint
 	Protocol              protocol.Protocol
 	Operation             execution.Operation
+	ClientIP              string
 	ClientModel           string
 	UpstreamModel         string
 	UpstreamReportedModel string

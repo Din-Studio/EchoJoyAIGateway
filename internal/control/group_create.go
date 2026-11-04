@@ -23,6 +23,7 @@ import (
 )
 
 type GroupCreateRequest struct {
+	Priority            optionalField[int32]                `json:"priority"`
 	PriceMultiplier     optionalField[string]               `json:"price_multiplier"`
 	Name                *string                             `json:"name"`
 	ChannelID           channel.ID                          `json:"channel_id"`
@@ -52,6 +53,7 @@ type SameTargetConflictData struct {
 }
 
 type normalizedGroupCreate struct {
+	priority            int32
 	priceMultiplier     pricing.PriceMultiplier
 	channelID           channel.ID
 	connectionType      models.ConnectionType
@@ -86,6 +88,9 @@ func (s *Service) CreateGroup(ctx context.Context, request GroupCreateRequest) (
 	result := GroupCreateResult{}
 	requestedEntries := make([]state.CredentialEntry, 0, len(normalized.credentials.candidates)+len(normalized.stagedCredentialIDs))
 	_, err = s.writeGroupConfig(ctx, func(tx *gorm.DB) error {
+		if err := lockProxyCatalog(tx); err != nil {
+			return err
+		}
 		if !normalized.confirmSameTarget {
 			conflicts, err := findGroupsByTarget(tx, normalized.channelID, normalized.connectionType, normalized.params)
 			if err != nil {
@@ -108,6 +113,7 @@ func (s *Service) CreateGroup(ctx context.Context, request GroupCreateRequest) (
 			return fmt.Errorf("encode group models: %w", err)
 		}
 		group := models.Group{
+			Priority:              normalized.priority,
 			PriceMultiplierMicros: priceMultiplierStorage(normalized.priceMultiplier),
 			Name:                  name,
 			ChannelID:             string(normalized.channelID),
@@ -122,6 +128,10 @@ func (s *Service) CreateGroup(ctx context.Context, request GroupCreateRequest) (
 			return err
 		}
 
+		group.ProxyConfig, err = s.managedProxyOverride(ctx, tx, group.ProxyConfig)
+		if err != nil {
+			return err
+		}
 		if err := tx.Create(&group).Error; err != nil {
 			return app_errors.ParseDBError(err)
 		}
@@ -166,7 +176,7 @@ func (s *Service) normalizeGroupCreate(
 	ctx context.Context,
 	request GroupCreateRequest,
 ) (normalizedGroupCreate, error) {
-	if s == nil || s.channelRegistry == nil || request.ChannelID == "" {
+	if s == nil || s.channelRegistry == nil || request.ChannelID == "" || request.Priority.Null {
 		return normalizedGroupCreate{}, app_errors.ErrValidation
 	}
 	priceMultiplier, err := normalizePriceMultiplier(request.PriceMultiplier)
@@ -236,13 +246,17 @@ func (s *Service) normalizeGroupCreate(
 	if err != nil {
 		return normalizedGroupCreate{}, err
 	}
-	var proxy *outboundproxy.Config
+	var proxy, resolvedProxy *outboundproxy.Config
 	if request.Proxy.Set && !request.Proxy.Null {
 		normalizedProxy, normalizeErr := outboundproxy.Normalize(request.Proxy.Value)
 		if normalizeErr != nil || normalizedProxy.Mode == outboundproxy.ModeInherit {
 			return normalizedGroupCreate{}, app_errors.ErrValidation
 		}
 		proxy = &normalizedProxy
+		resolvedProxy, err = s.resolveManagedProxy(ctx, s.db, proxy)
+		if err != nil {
+			return normalizedGroupCreate{}, err
+		}
 	}
 	_, err = state.Compile(state.CompileInput{
 		SystemSettings:   systemSettings,
@@ -252,7 +266,7 @@ func (s *Service) normalizeGroupCreate(
 		Groups: []state.GroupConfig{{
 			ID: 1, Name: "candidate", ChannelID: request.ChannelID, PriceMultiplier: &priceMultiplier,
 			ConnectionType: string(connectionType), Params: canonicalParams,
-			Models: runtimeModels, Settings: config.Settings{}, Proxy: proxy, Enabled: true,
+			Models: runtimeModels, Settings: config.Settings{}, Proxy: resolvedProxy, Enabled: true,
 		}},
 	})
 	if err != nil {
@@ -269,6 +283,7 @@ func (s *Service) normalizeGroupCreate(
 		defaultName = hostname
 	}
 	return normalizedGroupCreate{
+		priority:            request.Priority.Value,
 		priceMultiplier:     priceMultiplier,
 		channelID:           request.ChannelID,
 		connectionType:      connectionType,

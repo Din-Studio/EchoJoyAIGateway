@@ -18,6 +18,7 @@ import (
 	"gpt-load/internal/channel"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/platform/config"
+	"gpt-load/internal/platform/encryption"
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/requestlog"
@@ -301,7 +302,7 @@ func TestRouteInspectDerivesStandardRequestMetadataFromProtocol(t *testing.T) {
 		{protocol: protocol.OpenAICompletions, operation: execution.OperationChatCompletion, routeMode: execution.RouteNative, routeRequirement: execution.RouteRequirementAny},
 		{protocol: protocol.OpenAIResponses, operation: execution.OperationResponsesCreate, routeMode: execution.RouteNative, routeRequirement: execution.RouteRequirementAny},
 		{protocol: protocol.OpenAIImages, operation: execution.OperationImagesGenerate, routeMode: execution.RouteNative, routeRequirement: execution.RouteRequirementAny},
-		{protocol: protocol.OpenAIEmbeddings, operation: execution.OperationEmbeddingsCreate, routeMode: execution.RouteNative, routeRequirement: execution.RouteRequirementNative},
+		{protocol: protocol.OpenAIEmbeddings, operation: execution.OperationEmbeddingsCreate, routeMode: execution.RouteNative, routeRequirement: execution.RouteRequirementAny},
 		{protocol: protocol.Decisions, operation: execution.OperationDecisionsCreate, routeMode: execution.RouteNative, routeRequirement: execution.RouteRequirementNative},
 		{protocol: protocol.Anthropic, operation: execution.OperationChatCompletion, routeMode: execution.RouteConverted, routeRequirement: execution.RouteRequirementAny},
 		{protocol: protocol.Gemini, operation: execution.OperationChatCompletion, routeMode: execution.RouteConverted, routeRequirement: execution.RouteRequirementAny},
@@ -433,7 +434,7 @@ func TestRouteInspectEndpointReturnsCurrentSafeExplanation(t *testing.T) {
 		{
 			ID: 21, GroupID: 1, Version: 1, IdentityGeneration: 21, Fingerprint: "test-21", Status: state.CredentialStatusActive,
 			WeightManual:   &keyWeight,
-			EncryptedValue: "cipher-one",
+			EncryptedValue: "cipher-one", Name: "生产账号",
 		},
 	}); err != nil {
 		t.Fatalf("Replace() error = %v", err)
@@ -500,6 +501,9 @@ func TestRouteInspectEndpointReturnsCurrentSafeExplanation(t *testing.T) {
 		t.Fatalf("backup group = %#v", backup)
 	}
 	body := recorder.Body.String()
+	if !strings.Contains(body, `"name":"生产账号"`) {
+		t.Fatal("route inspection omitted credential alias")
+	}
 	if strings.Count(body, `"reason_code":null`) != 5 ||
 		strings.Count(body, `"cooldown_until_ms":null`) != 2 {
 		t.Fatalf("success response must preserve explicit nulls: %s", body)
@@ -880,6 +884,11 @@ func (spy *routeInspectEncryptionSpy) Decrypt(string) (string, error) {
 func (spy *routeInspectEncryptionSpy) Hash(string) string {
 	spy.calls.Add(1)
 	return ""
+}
+
+func (spy *routeInspectEncryptionSpy) NewRedactionCipher(uint) (encryption.RedactionCipher, error) {
+	spy.calls.Add(1)
+	return nil, nil
 }
 
 func TestRouteInspectNeverCallsUpstreamOrMutatesRuntime(t *testing.T) {

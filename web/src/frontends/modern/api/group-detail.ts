@@ -1,3 +1,4 @@
+import { credentialDisplayText } from '@shared/credential-display'
 import type { ApiClient } from '@shared/http/client'
 import { ApiError, InvalidResponseError } from '@shared/http/errors'
 import { boolean, integer, list, oneOf, record, text } from './response'
@@ -33,12 +34,17 @@ export interface CredentialFilters {
   reset: '' | 'available' | 'none' | 'unknown'
 }
 export const runtimeNumbers = [
+  'concurrency_limit',
   'first_byte_timeout',
   'request_timeout',
   'stream_idle_timeout',
   'blacklist_threshold',
 ] as const
-export const runtimeSwitches = ['affinity_enabled', 'responses_websocket_enabled'] as const
+export const runtimeSwitches = [
+  'affinity_enabled',
+  'responses_websocket_enabled',
+  'empty_response_retry',
+] as const
 export type RuntimeNumber = (typeof runtimeNumbers)[number]
 export type RuntimeSwitch = (typeof runtimeSwitches)[number]
 export interface HeaderRules {
@@ -64,7 +70,14 @@ export interface GroupSettings extends GroupBasics {
   validationProtocols: string[]
   overrides: RuntimeSettings
   effective: Required<Omit<RuntimeSettings, 'parameter_overrides'>>
-  proxy: { mode: 'inherit' | 'direct' | 'custom'; display: string; hasAuth: boolean }
+  proxy: {
+    id?: number
+    name?: string
+    referenceState?: string
+    mode: 'inherit' | 'direct' | 'custom'
+    display: string
+    hasAuth: boolean
+  }
 }
 export interface AdvancedSettingsPatch {
   params?: Record<string, string>
@@ -121,6 +134,9 @@ function readSettings(value: unknown): GroupSettings {
     overrides: readRuntime(data.overrides),
     effective: effective as GroupSettings['effective'],
     proxy: {
+      id: proxy.proxy_id === undefined ? undefined : integer(proxy.proxy_id, 1),
+      name: proxy.proxy_name === undefined ? undefined : text(proxy.proxy_name),
+      referenceState: proxy.reference_state === undefined ? undefined : text(proxy.reference_state),
       mode: oneOf(proxy.configured_mode, ['inherit', 'direct', 'custom']),
       display: proxy.display_url === undefined ? '' : text(proxy.display_url),
       hasAuth: boolean(proxy.has_auth),
@@ -233,6 +249,8 @@ export async function discoverGroupModels(client: ApiClient, id: number, signal:
 }
 
 export interface CredentialRow {
+  name: string
+  label: string
   rpmPeakHour?: number
   id: number
   mask: string
@@ -262,7 +280,14 @@ export interface CredentialRow {
     automatic: boolean
     at: number | null
   }
-  proxy: { mode: 'inherit' | 'direct' | 'custom'; source: string; display: string }
+  proxy: {
+    id?: number
+    name?: string
+    referenceState?: string
+    mode: 'inherit' | 'direct' | 'custom'
+    source: string
+    display: string
+  }
   observation?: CredentialObservation
 }
 export interface CredentialCollection {
@@ -281,6 +306,12 @@ export function readCredential(value: unknown): CredentialRow {
   return {
     id: integer(row.credential_id, 1),
     rpmPeakHour: row.rpm_peak_hour == null ? undefined : integer(row.rpm_peak_hour),
+    name: text(row.name ?? ''),
+    label: credentialDisplayText(
+      text(row.name ?? ''),
+      account ? text(account.email ?? account.email_mask ?? '') || text(row.mask) : text(row.mask),
+      text(row.connection_type),
+    ),
     mask: text(row.mask),
     account: account ? text(account.email ?? account.email_mask ?? '') : '',
     state: oneOf(row.effective_status, credentialStates),
@@ -329,6 +360,9 @@ export function readCredential(value: unknown): CredentialRow {
       at: recovery.at_ms === null ? null : integer(recovery.at_ms),
     },
     proxy: {
+      id: proxy.proxy_id === undefined ? undefined : integer(proxy.proxy_id, 1),
+      name: proxy.proxy_name === undefined ? undefined : text(proxy.proxy_name),
+      referenceState: proxy.reference_state === undefined ? undefined : text(proxy.reference_state),
       mode: oneOf(proxy.configured_mode, ['inherit', 'direct', 'custom']),
       source: text(proxy.effective_source),
       display: proxy.display_url === undefined ? '' : text(proxy.display_url),

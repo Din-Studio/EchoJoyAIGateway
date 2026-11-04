@@ -65,6 +65,8 @@ Your application only needs one base URL and one AccessKey. Providers, accounts,
 - **One gateway, native protocols** — Manage official APIs, cloud platforms, model services, and compatible relays together while clients keep their OpenAI, Anthropic, or Gemini native interfaces.
 - **One mechanism for API keys and subscriptions** — Codex, Claude, Antigravity, Grok, and API-key channels share credential management, scheduling, and health handling.
 - **Scheduling and failure isolation built in** — Multi-credential scheduling, configurable weights, retries, cooldown, blacklisting, and session affinity reduce the impact of overloaded or failing credentials.
+
+Group priority is a signed 32-bit integer, defaulting to 0; higher values take precedence. The highest available tier is selected before route strategy, soft affinity, and weights within that tier. A retryable execution failure moves directly to the next available tier without exhausting peers; the lowest tier tries remaining candidates. All tiers share the forwarding-attempt budget. Preparation failures do not advance tiers, authentication refresh replays the original credential first, and bound sessions keep their constraints. Priority edits propagate through cluster configuration; scheduling progress remains per replica.
 - **Observable, self-hosted, and simple to deploy** — Inspect health, routes, logs, usage, and cost estimates in an embedded UI backed by PostgreSQL and Redis, with credentials encrypted at rest.
 
 ## Quick start
@@ -106,6 +108,10 @@ Initial setup takes three steps:
 2. **Create a group** — Pick a channel, then configure available models and runtime policy.
 3. **Create an AccessKey** — Set the groups and client protocols it may use, then give the generated AccessKey to your application.
 
+In a group’s **All credentials → Import from files** menu, select UTF-8 TXT, JSON or JSONL files. Use one API key per line, or a credential field object with string values (for example, `{"api_key":"sk-example"}`). A formatted JSON object counts as one credential. Files from **Download all** can be imported again. Each import accepts at most 500 credentials and 32 MiB of files/request data; split larger imports manually. New credentials have unlimited concurrency (`0`); existing duplicates are skipped. Subscription accounts continue to use their authorization flow.
+
+Credentials support optional display aliases (up to 255 Unicode characters). Clear the name to remove an alias. Names are per credential record and do not change credential identity, scheduling, or concurrency limits; updates propagate across replicas. Logs display the current alias. Subscription accounts are masked by default in the UI, with explicit reveal controls on cards and details. This is display masking, not API redaction: administrator responses still contain the original account.
+
 <details>
 <summary>OAuth callback ports for subscription channels</summary>
 
@@ -129,29 +135,73 @@ When working over SSH or from a remote browser, the browser's `localhost` may no
 
 ### Client protocols
 
-| Protocol                | Main entry                             |
-| ----------------------- | -------------------------------------- |
-| OpenAI Chat Completions | `POST /v1/chat/completions`            |
-| OpenAI Responses        | `/v1/responses` and its resource paths |
-| OpenAI Images           | `POST /v1/images/...`                  |
-| OpenAI Embeddings       | `POST /v1/embeddings`                  |
-| Rerank                  | `POST /v1/rerank`                      |
-| Jev Decisions           | `POST /v1/systemone`                   |
-| Anthropic Messages      | `POST /v1/messages`                    |
-| Gemini                  | `/v1beta/models/...`                   |
+| Protocol                | Main entry                                                         |
+| ----------------------- | ------------------------------------------------------------------ |
+| OpenAI Chat Completions | `POST /v1/chat/completions`                                        |
+| OpenAI Responses        | `/v1/responses` and its resource paths                             |
+| OpenAI Images           | `POST /v1/images/...`                                              |
+| OpenAI Embeddings       | `POST /v1/embeddings`                                              |
+| Rerank                  | `POST /v1/rerank`                                                  |
+| Jev Decisions           | `POST /v1/systemone`                                               |
+| Anthropic Messages      | `POST /v1/messages`                                                |
+| Gemini                  | `/v1beta/models/...`                                               |
+| Gemini Embeddings       | `POST /v1beta/models/{model}:embedContent` / `:batchEmbedContents` |
 
 Each channel declares exactly which protocols and capabilities it can execute. GPT-Load converts between supported capabilities, but it is not a general-purpose any-protocol, any-JSON translator.
 
-Embeddings initially uses the native OpenAI-compatible wire only on the OpenAI, OpenRouter, Vercel AI Gateway, and OpenAI Compatible API-key channels; subscription channels and protocol conversion are not supported. An AccessKey without a protocol filter keeps its existing “all enabled protocols” behavior and therefore gains Embeddings access after upgrade. Least-privilege deployments should configure an explicit protocol filter.
+Embeddings has two independent native protocols: `openai-embeddings` (`POST /v1/embeddings`) on the OpenAI, OpenRouter, Vercel AI Gateway, OpenAI Compatible, New API, and GPT-Load API-key channels, and `gemini-embeddings` (`POST /v1beta/models/{model}:embedContent` and `:batchEmbedContents`) on the Gemini, New API, and GPT-Load API-key channels. Requests and responses keep each provider's native format. The Gemini channel also accepts `openai-embeddings` by converting text input to `:batchEmbedContents`; `dimensions` and `float` / `base64` output are supported, token-ID input is not, and Gemini enforces its per-request item limit. Keep the groups behind one client model name on the same embedding model, otherwise vectors from different models get mixed. Subscription channels are not supported. An AccessKey without a protocol filter keeps its existing “all enabled protocols” behavior and therefore gains both Embeddings protocols after upgrade. Least-privilege deployments should configure an explicit protocol filter.
 
 Rerank uses the independent `rerank` protocol through `POST /v1/rerank` on the OpenAI Compatible, New API, and GPT-Load API-key channels. Requests contain `model`, `query`, and a text-only `documents` array, with optional upstream parameters such as `top_n` and `return_documents`. Streaming, subscription channels, and protocol conversion are not supported. OpenAI Compatible takes a complete API prefix (for example, `https://host/v1`); New API / GPT-Load take the gateway root. The upstream must implement a compatible Rerank endpoint. AccessKeys without a protocol filter also gain Rerank access. Responses containing only non-token units such as `search_units` remain unpriced; these units are not treated as tokens or free requests.
 
 ### Built-in channels
 
 - **Official and cloud** — OpenAI, Anthropic, Gemini, xAI, Azure OpenAI, AWS Bedrock, Google Vertex AI
-- **Model services** — DeepSeek, Moonshot AI, SiliconFlow, Zhipu AI, Alibaba, Volcengine, OpenRouter, Groq, Vercel AI Gateway, Jev
+- **Model services** — DeepSeek, Moonshot AI, SiliconFlow, Zhipu AI, Alibaba, Volcengine, OpenRouter, Cline, Groq, Vercel AI Gateway, Jev, Cerebras, Mistral, Nebius, Parasail, Wafer, Hugging Face (Chat), Cohere (text reranking), OpenCode Go, OpenCode Zen
 - **Subscription** — Codex, Claude, Antigravity, Grok
 - **Custom** — OpenAI Compatible (any compatible relay)
+
+OpenCode Go / Zen use API keys and the existing multi-protocol gateway adapter for native Chat Completions, stateless Responses creation, and Anthropic Messages, including streaming and model discovery. Choose the protocol supported by the upstream model; these presets do not convert protocols automatically. Custom Base URLs use the gateway root without `/v1`. Gemini-native requests and Responses resource operations are not enabled. Go clients should preserve their coding-client identity and conversation session headers.
+
+### Parameter overrides and protocol conversion
+
+Group parameter overrides run before protocol conversion. Use client-protocol names for ordinary parameters: the SDK converts Responses `max_output_tokens` to Anthropic `max_tokens`, for example. For Bifrost conversation conversions, top-level fields explicitly set by an override but absent from the SDK's client request schema are supplied as SDK extra parameters. The SDK still determines whether the target protocol supports them; arbitrary parameter passthrough is not enabled. Unknown client-supplied fields are not automatically forwarded, and existing content-block cache markers retain their behavior.
+
+For example, configure an Anthropic group to supply top-level caching for Responses requests:
+
+```json
+[{"match":{"protocol":"openai-responses"},"set":{"cache_control":{"type":"ephemeral"}}}]
+```
+
+This forwards the cache configuration without guaranteeing an upstream cache hit.
+
+### Data-plane concurrency limits
+
+Global, access key, and group limits can be enabled together; all default to unlimited. System settings provide the global limit and default access key and group limits. Individual access keys and groups may override their defaults: leave an access key value blank or restore group inheritance to use the default; explicitly set `0` for unlimited. Reaching any applicable limit immediately returns `concurrency_limit_exceeded`, without queueing or switching groups or credentials to bypass the limit.
+
+Global and access key counters track unfinished logical requests; group counters track active upstream calls. Streaming holds its slots until forwarding finishes, and Responses WebSocket counts executing turns. Cancelling an existing response remains available. Counters live in Redis and are shared by every replica, so each limit applies to the whole deployment; a scope without a limit is not counted. Settings updates preserve counters and running work. Management requests and background jobs are excluded. When Redis is unavailable, a request under a configured limit is rejected with `503 cluster_state_unavailable`. The console home shows the global current count and effective limit. The access key list shows a concurrency limit tag only when the effective limit is positive; access key and group lists do not show live concurrency counts.
+
+### Centralized outbound proxies
+
+Administrators manage an encrypted PostgreSQL proxy catalog in the console: add, edit, import, enable, disable, delete, inspect references, and test connectivity. HTTP and SOCKS5 proxies support username/password authentication. Global settings, groups, and credentials select catalog entries by ID; AccessKeys cannot access the proxy management API.
+
+Outbound selection follows credential → group → global → environment proxy → direct. Disabling or deleting an entry preserves its references but makes them inherit the next level; traffic can therefore become direct. Catalog decryption failures are errors, not inheritance. Manual tests use the selected proxy even when disabled, with eight Redis-backed slots shared across all replicas, separate from data-plane limits. Full capacity returns 429; unavailable shared state returns 503. The saved test URL is a management preference, not a runtime routing setting.
+
+### Codex client model catalog
+
+Administrators can select and reorder the Codex catalog on the Models page. `GET /api/models/client-catalog` returns candidates, selection, defaults, model profiles, and the byte budget. `POST /api/models/client-catalog/preview` previews a draft without saving. `PUT /api/models/client-catalog` saves directory and profile changes atomically in one PostgreSQL control transaction, then propagates configuration to all replicas. These three endpoints are admin-only; AccessKeys cannot use them.
+
+- Candidates must be callable through Responses create. By default, the catalog selects names beginning with `gpt-`, except `gpt-image` and `gpt-image-*`. Manual order comes first; remaining GPT versions sort newest first.
+- Save and preview accept strict JSON: unknown or duplicate fields, multiple JSON values, and invalid field types are rejected. The request limit is 32 MiB. Send `known_models` with the complete candidate set from the last read. A changed candidate set rejects the stale draft with `400 VALIDATION_FAILED`; read it again before saving. This optional guard is not a configuration version lock.
+- `models` replaces selection and order; `[]` selects none. Omit it to keep the directory. `reset_directory: true` restores directory defaults without clearing profiles and cannot accompany nonempty `models`. Each `profiles` entry replaces that model's metadata overrides. `overrides: {}` resets only its profile, including through `PUT /api/models/profile`, without changing selection or order.
+- Profile fields are `display_name`, `description`, `context_window`, `auto_compact_token_limit`, `supported_reasoning_levels`, `default_reasoning_level`, `input_modalities`, and `service_tiers`. Standard is always the default tier. `priority` (Fast) and `ultrafast` are opt-in client choices; `service_tiers: []` hides them. The API does not accept `default_service_tier`.
+- The Codex response is limited to 1 MiB (1048576 bytes), including JSON framing. When it exceeds the limit, it returns the maximal complete prefix in catalog order, never partial entries or later entries after one does not fit. The budget reports full selected bytes, actual response bytes, and inclusion per entry. Saving an oversized selection is allowed.
+- With a valid three-part numeric `client_version >= 0.159.2`, the data-plane catalog omits legacy `base_instructions`. Older or unrecognized versions retain it. Admin previews use the returned pinned `client_version`; actual bytes also depend on the caller's permissions and version.
+- Directory settings affect only Codex catalog presentation. Ordinary model APIs, routing, and authorization are unchanged. Data-plane catalogs still filter by AccessKey protocol, model, and group permissions. System currency, client-model unified pricing, and admin-only upstream cost visibility are unchanged.
+
+See [the control API contract](docs/openapi.yaml) for request and response schemas.
+
+> [!WARNING]
+> Do not write configuration with mixed old and new gateway versions. This feature adds no schema migration; it extends the existing `client_model_overrides.overrides` JSON with directory keys (`catalog_enabled`, `catalog_order`) and metadata keys. Old binaries reject the new keys. After saving, an image-only rollback is not guaranteed; retain a tested compatible configuration/database backup and its matching image.
 
 ## Deployment and data
 
@@ -160,9 +210,12 @@ GPT-Load runs as a container that depends on PostgreSQL and Redis. `docker-compo
 The GPT-Load container is stateless and mounts no volume: configuration and usage live in PostgreSQL, and shared runtime state lives in Redis. Compose keeps both in the `postgres-data` and `redis-data` named volumes, and Redis runs with AOF persistence and `maxmemory-policy noeviction`.
 
 > [!IMPORTANT]
-> `ENCRYPTION_KEY` decrypts channel credentials. Back up PostgreSQL and `ENCRYPTION_KEY` **together**. Once the key is lost or replaced, existing encrypted credentials cannot be recovered, and this version does not support master key rotation.
+> `ENCRYPTION_KEY` decrypts channel credentials and the proxy catalog and references. Back up PostgreSQL and `ENCRYPTION_KEY` **together**. Once the key is lost or replaced, existing encrypted credentials cannot be recovered, and this version does not support master key rotation.
 
 To use an existing PostgreSQL or Redis instead of the bundled services, override `DATABASE_DSN` (for example `postgres://user:password@db.example:5432/gpt_load?sslmode=require`) and `REDIS_ADDRS` in the `gpt-load` service.
+
+> [!WARNING]
+> Before upgrading to the centralized proxy catalog, back up PostgreSQL and `ENCRYPTION_KEY` together and test restoration in an isolated database. Migration `0028_proxy_catalog` creates the catalog; control-plane startup converts legacy encrypted proxy URLs to encrypted ID references. The schema and encrypted reference format are incompatible with older versions. Stop all old gateway replicas before starting the new version; do not use a mixed-version rolling upgrade. Rolling back the image alone is not sufficient: use a tested pre-upgrade database backup with its original key and matching image.
 
 Common operations:
 
@@ -195,7 +248,9 @@ Compose passes `.env` to the container, and the values set in the Compose file t
 | `DATABASE_MAX_OPEN_CONNECTIONS` | `10` | Maximum open PostgreSQL connections per replica, positive integer. |
 | `DATABASE_MAX_IDLE_CONNECTIONS` | `5` | Maximum idle PostgreSQL connections per replica, positive integer and no greater than `DATABASE_MAX_OPEN_CONNECTIONS`. |
 | `AUTH_KEY` | Required | Bearer key for the management UI and `/api` management API, not a data-plane AccessKey. Every replica must share it. |
-| `ENCRYPTION_KEY` | Required | Encrypts channel credentials; changing or losing it makes existing credentials undecryptable, so back it up with PostgreSQL. Every replica must share it. |
+| `ENCRYPTION_KEY` | Required | Encrypts channel credentials, proxy catalog entries, and proxy references; changing or losing it makes them undecryptable, so back it up with PostgreSQL. Every replica must share it. |
+| `CLIENT_IP_HEADER` | Empty, uses the connection IP | Client IP header, such as `X-Forwarded-For` or `CF-Connecting-IP`; missing or invalid values fall back to the connection IP. Shared by logs, AccessKey IP restrictions, and other IP consumers; supports IPv4/IPv6. Restart after changes. |
+| `TRUSTED_PROXIES` | Empty | Optional comma-separated proxy IPs or CIDRs; applies only with `CLIENT_IP_HEADER`. Empty means trusting the selected header directly, with trust enforced by your deployment. When set, only matching connection peers may supply the header; others use their connection IP. For `X-Forwarded-For`, scan right to left for the first untrusted IP (leftmost if all are trusted); without a list, use the leftmost IP. Other headers accept one IP only. Restart after changes. |
 | `HTTP_PROXY` | Empty | Environment proxy for HTTP upstream requests. |
 | `HTTPS_PROXY` | Empty | Environment proxy for HTTPS upstream requests. |
 | `NO_PROXY` | Empty | Comma-separated hosts, domains, or IPs that bypass the environment proxy. |
@@ -291,10 +346,12 @@ These commands run on the same sample and need Docker and Compose v2.24 or later
 - The system currency (Settings → Currency and billing) is USD or CNY; CNY needs a "1 USD = X CNY" exchange rate. Upstream prices are always in USD. Each request records its cost in USD and in the currency and rate in effect when it settles, so changing the rate affects only later requests and never rewrites past costs. The control API, the UI and 429 responses report amounts in the system currency. Switching the currency converts every AccessKey cost limit to the new currency at the exchange rates and resets its used amount; usage totals count only the current currency and flag history in other currencies.
 - Every request is priced twice. The **cost** uses the unified price of the request model (ClientModel) times the AccessKey multiplier, and drives cost limits and usage totals. The **upstream cost** uses the channel's upstream model price times the group multiplier; it is what the gateway pays upstream and only administrators can see it. Set each request model's unified price on the Models page: it applies across every group and channel and supports context tiers and Fast/Ultrafast mode prices. A model without a unified price is unpriced rather than falling back to the upstream price. An auto model is charged by the target model it selects.
 - Subscription channels depend on upstream OAuth and compatibility protocols and may change as upstreams change. Only connect accounts you are entitled to use, and follow each provider's terms.
+- Codex models that support reasoning-effort updates preserve `configuration_update` over HTTP and WebSocket. In Codex CLI, enable `--enable reasoning_effort_override`; the gateway needs no experiment switch. WebSocket logs inherit an update only from the immediately known completed parent on the same connection and model. Unknown models and virtual fallback models do not advertise this capability. Token-derived subscription plans are display hints; live observations take precedence, and hints do not imply available quota. See [shared Codex capabilities](third_party/cpaembedded/README.md#shared-codex-capabilities).
 - HTTP Responses continuation with `previous_response_id` automatically uses native Responses routes that declare upstream-managed storage: currently `openai`, `gpt_load`, `xai`, `newapi`, `cliproxyapi`, and `sub2api`. Ownership is isolated by AccessKey and pins the original credential when current routing permits, independently of soft affinity; actual state availability depends on the upstream. Stateless and converted responses are not registered as persistent state. Unknown IDs, including IDs created before upgrading or outside this gateway, are rejected. Group parameter overrides cannot change this field.
-- Native Responses WebSocket uses `GET /v1/responses` on the same port. Admission follows declared upstream capabilities for OpenAI, xAI, Codex, and compatible native CPA/sub2api and GPT-Load endpoints. Clients may include the boolean `stream:true/false`; both values still use the WS event stream. Each turn checks current permissions, rate and cost limits, and routing, with separate usage and cost records. One connection keeps one upstream identity; there is no HTTP fallback or conversation-history replay.
+- Native Responses WebSocket uses `GET /v1/responses` on the same port. Admission follows declared upstream capabilities for OpenAI, xAI, Codex, Vercel AI Gateway, and compatible native CPA/sub2api and GPT-Load endpoints. Clients may include the boolean `stream:true/false`; both values still use the WS event stream. Each turn checks current permissions, rate and cost limits, and routing, with separate usage and cost records. One connection keeps one upstream identity; there is no HTTP fallback or conversation-history replay.
 - `responses_websocket_enabled` defaults to enabled. An explicit group setting overrides the global value; otherwise the group inherits it. Disabling immediately closes affected WS connections and interrupts generation without affecting HTTP/SSE. Re-enabling does not restore the old connection's temporary state.
-- Full `stream_id` multiplexing and forks are enabled for OpenAI and GPT-Load cascades that support them end to end. The other channels above run serially and reject named streams. Prewarming sends `generate:false` upstream. Codex continuation requires the original live connection: `store:true` and restoration by an old ID on a new connection are unsupported. Persistent continuation on other channels depends on storage capabilities and valid ownership. Existing [Codex SDK proxy, reading, and shutdown limits](third_party/cpaembedded/README.md#codex-websocket-session) still apply.
+- `empty_response_retry` defaults to disabled. An explicit group setting overrides the global value. When enabled, a streaming chat request is checked for produced content before it is committed downstream: if upstream finishes naturally without producing anything, the attempt counts as a failure and the next candidate is tried, without cooling down or blacklisting the credential. Once retries are exhausted the upstream empty response is still delivered as-is. Empty results explained by their stop reason, such as an exhausted output budget, a content filter or a refusal, are delivered without retrying. Prewarm requests (`generate:false`), requests carrying `previous_response_id` or `conversation`, non-chat endpoints and WebSocket are all exempt; when upstream keeps emitting events without content, the response is committed at a built-in limit rather than held indefinitely. Retried empty attempts are still billed upstream, but usage and cost estimates only record the attempt that was finally delivered.
+- Full `stream_id` multiplexing and forks are enabled for OpenAI, Vercel AI Gateway, and GPT-Load cascades that support them end to end. The other channels above run serially and reject named streams. Prewarming sends `generate:false` upstream. Codex and Vercel AI Gateway continuation requires the original live connection: restoration by an old ID on a new connection is unsupported, and Codex also rejects `store:true`. Vercel serves only OpenAI models over WebSocket and closes the connection when a turn switches models, so keep WebSocket-enabled Vercel groups to OpenAI models. Persistent continuation on other channels depends on storage capabilities and valid ownership. Existing [Codex SDK proxy, reading, and shutdown limits](third_party/cpaembedded/README.md#codex-websocket-session) still apply.
 - `conversation` and other existing resource IDs are outside this ownership routing scope and still depend on a single credential or upstream resource sharing across credentials.
 
 ## Moving from 1.x

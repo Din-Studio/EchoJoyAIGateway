@@ -117,6 +117,19 @@ func TestProjectProcessLogUsesStatusLevelAndConditionalDiagnostics(t *testing.T)
 	}
 }
 
+func TestProjectProcessLogWarnsOnUnbilledSuccess(t *testing.T) {
+	event := testEvent("success-without-usage")
+	event.Usage.Result = usage.Result{State: usage.StateMissing}
+	event.Usage.Pricing.CostState = string(pricing.CostStateUnpriced)
+	event.Usage.Pricing.PricingCompleteness = string(pricing.CompletenessUnavailable)
+	event.Usage.Pricing.UpstreamCostState = string(pricing.CostStateUnpriced)
+	event.Usage.Pricing.UpstreamPricingCompleteness = string(pricing.CompletenessUnavailable)
+	level, fields, ok := projectProcessLog(redact.New(), event)
+	if !ok || level != logrus.WarnLevel || fields["usage"] != string(usage.StateMissing) {
+		t.Fatalf("projection = %t/%s/%v", ok, level, fields)
+	}
+}
+
 func TestProjectProcessLogOmitsDefaultAndZeroValueFields(t *testing.T) {
 	event := testEvent("sparse-defaults")
 	event.Protocol = protocol.Anthropic

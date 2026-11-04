@@ -101,7 +101,11 @@ func (handler *Handler) prepareAutoModel(ctx context.Context, snapshot *state.Co
 	query.ResponsesStorePreference = metadata.ResponsesStorePreference
 	view, extractReason := automodel.Extract(selectedDialect.Protocol(), parsed.Body)
 	if !snapshot.RequestRedaction.Empty() {
-		clean, err := redactOutboundRequest(snapshot.RequestRedaction, selectedDialect.Protocol(), parsed)
+		cipher, err := handler.encryption.NewRedactionCipher(key.ID)
+		if err != nil {
+			return parsed, metadata, nil, &reasonRedactionFailed
+		}
+		clean, err := redactOutboundRequest(snapshot.RequestRedaction, selectedDialect.Protocol(), parsed, cipher)
 		if err != nil {
 			return parsed, metadata, nil, &reasonRedactionFailed
 		}
@@ -210,6 +214,9 @@ func (handler *Handler) prepareAutoModel(ctx context.Context, snapshot *state.Co
 				result = handler.executeAutoDecision(ctx, snapshot, key, presets, view)
 			}
 			decision = &result
+			if result.Reason == reasonConcurrencyLimit.Code {
+				return parsed, metadata, decision, &reasonConcurrencyLimit
+			}
 			if result.Status == "selected" {
 				for _, preset := range presets {
 					if preset.ID == result.Choice {

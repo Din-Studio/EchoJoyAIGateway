@@ -27,7 +27,7 @@ func TestRecordPassiveQuotaObservationIsVisibleAsDirty(t *testing.T) {
 	windows := []providerobservation.QuotaWindow{
 		{ID: "primary", Scope: "account", Unit: "percent", State: "available", Used: floatPointer(10)},
 	}
-	manager.RecordPassiveQuotaObservation(7, 100, 1000, windows)
+	manager.RecordPassiveQuotaObservation(7, 100, 1000, windows, nil)
 
 	dirty := manager.DirtyPassiveQuotaObservations(10)
 	if len(dirty) != 1 || dirty[0].CredentialID != 7 || dirty[0].IdentityGeneration != 100 ||
@@ -40,10 +40,10 @@ func TestRecordPassiveQuotaObservationReplacesRatherThanCombiningResponses(t *te
 	manager := testCredentialManagerForPassiveQuota(t)
 	manager.RecordPassiveQuotaObservation(7, 100, 1000, []providerobservation.QuotaWindow{
 		{ID: "primary", Used: floatPointer(10)},
-	})
+	}, nil)
 	manager.RecordPassiveQuotaObservation(7, 100, 2000, []providerobservation.QuotaWindow{
 		{ID: "secondary", Used: floatPointer(20)},
-	})
+	}, nil)
 
 	// A pending entry carries exactly one response, so its windows and its
 	// observation time always describe the same instant. Combining responses
@@ -64,7 +64,7 @@ func TestRecordPassiveQuotaObservationCopiesCallerWindows(t *testing.T) {
 	windows := []providerobservation.QuotaWindow{
 		{ID: "primary", Used: floatPointer(10), Utilization: floatPointer(0.1), ResetAtMS: &resetAt},
 	}
-	manager.RecordPassiveQuotaObservation(7, 100, 1000, windows)
+	manager.RecordPassiveQuotaObservation(7, 100, 1000, windows, nil)
 
 	// Both the struct fields and the values behind its pointers must be
 	// detached: sharing them would let a caller change what is about to be
@@ -90,10 +90,10 @@ func TestRecordPassiveQuotaObservationDropsOlderObservedAt(t *testing.T) {
 	manager := testCredentialManagerForPassiveQuota(t)
 	manager.RecordPassiveQuotaObservation(7, 100, 2000, []providerobservation.QuotaWindow{
 		{ID: "primary", Used: floatPointer(90)},
-	})
+	}, nil)
 	manager.RecordPassiveQuotaObservation(7, 100, 1000, []providerobservation.QuotaWindow{
 		{ID: "primary", Used: floatPointer(10)},
-	})
+	}, nil)
 
 	dirty := manager.DirtyPassiveQuotaObservations(10)
 	if len(dirty) != 1 || dirty[0].ObservedAtMS != 2000 || *dirty[0].Windows[0].Used != 90 {
@@ -103,7 +103,7 @@ func TestRecordPassiveQuotaObservationDropsOlderObservedAt(t *testing.T) {
 
 func TestRecordPassiveQuotaObservationIgnoresEmptyWindows(t *testing.T) {
 	manager := testCredentialManagerForPassiveQuota(t)
-	manager.RecordPassiveQuotaObservation(7, 100, 1000, nil)
+	manager.RecordPassiveQuotaObservation(7, 100, 1000, nil, nil)
 
 	if dirty := manager.DirtyPassiveQuotaObservations(10); len(dirty) != 0 {
 		t.Fatalf("dirty observations = %#v, want none for an empty-window record", dirty)
@@ -114,7 +114,7 @@ func TestRecordPassiveQuotaObservationReplacesOnIdentityGenerationChange(t *test
 	manager := testCredentialManagerForPassiveQuota(t)
 	manager.RecordPassiveQuotaObservation(7, 100, 1000, []providerobservation.QuotaWindow{
 		{ID: "primary", Used: floatPointer(10)},
-	})
+	}, nil)
 	entries, err := manager.registry.SnapshotGroupCredentialEntriesExact(1, []uint{7})
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("read credential entries: %v", err)
@@ -125,7 +125,7 @@ func TestRecordPassiveQuotaObservationReplacesOnIdentityGenerationChange(t *test
 	}
 	manager.RecordPassiveQuotaObservation(7, 200, 2000, []providerobservation.QuotaWindow{
 		{ID: "secondary", Used: floatPointer(20)},
-	})
+	}, nil)
 
 	dirty := manager.DirtyPassiveQuotaObservations(10)
 	if len(dirty) != 1 || dirty[0].IdentityGeneration != 200 || len(dirty[0].Windows) != 1 ||
@@ -138,7 +138,7 @@ func TestAckPassiveQuotaObservationEvictsTheEntry(t *testing.T) {
 	manager := testCredentialManagerForPassiveQuota(t)
 	manager.RecordPassiveQuotaObservation(7, 100, 1000, []providerobservation.QuotaWindow{
 		{ID: "primary", Used: floatPointer(10)},
-	})
+	}, nil)
 	dirty := manager.DirtyPassiveQuotaObservations(10)
 	if len(dirty) != 1 {
 		t.Fatalf("dirty observations = %#v", dirty)
@@ -162,7 +162,7 @@ func TestAckPassiveQuotaObservationClearsOnlyMatchingVersion(t *testing.T) {
 	manager := testCredentialManagerForPassiveQuota(t)
 	manager.RecordPassiveQuotaObservation(7, 100, 1000, []providerobservation.QuotaWindow{
 		{ID: "primary", Used: floatPointer(10)},
-	})
+	}, nil)
 	dirty := manager.DirtyPassiveQuotaObservations(10)
 	if len(dirty) != 1 {
 		t.Fatalf("dirty observations = %#v", dirty)
@@ -171,7 +171,7 @@ func TestAckPassiveQuotaObservationClearsOnlyMatchingVersion(t *testing.T) {
 
 	manager.RecordPassiveQuotaObservation(7, 100, 2000, []providerobservation.QuotaWindow{
 		{ID: "primary", Used: floatPointer(20)},
-	})
+	}, nil)
 	manager.passiveQuota.ack(7, staleVersion)
 	if stillDirty := manager.DirtyPassiveQuotaObservations(10); len(stillDirty) != 1 {
 		t.Fatalf("a stale ACK cleared a newer pending version: %#v", stillDirty)
@@ -195,7 +195,7 @@ func TestSetPassiveQuotaDirtyNotifierFiresOnRecord(t *testing.T) {
 	})
 	manager.RecordPassiveQuotaObservation(7, 100, 1000, []providerobservation.QuotaWindow{
 		{ID: "primary", Used: floatPointer(10)},
-	})
+	}, nil)
 	select {
 	case <-fired:
 	default:

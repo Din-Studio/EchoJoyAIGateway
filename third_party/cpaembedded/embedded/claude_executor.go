@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	internalexecutor "github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor"
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	internalexecutor "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 )
 
 // ClaudeExecutionError is the bounded error shape allowed to cross the
@@ -174,15 +174,19 @@ func (e *claudeHTTPExecutor) ExecuteCanonical(
 	})
 	if err != nil {
 		return ExecuteResponse{
-			Headers:                observation.responseHeaders(),
-			AppliedReasoningEffort: observation.reasoningEffort(),
-			QuotaSignals:           observation.quotaSignalObservation(),
+			Headers:                      observation.responseHeaders(),
+			AppliedReasoningEffort:       observation.reasoningEffort(),
+			AppliedReasoningMode:         observation.reasoningMode(),
+			AppliedReasoningBudgetTokens: observation.reasoningBudgetTokens(),
+			QuotaSignals:                 observation.quotaSignalObservation(),
 		}, normalizeClaudeExecutionError(err)
 	}
 	return ExecuteResponse{
 		Payload: append([]byte(nil), response.Payload...), Headers: response.Headers.Clone(),
-		AppliedReasoningEffort: observation.reasoningEffort(),
-		QuotaSignals:           observation.quotaSignalObservation(),
+		AppliedReasoningEffort:       observation.reasoningEffort(),
+		AppliedReasoningMode:         observation.reasoningMode(),
+		AppliedReasoningBudgetTokens: observation.reasoningBudgetTokens(),
+		QuotaSignals:                 observation.quotaSignalObservation(),
 	}, nil
 }
 
@@ -250,9 +254,11 @@ func (e *claudeHTTPExecutor) ExecuteStreamCanonical(
 	})
 	if err != nil {
 		return &ExecuteStreamResponse{
-			Headers:                observation.responseHeaders(),
-			AppliedReasoningEffort: observation.reasoningEffort(),
-			QuotaSignals:           observation.quotaSignalObservation(),
+			Headers:                      observation.responseHeaders(),
+			AppliedReasoningEffort:       observation.reasoningEffort(),
+			AppliedReasoningMode:         observation.reasoningMode(),
+			AppliedReasoningBudgetTokens: observation.reasoningBudgetTokens(),
+			QuotaSignals:                 observation.quotaSignalObservation(),
 		}, normalizeClaudeExecutionError(err)
 	}
 	chunks := make(chan ExecuteStreamChunk)
@@ -272,8 +278,10 @@ func (e *claudeHTTPExecutor) ExecuteStreamCanonical(
 	}()
 	return &ExecuteStreamResponse{
 		Headers: response.Headers.Clone(), Chunks: chunks,
-		AppliedReasoningEffort: observation.reasoningEffort(),
-		QuotaSignals:           observation.quotaSignalObservation(),
+		AppliedReasoningEffort:       observation.reasoningEffort(),
+		AppliedReasoningMode:         observation.reasoningMode(),
+		AppliedReasoningBudgetTokens: observation.reasoningBudgetTokens(),
+		QuotaSignals:                 observation.quotaSignalObservation(),
 	}, nil
 }
 

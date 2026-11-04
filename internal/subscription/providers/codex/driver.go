@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	cpaembedded "github.com/router-for-me/CLIProxyAPI/v7/gptload-embedded/embedded"
+	cpaembedded "github.com/router-for-me/CLIProxyAPI/v8/gptload-embedded/embedded"
 
 	"gpt-load/internal/channel/modules"
 	"gpt-load/internal/channel/spec"
@@ -262,7 +262,8 @@ func (codexResetCreditAction) ID() spec.ActionID { return modules.CodexResetCred
 
 func codexRuntimeCredential(value Credential, canonical []byte) subscriptionruntime.Credential {
 	expiresAt, expires := CredentialExpiresAt(value)
-	account := subscriptionruntime.Account{Email: strings.TrimSpace(value.Email), ExpiresAt: expiresAt, ExpiresAtKnown: expires}
+	plan := codexPlan(cpaembedded.CodexCredentialPlan(credentialToBridge(value)))
+	account := subscriptionruntime.Account{PlanName: plan.Name, PlanLevel: string(plan.Level), Email: strings.TrimSpace(value.Email), ExpiresAt: expiresAt, ExpiresAtKnown: expires}
 	if refreshed, err := time.Parse(time.RFC3339, strings.TrimSpace(value.LastRefresh)); err == nil {
 		account.LastRefresh, account.LastRefreshKnown = refreshed, true
 	}

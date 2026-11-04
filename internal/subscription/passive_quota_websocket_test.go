@@ -34,8 +34,8 @@ func TestMergeDelayedWebsocketQuotaDoesNotOverwriteAccountWithSpark(t *testing.T
 				"rate_limits":{"primary":{"used_percent":5,"window_minutes":10080,%s}},
 				"additional_rate_limits":{"Spark":{"secondary":{"used_percent":5,"window_minutes":10080,%s}}}
 			}`, top, named))
-			patches := codex.NormalizeWebsocketQuotaWindows(payload, time.Unix(1799999905, 0))
-			merged, err := mergePassiveQuotaSnapshot(raw, patches)
+			patches, _ := codex.NormalizeWebsocketQuota(payload, time.Unix(1799999905, 0))
+			merged, err := mergePassiveQuotaSnapshot(raw, patches, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -79,8 +79,8 @@ func TestFlushWebsocketQuotaCapturedEventsKeepAccountAndSparkSeparate(t *testing
 			}
 			ref, _ := registry.CredentialRef(credential.ID)
 			for _, observedAtMS := range []int64{2000, 3000} {
-				windows := codex.NormalizeWebsocketQuotaWindows(payload, time.UnixMilli(observedAtMS))
-				manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, observedAtMS, windows)
+				windows, _ := codex.NormalizeWebsocketQuota(payload, time.UnixMilli(observedAtMS))
+				manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, observedAtMS, windows, nil)
 				if pending, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil || pending {
 					t.Fatalf("flush: pending=%v error=%v", pending, err)
 				}
@@ -162,11 +162,12 @@ func TestCapturedHTTPAndWebsocketQuotasAgreeAfterMatching(t *testing.T) {
 				t.Fatal(err)
 			}
 			observedAt := time.Unix(1789204875, 0)
-			httpMerged, err := mergePassiveQuotaSnapshot(raw, codex.NormalizePassiveQuotaWindows(signals, observedAt))
+			httpMerged, err := mergePassiveQuotaSnapshot(raw, codex.NormalizePassiveQuotaWindows(signals, observedAt), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			wsMerged, err := mergePassiveQuotaSnapshot(raw, codex.NormalizeWebsocketQuotaWindows(payload, observedAt))
+			wsWindows, _ := codex.NormalizeWebsocketQuota(payload, observedAt)
+			wsMerged, err := mergePassiveQuotaSnapshot(raw, wsWindows, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -190,12 +191,12 @@ func TestMergeWebsocketQuotaUsesCurrentEventAcrossResetCycles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	patches := codex.NormalizeWebsocketQuotaWindows([]byte(`{
+	patches, _ := codex.NormalizeWebsocketQuota([]byte(`{
 		"type":"codex.rate_limits",
 		"rate_limits":{"secondary":{"used_percent":94,"window_minutes":10080,"reset_at":1800604800}},
 		"additional_rate_limits":{"Spark":{"primary":{"used_percent":5,"window_minutes":10080,"reset_at":1800610000}}}
 	}`), time.Unix(1800000001, 0))
-	merged, err := mergePassiveQuotaSnapshot(raw, patches)
+	merged, err := mergePassiveQuotaSnapshot(raw, patches, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,12 +255,12 @@ func TestMergeWebsocketQuotaPrefersNamedCopyForTheSameSourceAndPeriod(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	windows := codex.NormalizeWebsocketQuotaWindows([]byte(`{
+	windows, _ := codex.NormalizeWebsocketQuota([]byte(`{
 		"type":"codex.rate_limits","metered_limit_name":"codex_bengalfox",
 		"rate_limits":{"secondary":{"used_percent":1,"window_minutes":10080,"reset_at":1800000001}},
 		"additional_rate_limits":{"Spark":{"primary":{"used_percent":0,"window_minutes":10080,"reset_at":1800000000}}}
 	}`), time.Unix(1000, 0))
-	merged, err := mergePassiveQuotaSnapshot(raw, windows)
+	merged, err := mergePassiveQuotaSnapshot(raw, windows, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +345,7 @@ func TestWebsocketQuotaPairCoalescesWithoutRedatingHandshake(t *testing.T) {
 		t.Fatalf("coalescing lost the handshake time or retained caller pointers: %#v", dirty)
 	}
 	// HTTP 继续整份替换，不继承另一请求留下的握手样本。
-	manager.RecordPassiveQuotaObservation(7, 100, 4000, []providerobservation.QuotaWindow{{ID: "http"}})
+	manager.RecordPassiveQuotaObservation(7, 100, 4000, []providerobservation.QuotaWindow{{ID: "http"}}, nil)
 	dirty = manager.DirtyPassiveQuotaObservations(1)
 	if len(dirty) != 1 || dirty[0].Preceding != nil || len(dirty[0].Windows) != 1 || dirty[0].Windows[0].ID != "http" {
 		t.Fatalf("HTTP inherited a WS sample: %#v", dirty)

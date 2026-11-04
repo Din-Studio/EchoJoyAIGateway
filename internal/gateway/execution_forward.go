@@ -8,10 +8,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"gpt-load/internal/dialect"
 	"gpt-load/internal/execution"
+	"gpt-load/internal/health"
 	platformheader "gpt-load/internal/platform/httpheader"
 	"gpt-load/internal/platform/redact"
 	"gpt-load/internal/protocol"
@@ -26,6 +28,8 @@ type ExecutionForwarder struct {
 	usageCapture   *usageCaptureBoundary
 	credentialRPM  CredentialRPMRecorder
 	writeTimeout   time.Duration
+	// emptyResponseWindow 覆盖空回预读窗口；为 0 时使用默认窗口。
+	emptyResponseWindow time.Duration
 }
 
 // CredentialRPMRecorder counts each upstream attempt per credential for the
@@ -99,7 +103,7 @@ func (forwarder *ExecutionForwarder) Forward(
 	result := upstreamFromExecutionResult(ctx, input, executionResult)
 	result = forwarder.prepareBufferedResult(input, result)
 	if (input.ClientProtocol == protocol.OpenAIImages ||
-		input.ClientProtocol == protocol.OpenAIEmbeddings || input.ClientProtocol == protocol.Rerank) && input.ObserveUsage &&
+		embeddingsProtocol(input.ClientProtocol) || input.ClientProtocol == protocol.Rerank) && input.ObserveUsage &&
 		result.HasResponse() && result.StatusCode >= http.StatusOK &&
 		result.StatusCode < http.StatusMultipleChoices &&
 		executionResult.Usage == nil && result.Usage.State == usage.StateMissing && forwarder.usageCapture != nil {
@@ -108,7 +112,7 @@ func (forwarder *ExecutionForwarder) Forward(
 			result.ClassificationBody,
 		)
 	}
-	if input.ClientProtocol == protocol.OpenAIEmbeddings && result.Err == nil &&
+	if embeddingsProtocol(input.ClientProtocol) && result.Err == nil &&
 		result.StatusCode >= http.StatusOK && result.StatusCode < http.StatusMultipleChoices {
 		result.ClassificationBody = nil
 	}
@@ -151,12 +155,16 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 		return executionInputFailure(err)
 	}
 
+	ctx, stopFirstResponse := execution.WithFirstResponseObserver(ctx, input.OnFirstResponse)
+	defer stopFirstResponse()
+	firstData := execution.NewFirstResponseSSEFallback(ctx)
 	writeTimeout := forwarder.writeTimeout
 	if writeTimeout <= 0 {
 		writeTimeout = downstreamWriteTimeout
 	}
 	controller := newStreamWriteController(downstream, writeTimeout)
 	defer func() { _ = controller.clear() }()
+	outputDelivered := firstOutputSink(input.ClientProtocol, input.OnFirstOutput)
 	usageCapture := forwarder.usageCapture
 	if usageCapture == nil {
 		usageCapture = newUsageCaptureBoundary()
@@ -222,16 +230,55 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 	if input.ResponsesStoreDowngraded {
 		responsesStoreBuffer = newStatelessResponsesSSEBuffer()
 	}
+	var redactionRestore *redactionRestoreSSE
+	if input.RedactionCipher != nil && redactionBusinessProtocol(input.ClientProtocol) {
+		structured := input.Request != nil && requestDeclaresJSONOutput(input.ClientProtocol, input.Request.Body)
+		redactionRestore = newRedactionRestoreSSE(input.ClientProtocol, credentialSafeRestore(input.RedactionCipher.RestoreText, restorationCredentialSecrets(input)), structured)
+		redactionRestore.signer = newRedactionSigner(input.RedactionCipher)
+	}
 
 	var (
 		ready         *execution.StreamEvent
 		committed     bool
-		firstResponse bool
 		downstreamErr error
 		errorBody     []byte
 		streamUsage   *execution.UsageEvidence
 	)
+	preread := newEmptyResponsePreread(
+		input.EmptyResponseRetry && streamEvents.observeContent(input.Dialect),
+		nil,
+		forwarder.emptyResponseWindow,
+	)
+	// mu 串行化 sink、预读窗口计时器与收尾逻辑：上游静默时，计时器会从另一个
+	// 协程提交压住的数据。
+	var (
+		mu          sync.Mutex
+		windowTimer *time.Timer
+	)
+	// commitHeld 把压住的数据照常提交给客户端；调用方需持有 mu。
+	commitHeld := func() {
+		if committed || ready == nil || !preread.holding() {
+			return
+		}
+		held, heldTerminal := preread.flush()
+		committed = true
+		if err := commitStream(controller, ready.StatusCode, ready.Header, held); err != nil {
+			if downstreamErr == nil {
+				downstreamErr = err
+			}
+			return
+		}
+		outputDelivered(held)
+		if input.OnStreamReady != nil {
+			input.OnStreamReady()
+		}
+		if heldTerminal {
+			streamEvents.markTerminalForwarded()
+		}
+	}
 	sink := func(event execution.StreamEvent) error {
+		mu.Lock()
+		defer mu.Unlock()
 		if err := event.Validate(); err != nil {
 			downstreamErr = fmt.Errorf("%w: invalid execution stream event", ErrUpstreamProtocol)
 			return downstreamErr
@@ -267,6 +314,7 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 				errorBody = appendExecutionErrorBody(errorBody, event.Data)
 				return nil
 			}
+			firstData(event.Data)
 			observedData := event.Data
 			if responsesStoreBuffer != nil {
 				observedData, err = responsesStoreBuffer.push(event.Data)
@@ -294,26 +342,53 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 					return nil
 				}
 			}
-			if !committed {
-				if !firstResponse {
-					firstResponse = true
-					if input.OnFirstResponse != nil {
-						input.OnFirstResponse()
-					}
+			if redactionRestore != nil {
+				forwardData, err = redactionRestore.Push(forwardData)
+				terminalInChunk = redactionRestore.TerminalReleased()
+				if err != nil {
+					downstreamErr = executionRedactionStreamFailure()
+					return downstreamErr
 				}
+				if len(forwardData) == 0 {
+					return nil
+				}
+			}
+			if !committed {
 				if streamEvents.firstEventWasProviderError() {
 					errorBody = appendExecutionErrorBody(errorBody, forwardData)
 					return nil
 				}
+				if !streamEvents.producedContent() &&
+					preread.hold(forwardData, streamEvents.eventCount, terminalInChunk, streamEvents.sawTerminal) {
+					// 还没有任何产出，继续压住以保留换候选重试的可能。上游静默时不会再有
+					// 事件触发窗口检查，因此由计时器在窗口到期时主动提交。
+					if windowTimer == nil {
+						windowTimer = time.AfterFunc(preread.window, func() {
+							mu.Lock()
+							defer mu.Unlock()
+							commitHeld()
+						})
+					}
+					return nil
+				}
+				if windowTimer != nil {
+					windowTimer.Stop()
+				}
 				committed = true
-				if err := commitStream(controller, ready.StatusCode, ready.Header, forwardData); err != nil {
+				payload := forwardData
+				held, heldTerminal := preread.flush()
+				if len(held) > 0 {
+					payload = append(held, forwardData...)
+				}
+				if err := commitStream(controller, ready.StatusCode, ready.Header, payload); err != nil {
 					downstreamErr = err
 					return err
 				}
+				outputDelivered(payload)
 				if input.OnStreamReady != nil {
 					input.OnStreamReady()
 				}
-				if terminalInChunk {
+				if terminalInChunk || heldTerminal {
 					streamEvents.markTerminalForwarded()
 				}
 				return nil
@@ -340,6 +415,7 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 				}
 				return downstreamErr
 			}
+			outputDelivered(forwardData)
 			if terminalInChunk {
 				streamEvents.markTerminalForwarded()
 			}
@@ -352,6 +428,16 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 
 	forwarder.credentialRPM.RecordCredential(ctx, spec.Credential.ID)
 	terminal := forwarder.executor.ExecuteStream(ctx, spec, sink)
+	if terminal.Error == nil {
+		firstData([]byte{'\n'})
+	}
+	// 收尾全程持锁：迟到的计时器回调只会在此之后运行，届时数据已提交或已取走，
+	// 回调不会再写入可能已交给下一次尝试的响应。
+	mu.Lock()
+	defer mu.Unlock()
+	if windowTimer != nil {
+		windowTimer.Stop()
+	}
 	if err := terminal.Validate(); err != nil {
 		terminal = invalidExecutionStreamResult(terminal, ready, committed)
 	}
@@ -368,6 +454,53 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 				downstreamErr = err
 			}
 		}
+		if downstreamErr == nil && redactionRestore != nil {
+			tail, err := redactionRestore.Finish()
+			if err != nil {
+				downstreamErr = executionRedactionStreamFailure()
+			} else if len(tail) > 0 {
+				if !committed && streamEvents.firstEventWasProviderError() {
+					errorBody = appendExecutionErrorBody(errorBody, tail)
+				} else if !committed && !streamEvents.producedContent() &&
+					preread.hold(tail, streamEvents.eventCount, redactionRestore.TerminalReleased(), streamEvents.sawTerminal) {
+					// EOF 才释放的恢复数据仍须参与空回判定。
+				} else if !committed {
+					held, _ := preread.flush()
+					tail = append(held, tail...)
+					committed = true
+					downstreamErr = commitStream(controller, ready.StatusCode, ready.Header, tail)
+					if downstreamErr == nil {
+						outputDelivered(tail)
+					}
+					if downstreamErr == nil && input.OnStreamReady != nil {
+						input.OnStreamReady()
+					}
+				} else {
+					written, writeErr := controller.write(tail)
+					if writeErr == nil && written != len(tail) {
+						writeErr = io.ErrShortWrite
+					}
+					if writeErr == nil {
+						writeErr = controller.flush()
+					}
+					if writeErr != nil {
+						downstreamErr = &streamFailure{kind: streamFailureDownstreamWrite, err: writeErr}
+					} else {
+						outputDelivered(tail)
+					}
+				}
+			}
+			if committed && downstreamErr == nil && redactionRestore.TerminalReleased() {
+				streamEvents.markTerminalForwarded()
+			}
+		}
+	}
+	emptyResponse := !committed && downstreamErr == nil && terminal.Error == nil &&
+		ready != nil && ready.StatusCode >= http.StatusOK && ready.StatusCode < http.StatusMultipleChoices &&
+		preread.active() && streamEvents.endedWithoutContent()
+	if !emptyResponse {
+		// 不是空回：按关闭开关时的结果把压住的数据照常提交，开关只改变空回的处理。
+		commitHeld()
 	}
 	capturedUsage := streamEvents.finalizeUsage()
 	result := upstreamFromExecutionStreamResult(ctx, input, terminal, streamUsage)
@@ -387,6 +520,12 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 	}
 	if downstreamErr != nil {
 		result.Err = downstreamErr
+		if errors.Is(downstreamErr, errRedactionStream) {
+			// 执行层只看到消费方中止；还原失败是网关内部失败，不是上游提交前的错误。
+			result.ExecutionError = responseRedactionEvidence(0)
+			result.ErrorSummary = result.ExecutionError.Summary
+			result.ProviderErrorBeforeCommit = false
+		}
 	}
 	if committed {
 		result.Stream = executionStreamObservation(ctx, terminal, downstreamErr, streamEvents)
@@ -395,6 +534,23 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 		result.Header = ready.Header.Clone()
 		result.ResponseStarted = true
 		result.UpstreamRequestID = ready.UpstreamRequestID
+	}
+	if emptyResponse {
+		// 上游自然结束却没有任何产出。保留已压住的原始字节，
+		// 以便重试耗尽后仍能把这次空响应原样交付给客户端。
+		summary := fixedErrorSummary(health.EmptyResponseCode)
+		held, _ := preread.flush()
+		result.EmptyResponseBeforeCommit = true
+		result.Body = held
+		result.ErrorSummary = summary
+		result.ExecutionError = &execution.ErrorEvidence{
+			Kind:       execution.ErrorKindProvider,
+			OriginHint: execution.ErrorOriginUpstream,
+			ScopeHint:  execution.ErrorScopeRequest,
+			StatusCode: ready.StatusCode,
+			Code:       health.EmptyResponseCode,
+			Summary:    summary,
+		}
 	}
 	if !committed && streamEvents.firstEventWasProviderError() {
 		summary := streamEvents.firstSummary
@@ -413,7 +569,8 @@ func (forwarder *ExecutionForwarder) ForwardStream(
 			summarySecrets,
 		)
 	}
-	if !committed && result.HasResponse() && !result.ProviderErrorBeforeCommit {
+	if !committed && result.HasResponse() && !result.ProviderErrorBeforeCommit &&
+		!result.EmptyResponseBeforeCommit {
 		result = forwarder.prepareBufferedResult(input, result)
 	}
 	return result
@@ -765,11 +922,15 @@ func executionRepresentationFailure(result UpstreamResult, err error) UpstreamRe
 		Summary:      "Upstream response representation could not be processed.",
 		ReplaySafety: execution.ReplaySafetyUnknown,
 	}
+	if errors.Is(err, errUnaryRestore) {
+		evidence = *responseRedactionEvidence(0)
+	}
 	if result.ResponseStarted {
 		evidence.StatusCode = result.StatusCode
 	}
 	return UpstreamResult{
 		Err:               err,
+		Usage:             result.Usage,
 		StatusCode:        result.StatusCode,
 		RequestWritten:    result.RequestWritten,
 		DispatchState:     result.DispatchState,
@@ -814,6 +975,7 @@ func newExecutionAttemptSpec(input ForwardInput) (execution.AttemptSpec, error) 
 		RawQuery:                 input.Request.RawQuery,
 		Header:                   headers,
 		ConfiguredHeaders:        input.Group.HeaderRules.ConfiguredNames(),
+		ConfiguredParameters:     input.ConfiguredParameters,
 		Body:                     input.Request.Body,
 		IncludeUsage:             input.ObserveUsage,
 		ForceCredentialRefresh:   input.ForceCredentialRefresh,
@@ -855,7 +1017,7 @@ func upstreamFromExecutionResult(
 	}
 	upstream.UpstreamProtocol = result.UpstreamProtocol
 	if input.ClientProtocol == protocol.OpenAIImages ||
-		input.ClientProtocol == protocol.OpenAIEmbeddings {
+		embeddingsProtocol(input.ClientProtocol) {
 		// AttemptResult owns Body after the executor returns. Buffered opaque
 		// representations consume it synchronously, so move that ownership across
 		// the internal boundary instead of cloning a large payload twice.
@@ -992,6 +1154,10 @@ func executionStreamProtocolFailure(cause error) error {
 		kind: streamFailureProtocol,
 		err:  fmt.Errorf("%w: %v", ErrUpstreamProtocol, cause),
 	}
+}
+
+func executionRedactionStreamFailure() error {
+	return &streamFailure{kind: streamFailureRedaction, err: errRedactionStream}
 }
 
 func preferCapturedStreamUsage(

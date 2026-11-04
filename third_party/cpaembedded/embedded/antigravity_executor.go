@@ -12,14 +12,14 @@ import (
 	"time"
 	"unicode/utf8"
 
-	internalcache "github.com/router-for-me/CLIProxyAPI/v7/internal/cache"
-	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	internalexecutor "github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/proxyutil"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	internalcache "github.com/router-for-me/CLIProxyAPI/v8/internal/cache"
+	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	internalexecutor "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/proxyutil"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -181,11 +181,15 @@ func (executor *antigravityHTTPExecutor) ExecuteCanonical(
 		Model: request.Model, Payload: append([]byte(nil), request.Payload...), Format: format,
 	}, antigravityExecutorOptions(request, format, false))
 	if err != nil {
-		return ExecuteResponse{Headers: observation.responseHeaders(), AppliedReasoningEffort: observation.reasoningEffort()}, normalizeAntigravityExecutionError(err)
+		return ExecuteResponse{Headers: observation.responseHeaders(), AppliedReasoningEffort: observation.reasoningEffort(),
+			AppliedReasoningMode:         observation.reasoningMode(),
+			AppliedReasoningBudgetTokens: observation.reasoningBudgetTokens()}, normalizeAntigravityExecutionError(err)
 	}
 	return ExecuteResponse{
 		Payload: normalizeAntigravityConvertedUsage(request.Format, false, response.Payload), Headers: response.Headers.Clone(),
-		AppliedReasoningEffort: observation.reasoningEffort(),
+		AppliedReasoningEffort:       observation.reasoningEffort(),
+		AppliedReasoningMode:         observation.reasoningMode(),
+		AppliedReasoningBudgetTokens: observation.reasoningBudgetTokens(),
 	}, nil
 }
 
@@ -255,7 +259,9 @@ func (executor *antigravityHTTPExecutor) ExecuteStreamCanonical(
 		Model: request.Model, Payload: append([]byte(nil), request.Payload...), Format: format,
 	}, antigravityExecutorOptions(request, format, true))
 	if err != nil {
-		return &ExecuteStreamResponse{Headers: observation.responseHeaders(), AppliedReasoningEffort: observation.reasoningEffort()}, normalizeAntigravityExecutionError(err)
+		return &ExecuteStreamResponse{Headers: observation.responseHeaders(), AppliedReasoningEffort: observation.reasoningEffort(),
+			AppliedReasoningMode:         observation.reasoningMode(),
+			AppliedReasoningBudgetTokens: observation.reasoningBudgetTokens()}, normalizeAntigravityExecutionError(err)
 	}
 	chunks := make(chan ExecuteStreamChunk)
 	go func() {
@@ -274,6 +280,8 @@ func (executor *antigravityHTTPExecutor) ExecuteStreamCanonical(
 	}()
 	return &ExecuteStreamResponse{
 		Headers: response.Headers.Clone(), Chunks: chunks, AppliedReasoningEffort: observation.reasoningEffort(),
+		AppliedReasoningMode:         observation.reasoningMode(),
+		AppliedReasoningBudgetTokens: observation.reasoningBudgetTokens(),
 	}, nil
 }
 

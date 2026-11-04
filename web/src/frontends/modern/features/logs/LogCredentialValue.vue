@@ -25,8 +25,9 @@ const canCopy = computed(() =>
   Boolean(
     !props.deleted &&
     props.name &&
-    (props.connectionType === 'subscription' ||
-      (props.connectionType === 'api_key' && props.groupId && props.credentialId)),
+    props.connectionType === 'api_key' &&
+    props.groupId &&
+    props.credentialId,
   ),
 )
 function resolveSecret(): Promise<string> {
@@ -40,7 +41,7 @@ function resolveSecret(): Promise<string> {
     v-if="canCopy"
     :value="name"
     :label="t('logs.copyCredential')"
-    :resolve-value="connectionType === 'api_key' ? resolveSecret : undefined"
+    :resolve-value="resolveSecret"
   />
   <AppOverflowText v-else :text="display" :class="{ 'modern-log-credential-deleted': deleted }" />
 </template>

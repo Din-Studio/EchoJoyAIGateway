@@ -159,7 +159,7 @@ type externalBilling interface {
 | `usage.cache_read_tokens` | 读缓存 token |
 | `usage.cache_write_tokens` | 写缓存 token 三项之和：5m、1h、TTL 未知 |
 | `cost` | `chargeNano`，也就是密钥额度扣的同一个数，从 nano-CNY 四舍五入到 6 位小数，与请求日志的显示一致（见 10.6） |
-| `started_at` | `event.CompletedAt - event.DurationMs`，RFC 3339 毫秒精度 |
+| `started_at` | recorder 显式传入的响应计时起点，RFC 3339 毫秒精度；不能用日志发出时间减响应耗时（2026-11-04 合并适配） |
 | `duration_ms` | `event.DurationMs` |
 
 ### 4.5 outbox 与投递
@@ -204,6 +204,8 @@ RETURNING request_id, payload, attempts
 | 其他非 200 状态码、网络错误、超时 | 写入 `last_error`。下次重试时间在领取时已经写好，这里不用再改 |
 
 可重试的错误不设放弃上限。401、403 表示配置错误，修正后积压的记录会自动补报。
+
+**计时口径更新（2026-11-04）**：dev 的响应耗时不再包含响应结束后的额度结算和日志收尾。`CompletedAt` 仍为日志发出时间，因此 `Record` 接口显式接收 recorder 的计时起点 `startedAt`。计费钩子在 emit 时读取该值，兼容准入后才开始计时的 HTTP 与 WebSocket 回合；不修改通用日志的时间字段、响应耗时或扣费金额。
 
 **正确性依据**：灵影按 `request_id` 幂等，所以重复投递不会重复扣费。`SKIP LOCKED` 和"时间下限"只是用来减少重复投递的流量，正确性并不依赖它们（第 7.1 节）。
 

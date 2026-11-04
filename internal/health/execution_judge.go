@@ -95,6 +95,18 @@ func JudgeExecution(attempt ExecutionAttempt, decisionContext DecisionContext) D
 			"safety.execution_canceled",
 		)
 	}
+	if attempt.Evidence.Code == EmptyResponseCode {
+		// 上游正常完成了一次请求，只是没有产出内容。换下一个候选值得一试，
+		// 但这不是凭据故障：不冷却、不拉黑，也不计入失败统计。
+		return constrainCommittedDecision(decision(
+			FailureCategoryAmbiguous,
+			execution.ErrorOriginUpstream,
+			execution.ErrorScopeRequest,
+			RetryNextCandidate,
+			EffectNone,
+			"content.empty_response",
+		), attempt)
+	}
 	if attempt.DispatchState == execution.DispatchNotSent {
 		if result, ok := candidatePreparationDecision(attempt.Evidence); ok {
 			return result
@@ -116,6 +128,18 @@ func JudgeExecution(attempt ExecutionAttempt, decisionContext DecisionContext) D
 			)
 		}
 		switch attempt.Evidence.Kind {
+		case execution.ErrorKindHTTP:
+			if originForEvidence(attempt.Evidence) == execution.ErrorOriginUpstream &&
+				attempt.Evidence.StatusCode >= http.StatusBadRequest && attempt.Evidence.StatusCode <= 599 {
+				// 握手可返回 HTTP 拒绝，但业务请求尚未发送。保留发送证据，复用既有健康规则。
+				evidence := attempt.Evidence.Clone()
+				evidence.ReplaySafety = execution.ReplaySafetyRejectedBeforeProcessing
+				attempt.Evidence = &evidence
+				category := classifyExecutionEvidence(attempt)
+				return constrainCommittedDecision(decisionForExecutionCategory(category, attempt, decisionContext), attempt)
+			}
+			return decision(FailureCategoryAmbiguous, originForEvidence(attempt.Evidence), attempt.Evidence.ScopeHint,
+				RetryNone, EffectNone, "fallback.not_sent")
 		case execution.ErrorKindTransport, execution.ErrorKindTimeout:
 			return decision(
 				FailureCategoryUpstreamHostError,
@@ -490,7 +514,7 @@ func retryableUpstreamResponse(attempt ExecutionAttempt) bool {
 
 func transientCapacityDecision(attempt ExecutionAttempt) (Decision, bool) {
 	evidence := attempt.Evidence
-	if evidence == nil || evidence.ReplaySafety != execution.ReplaySafetyRejectedBeforeProcessing ||
+	if attempt.DispatchState != execution.DispatchMaybeSent || evidence == nil || evidence.ReplaySafety != execution.ReplaySafetyRejectedBeforeProcessing ||
 		originForEvidence(evidence) != execution.ErrorOriginUpstream ||
 		(evidence.Kind != execution.ErrorKindHTTP && evidence.Kind != execution.ErrorKindProvider) {
 		return Decision{}, false

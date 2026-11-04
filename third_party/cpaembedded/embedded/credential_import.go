@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	claudeauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/claude"
-	codexauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
+	claudeauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/claude"
+	codexauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codex"
 )
 
 // ImportCodexCredential 将导入字段补全为已有的持久凭据。
@@ -71,6 +71,9 @@ func ImportCodexCredential(ctx context.Context, raw []byte, options Options) (Co
 	}
 	if refreshed.Email == "" {
 		refreshed.Email = current.Email
+	}
+	if refreshed.PlanType == "" {
+		refreshed.PlanType = current.PlanType
 	}
 	if refreshed.IDToken == "" {
 		refreshed.IDToken = current.IDToken

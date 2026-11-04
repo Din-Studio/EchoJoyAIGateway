@@ -1,17 +1,37 @@
 package control
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 
+	"gpt-load/internal/jev"
 	"gpt-load/internal/platform/config"
+	"gpt-load/internal/pricing"
+	"gpt-load/internal/requestaudit"
+	"gpt-load/internal/requestlog"
 )
 
+// 每次调用按冻结汇率各自换算，不把整条请求的护栏费用重复记到每次调用。
+func TestRequestAuditCallsSettleEachCallSeparately(t *testing.T) {
+	cny, err := pricing.NewCurrency(pricing.CurrencyCNY, 7_000_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := requestlog.Record{Settlement: cny, AuditCostNano: 21, RequestAudit: &requestaudit.Result{Status: "passed", Calls: []jev.Observation{
+		{Called: true, EstimatedCostNanoUSD: 1}, {Called: true, EstimatedCostNanoUSD: 2}, {Reason: "no_candidate"},
+	}}}
+	calls := mapRequestAudit(record).Calls
+	if calls[0].EstimatedCostNano != "7" || calls[1].EstimatedCostNano != "14" || calls[2].EstimatedCostNano != "0" {
+		t.Fatalf("per-call settled costs = %+v", calls)
+	}
+}
+
 func TestRequestAuditLogQueryValidation(t *testing.T) {
-	for _, status := range []string{"warned", "blocked", "incomplete"} {
+	for _, status := range []string{"allowed", "blocked", "failed", "warned", "incomplete"} {
 		query, err := parseRequestLogQuery("audit_status=" + status + "&audit_rule=Private%20data")
 		if err != nil || query.AuditStatus != status || query.AuditRule != "Private data" {
 			t.Fatalf("guardrail query was rejected: %+v, %v", query, err)
@@ -24,6 +44,34 @@ func TestRequestAuditLogQueryValidation(t *testing.T) {
 		if _, err := parseRequestLogQuery(raw); err == nil {
 			t.Fatalf("invalid guardrail query accepted: %s", raw)
 		}
+	}
+}
+
+func TestRequestAuditFinalOutcomeProjection(t *testing.T) {
+	for _, test := range []struct{ status, reason, want string }{
+		{"passed", "", "allowed"},
+		{"warned", "", "warned"},
+		{"incomplete", "content_truncated", "allowed"},
+		{"warned", "content_truncated", "warned"},
+		{"blocked", "content_truncated", "blocked"},
+		{"incomplete", "timeout", "failed"},
+		{"incomplete", "invalid_response", "failed"},
+		{"incomplete", "canceled", "failed"},
+	} {
+		t.Run(test.status+"/"+test.reason, func(t *testing.T) {
+			response := mapRequestAudit(requestlog.Record{RequestAudit: &requestaudit.Result{Status: test.status, Reason: test.reason}})
+			encoded, err := json.Marshal(response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var value map[string]any
+			if err := json.Unmarshal(encoded, &value); err != nil {
+				t.Fatal(err)
+			}
+			if value["outcome"] != test.want || response.Reason != test.reason {
+				t.Fatalf("outcome or detail changed: %s", encoded)
+			}
+		})
 	}
 }
 

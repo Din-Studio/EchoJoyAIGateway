@@ -31,6 +31,7 @@ func testRequestAuditLogFilters(t *testing.T, db *gorm.DB) {
 		{"incomplete", `{"status":"incomplete","reason":"timeout","findings":[{"rule_id":"personal_data","name":"Private data","action":"warn"}],"calls":[]}`},
 		{"other_key", `{"status":"warned","findings":[{"rule_id":"personal_data","name":"Private data","action":"warn"}],"calls":[]}`},
 		{"upstream_error", `{"status":"warned","findings":[{"rule_id":"personal_data","name":"Private data","action":"warn"}],"calls":[]}`},
+		{"sampled", `{"status":"incomplete","reason":"content_truncated","findings":[],"calls":[]}`},
 	}
 	ids := map[string]string{}
 	for index, fixture := range fixtures {
@@ -64,7 +65,9 @@ func testRequestAuditLogFilters(t *testing.T, db *gorm.DB) {
 	}{
 		{"warnings regardless of request outcome", ListQuery{AuditStatus: "warned"}, []string{"warned", "other_key", "upstream_error"}},
 		{"blocked", ListQuery{AuditStatus: "blocked"}, []string{"blocked"}},
-		{"incomplete", ListQuery{AuditStatus: "incomplete"}, []string{"incomplete"}},
+		{"incomplete", ListQuery{AuditStatus: "incomplete"}, []string{"incomplete", "sampled"}},
+		{"allowed includes sampled but excludes warning hits", ListQuery{AuditStatus: "allowed"}, []string{"empty_findings", "passed", "sampled"}},
+		{"failed excludes valid sampled reviews", ListQuery{AuditStatus: "failed"}, []string{"incomplete"}},
 		{"rule keyword is case-insensitive", ListQuery{AuditRule: "CREDENTIAL"}, []string{"blocked"}},
 		{"literal percent", ListQuery{AuditRule: "100%"}, []string{"warned"}},
 		{"literal underscore", ListQuery{AuditRule: "_"}, []string{"warned"}},

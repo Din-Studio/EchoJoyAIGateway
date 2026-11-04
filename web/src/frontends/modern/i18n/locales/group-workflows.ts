@@ -1,5 +1,4 @@
 export const zhCN = {
-  openImport: '继续',
   deleteGroup: '删除分组',
   deleteDescription: '将删除此分组及其凭据、模型和配置，此操作无法撤销。',
   typeGroupName: '输入分组名称以确认',
@@ -20,17 +19,10 @@ export const zhCN = {
   modelConflicts: '以下模型映射重复，请先在模型设置中删除重复项：',
   noModelChanges: '模型已一致，无需同步。',
   clearModels: '此次同步将清空分组模型，分组将无法提供模型服务。',
-  importTarget: '导入目标',
-  importExisting: '导入已有分组',
-  importNew: '创建新分组',
   chooseGroup: '选择分组',
-  chooseGroupHelp: '搜索目标分组后添加密钥或订阅账号，也可以创建新分组。',
-  importSucceeded: '已导入「{name}」：新增 {added}，跳过重复 {duplicated}。',
-  continueImport: '继续导入',
 }
 
 export const enUS: typeof zhCN = {
-  openImport: 'Continue',
   deleteGroup: 'Delete group',
   deleteDescription:
     'Delete this group and its credentials, models, and configuration. This cannot be undone.',
@@ -53,18 +45,10 @@ export const enUS: typeof zhCN = {
   modelConflicts: 'These model mappings are duplicated. Remove duplicates in model settings first:',
   noModelChanges: 'Models are already in sync.',
   clearModels: 'This will remove all group models. The group will no longer serve models.',
-  importTarget: 'Import target',
-  importExisting: 'Existing group',
-  importNew: 'Create group',
   chooseGroup: 'Choose a group',
-  chooseGroupHelp:
-    'Search for a group to add API keys or subscription accounts, or create a new group.',
-  importSucceeded: 'Imported into “{name}”: {added} added, {duplicated} duplicates skipped.',
-  continueImport: 'Continue importing',
 }
 
 export const jaJP: typeof zhCN = {
-  openImport: '続ける',
   deleteGroup: 'グループを削除',
   deleteDescription: 'グループと認証情報、モデル、設定を削除します。この操作は取り消せません。',
   typeGroupName: '確認のためグループ名を入力',
@@ -86,12 +70,5 @@ export const jaJP: typeof zhCN = {
   modelConflicts: 'モデルのマッピングが重複しています。モデル設定で重複を削除してください：',
   noModelChanges: 'モデルは同期済みです。',
   clearModels: 'すべてのモデルが削除され、グループはモデルを提供できなくなります。',
-  importTarget: 'インポート先',
-  importExisting: '既存グループ',
-  importNew: '新規グループ',
   chooseGroup: 'グループを選択',
-  chooseGroupHelp:
-    'グループを検索してキーやアカウントを追加するか、新しいグループを作成してください。',
-  importSucceeded: '「{name}」へ追加 {added} 件、重複スキップ {duplicated} 件。',
-  continueImport: '続けてインポート',
 }

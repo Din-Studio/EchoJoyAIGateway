@@ -1,3 +1,5 @@
+import { jaJP as proxies } from './proxies'
+import { jaJP as concurrency } from './concurrency'
 import { jaJP as requestRedaction } from './request-redaction'
 import { jaJP as experimental } from './experimental'
 import { jaJP as rpm } from './rpm'
@@ -22,6 +24,8 @@ import { jaJP as autoModel } from './auto-model'
 import { jaJP as subscriptions } from './subscriptions'
 
 export default {
+  proxies,
+  concurrency,
   requestRedaction,
   ...experimental,
   rpm,
@@ -52,7 +56,6 @@ export default {
   shell: {
     refresh: '更新',
     refreshedAt: '{time} 更新',
-    importCredentials: 'キーをインポート',
     goHome: 'GPT-Load の概要',
     mascotHint:
       'マスコットを長押し、またはフォーカス中にスペースで遊べます。Enter で概要へ戻ります。',
@@ -101,6 +104,7 @@ export default {
     },
   },
   pages: {
+    proxies: { title: proxies.title },
     home: { title: '概要' },
     groups: { title: 'グループ' },
     groupDetail: { title: 'グループの詳細' },

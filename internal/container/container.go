@@ -74,6 +74,7 @@ func BuildContainer() (*dig.Container, error) {
 		cluster.NewCredentialHealth,
 		cluster.NewRefreshLease,
 		cluster.NewRPMStats,
+		cluster.NewConcurrency,
 		cluster.NewJobLease,
 		cluster.NewCatalogStore,
 		cluster.NewAuthFailures,
@@ -169,6 +170,7 @@ func BuildContainer() (*dig.Container, error) {
 		dialect.NewDecisions,
 		dialect.NewAnthropic,
 		dialect.NewGemini,
+		dialect.NewGeminiEmbeddings,
 		func(
 			openAI *dialect.OpenAI,
 			openAIResponses *dialect.OpenAIResponses,
@@ -178,8 +180,11 @@ func BuildContainer() (*dig.Container, error) {
 			decisions *dialect.Decisions,
 			anthropic *dialect.Anthropic,
 			gemini *dialect.Gemini,
+			geminiEmbeddings *dialect.GeminiEmbeddings,
 		) dialect.Set {
-			return dialect.NewSet(openAI, openAIResponses, openAIImages, openAIEmbeddings, rerank, decisions, anthropic, gemini)
+			return dialect.NewSet(
+				openAI, openAIResponses, openAIImages, openAIEmbeddings, rerank, decisions, anthropic, gemini, geminiEmbeddings,
+			)
 		},
 		func(registry *channel.Registry) (*bifrostexecutor.RuntimeManager, error) {
 			return bifrostexecutor.NewManagedRuntime(registry)
@@ -302,14 +307,15 @@ func newGatewaySharedState(
 	client *cluster.Client,
 	quota *cluster.AccessQuota,
 	credentialHealth *cluster.CredentialHealth,
+	concurrency *cluster.Concurrency,
 ) gateway.SharedState {
 	return gateway.SharedState{
-		AccessQuota:           quota,
-		Health:                credentialHealth,
-		ResponseBindings:      cluster.NewResponseBindings(client, cfg.Cluster.ResponseBindingTTL),
-		Affinity:              cluster.NewAffinity(client),
-		CredentialConcurrency: cluster.NewCredentialConcurrency(client),
-		GuardrailEvidence:     cluster.NewGuardrailVerdicts(client, requestaudit.EvidenceTTL),
+		AccessQuota:       quota,
+		Health:            credentialHealth,
+		ResponseBindings:  cluster.NewResponseBindings(client, cfg.Cluster.ResponseBindingTTL),
+		Affinity:          cluster.NewAffinity(client),
+		Concurrency:       concurrency,
+		GuardrailEvidence: cluster.NewGuardrailVerdicts(client, requestaudit.EvidenceTTL),
 	}
 }
 
@@ -332,6 +338,7 @@ func newProviderAdapterRegistry(
 		{ProviderKind: channel.ProviderGemini, Adapter: bifrost},
 		{ProviderKind: channel.ProviderMultiProtocolGateway, Adapter: bifrost},
 		{ProviderKind: channel.ProviderOpenAICompatible, Adapter: bifrost},
+		{ProviderKind: channel.ProviderCline, Adapter: bifrost},
 		{ProviderKind: channel.ProviderAzureOpenAI, Adapter: bifrost},
 		{ProviderKind: channel.ProviderAWSBedrock, Adapter: bifrost},
 		{ProviderKind: channel.ProviderGoogleVertex, Adapter: bifrost},

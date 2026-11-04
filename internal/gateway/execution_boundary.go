@@ -136,6 +136,17 @@ func judgeUpstreamResult(
 	return decision
 }
 
+// responseRedactionEvidence describes a response withheld because its
+// reversible-redaction tokens could not be restored safely.
+func responseRedactionEvidence(statusCode int) *execution.ErrorEvidence {
+	return &execution.ErrorEvidence{
+		Kind: execution.ErrorKindInternal, OriginHint: execution.ErrorOriginInternal,
+		ScopeHint: execution.ErrorScopeRequest, StatusCode: statusCode,
+		Code: reasonResponseRedactionFailed.Code, Summary: reasonResponseRedactionFailed.Message,
+		ReplaySafety: execution.ReplaySafetyUnknown,
+	}
+}
+
 func decisionEvidence(result UpstreamResult) (*execution.ErrorEvidence, error) {
 	if errors.Is(result.Err, errResponseOwnershipUnavailable) {
 		// 归属登记失败是共享状态故障，不能按流的结束方式判为上游或凭据故障。
@@ -187,6 +198,8 @@ func decisionEvidence(result UpstreamResult) (*execution.ErrorEvidence, error) {
 			ScopeHint:  execution.ErrorScopeRequest,
 			StatusCode: result.StatusCode, Code: "upstream_protocol_error", Summary: summary,
 		}, nil
+	case StreamEndRedactionFailed:
+		return responseRedactionEvidence(result.StatusCode), nil
 	case StreamEndIdleTimeout:
 		return &execution.ErrorEvidence{
 			Kind: execution.ErrorKindTimeout, OriginHint: execution.ErrorOriginUpstream,

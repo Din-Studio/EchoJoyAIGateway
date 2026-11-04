@@ -122,7 +122,7 @@ func recordRequest(service *Service, requestID string) {
 	service.Record(&Admission{UserID: "u1", KeyID: "k1"}, telemetry.RequestEvent{
 		RequestID: requestID, ClientModel: "gpt-5", Status: telemetry.RequestStatusSuccess,
 		CompletedAt: time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC), DurationMs: 10,
-	}, 12_345_000)
+	}, 12_345_000, time.Date(2026, 10, 19, 9, 59, 59, 990_000_000, time.UTC))
 }
 
 type outboxRow struct {
@@ -151,7 +151,7 @@ func TestRecordStoresOneReportPerRequest(t *testing.T) {
 
 	recordRequest(service, "req-1")
 	recordRequest(service, "req-1")
-	service.Record(nil, telemetry.RequestEvent{RequestID: "req-unbilled"}, 1)
+	service.Record(nil, telemetry.RequestEvent{RequestID: "req-unbilled"}, 1, time.Time{})
 
 	var payload string
 	var count int
