@@ -28,7 +28,7 @@ func TestQuotaHistoryPreservesBatchedCrossTransportRebound(t *testing.T) {
 				} else {
 					window.SourceID = "codex_spark"
 				}
-				manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, int64(index+1)*10000, []providerobservation.QuotaWindow{window})
+				manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, int64(index+1)*10000, []providerobservation.QuotaWindow{window}, nil)
 			}
 			for attempt := 0; attempt < 10; attempt++ {
 				remaining, err := manager.FlushPassiveQuotaObservations(t.Context())
@@ -75,16 +75,16 @@ func TestQuotaHistoryPrefersNamedCopyForSameEvent(t *testing.T) {
 					ref, _ := registry.CredentialRef(credential.ID)
 					if warm {
 						seconds, used := int64(604800), .9
-						manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, 10000, []providerobservation.QuotaWindow{{ID: "primary", SourceID: "codex_bengalfox", WindowSeconds: &seconds, Utilization: &used}})
+						manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, 10000, []providerobservation.QuotaWindow{{ID: "primary", SourceID: "codex_bengalfox", WindowSeconds: &seconds, Utilization: &used}}, nil)
 						if _, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil {
 							t.Fatal(err)
 						}
 					}
-					windows := codex.NormalizeWebsocketQuotaWindows([]byte(`{"type":"codex.rate_limits","metered_limit_name":"codex_bengalfox","rate_limits":{"secondary":{"used_percent":1,"window_minutes":10080,"reset_at":1800000001}},"additional_rate_limits":{"Spark":{"primary":{"used_percent":0,"window_minutes":10080,"reset_at":1800000000}}}}`), time.UnixMilli(30000))
+					windows, _ := codex.NormalizeWebsocketQuota([]byte(`{"type":"codex.rate_limits","metered_limit_name":"codex_bengalfox","rate_limits":{"secondary":{"used_percent":1,"window_minutes":10080,"reset_at":1800000001}},"additional_rate_limits":{"Spark":{"primary":{"used_percent":0,"window_minutes":10080,"reset_at":1800000000}}}}`), time.UnixMilli(30000))
 					if reverse {
 						slices.Reverse(windows)
 					}
-					manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, 30000, windows)
+					manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, 30000, windows, nil)
 					for attempt := 0; attempt < 10; attempt++ {
 						remaining, err := manager.FlushPassiveQuotaObservations(t.Context())
 						if err != nil {
@@ -121,7 +121,7 @@ func TestQuotaHistoryDiscardedTopCopyDoesNotCreateRebound(t *testing.T) {
 	seconds := int64(604_800)
 	for index, used := range []float64{0, .03} {
 		manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, int64(index+1)*10_000,
-			[]providerobservation.QuotaWindow{{ID: "primary", SourceID: "codex_spark", WindowSeconds: &seconds, Utilization: &used}})
+			[]providerobservation.QuotaWindow{{ID: "primary", SourceID: "codex_spark", WindowSeconds: &seconds, Utilization: &used}}, nil)
 		if _, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil {
 			t.Fatal(err)
 		}
@@ -133,7 +133,7 @@ func TestQuotaHistoryDiscardedTopCopyDoesNotCreateRebound(t *testing.T) {
 	manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, 30_000, []providerobservation.QuotaWindow{
 		{ID: "secondary", SourceID: "codex_spark", WindowSeconds: &seconds, Utilization: &topUsed},
 		{ID: "primary", SourceName: "Spark", WindowSeconds: &seconds, Utilization: &namedUsed},
-	})
+	}, nil)
 	for attempt := 0; attempt < 10; attempt++ {
 		remaining, err := manager.FlushPassiveQuotaObservations(t.Context())
 		if err != nil {
@@ -148,7 +148,7 @@ func TestQuotaHistoryDiscardedTopCopyDoesNotCreateRebound(t *testing.T) {
 	}
 	used := .06
 	manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, 3_610_000,
-		[]providerobservation.QuotaWindow{{ID: "primary", SourceID: "codex_spark", WindowSeconds: &seconds, Utilization: &used}})
+		[]providerobservation.QuotaWindow{{ID: "primary", SourceID: "codex_spark", WindowSeconds: &seconds, Utilization: &used}}, nil)
 	if remaining, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil || remaining {
 		t.Fatalf("hourly flush: remaining=%t error=%v", remaining, err)
 	}

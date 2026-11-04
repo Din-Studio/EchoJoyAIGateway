@@ -155,7 +155,7 @@ func openAIResponsesUsagePatch(
 	)
 	diagnostics.Merge(totalDiagnostics)
 
-	var cached *int64
+	var cached, cacheWrite *int64
 	if details, detailDiagnostics := usageOptionalObject(
 		usageObject,
 		"input_tokens_details",
@@ -166,6 +166,8 @@ func openAIResponsesUsagePatch(
 			"cached_tokens",
 			false,
 		)
+		diagnostics.Merge(detailDiagnostics)
+		cacheWrite, detailDiagnostics = usageInteger(details, "cache_write_tokens", false)
 		diagnostics.Merge(detailDiagnostics)
 		diagnostics.Merge(usageUnsupportedPositiveIntegerDetails(details, "audio_tokens"))
 	} else {
@@ -185,37 +187,5 @@ func openAIResponsesUsagePatch(
 		diagnostics.Merge(detailDiagnostics)
 	}
 
-	patch := usage.Patch{Final: final, Diagnostics: diagnostics}
-	cacheValue := int64(0)
-	if cached != nil {
-		cacheValue = *cached
-		patch.CacheRead = &cacheValue
-	}
-	if input != nil {
-		if cached == nil {
-			patch.CacheRead = &cacheValue
-		}
-		uncached, ok := usage.SubtractCached(*input, cacheValue)
-		if !ok {
-			uncached = 0
-			patch.Diagnostics.Add(usage.DiagnosticNegativeValue)
-		}
-		patch.UncachedInput = &uncached
-	}
-	if output != nil {
-		patch.Output = output
-	}
-
-	tokens := usage.Tokens{}
-	if patch.UncachedInput != nil {
-		tokens.UncachedInput = *patch.UncachedInput
-	}
-	if patch.CacheRead != nil {
-		tokens.CacheRead = *patch.CacheRead
-	}
-	if patch.Output != nil {
-		tokens.Output = *patch.Output
-	}
-	usageNormalizedTotal(total, tokens, &patch.Diagnostics)
-	return patch, true
+	return openAICountsPatch(final, diagnostics, input, output, total, cached, cacheWrite), true
 }

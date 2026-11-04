@@ -22,6 +22,7 @@ type scriptedAccessQuotaGate struct {
 	admitErr    error
 	completeErr error
 	completes   atomic.Int32
+	costNano    atomic.Int64
 }
 
 func (gate *scriptedAccessQuotaGate) Check(
@@ -44,9 +45,10 @@ func (gate *scriptedAccessQuotaGate) View(
 }
 
 func (gate *scriptedAccessQuotaGate) Complete(
-	context.Context, accessquota.Ticket, int64,
+	_ context.Context, _ accessquota.Ticket, costNano int64,
 ) (accessquota.CompletionResult, error) {
 	gate.completes.Add(1)
+	gate.costNano.Store(costNano)
 	return accessquota.CompletionResult{}, gate.completeErr
 }
 

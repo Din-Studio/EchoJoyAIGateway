@@ -35,10 +35,20 @@ const (
 	Alibaba          ID = "alibaba"
 	Volcengine       ID = "volcengine"
 	OpenRouter       ID = "openrouter"
+	Cline            ID = "cline"
 	Jev              ID = "jev"
 	Groq             ID = "groq"
 	Vercel           ID = "vercel"
 	XAI              ID = "xai"
+	Cerebras         ID = "cerebras"
+	Mistral          ID = "mistral"
+	Nebius           ID = "nebius"
+	Parasail         ID = "parasail"
+	Wafer            ID = "wafer"
+	HuggingFace      ID = "huggingface"
+	Cohere           ID = "cohere"
+	OpenCodeGo       ID = "opencode_go"
+	OpenCodeZen      ID = "opencode_zen"
 )
 
 // ProviderKind is the single dispatch key used to resolve a ProviderAdapter.
@@ -54,6 +64,7 @@ const (
 	ProviderGemini               ProviderKind = "gemini"
 	ProviderMultiProtocolGateway ProviderKind = "multi_protocol_gateway"
 	ProviderOpenAICompatible     ProviderKind = "openai_compatible"
+	ProviderCline                ProviderKind = "cline"
 	ProviderAzureOpenAI          ProviderKind = "azure_openai"
 	ProviderAWSBedrock           ProviderKind = "aws_bedrock"
 	ProviderGoogleVertex         ProviderKind = "google_vertex"
@@ -105,6 +116,7 @@ func (kind ProviderKind) Valid() bool {
 		ProviderGemini,
 		ProviderMultiProtocolGateway,
 		ProviderOpenAICompatible,
+		ProviderCline,
 		ProviderAzureOpenAI,
 		ProviderAWSBedrock,
 		ProviderGoogleVertex,

@@ -19,6 +19,9 @@ const defaultAccessKeyMarker = models.InternalSystemSettingPrefix + "bootstrap.d
 func (s *Service) EnsureInitialState(ctx context.Context) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	if err := s.migrateLegacyProxyOverrides(ctx); err != nil {
+		return fmt.Errorf("migrate legacy proxy configuration: %w", err)
+	}
 	var catalogSnapshot *catalog.Snapshot
 	if s.catalogRuntime != nil {
 		catalogSnapshot = s.catalogRuntime.Load()
@@ -26,6 +29,10 @@ func (s *Service) EnsureInitialState(ctx context.Context) error {
 
 	var priceTable *pricing.Table
 	err := s.withControlTransaction(ctx, func(tx *gorm.DB) error {
+		// Serialize the default-key marker across concurrent startup replicas.
+		if err := lockProxyCatalog(tx); err != nil {
+			return err
+		}
 		nowMS := s.now().UnixMilli()
 		// A peer may be refreshing right now, so interrupted refreshes are
 		// swept by lease after this transaction, not here.

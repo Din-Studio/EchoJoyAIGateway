@@ -16,7 +16,7 @@ func TestPassiveQuotaAdmissionDoesNotWaitForPersistenceLock(t *testing.T) {
 	defer close(release)
 	go func() {
 		manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 2000,
-			[]providerobservation.QuotaWindow{{ID: "primary", State: "available"}})
+			[]providerobservation.QuotaWindow{{ID: "primary", State: "available"}}, nil)
 		close(done)
 	}()
 	select {

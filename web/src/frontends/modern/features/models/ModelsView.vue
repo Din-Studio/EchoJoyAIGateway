@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Boxes, RefreshCw, Search } from '@lucide/vue'
+import { Boxes, ListOrdered, RefreshCw, Search } from '@lucide/vue'
 import { keepPreviousData, useIsFetching, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { computed, onScopeDispose, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -29,7 +29,7 @@ import {
 } from '@modern/components/ui'
 import { modelStateKeys, parseModelsState, serializeModelsState } from './models-state'
 import ModelCard from './ModelCard.vue'
-import ModelCatalogSettingsDialog from './ModelCatalogSettingsDialog.vue'
+import ClientModelCatalogDialog from './ClientModelCatalogDialog.vue'
 import ModelDetailPanel from './ModelDetailPanel.vue'
 
 const { t } = useI18n()
@@ -41,7 +41,7 @@ const state = useURLState(modelStateKeys, parseModelsState, serializeModelsState
 const filters = computed<ModelFilters>(() => ({
   q: state.value.q,
   groups: admin.value ? state.value.groups : 'enabled',
-  pricing: state.value.pricing,
+  pricing: admin.value ? state.value.pricing : 'all',
   page: state.value.page,
   pageSize: state.value.pageSize,
 }))
@@ -55,7 +55,7 @@ const query = useQuery(
 )
 const data = computed(() => query.data.value)
 const search = ref(state.value.q)
-const profileModel = ref('')
+const catalogOpen = ref(false)
 const composing = ref(false)
 let timer: ReturnType<typeof setTimeout> | undefined
 const frame = ref<InstanceType<typeof AppListFrame>>()
@@ -79,7 +79,7 @@ const summary = computed(() => [
   ...(admin.value && state.value.groups !== 'enabled'
     ? [{ key: 'groups', label: t('modelManager.groupStatus'), value: t('modelManager.allGroups') }]
     : []),
-  ...(state.value.pricing !== 'all'
+  ...(admin.value && state.value.pricing !== 'all'
     ? [
         {
           key: 'pricing',
@@ -174,8 +174,8 @@ watch([data, () => query.isPlaceholderData.value], ([result, placeholder]) => {
 watch(
   admin,
   (value) => {
-    if (!value && state.value.groups !== 'enabled')
-      state.value = { ...state.value, groups: 'enabled' }
+    if (!value && (state.value.groups !== 'enabled' || state.value.pricing !== 'all'))
+      state.value = { ...state.value, groups: 'enabled', pricing: 'all' }
   },
   { immediate: true },
 )
@@ -206,7 +206,9 @@ useMessageSource(() =>
       <AppTextField
         v-model="search"
         :label="t('modelManager.search')"
-        :placeholder="t('modelManager.searchPlaceholder')"
+        :placeholder="
+          t(admin ? 'modelManager.searchPlaceholder' : 'modelManager.readOnlySearchPlaceholder')
+        "
         :icon="Search"
         type="search"
         label-hidden
@@ -224,12 +226,16 @@ useMessageSource(() =>
         class="modern-models-filter"
         @update:model-value="change({ groups: $event === 'all' ? 'all' : 'enabled' })"
       />
+      <AppButton v-if="admin" :icon="ListOrdered" @click="catalogOpen = true">{{
+        t('modelManager.clientCatalog.title')
+      }}</AppButton>
       <AppButton v-if="admin" :icon="RefreshCw" :loading="syncing" @click="sync">{{
         t('modelManager.sync')
       }}</AppButton>
     </form>
     <div class="modern-models-statusbar">
       <AppSegmentedControl
+        v-if="admin"
         :model-value="state.pricing"
         :options="pricingOptions"
         :label="t('modelManager.pricingStatus')"
@@ -237,13 +243,13 @@ useMessageSource(() =>
           change({ pricing: $event === 'pending' || $event === 'configured' ? $event : 'all' })
         "
       />
+      <p v-else class="modern-models-price-help">{{ t('modelManager.readOnlyPriceHelp') }}</p>
       <AppFilterSummary :items="summary" @remove="reset" @reset="reset()" />
     </div>
     <AppListFrame
       ref="frame"
       :label="t('pages.models.title')"
       :loading="Boolean(data) && query.isFetching.value"
-      :scroll-key="JSON.stringify(filters)"
     >
       <AppCollectionState
         v-if="!data && query.isPending.value"
@@ -257,11 +263,19 @@ useMessageSource(() =>
         v-else-if="!data.items.length"
         :icon="summary.length ? Search : Boxes"
         :title="t(summary.length ? 'modelManager.noMatches' : 'modelManager.empty')"
-        :description="t(summary.length ? 'modelManager.noMatchesHelp' : 'modelManager.emptyHelp')"
+        :description="
+          t(
+            summary.length
+              ? 'modelManager.noMatchesHelp'
+              : admin
+                ? 'modelManager.emptyHelp'
+                : 'modelManager.readOnlyEmptyHelp',
+          )
+        "
       >
         <AppButton v-if="summary.length" @click="reset()">{{ t('collection.reset') }}</AppButton>
       </AppCollectionState>
-      <div v-else class="modern-models-grid">
+      <div v-else class="modern-models-grid" :class="{ 'is-read-only': !admin }">
         <ModelCard
           v-for="model in data.items"
           :key="model.name"
@@ -270,7 +284,6 @@ useMessageSource(() =>
           :selected="model.name === state.model"
           :disabled="query.isPlaceholderData.value"
           @open="open(model, $event)"
-          @settings="profileModel = model.name"
         />
       </div>
       <template #footer>
@@ -296,13 +309,7 @@ useMessageSource(() =>
       @select="state = { ...state, source: $event }"
       @changed="changed"
     />
-    <ModelCatalogSettingsDialog
-      v-if="admin && profileModel"
-      :key="profileModel"
-      :model="profileModel"
-      :editable="admin"
-      @close="profileModel = ''"
-    />
+    <ClientModelCatalogDialog v-if="admin && catalogOpen" @close="catalogOpen = false" />
   </div>
 </template>
 
@@ -341,12 +348,18 @@ useMessageSource(() =>
   color: var(--modern-muted);
   font-size: var(--modern-font-size-secondary);
 }
+.modern-models-price-help {
+  margin: 0;
+}
 /* 卡片改为价格表头 + 来源行的宽卡布局，需要足够宽度让 4 个价格列不挤压来源名。
    用多列而不是网格：来源数不同导致卡高不一，网格会按行内最高的卡留出空洞。 */
 .modern-models-grid {
   column-width: 620px;
   column-gap: var(--modern-space-4);
   padding-block: var(--modern-space-1) var(--modern-space-4);
+}
+.modern-models-grid.is-read-only {
+  column-width: 520px;
 }
 .modern-models-grid > * {
   margin-bottom: var(--modern-space-4);

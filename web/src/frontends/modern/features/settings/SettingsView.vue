@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ProxySelect from '../proxies/ProxySelect.vue'
 import {
   Banknote,
   Cable,
@@ -98,6 +99,9 @@ type SectionID = (typeof sectionIDs)[number]
 const sectionFields: Record<SectionID, readonly SettingKey[]> = {
   routing: ['route_strategy', 'affinity_enabled', 'affinity_ttl', 'affinity_capacity'],
   connection: [
+    'global_concurrency_limit',
+    'default_access_key_concurrency_limit',
+    'default_group_concurrency_limit',
     'proxy_config',
     'responses_websocket_enabled',
     'first_byte_timeout',
@@ -105,6 +109,7 @@ const sectionFields: Record<SectionID, readonly SettingKey[]> = {
     'stream_idle_timeout',
     'retry_count',
     'blacklist_threshold',
+    'empty_response_retry',
     'validation_interval',
   ],
   browser: ['gateway_name', 'public_base_url', 'cors', 'header_rules', 'response_header_rules'],
@@ -124,6 +129,11 @@ const sectionIcons = {
   experimental: FlaskConical,
   system: Server,
 }
+const concurrencyNumbers: readonly SettingNumber[] = [
+  'global_concurrency_limit',
+  'default_access_key_concurrency_limit',
+  'default_group_concurrency_limit',
+]
 const timeouts: readonly SettingNumber[] = [
   'first_byte_timeout',
   'request_timeout',
@@ -204,7 +214,7 @@ const switchingCurrency = computed(() =>
 const proxyOptions = computed(() =>
   ['inherit', 'direct', 'custom'].map((value) => ({
     value,
-    label: t('settingsForm.proxy.' + value),
+    label: value === 'custom' ? t('proxies.select') : t('settingsForm.proxy.' + value),
   })),
 )
 function settingState(key: SettingKey) {
@@ -515,6 +525,20 @@ onScopeDispose(() => {
                 />
               </SettingItem>
               <SettingItem
+                v-if="matches('empty_response_retry')"
+                v-bind="settingItem('empty_response_retry')"
+                class="modern-settings-block"
+                @reset="restore('empty_response_retry')"
+                @undo="undoRestore('empty_response_retry')"
+              >
+                <AppSwitch
+                  id="settings-empty_response_retry"
+                  v-model="draft.empty_response_retry"
+                  :label="t('settingsForm.fields.empty_response_retry')"
+                  :disabled="disabled('empty_response_retry')"
+                />
+              </SettingItem>
+              <SettingItem
                 v-if="matches('proxy_config')"
                 v-bind="settingItem('proxy_config')"
                 :description="t('settingsForm.hints.proxy_config')"
@@ -537,19 +561,15 @@ onScopeDispose(() => {
                 />
                 <template #details>
                   <div class="modern-settings-proxy">
-                    <AppTextField
+                    <ProxySelect
                       v-if="draft.proxy_config.mode === 'custom'"
-                      v-model="draft.proxy_config.url"
-                      :label="t('settingsForm.proxy.url')"
+                      v-model="draft.proxy_config.id"
+                      :saved-id="base.values.proxy_config.proxy_id"
+                      :saved-name="base.values.proxy_config.proxy_name"
+                      :saved-address="base.values.proxy_config.display_url"
+                      :reference-state="base.values.proxy_config.reference_state"
                       :disabled="disabled('proxy_config')"
                       :error="fieldErrors.proxy_config"
-                      :placeholder="
-                        base.values.proxy_config.configured_mode === 'custom'
-                          ? t('settingsForm.proxy.existing')
-                          : t('settingsForm.proxy.placeholder')
-                      "
-                      autocomplete="off"
-                      spellcheck="false"
                     />
                     <p class="modern-settings-proxy-effective">
                       <span>{{ t('settingsForm.proxy.effective') }}</span>
@@ -568,6 +588,24 @@ onScopeDispose(() => {
                   </div>
                 </template>
               </SettingItem>
+              <div
+                v-if="concurrencyNumbers.some(matches)"
+                class="modern-settings-block modern-settings-group"
+              >
+                <h3 class="modern-settings-group-title">{{ t('concurrency.label') }}</h3>
+                <div class="modern-settings-number-grid">
+                  <SettingsNumberField
+                    v-for="key in concurrencyNumbers.filter(matches)"
+                    :key="key"
+                    v-model="draft[key]"
+                    :setting="key"
+                    v-bind="settingState(key)"
+                    :error="fieldErrors[key]"
+                    @reset="restore(key)"
+                    @undo="undoRestore(key)"
+                  />
+                </div>
+              </div>
               <div
                 v-if="timeouts.some(matches)"
                 class="modern-settings-block modern-settings-group"

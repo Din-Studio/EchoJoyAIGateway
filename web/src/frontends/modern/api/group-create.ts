@@ -20,6 +20,7 @@ export interface GroupChannel {
   mark: string
   keywords: string[]
   defaultBaseURL: string
+  defaultBaseURLs: string[]
   fields: ChannelField[]
   credentialFields: ChannelField[]
   discovery: boolean
@@ -95,6 +96,7 @@ export async function getGroupChannels(
       mark: text(item.mark),
       keywords: list(item.search_terms).map(text),
       defaultBaseURL: text(item.default_base_url),
+      defaultBaseURLs: list(item.default_base_urls).map(text),
       fields: list(item.param_fields).map(field),
       credentialFields: list(item.credential_fields).map(field),
       discovery: boolean(capabilities.model_discovery),
@@ -121,7 +123,7 @@ export interface ModelDraft {
   id: string
   alias: string
 }
-export type ProxyOverride = { mode: 'direct' } | { mode: 'custom'; url: string }
+export type ProxyOverride = { mode: 'direct' } | { mode: 'custom'; proxy_id: number }
 export interface GroupConnectionDraft {
   channel_id: string
   params: Record<string, string>

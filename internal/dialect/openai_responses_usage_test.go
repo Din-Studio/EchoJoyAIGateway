@@ -56,6 +56,12 @@ func TestOpenAIResponsesUsageNonStreaming(t *testing.T) {
 			},
 		},
 		{
+			name:  "positive cache write uses base cache-write bucket",
+			body:  `{"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":20,"cache_write_tokens":5},"output_tokens":30,"total_tokens":130}}`,
+			want:  usage.Tokens{UncachedInput: 75, CacheRead: 20, CacheWrite5M: 5, Output: 30},
+			state: usage.StateComplete,
+		},
+		{
 			name:  "response service tier does not affect usage extraction",
 			body:  `{"service_tier":"priority","usage":{"input_tokens":100,"output_tokens":30,"total_tokens":130}}`,
 			want:  usage.Tokens{UncachedInput: 100, Output: 30},

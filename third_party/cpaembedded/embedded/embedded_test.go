@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 )
 
 func TestParseCodexCredentialJSON(t *testing.T) {
@@ -328,6 +328,7 @@ func TestRefreshCodexCredentialOnce(t *testing.T) {
 
 	credential, err := RefreshCodexCredentialOnce(context.Background(), CodexCredential{
 		Type:         ProviderCodex,
+		PlanType:     "pro",
 		AccessToken:  "old-access",
 		RefreshToken: "old-refresh",
 		AccountID:    "account-123",
@@ -341,6 +342,9 @@ func TestRefreshCodexCredentialOnce(t *testing.T) {
 	}
 	if credential.AccessToken != "new-access" || credential.RefreshToken != "new-refresh" {
 		t.Fatalf("credential = %#v", credential)
+	}
+	if credential.PlanType != "pro" {
+		t.Fatalf("刷新丢失套餐提示：%q", credential.PlanType)
 	}
 	if credential.AccountID != "account-123" || credential.Email != "admin@example.com" {
 		t.Fatalf("identity changed: %#v", credential)
@@ -747,10 +751,10 @@ func TestListCodexModelsRequestsOnceAndNormalizesIDs(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		if r.Header.Get("Version") != "0.155.0" || r.Header.Get("User-Agent") != "codex_cli_rs/0.155.0" {
+		if r.Header.Get("Version") != "0.159.2" || r.Header.Get("User-Agent") != "codex_cli_rs/0.159.2" {
 			t.Errorf("Codex version headers = %q / %q", r.Header.Get("Version"), r.Header.Get("User-Agent"))
 		}
-		if r.URL.Path != "/models" || r.URL.Query().Get("client_version") != "0.155.0" ||
+		if r.URL.Path != "/models" || r.URL.Query().Get("client_version") != "0.159.2" ||
 			r.Header.Get("Authorization") != "Bearer access" || r.Header.Get("Chatgpt-Account-Id") != "account-123" {
 			t.Errorf("request = %s %s %#v", r.Method, r.URL.String(), r.Header)
 		}
@@ -775,7 +779,7 @@ func TestObserveCodexAccountUsesFixedUsagePathOnce(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		if r.Header.Get("Version") != "0.155.0" || r.Header.Get("User-Agent") != "codex_cli_rs/0.155.0" {
+		if r.Header.Get("Version") != "0.159.2" || r.Header.Get("User-Agent") != "codex_cli_rs/0.159.2" {
 			t.Errorf("Codex version headers = %q / %q", r.Header.Get("Version"), r.Header.Get("User-Agent"))
 		}
 		if r.URL.Path != "/wham/usage" {
@@ -803,7 +807,7 @@ func TestObserveCodexResetCreditsUsesFixedDetailsPathOnce(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		if r.Header.Get("Version") != "0.155.0" || r.Header.Get("User-Agent") != "codex_cli_rs/0.155.0" {
+		if r.Header.Get("Version") != "0.159.2" || r.Header.Get("User-Agent") != "codex_cli_rs/0.159.2" {
 			t.Errorf("Codex version headers = %q / %q", r.Header.Get("Version"), r.Header.Get("User-Agent"))
 		}
 		if r.Method != http.MethodGet || r.URL.Path != "/wham/rate-limit-reset-credits" {
@@ -834,7 +838,7 @@ func TestConsumeCodexResetCreditUsesStableRedeemRequestIDOnce(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		if r.Header.Get("Version") != "0.155.0" || r.Header.Get("User-Agent") != "codex_cli_rs/0.155.0" {
+		if r.Header.Get("Version") != "0.159.2" || r.Header.Get("User-Agent") != "codex_cli_rs/0.159.2" {
 			t.Errorf("Codex version headers = %q / %q", r.Header.Get("Version"), r.Header.Get("User-Agent"))
 		}
 		if r.Method != http.MethodPost || r.URL.Path != "/wham/rate-limit-reset-credits/consume" ||

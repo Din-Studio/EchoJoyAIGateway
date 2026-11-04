@@ -109,7 +109,9 @@ const display = computed(() => {
     case 'affinity_hit':
       return t(row[column] ? 'logs.yes' : 'logs.no')
     case 'first_response_ms':
-      return row.stream ? logDuration(row.first_response_ms, locale.value) : '—'
+      return row.stream && row.first_response_ms !== null && row.first_response_ms > 0
+        ? logDuration(row.first_response_ms, locale.value)
+        : '—'
     case 'duration_ms':
       return logDuration(row.duration_ms, locale.value)
     case 'attempt_count':
@@ -145,6 +147,7 @@ const display = computed(() => {
       return row.context_threshold_tokens === null
         ? '—'
         : logNumber(row.context_threshold_tokens, locale.value)
+    case 'client_ip':
     case 'client_model':
     case 'upstream_model':
     case 'upstream_reported_model':
@@ -253,6 +256,11 @@ const hint = computed(() => {
   <AppTooltip v-else-if="table && column === 'attempt_count' && row.attempt_count > 1" :label="hint"
     ><span class="modern-log-retry">{{ display }}</span></AppTooltip
   >
+  <span
+    v-else-if="column === 'duration_ms' || column === 'first_response_ms'"
+    :class="{ 'modern-log-number': table, 'modern-log-empty': table && display === '—' }"
+    >{{ display }}</span
+  >
   <AppOverflowText
     v-else
     :text="display"
@@ -260,9 +268,7 @@ const hint = computed(() => {
     :class="{
       'modern-log-empty': table && display === '—',
       'modern-log-amount': table && costCell?.cost_state === 'priced',
-      'modern-log-number':
-        table &&
-        (tokenValue !== undefined || column === 'duration_ms' || column === 'first_response_ms'),
+      'modern-log-number': table && tokenValue !== undefined,
     }"
   />
 </template>

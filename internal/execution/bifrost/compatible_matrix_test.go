@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/maximhq/bifrost/core/schemas"
+
 	"gpt-load/internal/channel"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/protocol"
@@ -343,5 +345,88 @@ func TestListModelsConvertsProviderResultToClientProtocol(t *testing.T) {
 	}
 	if strings.Contains(string(result.Body), "gptload-custom-") || strings.Contains(string(result.Body), "openai/model-1") {
 		t.Fatalf("internal provider leaked: %s", result.Body)
+	}
+}
+
+func TestConvertedGeminiTerminalEvents(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		reason string
+		want   string
+	}{
+		{"completed", "", "STOP"},
+		{"output-limit", "max_output_tokens", "MAX_TOKENS"},
+		{"content-filter", "content_filter", "SAFETY"},
+		{"unknown-reason", "unknown", "OTHER"},
+		{"missing-reason", "", "OTHER"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var event schemas.BifrostResponsesStreamResponse
+			if err := json.Unmarshal([]byte(`{"type":"response.incomplete","response":{"status":"incomplete","model":"served","usage":{"input_tokens":8,"output_tokens":2,"total_tokens":10}}}`), &event); err != nil {
+				t.Fatal(err)
+			}
+			if tc.name == "completed" {
+				event.Type = schemas.ResponsesStreamResponseTypeCompleted
+				event.Response.Status = schemas.Ptr(schemas.ResponsesResponseStatusCompleted)
+			} else if tc.reason != "" {
+				event.Response.IncompleteDetails = &schemas.ResponsesResponseIncompleteDetails{Reason: tc.reason}
+			}
+			originalType := event.Type
+			encoder := newConvertedResponsesStreamEncoder(protocol.Gemini)
+			frames, err := encoder.encode(nil, &event, nil)
+			if err != nil || len(frames) != 1 {
+				t.Fatalf("terminal frames = %q, error = %v", frames, err)
+			}
+			for _, fragment := range []string{`"finishReason":"` + tc.want + `"`, `"promptTokenCount":8`, `"candidatesTokenCount":2`, `"totalTokenCount":10`} {
+				if !bytes.Contains(frames[0], []byte(fragment)) {
+					t.Errorf("terminal frame missing %s: %s", fragment, frames[0])
+				}
+			}
+			if event.Type != originalType {
+				t.Errorf("encoder changed source event type: %s -> %s", originalType, event.Type)
+			}
+		})
+	}
+}
+
+func TestOpenAICompatibleConvertedGeminiStreamEndsWithUsage(t *testing.T) {
+	t.Parallel()
+
+	// Chat providers send the finish chunk and then a usage-only chunk with empty choices.
+	const chatStream = "data: {\"id\":\"chat_1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"served\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"id\":\"chat_1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"served\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}\n\n" +
+		"data: {\"id\":\"chat_1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"served\",\"choices\":[],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":2,\"total_tokens\":10,\"prompt_tokens_details\":{\"cached_tokens\":3,\"cache_write_tokens\":4}}}\n\n" +
+		"data: [DONE]\n\n"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, chatStream)
+	}))
+	defer server.Close()
+
+	runtime := newProtocolTestRuntime(t, testRuntimeOptions{allowPrivateNetwork: true})
+	target, _ := json.Marshal(map[string]string{"base_url": server.URL + "/v1"})
+	spec := convertedSpec(channel.OpenAICompatible, protocol.Gemini, execution.OperationChatCompletion,
+		"/v1beta/models/client-model:streamGenerateContent", []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`))
+	spec.TargetConfig = target
+	spec = freezeTestAttempt(spec)
+	var data bytes.Buffer
+	result := runtime.ExecuteStream(context.Background(), spec, func(event execution.StreamEvent) error {
+		if event.Kind == execution.StreamEventData {
+			data.Write(event.Data)
+		}
+		return nil
+	})
+	if err := result.Validate(); err != nil || result.Error != nil || result.Usage == nil {
+		t.Fatalf("result = %+v err=%v data=%s", result, err, data.String())
+	}
+	for _, fragment := range []string{"hello", `"finishReason":"MAX_TOKENS"`, `"usageMetadata"`, `"promptTokenCount":8`} {
+		if !strings.Contains(data.String(), fragment) {
+			t.Errorf("stream missing %q: %s", fragment, data.String())
+		}
+	}
+	if got := result.Usage.Normalized.Tokens; got.CacheRead != 3 || got.CacheWrite5M != 4 || got.UncachedInput != 1 || got.Output != 2 {
+		t.Errorf("usage tokens = %+v", got)
 	}
 }

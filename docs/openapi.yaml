@@ -6,7 +6,7 @@ info:
     name: MIT
     identifier: MIT
   description: |
-    控制面 HTTP 接口，路由前缀为 `/api`。当前收录范围：AccessKey 管理；模型总览、模型价格、分组模型与模型发现。
+    控制面 HTTP 接口，路由前缀为 `/api`。当前收录范围：AccessKey 管理；模型总览、客户端目录与资料、模型价格、分组模型与模型发现；集中代理管理。
     数据面接口（`/v1/*`、`/v1beta/*`）不在本文档内。
 
     ## 鉴权
@@ -26,9 +26,10 @@ info:
     `Accept-Language` 本地化。
 
     ## 幂等
-    会生成或替换密钥明文的写操作要求 `Idempotency-Key` 请求头（小写规范 UUID v4）。
-    相同 key + 相同请求体重放时返回首次结果，`replayed=true`，且**不再返回明文 `key`**。
-    相同 key + 不同请求体返回 `409 IDEMPOTENCY_KEY_REUSED`。
+    会生成或替换密钥明文的写操作，以及代理新增、修改、导入，要求 `Idempotency-Key` 请求头（小写规范 UUID v4）。
+    AccessKey 写操作重放时返回首次结果，`replayed=true`，且**不再返回明文 `key`**。
+    代理写操作重放返回首次脱敏 DTO，不增加 `replayed` 或操作账本字段。
+    相同 key + 不同规范化请求返回 `409 IDEMPOTENCY_KEY_REUSED`。
 
     ## 灵影镜像密钥
     灵影通过 `/api/access-keys` 把用户的个人 API Key 镜像为 AccessKey，并通过 `GET /api/models` 读取模型目录。
@@ -68,7 +69,7 @@ tags:
   - name: AccessKeys
     description: AccessKey 管理（仅 admin）
   - name: Models
-    description: 模型总览（admin 与 AccessKey 均可调用）
+    description: 模型总览（admin 与 AccessKey 均可调用）；客户端目录与模型资料管理（仅 admin）
   - name: ModelPrices
     description: 上游价格、客户端模型统一价与 models.dev 目录同步（仅 admin）
   - name: GroupModels
@@ -77,8 +78,308 @@ tags:
     description: 从上游发现可用模型（仅 admin）
   - name: Currency
     description: 系统货币（admin 与 AccessKey 均可调用）
+  - name: Proxies
+    description: |
+      加密代理目录，仅 admin，AccessKey 不可访问。全局、分组、凭据通过 ID 引用。
+      禁用或删除保留引用，但出站继承上一级，最终可以使用环境代理或直连；解密失败不按继承处理。
+      修改目录走配置发布；测试观测和测试 URL 偏好仅写 bookkeeping，不更新配置 revision，不触发运行时 reload。
 
 paths:
+  /api/proxies:
+    get:
+      tags: [Proxies]
+      operationId: listProxies
+      summary: 分页查询脱敏代理目录
+      description: |
+        默认按名称（空名称使用 display_url）、ID 升序；latency 先按耗时升序，未测试项排后。
+        all=true 返回全部匹配项，但响应 page_size 仍为 20。
+      parameters:
+        - { name: q, in: query, schema: { type: string }, description: 名称或脱敏地址的大小写不敏感包含匹配 }
+        - { name: state, in: query, schema: { type: string, enum: [enabled, disabled] } }
+        - { name: scheme, in: query, schema: { type: string, enum: [http, socks5] } }
+        - { name: used, in: query, schema: { type: string, enum: [used, unused] } }
+        - { name: test, in: query, schema: { type: string, enum: [untested, success, failed] }, description: success 指无连接错误且 HTTP 状态为 2xx }
+        - { name: sort, in: query, schema: { type: string, enum: [latency] } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: all, in: query, schema: { type: boolean, default: false } }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - properties:
+                      data: { $ref: '#/components/schemas/ProxyList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [Proxies]
+      operationId: createProxy
+      summary: 创建启用中的代理
+      description: 名称可空；url 必填。同一规范化连接（包括认证信息）不能重复。重放返回首次脱敏结果。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/ProxySaveRequest'
+                - required: [url]
+      responses:
+        '200': { $ref: '#/components/responses/ProxyItemResult' }
+        '400': { $ref: '#/components/responses/ProxyWriteBadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/ProxyWriteConflict' }
+        '410': { $ref: '#/components/responses/IdempotencyExpired' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '428': { $ref: '#/components/responses/IdempotencyKeyRequired' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/OperationIncomplete' }
+
+  /api/proxies/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ProxyID'
+    put:
+      tags: [Proxies]
+      operationId: updateProxy
+      summary: 更新代理名称或连接
+      description: |
+        url 省略或去除首尾空白后为空时保留原连接；name 省略或为空时清空名称。
+        提交非空 url 会重置测试观测。重放返回首次脱敏结果，不读取当前条目。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProxySaveRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/ProxyItemResult' }
+        '400': { $ref: '#/components/responses/ProxyWriteBadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/ProxyWriteConflict' }
+        '410': { $ref: '#/components/responses/IdempotencyExpired' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '428': { $ref: '#/components/responses/IdempotencyKeyRequired' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/OperationIncomplete' }
+
+  /api/proxies/{id}/reveal:
+    parameters:
+      - $ref: '#/components/parameters/ProxyID'
+    post:
+      tags: [Proxies]
+      operationId: revealProxy
+      summary: 读取含认证信息的代理原始地址
+      description: 无需 Idempotency-Key；通过鉴权后，处理器的成功与错误响应均带 Cache-Control no-store 和 Pragma no-cache。
+      responses:
+        '200':
+          description: 成功
+          headers:
+            Cache-Control: { $ref: '#/components/headers/NoStore' }
+            Pragma: { schema: { type: string, const: no-cache } }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [id, name, url]
+                        properties:
+                          id: { type: integer }
+                          name: { type: string }
+                          url: { type: string, description: 未脱敏的完整地址，含已配置的认证信息 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/proxies/impact:
+    post:
+      tags: [Proxies]
+      operationId: proxyImpact
+      summary: 查询代理的直接引用
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/ProxyIDs'
+              unevaluatedProperties: false
+      responses:
+        '200':
+          description: 合并并去重代理 ID 后的直接引用；不计算继承影响，不存在的 ID 不报错
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - properties:
+                      data: { $ref: '#/components/schemas/ProxyReferences' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/proxies/batch:
+    post:
+      tags: [Proxies]
+      operationId: batchProxies
+      summary: 批量启用、禁用或删除代理
+      description: 无需 Idempotency-Key；不存在的 ID 忽略。禁用或删除不清除引用，出站改为继承。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/ProxyIDs'
+                - required: [ids, action]
+                  properties:
+                    ids: { minItems: 1 }
+                    action: { type: string, enum: [enable, disable, delete] }
+              unevaluatedProperties: false
+      responses:
+        '200': { $ref: '#/components/responses/ProxyNoDataResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503':
+          description: '`CONTROL_RECOVERY_PENDING` / `CONTROL_OPERATION_INCOMPLETE`（配置已提交但运行时恢复未完成）'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/proxies/import:
+    post:
+      tags: [Proxies]
+      operationId: importProxies
+      summary: 按行导入代理地址
+      description: 最多 1000 行（去除末尾换行后计算），忽略空行，跳过重复连接；新条目启用，按主机生成名称。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                entries: { type: string, description: 每行一个 HTTP 或 SOCKS5 代理 URL }
+      responses:
+        '200':
+          description: 成功或首次结果的幂等重放
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [imported, duplicates, invalid_lines]
+                        properties:
+                          imported: { type: integer, minimum: 0 }
+                          duplicates: { type: integer, minimum: 0 }
+                          invalid_lines: { type: array, items: { type: integer, minimum: 1 }, description: 无效行号从 1 开始 }
+        '400': { $ref: '#/components/responses/ProxyWriteBadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/IdempotencyKeyReused' }
+        '410': { $ref: '#/components/responses/IdempotencyExpired' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '428': { $ref: '#/components/responses/IdempotencyKeyRequired' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/OperationIncomplete' }
+
+  /api/proxies/{id}/test:
+    parameters:
+      - $ref: '#/components/parameters/ProxyID'
+    post:
+      tags: [Proxies]
+      operationId: testProxy
+      summary: 手动测试指定代理
+      description: |
+        无需 Idempotency-Key；直接使用指定代理，即使代理已禁用，不使用继承链。
+        发起 GET，10 秒超时；Redis 中独立的 8 个槽由所有副本共享，不占业务全局槽。
+        满额立即返回 429，Redis 不可用返回 503，不等待；结束或取消释放名额。
+        连接失败与超时写入观测并返回 HTTP 200，不作为 API 错误；观测只在连接身份和顺序守卫通过时保存。
+        返回当前目录条目，防止旧测试结果覆盖新连接。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProxyTestURLRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/ProxyItemResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429':
+          description: '`PROXY_TEST_CONCURRENCY_LIMITED`：8 个共享测试槽已满；认证锁定时为 AUTH_LOCKED'
+          headers:
+            Retry-After: { schema: { type: integer, minimum: 1 }, description: 测试槽已满时为 1 }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503':
+          description: '`CLUSTER_STATE_UNAVAILABLE`：Redis 测试槽不可用'
+          headers:
+            Retry-After: { schema: { type: string, const: '1' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/proxies/test-url:
+    put:
+      tags: [Proxies]
+      operationId: saveProxyTestURL
+      summary: 保存管理用测试 URL 偏好
+      description: |
+        无需 Idempotency-Key。不发起测试，不改变运行时路由设置，不触发配置 reload。
+        列表的 test_url 返回该偏好，未保存时为 https://www.gstatic.com/generate_204。
+        手动测试仍须在请求体中显式传入 url。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProxyTestURLRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/ProxyNoDataResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
   /api/currency:
     get:
       tags: [Currency]
@@ -555,6 +856,126 @@ paths:
         '429': { $ref: '#/components/responses/AuthLocked' }
         '500': { $ref: '#/components/responses/InternalError' }
 
+  /api/models/client-catalog:
+    get:
+      tags: [Models]
+      operationId: getClientCatalog
+      summary: 查询 Codex 客户端目录、模型资料与字节预算（仅 admin）
+      description: |
+        返回可通过 Responses create 调用的候选模型资料（`models`）、当前选择及顺序（`selected`）、
+        默认选择及顺序（`defaults`），以及按 `client_version` 生成的真实 JSON 字节预算（`budget`）。
+        AccessKey 不可访问此管理接口。数据面下发目录时仍按 AccessKey 的协议、模型和分组权限过滤候选。
+        默认选择名称以 `gpt-` 开头的候选，但排除 `gpt-image` 和 `gpt-image-*`；
+        手动排序优先，其余按 GPT 数字版本从新到旧排列，同版本或无版本时按名称排列。
+        目录选择只影响 Codex 目录展示，不改变普通模型列表 API、请求路由、调用权限或计费。
+        Codex 目录响应体最多 1 MiB（1048576 字节），包含 JSON 包装、逗号和闭合字符。
+        超限时只返回所选顺序中可容纳的最大完整前缀，不截断条目，也不跳过大条目来填入后续模型。
+        数据面 `client_version` 为三段非负整数且 >= 0.159.2 时省略 `base_instructions`；
+        旧版本或无法识别的版本保留该字段。管理面预算使用返回的固定模板版本，不代表所有客户端版本或密钥的预算。
+      security:
+        - adminBearer: []
+      responses:
+        '200':
+          description: 当前目录与预算
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/ClientCatalogDTO' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    put:
+      tags: [Models]
+      operationId: updateClientCatalog
+      summary: 原子保存 Codex 目录选择、排序与模型资料（仅 admin）
+      description: |
+        严格解析一个 JSON 对象；未知字段、重复字段、多个 JSON 值或错误字段类型均拒绝。请求体上限 32 MiB。
+        `models` 替换当前候选的选择与顺序；`profiles` 中每项整体替换该模型的资料覆盖。
+        `known_models` 可选；提供非 null 值时必须与当前完整候选集合一致且无重复，顺序不限。
+        启用该校验后，候选新增、删除或失去可用路由会使旧草稿返回 `400 VALIDATION_FAILED`；必须重新读取目录。
+        该字段不是配置版本锁，不检测只有资料或排序发生的变化。
+        `reset_directory: true` 只重置目录选择与顺序；不能同时提交非空 `models`。
+        资料的 `overrides: {}` 只重置该模型资料，不重置目录；两种重置可以在同一请求中组合。
+        任一项校验失败均不保存。目录与资料在同一个 PostgreSQL 控制事务中保存，随后通过配置 revision、
+        广播及轮询同步到各副本。提交后的发布失败不代表数据库已回滚，重试前先查询当前配置。
+        不要求 `Idempotency-Key`。超出 Codex 下发预算不会拒绝保存，返回预算标记未下发的后缀。
+        本功能没有数据库结构迁移，只扩展已有 `client_model_overrides.overrides` JSON，
+        包括目录键 `catalog_enabled`、`catalog_order` 和新增资料键。
+        不得混合新旧版本写配置：旧程序严格解析 JSON，会拒绝新增键；保存后仅回退镜像不能保证恢复。
+      security:
+        - adminBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClientCatalogRequest' }
+            example:
+              known_models: [gpt-5.5, gpt-5, custom-model]
+              models: [gpt-5.5, custom-model]
+              profiles:
+                - client_model: custom-model
+                  overrides: { description: Custom model, service_tiers: [priority, ultrafast] }
+      responses:
+        '200':
+          description: 保存后的目录与预算
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/ClientCatalogDTO' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/RecoveryPending' }
+
+  /api/models/client-catalog/preview:
+    post:
+      tags: [Models]
+      operationId: previewClientCatalog
+      summary: 预览 Codex 目录草稿与字节预算（仅 admin，不保存）
+      description: |
+        使用与 `PUT /api/models/client-catalog` 相同的严格 JSON 请求、候选校验、独立重置和序列化规则。
+        在当前配置的副本上应用草稿，不写数据库、不发布配置。预览成功不保证稍后保存时候选仍相同。
+        返回全部候选资料、选择、默认目录及预算；超限时 `budget.entries[].included` 标记最大完整前缀。
+      security:
+        - adminBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClientCatalogRequest' }
+      responses:
+        '200':
+          description: 草稿目录与预算
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/ClientCatalogDTO' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
   /api/models/profile:
     get:
       tags: [Models]
@@ -596,20 +1017,15 @@ paths:
       operationId: updateClientModelProfile
       summary: 保存客户端模型的 Codex 模型目录覆盖（整体替换）
       description: |
-        `overrides` 整体替换已保存的覆盖，省略的字段回到自动值；传 `{}` 即删除全部覆盖。
+        `overrides` 整体替换已保存的资料覆盖，省略的字段回到自动值；传 `{}` 只重置资料。
+        目录选择与排序保持不变；`catalog_enabled`、`catalog_order` 不可通过此接口设置。
         客户端模型必须被某个分组引用，否则返回 `404 NOT_FOUND`。
         保存后立即发布配置，其他实例经集群配置同步重新加载。不接受查询参数。
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [client_model, overrides]
-              properties:
-                client_model: { type: string }
-                overrides: { $ref: '#/components/schemas/ClientModelOverrides' }
+            schema: { $ref: '#/components/schemas/ClientModelProfileUpdateRequest' }
             example:
               client_model: gpt-5.5
               overrides: { display_name: GPT-5.5, context_window: 400000 }
@@ -689,6 +1105,8 @@ paths:
 
         - `api_key` 连接：传 `credentials`，按顺序逐个尝试，第一个成功的结果即返回；不可传 `staged_credential_id`。
         - `subscription` 连接：传 `staged_credential_id`（已完成授权的暂存凭据），不可传 `credentials`。
+        - `proxy` 省略或 null：继承全局。显式配置只接受 direct 或 custom；custom 使用 URL 或已启用的目录 ID，二选一。
+          目录 ID 不存在或已禁用、显式 inherit、渠道不支持代理时返回 `400 VALIDATION_FAILED`。
 
         上游请求总超时 30 秒，最多翻 20 页、20000 个模型；全部凭据都失败时返回 `502 BAD_GATEWAY`。
       requestBody:
@@ -1141,6 +1559,12 @@ components:
       in: path
       required: true
       schema: { type: integer, minimum: 1 }
+    ProxyID:
+      name: id
+      in: path
+      required: true
+      description: 规范十进制正整数代理 ID。
+      schema: { type: integer, minimum: 1, maximum: 9007199254740991 }
     ModelPriceID:
       name: id
       in: path
@@ -1164,6 +1588,30 @@ components:
       schema: { type: string, const: no-store }
 
   responses:
+    ProxyItemResult:
+      description: 脱敏代理条目（不含密码明文）
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SuccessEnvelope'
+              - properties:
+                  data: { $ref: '#/components/schemas/ProxyItem' }
+    ProxyNoDataResult:
+      description: 成功，无 data
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+    ProxyWriteBadRequest:
+      description: '`BAD_REQUEST` / `INVALID_JSON` / `VALIDATION_FAILED` / `INVALID_IDEMPOTENCY_KEY`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    ProxyWriteConflict:
+      description: '`DUPLICATE_RESOURCE`（规范化连接重复）/ `IDEMPOTENCY_KEY_REUSED`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     BadRequest:
       description: '`BAD_REQUEST` / `INVALID_JSON` / `VALIDATION_FAILED`'
       content:
@@ -1281,6 +1729,7 @@ components:
         - rerank
         - anthropic
         - gemini
+        - gemini-embeddings
         - decisions
 
     AccessKeyPlaintext:
@@ -1356,6 +1805,9 @@ components:
           description: |
             允许的来源 IP 或 CIDR，最多 64 条；单个 IP 视为 /32 或 /128。
             同时约束数据面调用和该 AccessKey 登录控制台。输出为规范化后排序的 CIDR。
+            使用入口解析的客户端 IP，与请求日志一致。默认使用连接 IP。
+            设置 CLIENT_IP_HEADER 后按 TRUSTED_PROXIES 信任规则解析；缺失或无效时回退到连接 IP。
+            代理名单为空时直接信任所选头，部署方必须清洗该头。修改环境变量后须重启所有副本。
           maxItems: 64
           items: { type: string, examples: [10.0.0.0/8, 203.0.113.7] }
 
@@ -1451,6 +1903,10 @@ components:
           minimum: 0
           default: 0
           description: 每分钟请求上限，0 表示不限；不可为 `null`。
+        concurrency_limit:
+          type: [integer, 'null']
+          minimum: 0
+          description: 该密钥的并发上限（整个集群计数）；省略或 `null` 继承系统默认值，`0` 表示不限。
         cost_limit_rules:
           type: array
           description: 不可带 `id`；不可为 `null`。
@@ -1477,6 +1933,10 @@ components:
         price_multiplier: { $ref: '#/components/schemas/PriceMultiplier' }
         filters: { $ref: '#/components/schemas/AccessKeyFilters' }
         rpm_limit: { type: integer, minimum: 0 }
+        concurrency_limit:
+          type: [integer, 'null']
+          minimum: 0
+          description: 并发上限；`null` 表示改为继承系统默认值，`0` 表示不限。
         cost_limit_rules:
           type: array
           items: { $ref: '#/components/schemas/CostLimitRuleInput' }
@@ -1495,6 +1955,8 @@ components:
         - price_multiplier
         - filters
         - rpm_limit
+        - concurrency_limit
+        - concurrency
         - cost_limit_rules
         - expires_at_ms
         - created_at_ms
@@ -1515,6 +1977,10 @@ components:
         price_multiplier: { $ref: '#/components/schemas/PriceMultiplier' }
         filters: { $ref: '#/components/schemas/AccessKeyFiltersOutput' }
         rpm_limit: { type: integer }
+        concurrency_limit:
+          type: [integer, 'null']
+          description: 配置的并发上限；`null` 表示继承系统默认值。
+        concurrency: { $ref: '#/components/schemas/ConcurrencyView' }
         cost_limit_rules:
           type: array
           items: { $ref: '#/components/schemas/CostLimitRule' }
@@ -1525,6 +1991,19 @@ components:
         expires_at_ms: { type: [integer, 'null'] }
         created_at_ms: { type: integer }
         updated_at_ms: { type: integer }
+
+    ConcurrencyView:
+      type: object
+      required: [current, limit]
+      properties:
+        current:
+          type: integer
+          minimum: 0
+          description: 当前跨所有副本持有的并发数；未配置上限（`limit` 为 0）时不计数，恒为 0。
+        limit:
+          type: integer
+          minimum: 0
+          description: 生效的并发上限，0 表示不限。
 
     AccessKeySecretResult:
       description: 创建或轮换结果。
@@ -2008,7 +2487,7 @@ components:
           description: 客户端请求时使用的模型名。
         has_overrides:
           type: boolean
-          description: 是否为该客户端模型保存了 Codex 模型目录的手动覆盖，见 `GET /api/models/profile`。
+          description: 是否保存了客户端模型资料覆盖；不计目录选择与排序覆盖，见 `GET /api/models/profile`。
         price:
           oneOf:
             - $ref: '#/components/schemas/ClientModelPrice'
@@ -2025,26 +2504,48 @@ components:
 
     ClientModelProfile:
       type: object
-      required: [display_name, context_window, supported_reasoning_levels, input_modalities]
+      required: [display_name, description, context_window, auto_compact_token_limit, supported_reasoning_levels, default_reasoning_level, input_modalities, service_tiers]
       properties:
         display_name: { type: string }
+        description: { type: string }
         context_window:
           type: [integer, 'null']
           description: 上下文窗口 tokens；模板未提供时为 `null`。
+        auto_compact_token_limit:
+          type: [integer, 'null']
+          description: 自动压缩阈值 tokens；模板未提供时为 `null`。
         supported_reasoning_levels:
           type: array
           items: { type: string, enum: [none, minimal, low, medium, high, xhigh, max, ultra, persistent] }
+        default_reasoning_level:
+          type: string
+          enum: [none, minimal, low, medium, high, xhigh, max, ultra, persistent]
+          description: 支持列表内的默认推理强度；自动值不在列表时优先 medium，否则取首项。
         input_modalities:
           type: array
           items: { type: string, enum: [text, image, audio] }
+        service_tiers:
+          type: array
+          uniqueItems: true
+          description: 可选加速档位。默认使用标准档位，priority（Fast）与 ultrafast 必须由客户端显式选择。
+          items: { type: string, enum: [priority, ultrafast] }
 
     ClientModelOverrides:
       type: object
       additionalProperties: false
-      description: 只包含被覆盖的字段；省略的字段使用自动值。
+      description: |
+        API 中只包含资料覆盖；省略的字段使用自动值。目录键 catalog_enabled、catalog_order 仅存储在已有 JSON 中，
+        通过 ClientCatalogRequest 的 models/reset_directory 管理，不在资料请求或响应中使用。
+        不接受 default_service_tier；Codex 下发的 default_service_tier 恒为 null，表示默认标准档位。
       properties:
         display_name: { type: string, maxLength: 512, description: '非空白 UTF-8 文本，最长 512 字节。' }
+        description: { type: string, maxLength: 4096, description: 'UTF-8 文本，最长 4096 字节，可以为空。' }
         context_window: { type: integer, minimum: 1, maximum: 9007199254740991 }
+        auto_compact_token_limit: { type: integer, minimum: 1, maximum: 9007199254740991 }
+        default_reasoning_level:
+          type: string
+          enum: [none, minimal, low, medium, high, xhigh, max, ultra, persistent]
+          description: 必须在本次提交的 supported_reasoning_levels 中；未提交该列表时必须在自动列表中。
         supported_reasoning_levels:
           type: array
           minItems: 1
@@ -2055,6 +2556,87 @@ components:
           uniqueItems: true
           description: 必须包含 `text`。
           items: { type: string, enum: [text, image, audio] }
+        service_tiers:
+          type: array
+          uniqueItems: true
+          description: 只管理可选加速档位；空数组隐藏全部加速档位，省略则使用自动值。不填写 standard。
+          items: { type: string, enum: [priority, ultrafast] }
+
+    ClientModelProfileUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [client_model, overrides]
+      properties:
+        client_model: { type: string, minLength: 1 }
+        overrides: { $ref: '#/components/schemas/ClientModelOverrides' }
+
+    ClientCatalogRequest:
+      type: object
+      additionalProperties: false
+      description: |
+        空请求无效。必须提供非 null 的 known_models 或 models、非空 profiles，或 reset_directory=true。
+        未知候选名、重复模型、重复资料条目或无效资料均返回 400 VALIDATION_FAILED。
+        models 省略或为 null 时保持目录；profiles 省略或为空时保持资料。
+      properties:
+        known_models:
+          type: [array, 'null']
+          uniqueItems: true
+          description: 从上次读取的 models[].client_model 收集完整候选集；提供非 null 值时拒绝过期候选集合，非配置版本锁。
+          items: { type: string }
+        models:
+          type: [array, 'null']
+          uniqueItems: true
+          description: 要下发的候选模型名，数组顺序就是目录顺序；空数组清空选择。不改变调用权限。
+          items: { type: string }
+        reset_directory:
+          type: boolean
+          default: false
+          description: 清除全部目录选择与排序覆盖，保留资料覆盖；为 true 时不得同时提交非空 models。
+        profiles:
+          type: [array, 'null']
+          description: 按模型整体替换资料覆盖；同一 client_model 不得重复。overrides 为 {} 时只重置资料。
+          items: { $ref: '#/components/schemas/ClientModelProfileUpdateRequest' }
+
+    ClientCatalogDTO:
+      type: object
+      required: [models, selected, defaults, budget, client_version]
+      properties:
+        models:
+          type: array
+          description: 当前全部 Responses create 候选的资料，不仅包含已选择的模型。
+          items: { $ref: '#/components/schemas/ClientModelProfileResponse' }
+        selected:
+          type: array
+          description: 当前选择及顺序，包含超出下发预算的后缀。
+          items: { type: string }
+        defaults:
+          type: array
+          description: 忽略目录覆盖时的默认选择及顺序。
+          items: { type: string }
+        budget: { $ref: '#/components/schemas/ClientCatalogBudget' }
+        client_version:
+          type: string
+          description: 管理面预算使用的内置 Codex 模板版本，不是请求参数。
+          examples: ['0.159.2']
+
+    ClientCatalogBudget:
+      type: object
+      required: [limit_bytes, response_bytes, selected_bytes, included_count, entries]
+      properties:
+        limit_bytes: { type: integer, const: 1048576, description: 'Codex 目录响应体上限：1 MiB。' }
+        response_bytes: { type: integer, minimum: 13, maximum: 1048576, description: '实际最大完整前缀的 JSON 字节数，含包装。' }
+        selected_bytes: { type: integer, minimum: 13, description: '完整所选目录的 JSON 字节数，含包装和逗号，可以超限。' }
+        included_count: { type: integer, minimum: 0, description: 实际下发的前缀模型数。 }
+        entries:
+          type: array
+          description: 按所选顺序列出全部条目；一项无法容纳时，该项与全部后续项的 included 均为 false。
+          items:
+            type: object
+            required: [client_model, bytes, included]
+            properties:
+              client_model: { type: string }
+              bytes: { type: integer, minimum: 0, description: 单个序列化条目的 UTF-8 字节数，不含分隔逗号或外层包装。 }
+              included: { type: boolean }
 
     ClientModelProfileResponse:
       type: object
@@ -2064,7 +2646,7 @@ components:
         automatic: { $ref: '#/components/schemas/ClientModelProfile' }
         overrides: { $ref: '#/components/schemas/ClientModelOverrides' }
         effective: { $ref: '#/components/schemas/ClientModelProfile' }
-        has_overrides: { type: boolean }
+        has_overrides: { type: boolean, description: 只统计资料覆盖，不计目录选择与排序覆盖。 }
 
     ProjectModelCollection:
       type: object
@@ -2176,16 +2758,99 @@ components:
           default: 0
           description: 单凭据并发上限，0 表示不限。
 
+    ProxySaveRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, description: 去除首尾空白后最多 255 个 Unicode 字符 }
+        url:
+          type: string
+          description: |
+            创建时必填；更新时空值保留连接。仅 http 或 socks5，SOCKS5 必须带端口，端口范围 1–65535。
+            无路径（允许末尾 /）、查询或片段；认证必须同时提供非空用户名和密码。去除首尾空白并规范化连接后去重。
+    ProxyIDs:
+      type: object
+      properties:
+        ids: { type: array, maxItems: 10000, items: { type: integer, minimum: 0 } }
+    ProxyTestURLRequest:
+      type: object
+      additionalProperties: false
+      required: [url]
+      properties:
+        url:
+          type: string
+          description: 去除首尾空白后最多 2048 字节；http 或 https，必须有主机，不得包含认证信息或片段。
+    ProxyItem:
+      type: object
+      required: [id, name, display_url, scheme, has_auth, enabled, group_count, credential_count, global, last_test_url, last_test_at_ms, last_test_duration_ms, last_test_status_code, last_test_error]
+      properties:
+        id: { type: integer, minimum: 1 }
+        name: { type: string }
+        display_url: { type: string, description: 保留用户名，密码替换为六个星号 }
+        scheme: { type: string, enum: [http, socks5] }
+        has_auth: { type: boolean }
+        enabled: { type: boolean }
+        group_count: { type: integer, minimum: 0, description: 直接引用的分组数 }
+        credential_count: { type: integer, minimum: 0, description: 直接引用的凭据数 }
+        global: { type: boolean, description: 全局设置是否直接引用 }
+        last_test_url: { type: string }
+        last_test_at_ms: { type: [integer, 'null'] }
+        last_test_duration_ms: { type: [integer, 'null'] }
+        last_test_status_code: { type: [integer, 'null'], description: 连接失败时为 0，未测试时为 null }
+        last_test_error: { type: string, enum: ['', connection_failed, timeout] }
+    ProxyList:
+      type: object
+      required: [items, total, page, page_size, test_url]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ProxyItem' } }
+        total: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1, maximum: 100 }
+        test_url: { type: string }
+    ProxyReferences:
+      type: object
+      required: [groups, credentials, global]
+      properties:
+        global: { type: boolean }
+        groups: { type: array, items: { $ref: '#/components/schemas/ProxyReference' } }
+        credentials: { type: array, items: { $ref: '#/components/schemas/ProxyReference' } }
+    ProxyReference:
+      type: object
+      required: [group_id, group_name]
+      properties:
+        group_id: { type: integer }
+        group_name: { type: string }
+        credential_id: { type: integer, description: 仅凭据引用返回 }
+        connection_type: { type: string, description: 仅凭据引用返回 }
+        label: { type: string, description: 非空时返回脱敏凭据或账号标签 }
+
     OutboundProxyConfig:
       type: object
       additionalProperties: false
       required: [mode]
-      description: 出站代理。发现接口只接受 `direct` 与 `custom`；仅支持代理的渠道可传。
+      description: |
+        发现接口只接受 direct 或 custom；只有支持出站代理的渠道可传。省略或 null 时继承全局代理。
+        custom 必须在有效 url 与正整数 proxy_id 中二选一。引用必须存在且启用，否则返回 VALIDATION_FAILED。
+        不接受显式 inherit。URL 发现仅用于草稿连接，不创建目录条目。
       properties:
         mode: { type: string, enum: [direct, custom] }
-        url:
-          type: string
-          description: '`custom` 时必填的代理地址；`direct` 时不可传。'
+        url: { type: string, description: HTTP 或 SOCKS5 代理地址，连接格式同 ProxySaveRequest.url }
+        proxy_id: { type: integer, minimum: 0, description: 集中代理目录 ID；0 等同未选择引用 }
+      oneOf:
+        - properties:
+            mode: { const: direct }
+            url: { const: '' }
+            proxy_id: { const: 0 }
+        - required: [url]
+          properties:
+            mode: { const: custom }
+            url: { type: string, minLength: 1 }
+            proxy_id: { const: 0 }
+        - required: [proxy_id]
+          properties:
+            mode: { const: custom }
+            url: { const: '' }
+            proxy_id: { type: integer, minimum: 1 }
 
     ModelDiscoveryRequest:
       type: object
@@ -2211,7 +2876,10 @@ components:
         staged_credential_id:
           type: string
           description: '`subscription` 连接必填：已完成授权的暂存凭据 ID。'
-        proxy: { $ref: '#/components/schemas/OutboundProxyConfig' }
+        proxy:
+          oneOf:
+            - $ref: '#/components/schemas/OutboundProxyConfig'
+            - type: 'null'
 
     CredentialValidationData:
       type: object

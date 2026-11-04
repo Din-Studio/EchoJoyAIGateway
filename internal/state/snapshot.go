@@ -44,6 +44,7 @@ type CompileInput struct {
 }
 
 type GroupConfig struct {
+	Priority           int32
 	PriceMultiplier    *pricing.PriceMultiplier
 	ID                 uint
 	Name               string
@@ -91,6 +92,7 @@ func externalModelName(model ModelConfig) string {
 const UserDefaultKeyNamePrefix = "ly:default:"
 
 type AccessKeyConfig struct {
+	ConcurrencyLimit *int64
 	KeyPrefix        string
 	PriceMultiplier  *pricing.PriceMultiplier
 	ID               uint
@@ -158,6 +160,8 @@ func (rules HeaderRules) ConfiguredNames() []string {
 }
 
 type GroupView struct {
+	Priority                  int32
+	ConcurrencyLimit          int64
 	PriceMultiplier           pricing.PriceMultiplier
 	ID                        uint
 	Name                      string
@@ -174,12 +178,14 @@ type GroupView struct {
 	BlacklistThreshold        int
 	AffinityEnabled           bool
 	ResponsesWebsocketEnabled bool
+	EmptyResponseRetry        bool
 	WeightManual              *int
 	Proxy                     outboundproxy.Effective
 	ParameterOverrides        parameteroverride.Rules
 }
 
 type GroupCatalogView struct {
+	Priority       int32
 	ID             uint
 	Name           string
 	ChannelID      channel.ID
@@ -189,6 +195,9 @@ type GroupCatalogView struct {
 }
 
 type AccessKeyView struct {
+	// ConcurrencyLimit is the effective cluster-wide limit: the key's own
+	// value, or the default setting when the key inherits; 0 is unlimited.
+	ConcurrencyLimit int64
 	KeyPrefix        string
 	PriceMultiplier  pricing.PriceMultiplier
 	ID               uint
@@ -332,7 +341,8 @@ func Compile(input CompileInput) (*ConfigSnapshot, error) {
 
 	for _, group := range input.Groups {
 		catalogView := GroupCatalogView{
-			ID: group.ID, Name: group.Name, Enabled: group.Enabled,
+			Priority: group.Priority,
+			ID:       group.ID, Name: group.Name, Enabled: group.Enabled,
 			ChannelID:      group.ChannelID,
 			ConnectionType: connection.Normalize(group.ConnectionType),
 			WeightManual:   cloneWeight(group.WeightManual),
@@ -354,6 +364,7 @@ func Compile(input CompileInput) (*ConfigSnapshot, error) {
 		}
 
 		view := GroupView{
+			Priority:                  group.Priority,
 			PriceMultiplier:           resolvePriceMultiplier(group.PriceMultiplier),
 			ID:                        group.ID,
 			Name:                      group.Name,
@@ -365,6 +376,8 @@ func Compile(input CompileInput) (*ConfigSnapshot, error) {
 			BlacklistThreshold:        resolved.BlacklistThreshold,
 			AffinityEnabled:           resolved.AffinityEnabled,
 			ResponsesWebsocketEnabled: resolved.ResponsesWebsocketEnabled,
+			EmptyResponseRetry:        resolved.EmptyResponseRetry,
+			ConcurrencyLimit:          resolved.ConcurrencyLimit,
 			WeightManual:              cloneWeight(group.WeightManual),
 			ConnectionType:            connection.Normalize(group.ConnectionType),
 			Proxy:                     groupProxy,
@@ -390,9 +403,10 @@ func Compile(input CompileInput) (*ConfigSnapshot, error) {
 	}
 
 	for _, accessKey := range input.AccessKeys {
-		snapshot.AccessKeysByID[accessKey.ID] = newAccessKeyView(accessKey)
+		view := newAccessKeyView(accessKey, snapshot.Settings.DefaultAccessKeyConcurrencyLimit)
+		snapshot.AccessKeysByID[accessKey.ID] = view
 		if accessKey.Status == AccessKeyStatusActive {
-			snapshot.AccessKeysByHash[accessKey.KeyHash] = newAccessKeyView(accessKey)
+			snapshot.AccessKeysByHash[accessKey.KeyHash] = newAccessKeyView(accessKey, snapshot.Settings.DefaultAccessKeyConcurrencyLimit)
 			addUserDefaultKey(snapshot.UserDefaultKeys, accessKey)
 		}
 	}
@@ -411,7 +425,11 @@ func addUserDefaultKey(index map[string]uint, accessKey AccessKeyConfig) {
 	index[accessKey.Note] = accessKey.ID
 }
 
-func newAccessKeyView(input AccessKeyConfig) AccessKeyView {
+func newAccessKeyView(input AccessKeyConfig, defaultConcurrencyLimit int64) AccessKeyView {
+	concurrencyLimit := defaultConcurrencyLimit
+	if input.ConcurrencyLimit != nil {
+		concurrencyLimit = *input.ConcurrencyLimit
+	}
 	rules := append([]accessquota.Rule(nil), input.CostLimitRules...)
 	sort.Slice(rules, func(i, j int) bool {
 		if rules[i].Kind != rules[j].Kind {
@@ -431,6 +449,7 @@ func newAccessKeyView(input AccessKeyConfig) AccessKeyView {
 		ExpiresAtMS:      cloneAccessKeyExpiry(input.ExpiresAtMS),
 		AllowedPeerCIDRs: cloneAllowedPeerCIDRs(input.AllowedPeerCIDRs),
 		RPMLimit:         input.RPMLimit,
+		ConcurrencyLimit: concurrencyLimit,
 		CostLimitRules:   rules,
 	}
 }
@@ -670,6 +689,9 @@ func validateCompileInput(input CompileInput) error {
 		accessKeyIDs[accessKey.ID] = struct{}{}
 		if accessKey.PriceMultiplier != nil && !accessKey.PriceMultiplier.Valid() {
 			return fmt.Errorf("access key %d price multiplier is invalid", accessKey.ID)
+		}
+		if accessKey.ConcurrencyLimit != nil && (*accessKey.ConcurrencyLimit < 0 || *accessKey.ConcurrencyLimit > maxJSONSafeInteger) {
+			return fmt.Errorf("access key %d has invalid concurrency limit", accessKey.ID)
 		}
 		if accessKey.RPMLimit < 0 {
 			return fmt.Errorf("access key %d rpm limit must not be negative", accessKey.ID)

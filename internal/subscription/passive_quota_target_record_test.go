@@ -34,7 +34,7 @@ func TestRecordPassiveQuotaObservationPreservesNewTargetWhenOldResponseArrives(t
 		`{"quota_windows":[{"id":"primary","scope":"account","unit":"percent","state":"available","utilization":0.1,"reset_at_ms":1800000000000}]}`)
 	newUtilization := 0.25
 	manager.RecordPassiveQuotaObservation(row.ID, entries[0].IdentityGeneration, 2000,
-		[]providerobservation.QuotaWindow{{ID: "primary", Utilization: &newUtilization}})
+		[]providerobservation.QuotaWindow{{ID: "primary", Utilization: &newUtilization}}, nil)
 	current := manager.DirtyPassiveQuotaObservations(1)
 	if len(current) != 1 {
 		t.Fatal("new target observation was not queued")
@@ -42,7 +42,7 @@ func TestRecordPassiveQuotaObservationPreservesNewTargetWhenOldResponseArrives(t
 
 	// 旧请求可以晚于新请求返回，时间戳更新也不能替换当前目标已排队的样本。
 	manager.RecordPassiveQuotaObservation(row.ID, oldIdentity, 3000,
-		[]providerobservation.QuotaWindow{{ID: "primary", State: "exhausted"}})
+		[]providerobservation.QuotaWindow{{ID: "primary", State: "exhausted"}}, nil)
 	if pending := manager.DirtyPassiveQuotaObservations(1); !reflect.DeepEqual(pending, current) {
 		t.Fatalf("old target response replaced the new pending observation: got=%#v want=%#v", pending, current)
 	}

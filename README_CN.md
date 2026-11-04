@@ -65,6 +65,8 @@
 - **统一入口，保留原生协议** — 官方 API、云平台、模型服务和兼容中转统一管理；客户端继续使用 OpenAI、Anthropic 或 Gemini 原生接口，无需改造代码。
 - **统一管理 API Key 与订阅账号** — Codex、Claude、Antigravity、Grok 等订阅渠道与 API Key 渠道共享凭据管理、调度和健康体系。
 - **内置调度与故障隔离** — 多凭据调度、可配置权重、重试、冷却、黑名单与会话亲和，降低单个凭据过载或失效的影响。
+
+分组优先级是有符号 32 位整数，默认 0，数值越大越优先。先选最高可用档，再在同档应用路由策略、软亲和和权重。可重试的执行失败直接降至下一可用档，不先耗尽同档凭据；最低档继续尝试剩余候选，各档共用转发次数预算。准备失败不触发降档，认证刷新优先重放原凭据，绑定会话保持原约束。优先级修改通过集群配置传播；调度进度仍由各副本独立维护。
 - **可观测、易部署、数据自持** — 提供健康、路由、日志、用量与成本估算；内嵌管理界面，基于 PostgreSQL 与 Redis 运行，凭据加密存储。
 
 ## 快速开始
@@ -106,6 +108,10 @@ GPT-Load 连上 PostgreSQL 与 Redis 后，响应中会包含 `"checks": {"datab
 2. **创建 Group** — 选择渠道，配置可用模型与运行策略。
 3. **创建 AccessKey** — 设置允许访问的 Group 与客户端协议，把生成的 AccessKey 交给应用使用。
 
+在分组的**全量操作 → 从文件导入**中选择 UTF-8 编码的 TXT、JSON 或 JSONL 文件。每行填写一个 API Key，或使用字段值均为字符串的凭据对象（例如 `{"api_key":"sk-example"}`）。格式化的 JSON 对象算一条凭据。**下载全部**生成的文件可以再次导入。每次最多导入 500 条，文件总大小及请求大小均不得超过 32 MiB；超出时请手动拆分。新凭据的并发上限为不限（`0`），已有重复凭据会跳过。订阅账号继续使用原授权流程。
+
+凭据支持可选展示别名，最多 255 个 Unicode 字符，留空即可清除。别名属于单条凭据记录，不改变凭据身份、调度或并发上限；修改通过集群配置传播。日志显示当前别名。订阅账号在界面中默认遮盖，可在卡片和详情中主动展开。这只是界面遮盖，不是 API 脱敏：管理员响应仍包含原始账号。
+
 <details>
 <summary>订阅渠道的 OAuth 回调端口</summary>
 
@@ -129,29 +135,73 @@ Codex、Claude、Antigravity 的 OAuth 客户端使用固定回调端口。Compo
 
 ### 客户端协议
 
-| 协议                    | 主要入口                     |
-| ----------------------- | ---------------------------- |
-| OpenAI Chat Completions | `POST /v1/chat/completions`  |
-| OpenAI Responses        | `/v1/responses` 及其资源路径 |
-| OpenAI Images           | `POST /v1/images/...`        |
-| OpenAI Embeddings       | `POST /v1/embeddings`        |
-| Rerank                  | `POST /v1/rerank`            |
-| Jev Decisions           | `POST /v1/systemone`         |
-| Anthropic Messages      | `POST /v1/messages`          |
-| Gemini                  | `/v1beta/models/...`         |
+| 协议                    | 主要入口                                                           |
+| ----------------------- | ------------------------------------------------------------------ |
+| OpenAI Chat Completions | `POST /v1/chat/completions`                                        |
+| OpenAI Responses        | `/v1/responses` 及其资源路径                                       |
+| OpenAI Images           | `POST /v1/images/...`                                              |
+| OpenAI Embeddings       | `POST /v1/embeddings`                                              |
+| Rerank                  | `POST /v1/rerank`                                                  |
+| Jev Decisions           | `POST /v1/systemone`                                               |
+| Anthropic Messages      | `POST /v1/messages`                                                |
+| Gemini                  | `/v1beta/models/...`                                               |
+| Gemini Embeddings       | `POST /v1beta/models/{model}:embedContent` / `:batchEmbedContents` |
 
 每个渠道会明确声明自己可执行的协议与能力。GPT-Load 在受支持的能力之间做转换，但不是任意协议、任意 JSON 的通用转换器。
 
-Embeddings 首期只在 OpenAI、OpenRouter、Vercel AI Gateway 和 OpenAI Compatible API Key 渠道提供原生 OpenAI-compatible Wire，不支持订阅渠道或协议互转。未设置协议过滤器的 AccessKey 会按既有语义允许全部已启用协议，升级后也会获得 Embeddings 访问能力；最小权限部署请显式配置协议过滤器。
+Embeddings 有两个独立的原生协议：`openai-embeddings`（`POST /v1/embeddings`）用于 OpenAI、OpenRouter、Vercel AI Gateway、OpenAI Compatible、New API 和 GPT-Load API Key 渠道；`gemini-embeddings`（`POST /v1beta/models/{model}:embedContent` 和 `:batchEmbedContents`）用于 Gemini、New API 和 GPT-Load API Key 渠道。请求和响应保持各服务商的原生格式。Gemini 渠道还可以通过转换接收 `openai-embeddings`：把文本输入转为 `:batchEmbedContents`，支持 `dimensions` 以及 `float` / `base64` 输出，不支持 Token ID 输入，单次条数上限由 Gemini 校验。同一个客户端模型名下的分组请使用同一个 Embedding 模型，否则不同模型的向量会混在一起。不支持订阅渠道。未设置协议过滤器的 AccessKey 会按既有语义允许全部已启用协议，升级后也会获得这两个 Embeddings 协议；最小权限部署请显式配置协议过滤器。
 
 Rerank 使用独立的 `rerank` 协议，在 OpenAI Compatible、New API、GPT-Load API Key 渠道支持 `POST /v1/rerank`。请求使用 `model`、`query` 和纯文本 `documents` 数组，可传 `top_n`、`return_documents` 等上游参数；不支持流式、订阅渠道或协议互转。OpenAI Compatible 的 Base URL 是完整 API 前缀（如 `https://host/v1`），New API / GPT-Load 使用网关根地址；上游必须提供兼容 Rerank 接口。未设置协议过滤器的 AccessKey 也会获得 Rerank 访问能力。仅有 `search_units` 等非 Token 计量时保持未计价，不将其视为 Token 或免费请求。
 
 ### 内置渠道
 
 - **官方与云平台**：OpenAI、Anthropic、Gemini、xAI、Azure OpenAI、AWS Bedrock、Google Vertex AI
-- **常用模型服务**：DeepSeek、Moonshot AI、SiliconFlow、Zhipu AI、Alibaba、Volcengine、OpenRouter、Groq、Vercel AI Gateway、Jev
+- **常用模型服务**：DeepSeek、Moonshot AI、SiliconFlow、Zhipu AI、Alibaba、Volcengine、OpenRouter、Cline、Groq、Vercel AI Gateway、Jev、Cerebras、Mistral、Nebius、Parasail、Wafer、Hugging Face（聊天）、Cohere（文本重排序）、OpenCode Go、OpenCode Zen
 - **订阅渠道**：Codex、Claude、Antigravity、Grok
 - **自定义**：OpenAI Compatible（任意兼容中转）
+
+OpenCode Go / Zen 使用 API Key，通过现有多协议网关适配器接入原生 Chat Completions、无状态 Responses 创建和 Anthropic Messages，支持流式请求及模型发现。客户端需要选择上游模型支持的协议，这两个预设不自动转换协议。自定义 Base URL 填写不含 `/v1` 的网关根地址；暂不开放 Gemini 原生请求和 Responses 资源操作。Go 客户端应保留编程工具身份及对话会话头。
+
+### 参数覆盖与协议转换
+
+分组参数覆盖在协议转换前应用。普通参数按客户端协议填写，例如 Responses 的 `max_output_tokens` 会由 SDK 转换成 Anthropic 的 `max_tokens`。对于 Bifrost 对话转换，覆盖规则明确设置、但 SDK 客户端请求结构未定义的顶层字段，会作为扩展参数交给 SDK；是否保留仍取决于 SDK 对目标协议的支持，不会开启任意字段透传。客户端自行附加的未知字段不因此获得透传能力，内容块内已有的缓存标记保持原有行为。
+
+例如，在 Anthropic 分组中为 Responses 请求设置顶层缓存参数：
+
+```json
+[{"match":{"protocol":"openai-responses"},"set":{"cache_control":{"type":"ephemeral"}}}]
+```
+
+这会传递缓存配置，不保证上游实际缓存命中。
+
+### 数据面并发限制
+
+可同时设置全局、访问密钥和分组并发上限，默认均不限。系统设置提供全局上限及访问密钥、分组的默认上限；访问密钥和分组可单独覆盖。访问密钥留空、分组恢复继承时使用默认值；显式设为 `0` 表示不限。任一层级满额立即返回 `concurrency_limit_exceeded`，不排队，也不为绕过限制切换分组或凭据。
+
+全局和访问密钥按未结束的逻辑请求计数，分组按实际执行的上游调用计数。流式响应持有到转发结束；Responses WebSocket 按执行中的轮次计数。已有响应的取消不受并发限制。计数保存在 Redis 中、所有副本共享，因此每个上限都按整个部署计数；未配置上限的层级不计数。热更新不清零、不打断已有执行，管理请求与后台任务不受限制。Redis 不可用时，受上限约束的请求返回 `503 cluster_state_unavailable`。管理界面首页显示全局当前值与生效上限。访问密钥列表仅在生效上限大于 0 时显示并发限制标签；访问密钥和分组列表不显示实时并发数。
+
+### 集中管理出站代理
+
+管理员在控制台管理 PostgreSQL 中的加密代理目录：新增、编辑、导入、启用、禁用、删除、查询引用及测试连通性。支持 HTTP 与 SOCKS5 代理及用户名密码认证。全局设置、分组和凭据通过 ID 选择目录中的代理；AccessKey 无权访问代理管理 API。
+
+出站选择顺序为凭据 → 分组 → 全局 → 环境代理 → 直连。禁用或删除代理后，原引用保留，但出站继承上一级，因此流量最终可以直连。目录解密失败会报错，不按继承处理。手动测试直接使用指定代理，包括禁用的代理；测试单独使用 Redis 中的 8 个集群共享槽，不占数据面名额。满额返回 429，共享状态不可用返回 503。保存的测试 URL 只是管理偏好，不是运行时路由设置。
+
+### Codex 客户端模型目录
+
+管理员可以在「模型」页选择 Codex 目录模型并排序。`GET /api/models/client-catalog` 返回候选、选择、默认目录、模型资料和字节预算。`POST /api/models/client-catalog/preview` 预览草稿，不保存配置。`PUT /api/models/client-catalog` 在一个 PostgreSQL 控制事务中原子保存目录与资料，再向全部副本传播配置。这三个接口仅限管理员，AccessKey 无权访问。
+
+- 候选必须可以通过 Responses create 调用。默认选择名称以 `gpt-` 开头的模型，但排除 `gpt-image` 和 `gpt-image-*`。手动排序优先，其余 GPT 版本从新到旧排列。
+- 保存与预览严格解析 JSON，拒绝未知字段、重复字段、多个 JSON 值和错误字段类型。请求体上限为 32 MiB。提交 `known_models` 时，必须使用上次读取的完整候选集。候选集变化后，旧草稿返回 `400 VALIDATION_FAILED`，必须重新读取。该可选校验不是配置版本锁。
+- `models` 替换选择与顺序；`[]` 清空选择；省略时保留目录。`reset_directory: true` 恢复目录默认值，但保留资料，且不得与非空 `models` 同时提交。`profiles` 中每项整体替换该模型的资料覆盖。`overrides: {}` 只重置资料，不改变选择与顺序；`PUT /api/models/profile` 同样遵守此规则。
+- 资料字段为 `display_name`、`description`、`context_window`、`auto_compact_token_limit`、`supported_reasoning_levels`、`default_reasoning_level`、`input_modalities` 和 `service_tiers`。标准档位始终为默认值。`priority`（Fast）与 `ultrafast` 必须由客户端显式选择；`service_tiers: []` 隐藏加速档位。API 不接受 `default_service_tier`。
+- Codex 响应体上限为 1 MiB（1048576 字节），包含 JSON 包装。超限时按目录顺序返回可容纳的最大完整前缀，不截断条目，也不跳过大条目来填入后续模型。预算返回完整选择的字节数、实际响应字节数和每项是否下发。可以保存超出下发预算的选择。
+- 数据面 `client_version` 为有效三段数字且 `>= 0.159.2` 时，目录省略旧字段 `base_instructions`。旧版本或无法识别的版本保留该字段。管理面预览使用响应中的固定 `client_version`；实际字节数还取决于调用者权限和版本。
+- 目录设置只影响 Codex 目录展示。普通模型 API、路由与调用权限不变。数据面目录仍按 AccessKey 的协议、模型和分组权限过滤。系统币种、客户端模型统一价和仅管理员可见的上游成本保持不变。
+
+请求与响应结构见[控制面 API 契约](docs/openapi.yaml)。
+
+> [!WARNING]
+> 不得混合新旧网关版本写配置。本功能没有数据库结构迁移，只扩展已有 `client_model_overrides.overrides` JSON，新增目录键（`catalog_enabled`、`catalog_order`）和资料键。旧程序会拒绝新增键。保存后仅回退镜像不能保证恢复；必须保留经过恢复验证的兼容配置或数据库备份及匹配镜像。
 
 ## 部署与数据
 
@@ -160,9 +210,12 @@ GPT-Load 以容器运行，依赖 PostgreSQL 与 Redis。`docker-compose.yml` �
 GPT-Load 容器无状态，不挂载任何卷：配置与用量保存在 PostgreSQL，共享运行状态保存在 Redis。Compose 把两者分别放在 `postgres-data` 与 `redis-data` 具名卷中，Redis 开启 AOF 持久化并使用 `maxmemory-policy noeviction`。
 
 > [!IMPORTANT]
-> `ENCRYPTION_KEY` 用于解密渠道凭据。PostgreSQL 与 `ENCRYPTION_KEY` **必须一起备份**；密钥丢失或被替换后，已有加密凭据无法恢复，且当前版本不支持主密钥轮换。
+> `ENCRYPTION_KEY` 用于解密渠道凭据、代理目录和代理引用。PostgreSQL 与 `ENCRYPTION_KEY` **必须一起备份**；密钥丢失或被替换后，已有加密凭据无法恢复，且当前版本不支持主密钥轮换。
 
 如需使用已有的 PostgreSQL 或 Redis 代替内置服务，在 `gpt-load` 服务中覆盖 `DATABASE_DSN`（例如 `postgres://user:password@db.example:5432/gpt_load?sslmode=require`）与 `REDIS_ADDRS`。
+
+> [!WARNING]
+> 升级到集中代理目录前，必须同时备份 PostgreSQL 与 `ENCRYPTION_KEY`，并在独立数据库演练恢复。迁移 `0028_proxy_catalog` 创建目录；控制面启动时把旧加密代理 URL 转为加密 ID 引用。表结构和加密引用格式与旧版本不兼容。必须停止所有旧网关副本后再启动新版本，不得混合新旧版本滚动升级。仅回退镜像不足以恢复旧版本；回退必须使用演练通过的升级前数据库备份、原密钥和匹配的镜像。
 
 常用运维命令：
 
@@ -195,7 +248,9 @@ Compose 会把 `.env` 传入容器，Compose 文件中设置的值优先。除�
 | `DATABASE_MAX_OPEN_CONNECTIONS` | `10`                                        | 每个副本的 PostgreSQL 最大打开连接数，必须为正整数。 |
 | `DATABASE_MAX_IDLE_CONNECTIONS` | `5`                                         | 每个副本的 PostgreSQL 最大空闲连接数，必须为正整数且不大于 `DATABASE_MAX_OPEN_CONNECTIONS`。 |
 | `AUTH_KEY`                      | 必填                                        | 管理界面和 `/api` 管理接口的 Bearer 密钥，不是数据面 AccessKey。所有副本必须相同。 |
-| `ENCRYPTION_KEY`                | 必填                                        | 用于加密渠道凭据；更换或丢失后无法解密已有凭据，必须与 PostgreSQL 一起备份。所有副本必须相同。 |
+| `ENCRYPTION_KEY`                | 必填                                        | 用于加密渠道凭据、代理目录和代理引用；更换或丢失后无法解密这些数据，必须与 PostgreSQL 一起备份。所有副本必须相同。 |
+| `CLIENT_IP_HEADER` | 空，使用连接 IP | 客户端 IP 请求头，如 `X-Forwarded-For` 或 `CF-Connecting-IP`；缺失或无效时回退到连接 IP。统一用于日志、访问密钥 IP 限制等，支持 IPv4/IPv6。修改后重启。 |
+| `TRUSTED_PROXIES` | 空 | 可选，逗号分隔的代理 IP 或 CIDR；仅在设置 `CLIENT_IP_HEADER` 时生效。留空直接信任所选请求头，需由部署环境保证其可信；配置后仅信任匹配的连接来源，否则使用连接 IP。`X-Forwarded-For` 有名单时从右向左取首个不可信 IP（全可信时取最左侧），无名单时取最左侧；其他头只接受单个 IP。修改后重启。 |
 | `HTTP_PROXY`                    | 空                                          | HTTP 上游请求的环境代理。                                                                                                                                |
 | `HTTPS_PROXY`                   | 空                                          | HTTPS 上游请求的环境代理。                                                                                                                               |
 | `NO_PROXY`                      | 空                                          | 逗号分隔的不经过环境代理的主机、域名或 IP。                                                                                                              |
@@ -291,10 +346,12 @@ Codex、Claude、Antigravity 的 OAuth 自动回调发往固定端口的 `localh
 - 系统货币（全局设置 → 货币与计费）可选美元或人民币，人民币需填写"1 USD = X CNY"的汇率。上游价格恒为美元；每笔请求结算时按当时的币种和汇率同时记录美元与本币金额，修改汇率只影响之后的请求，历史费用不变。管理接口、界面和 429 响应按系统货币返回金额；切换币种时，所有 AccessKey 成本额度按汇率换算到新币种并清零已用额度，用量统计只合计当前币种并提示存在其他币种的历史。
 - 每笔请求同时计算两笔钱：**费用**按请求模型（ClientModel）的统一价乘以 AccessKey 倍率，用于成本额度与用量统计；**上游费用**按渠道上游模型的价格乘以分组倍率，是网关付给上游的成本，只对管理员可见。统一价在「模型」页为每个请求模型单独设置，对所有分组和渠道生效，支持阶梯价与 Fast、Ultrafast 模式价；未设置统一价的模型按未定价处理，不回退到上游价格。auto 模型按选中的目标模型收费。
 - 订阅渠道依赖上游 OAuth 与兼容协议，可能随上游变化调整。请只接入自己有权使用的账号，并遵守对应服务商条款。
+- 支持推理强度更新的 Codex 模型会在 HTTP 和 WebSocket 中保留 `configuration_update`。Codex CLI 需启用 `--enable reasoning_effort_override`，网关无需实验开关。WebSocket 日志只从同连接、同模型的最近已知已完成父响应继承更新；未知模型和虚拟回退模型不声明支持此能力。Token 中的套餐仅用于展示，实时观测优先，套餐提示不代表可用额度。详见 [Codex 共享能力说明](third_party/cpaembedded/README.md#shared-codex-capabilities)。
 - HTTP Responses 的 `previous_response_id` 续接按协议及现有存储能力自动接入：原生 Responses 且声明由上游管理状态的渠道目前包括 `openai`、`gpt_load`、`xai`、`newapi`、`cliproxyapi`、`sub2api`。按 AccessKey 隔离归属，在当前路由允许时固定原凭据，不受软亲和开关影响；实际状态可用性由上游决定。无状态及转换响应不登记为持久状态。未知 ID（包括升级前或网关外创建的 ID）直接拒绝；Group 参数覆盖不能改写该字段。
-- 原生 Responses WebSocket 使用同端口 `GET /v1/responses`，按渠道声明的实际能力准入，支持 OpenAI、xAI、Codex 及符合原生合同的 CPA/sub2api、GPT-Load 端点。兼容客户端携带布尔参数 `stream:true/false`，两者均按 WS 事件流返回。每轮独立检查权限、限流、额度与当前路由，并记录用量及成本。同一连接固定上游身份；不回退 HTTP、不缓存或重放聊天历史。
+- 原生 Responses WebSocket 使用同端口 `GET /v1/responses`，按渠道声明的实际能力准入，支持 OpenAI、xAI、Codex、Vercel AI Gateway 及符合原生合同的 CPA/sub2api、GPT-Load 端点。兼容客户端携带布尔参数 `stream:true/false`，两者均按 WS 事件流返回。每轮独立检查权限、限流、额度与当前路由，并记录用量及成本。同一连接固定上游身份；不回退 HTTP、不缓存或重放聊天历史。
 - `responses_websocket_enabled` 默认开启，分组显式设置优先于全局，未覆盖时继承全局。关闭会立即断开受影响的 WS 连接并中断生成；HTTP/SSE 不受影响。重新开启不会恢复旧连接的临时状态。
-- 完整 `stream_id` 多流与分叉用于 OpenAI 和满足端到端条件的 GPT-Load 级联；其余上述渠道串行执行并明确拒绝命名流。预热实际发送 `generate:false`。Codex 只支持原连接内续接，不能使用 `store:true` 或凭旧 ID 跨连接恢复；其他渠道的持久续接仍取决于存储能力与有效归属。[Codex SDK 的代理、读取和关闭边界](third_party/cpaembedded/README.md#codex-websocket-session)继续适用。
+- `empty_response_retry` 默认关闭，分组显式设置优先于全局。开启后，流式对话请求在提交给客户端前会先确认上游是否产出内容；上游自然结束却没有任何产出时算作一次失败并换下一个候选重试，但不冷却也不拉黑凭据。重试用尽后仍把上游返回的空响应原样交给客户端。输出预算耗尽、内容过滤、拒答等由终止原因解释的空结果不重试，照常交付。预热（`generate:false`）、带 `previous_response_id` 或 `conversation` 的请求、非对话端点与 WebSocket 均不参与判定；上游持续发出无产出事件时按内置上限照常提交，不会一直压着响应。被重试掉的空回尝试已在上游产生计费，但用量与成本估算只记录最终交付的那次尝试。
+- 完整 `stream_id` 多流与分叉用于 OpenAI、Vercel AI Gateway 和满足端到端条件的 GPT-Load 级联；其余上述渠道串行执行并明确拒绝命名流。预热实际发送 `generate:false`。Codex 与 Vercel AI Gateway 只支持原连接内续接，不能凭旧 ID 跨连接恢复，Codex 还不能使用 `store:true`；Vercel 的 WebSocket 只接受 OpenAI 模型，同一连接换模型会被断开，开启 WebSocket 的 Vercel 分组应只配置 OpenAI 模型；其他渠道的持久续接仍取决于存储能力与有效归属。[Codex SDK 的代理、读取和关闭边界](third_party/cpaembedded/README.md#codex-websocket-session)继续适用。
 - `conversation` 与其他既有资源 ID 不在上述归属路由范围内，仍依赖单凭据或上游跨凭据共享资源。
 
 ## 从 1.x 切换

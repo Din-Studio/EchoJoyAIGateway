@@ -48,14 +48,17 @@ func TestNewUsageReportMapsTheRequestEvent(t *testing.T) {
 		}}},
 	}
 
-	got := newUsageReport(&Admission{UserID: "u1", KeyID: "k1"}, event, 12_345_678)
+	// Logging completes three seconds after the response. Billing must use the
+	// explicit response start, not CompletedAt minus the response duration.
+	started := completed.Add(-4500 * time.Millisecond)
+	got := newUsageReport(&Admission{UserID: "u1", KeyID: "k1"}, event, 12_345_678, started)
 
 	want := usageReport{
 		RequestID: "req-1", UserID: "u1", KeyID: "k1", Model: "claude-sonnet",
 		Upstream: "anthropic/claude-sonnet-4.5", Protocol: "anthropic", Status: "failed",
 		ErrorCode: "stream_interrupted", ErrorMessage: "client went away",
 		Usage: usageTokens{InputTokens: 1000, OutputTokens: 500, CacheReadTokens: 70, CacheWriteTokens: 33},
-		Cost:  "0.012346", StartedAt: "2026-10-19T10:00:00.123Z", DurationMs: 1500,
+		Cost:  "0.012346", StartedAt: "2026-10-19T09:59:57.123Z", DurationMs: 1500,
 	}
 	if got.ProjectID != nil {
 		t.Fatalf("ProjectID = %q, want null without X-Project-Id", *got.ProjectID)
@@ -76,7 +79,7 @@ func TestNewUsageReportStatusAndProtocol(t *testing.T) {
 		{telemetry.RequestStatusCanceled, protocol.Anthropic, [2]string{"failed", "anthropic"}},
 	} {
 		report := newUsageReport(&Admission{UserID: "u1", ProjectID: "p1"},
-			telemetry.RequestEvent{Status: test.status, Protocol: test.protocol}, 0)
+			telemetry.RequestEvent{Status: test.status, Protocol: test.protocol}, 0, time.Time{})
 		if [2]string{report.Status, report.Protocol} != test.want || report.ProjectID == nil || *report.ProjectID != "p1" {
 			t.Errorf("status %s protocol %s -> %q %q project %v, want %v",
 				test.status, test.protocol, report.Status, report.Protocol, report.ProjectID, test.want)

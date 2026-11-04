@@ -35,6 +35,7 @@ type HomeAccessKey struct {
 }
 
 type HomeBase struct {
+	Concurrency      *ConcurrencyView         `json:"concurrency,omitempty"`
 	PublicBaseURL    string                   `json:"public_base_url"`
 	GatewayName      string                   `json:"gateway_name"`
 	Inventory        HomeInventory            `json:"inventory"`
@@ -91,8 +92,17 @@ func (s *Service) readHomeBase(
 	accessKeyID *uint,
 ) (HomeBase, error) {
 	result, err := s.captureHomeBase(ctx, nowMS, accessKeyID)
-	if err != nil || result.CurrentAccessKey == nil {
+	if err != nil {
 		return result, err
+	}
+	if result.CurrentAccessKey == nil {
+		// 管理员首页展示集群级的全局并发；AccessKey 视角只看自己的密钥。
+		global, err := s.globalConcurrency(ctx)
+		if err != nil {
+			return HomeBase{}, err
+		}
+		result.Concurrency = &global
+		return result, nil
 	}
 	view, err := s.accessQuotaView(ctx, s.manager.Current(), *accessKeyID, time.UnixMilli(nowMS))
 	if err != nil {
@@ -101,6 +111,9 @@ func (s *Service) readHomeBase(
 	if status := mapAccessKeyCostLimitStatus(view); len(status.Rules) > 0 {
 		result.CurrentAccessKey.CostLimitStatus = &status
 		result.CurrentAccessKey.CostLimitRules = costLimitDefinitionsFromStatus(status)
+	}
+	if err := s.fillAccessKeyConcurrency(ctx, &result.CurrentAccessKey.AccessKeyMetadata); err != nil {
+		return HomeBase{}, err
 	}
 	return result, nil
 }

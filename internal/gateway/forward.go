@@ -16,6 +16,7 @@ import (
 	"gpt-load/internal/execution"
 	"gpt-load/internal/outboundproxy"
 	"gpt-load/internal/platform/contentcoding"
+	"gpt-load/internal/platform/encryption"
 	platformheader "gpt-load/internal/platform/httpheader"
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/reasoning"
@@ -26,16 +27,20 @@ import (
 // ForwardInput is the frozen logical-attempt input shared by the gateway
 // orchestrator and the provider-neutral execution adapter.
 type ForwardInput struct {
-	Dialect           dialect.Dialect
-	ObserveUsage      bool
-	Group             state.GroupView
-	APIKey            string
-	CredentialSecrets []string
-	Request           *dialect.ParsedRequest
-	ExternalModel     string
-	UpstreamModelID   string
-	OnStreamReady     func()
-	OnFirstResponse   func()
+	Dialect              dialect.Dialect
+	ObserveUsage         bool
+	Group                state.GroupView
+	APIKey               string
+	CredentialSecrets    []string
+	RedactionCipher      encryption.RedactionCipher
+	Request              *dialect.ParsedRequest
+	ConfiguredParameters []string
+	ExternalModel        string
+	UpstreamModelID      string
+	OnStreamReady        func()
+	OnFirstResponse      func()
+	// OnFirstOutput 仅供自动选模记录成功交付的首次生成内容。
+	OnFirstOutput func()
 	// OnResponse 在原生 Response 对象下发前登记归属，不承担上游执行。
 	OnResponse func([]byte) error
 
@@ -59,6 +64,9 @@ type ForwardInput struct {
 	// ContinuityKey is an opaque per-tenant replay boundary for provider-private
 	// thinking and tool state. It never crosses the gateway DTO boundary.
 	ContinuityKey string
+	// EmptyResponseRetry 启用空回检测：提交前压住尚无产出的前导事件，
+	// 使「上游正常完成但没有内容」仍可换候选重试。
+	EmptyResponseRetry bool
 }
 
 // UpstreamResult is the gateway's stable view of one logical execution
@@ -76,6 +84,7 @@ type UpstreamResult struct {
 	RequestWritten            bool
 	Committed                 bool
 	ProviderErrorBeforeCommit bool
+	EmptyResponseBeforeCommit bool
 	Stream                    StreamObservation
 	Usage                     usage.Result
 	DispatchState             execution.DispatchState
@@ -434,6 +443,7 @@ func sanitizeForwardResponseHeaders(
 			strings.HasPrefix(strings.ToLower(actualName), "x-upstream-") ||
 			strings.EqualFold(actualName, "Set-Cookie") ||
 			strings.EqualFold(actualName, "Set-Cookie2") ||
+			headerValuesContainLiteral(values, "gld1_") ||
 			headerValuesContainLiteral(values, input.APIKey)
 		for _, secret := range append(append([]string(nil), input.CredentialSecrets...), additionalSecrets...) {
 			if deleteField || secret == "" || secret == input.APIKey {

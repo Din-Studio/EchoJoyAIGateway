@@ -2155,7 +2155,10 @@ func TestRequestRecorderEmitsOperationAndAppliedAttemptObservation(t *testing.T)
 	recorder.setOperation(execution.OperationResponsesCreate)
 	selection := requestLogSelection(7, 8, "converted")
 	selection.RouteMode = channel.RouteConverted
-	recorder.appendAttempt(
+	requested := reasoning.Config{Effort: "high"}
+	recorder.setReasoning(requested)
+	recorder.freezeNextAttemptPricing(frozenAttemptPricing{metadataSet: true, reasoning: requested})
+	index := recorder.appendAttempt(
 		selection,
 		UpstreamResult{
 			UpstreamProtocol: protocol.Anthropic,
@@ -2170,9 +2173,7 @@ func TestRequestRecorderEmitsOperationAndAppliedAttemptObservation(t *testing.T)
 		startedAt,
 		startedAt.Add(500*time.Millisecond),
 	)
-	recorder.outcome = requestOutcome{
-		status: telemetry.RequestStatusSuccess, statusCode: http.StatusOK,
-	}
+	recorder.completeResponse(UpstreamResult{StatusCode: http.StatusOK}, health.Decision{}, "upstream", index)
 	budget = 1
 	recorder.emit()
 
@@ -2181,9 +2182,13 @@ func TestRequestRecorderEmitsOperationAndAppliedAttemptObservation(t *testing.T)
 		len(events[0].Attempts) != 1 {
 		t.Fatalf("events = %#v, want one responses_create attempt", events)
 	}
+	// 请求与尝试均记录最终下发值，不混入源协议的强度。
 	attempt := events[0].Attempts[0]
+	if !reflect.DeepEqual(events[0].Reasoning, attempt.Reasoning) {
+		t.Fatalf("request reasoning = %#v, want applied %#v", events[0].Reasoning, attempt.Reasoning)
+	}
 	if attempt.UpstreamProtocol != protocol.Anthropic ||
-		attempt.Reasoning.Mode != "enabled" || attempt.Reasoning.BudgetTokens == nil ||
+		attempt.Reasoning.Effort != "" || attempt.Reasoning.Mode != "enabled" || attempt.Reasoning.BudgetTokens == nil ||
 		*attempt.Reasoning.BudgetTokens != 4096 {
 		t.Fatalf("attempt observation = %#v", attempt)
 	}

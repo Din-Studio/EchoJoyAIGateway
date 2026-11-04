@@ -19,7 +19,7 @@ func TestQuotaHistoryRecordsDisplayedPercentChangesAndSurvivesRestart(t *testing
 	seconds := int64(604_800)
 	record := func(at int64, id string, used float64) {
 		manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, at,
-			[]providerobservation.QuotaWindow{{ID: id, WindowSeconds: &seconds, Utilization: &used}})
+			[]providerobservation.QuotaWindow{{ID: id, WindowSeconds: &seconds, Utilization: &used}}, nil)
 	}
 	flush := func() {
 		t.Helper()
@@ -60,13 +60,13 @@ func TestQuotaHistoryIgnoresMissingPercentAndKeepsSamplesAfterWriteFailure(t *te
 	ref, _ := registry.CredentialRef(credential.ID)
 	seconds := int64(604_800)
 	manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, 10_000,
-		[]providerobservation.QuotaWindow{{ID: "primary", WindowSeconds: &seconds, State: "available"}})
+		[]providerobservation.QuotaWindow{{ID: "primary", WindowSeconds: &seconds, State: "available"}}, nil)
 	if len(manager.passiveQuota.historyBatch(20)) != 0 {
 		t.Fatal("missing percentage fabricated a sample")
 	}
 	used := 0.25
 	manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, 20_000,
-		[]providerobservation.QuotaWindow{{ID: "primary", WindowSeconds: &seconds, Utilization: &used}})
+		[]providerobservation.QuotaWindow{{ID: "primary", WindowSeconds: &seconds, Utilization: &used}}, nil)
 	if err := db.Callback().Create().Before("gorm:create").Register("test:history_write_failure", func(tx *gorm.DB) {
 		if tx.Statement.Table == "credential_quota_histories" {
 			tx.AddError(testQuotaHistoryWriteError{})
@@ -80,7 +80,7 @@ func TestQuotaHistoryIgnoresMissingPercentAndKeepsSamplesAfterWriteFailure(t *te
 	// 写入失败期间继续观测，每次显示值变化都必须保留。
 	for index, utilization := range []float64{0.9, 0.01, 0.02} {
 		manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, 30_000+int64(index)*10_000,
-			[]providerobservation.QuotaWindow{{ID: "primary", WindowSeconds: &seconds, Utilization: &utilization}})
+			[]providerobservation.QuotaWindow{{ID: "primary", WindowSeconds: &seconds, Utilization: &utilization}}, nil)
 	}
 	if err := db.Callback().Create().Remove("test:history_write_failure"); err != nil {
 		t.Fatal(err)
@@ -120,7 +120,7 @@ func TestQuotaHistoryUsesOneWindowForNamedWebsocketAndHTTPObservations(t *testin
 		} else {
 			window.SourceID = "codex_spark"
 		}
-		manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, at, []providerobservation.QuotaWindow{window})
+		manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, at, []providerobservation.QuotaWindow{window}, nil)
 		if remaining, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil || remaining {
 			t.Fatalf("flush: remaining=%t error=%v", remaining, err)
 		}
@@ -143,7 +143,7 @@ func TestQuotaHistoryKeepsNamedWebsocketSourcesSeparate(t *testing.T) {
 	manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, 10_000, []providerobservation.QuotaWindow{
 		{ID: "primary", SourceName: "Spark", WindowSeconds: &seconds, Utilization: &sparkUsed},
 		{ID: "primary", SourceName: "Other", WindowSeconds: &seconds, Utilization: &otherUsed},
-	})
+	}, nil)
 	if remaining, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil || remaining {
 		t.Fatalf("flush: remaining=%t error=%v", remaining, err)
 	}
@@ -168,7 +168,7 @@ func TestQuotaHistoryOnlyPersistsWindowsOfAtLeastOneDay(t *testing.T) {
 		{ID: "below-day", WindowSeconds: &belowDay, Utilization: &used},
 		{ID: "one-day", WindowSeconds: &oneDay, Utilization: &used},
 		{ID: "one-week", WindowSeconds: &oneWeek, Utilization: &used},
-	})
+	}, nil)
 	if remaining, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil || remaining {
 		t.Fatalf("flush: remaining=%t error=%v", remaining, err)
 	}
@@ -188,7 +188,7 @@ func TestQuotaHistoryRecordsEveryDisplayedChangeAndDropsOutOfOrderObservation(t 
 	seconds := int64(604_800)
 	record := func(at int64, used float64) {
 		manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, at,
-			[]providerobservation.QuotaWindow{{ID: "primary", WindowSeconds: &seconds, Utilization: &used}})
+			[]providerobservation.QuotaWindow{{ID: "primary", WindowSeconds: &seconds, Utilization: &used}}, nil)
 	}
 	flush := func() {
 		t.Helper()
@@ -276,7 +276,7 @@ func TestQuotaHistoryPreservesWebsocketHandshakeSample(t *testing.T) {
 				return []providerobservation.QuotaWindow{{ID: "primary", WindowSeconds: &seconds, Utilization: &used}}
 			}
 			if reset {
-				manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, 10_000, window(.9))
+				manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, 10_000, window(.9), nil)
 				if _, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil {
 					t.Fatal(err)
 				}
@@ -321,7 +321,7 @@ func TestQuotaHistoryDetectsReboundAcrossHTTPAndNamedWebsocket(t *testing.T) {
 				} else {
 					window.SourceID = "codex_spark"
 				}
-				manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, int64(index+1)*10_000, []providerobservation.QuotaWindow{window})
+				manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, int64(index+1)*10_000, []providerobservation.QuotaWindow{window}, nil)
 				if remaining, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil || remaining {
 					t.Fatalf("flush: %t %v", remaining, err)
 				}
@@ -356,10 +356,10 @@ func TestQuotaHistoryDetectsReboundAfterSourceCacheEviction(t *testing.T) {
 						used = .01
 					}
 				}
-				manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, int64(index+1)*10_000, []providerobservation.QuotaWindow{window})
+				manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, int64(index+1)*10_000, []providerobservation.QuotaWindow{window}, nil)
 				if index == 2 && burst {
 					used = .95
-					manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, 40_000, []providerobservation.QuotaWindow{window})
+					manager.RecordPassiveQuotaObservation(credential.ID, ref.IdentityGeneration, 40_000, []providerobservation.QuotaWindow{window}, nil)
 				}
 				for attempt := 0; attempt < 3; attempt++ {
 					remaining, err := manager.FlushPassiveQuotaObservations(t.Context())

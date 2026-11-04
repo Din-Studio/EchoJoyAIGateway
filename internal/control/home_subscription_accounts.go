@@ -349,6 +349,7 @@ func (s *Service) mapHomeSubscriptionAccount(
 	if err != nil {
 		return HomeSubscriptionAccountResponse{}, err
 	}
+	item.Name = credential.Name
 	item.ConnectionType = string(models.ConnectionTypeSubscription)
 	item.SecretVersion = credential.SecretVersion
 	item.AuthState = string(credential.AuthState)
@@ -358,6 +359,7 @@ func (s *Service) mapHomeSubscriptionAccount(
 		representative.observation,
 		credential.IdentityFingerprint,
 	)
+	item.Observation = withCredentialPlan(item.Observation, account.Plan)
 	proxyViews, err := s.credentialProxyViews(ctx, s.db, group, []models.Credential{credential})
 	if err != nil {
 		return HomeSubscriptionAccountResponse{}, err

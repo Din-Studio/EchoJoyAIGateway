@@ -25,7 +25,7 @@ func testCustomAccessKeyMigration(t *testing.T, open func(*testing.T) *gorm.DB) 
 					t.Fatal(err)
 				}
 				key = models.AccessKey{Name: "existing", KeyValue: "encrypted-test-value", KeyHash: "existing-hash", KeySuffix: "cafe", Status: "active", Filters: models.JSON(`{}`)}
-				if err := db.Omit("KeyPrefix", "Note").Create(&key).Error; err != nil {
+				if err := db.Omit("KeyPrefix", "Note", "ConcurrencyLimit").Create(&key).Error; err != nil {
 					t.Fatal(err)
 				}
 				// 0010 时限额列仍是 *_nano_usd，0021 才改名，所以这里写原始 SQL。
@@ -41,7 +41,7 @@ func testCustomAccessKeyMigration(t *testing.T, open func(*testing.T) *gorm.DB) 
 				}
 				// 删除过的较大 ID 也不能因重建表而被再次分配。
 				deleted := models.AccessKey{Name: "deleted", KeyValue: "cipher", KeyHash: "deleted-hash", KeySuffix: "dead", Status: "active", Filters: models.JSON(`{}`)}
-				if err := db.Omit("KeyPrefix", "Note").Create(&deleted).Error; err != nil {
+				if err := db.Omit("KeyPrefix", "Note", "ConcurrencyLimit").Create(&deleted).Error; err != nil {
 					t.Fatal(err)
 				}
 				deletedID = deleted.ID

@@ -4,20 +4,21 @@ go 1.27.0
 
 require (
 	github.com/alicebob/miniredis/v2 v2.39.0
-	github.com/andybalholm/brotli v1.2.4
+	github.com/andybalholm/brotli v1.2.6
 	github.com/buger/jsonparser v1.6.1
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
-	github.com/klauspost/compress v1.20.0
-	github.com/maximhq/bifrost/core v1.9.0
+	github.com/klauspost/compress v1.20.1
+	github.com/maximhq/bifrost/core v1.11.0
 	github.com/nicksnyder/go-i18n/v2 v2.6.1
 	github.com/redis/go-redis/v9 v9.19.0
-	github.com/router-for-me/CLIProxyAPI/v7/gptload-embedded v0.0.0
+	github.com/router-for-me/CLIProxyAPI/v8/gptload-embedded v0.0.0
 	github.com/sirupsen/logrus v1.10.2
 	github.com/tidwall/gjson v1.19.0
 	github.com/tidwall/sjson v1.2.5
+	github.com/tink-crypto/tink-go/v2 v2.8.0
 	go.uber.org/dig v1.19.0
 	golang.org/x/crypto v0.57.0
 	golang.org/x/net v0.59.0
@@ -93,7 +94,7 @@ require (
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.1 // indirect
 	github.com/refraction-networking/utls v1.8.2 // indirect
-	github.com/router-for-me/CLIProxyAPI/v7 v7.3.15 // indirect
+	github.com/router-for-me/CLIProxyAPI/v8 v8.0.8 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/savsgio/gotils v0.0.0-20250408102913-196191ec6287 // indirect
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966 // indirect
@@ -119,4 +120,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/router-for-me/CLIProxyAPI/v7/gptload-embedded => ./third_party/cpaembedded
+replace github.com/router-for-me/CLIProxyAPI/v8/gptload-embedded => ./third_party/cpaembedded

@@ -1023,9 +1023,10 @@ func stringPtr(value string) *string {
 func TestLoaderIndexesUserDefaultKeysByNote(t *testing.T) {
 	db := openMigratedDatabase(t)
 	createRuntimeGroup(t, db, "first", protocol.OpenAICompletions, "gpt-4o")
+	limit := int64(7)
 	defaultKey := models.AccessKey{
 		Name: state.UserDefaultKeyNamePrefix + "k9", Note: "user-1", KeyValue: "default-cipher", KeyHash: "default-hash",
-		KeySuffix: "0005", Status: "active", Filters: models.JSON(`{}`),
+		KeySuffix: "0005", Status: "active", Filters: models.JSON(`{}`), ConcurrencyLimit: &limit,
 	}
 	mustCreate(t, db, &defaultKey)
 
@@ -1037,6 +1038,11 @@ func TestLoaderIndexesUserDefaultKeysByNote(t *testing.T) {
 	snapshot := manager.Current()
 	if got := snapshot.UserDefaultKeys; len(got) != 1 || got["user-1"] != defaultKey.ID {
 		t.Fatalf("UserDefaultKeys = %v, want user-1 → %d", got, defaultKey.ID)
+	}
+	for _, key := range []state.AccessKeyView{snapshot.AccessKeysByID[defaultKey.ID], snapshot.AccessKeysByHash[defaultKey.KeyHash]} {
+		if key.ConcurrencyLimit != limit {
+			t.Fatalf("default key concurrency = %d, want %d", key.ConcurrencyLimit, limit)
+		}
 	}
 	if strings.Contains(fmt.Sprintf("%#v", snapshot), defaultKey.KeyValue) {
 		t.Fatal("snapshot exposes the default key's ciphertext")
@@ -1085,5 +1091,40 @@ func TestBuildCompileInputLoadsStrictClientModelOverrides(t *testing.T) {
 	}
 	if _, err := loader.BuildCompileInput(context.Background(), db, channel.NewRegistry()); err == nil {
 		t.Fatal("BuildCompileInput() accepted duplicate client model override field")
+	}
+}
+
+func TestBuildCompileInputIgnoresRetiredDefaultServiceTierWithoutLosingMetadata(t *testing.T) {
+	db := openMigratedDatabase(t)
+	for name, raw := range map[string]string{
+		"legacy-only": `{"default_service_tier":"priority"}`,
+		"metadata":    `{"default_service_tier":"ultrafast","description":"说明","auto_compact_token_limit":48000,"default_reasoning_level":"high","supported_reasoning_levels":["low","high"],"service_tiers":[]}`,
+	} {
+		mustCreate(t, db, &models.ClientModelOverride{
+			ModelHash: models.ClientModelHash(name), ClientModel: name, Overrides: models.JSON(raw),
+		})
+	}
+	input, err := loader.BuildCompileInput(t.Context(), db, channel.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := input.ClientModelOverrides["legacy-only"]; exists {
+		t.Fatal("retired-only configuration was kept as an empty override")
+	}
+	overrides := input.ClientModelOverrides["metadata"]
+	if overrides.Description == nil || *overrides.Description != "说明" || overrides.AutoCompactTokenLimit == nil || *overrides.AutoCompactTokenLimit != 48000 ||
+		overrides.DefaultReasoningLevel == nil || *overrides.DefaultReasoningLevel != "high" || overrides.ServiceTiers == nil || len(*overrides.ServiceTiers) != 0 {
+		t.Fatalf("metadata lost while ignoring retired field: %#v", overrides)
+	}
+	if _, err := state.Compile(input); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.ClientModelOverride{}).
+		Where("model_hash = ?", models.ClientModelHash("legacy-only")).
+		Update("overrides", models.JSON(`{"default_service_tier":"priority","unknown":true}`)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loader.BuildCompileInput(t.Context(), db, channel.NewRegistry()); err == nil {
+		t.Fatal("retired field bypassed unknown-field validation")
 	}
 }

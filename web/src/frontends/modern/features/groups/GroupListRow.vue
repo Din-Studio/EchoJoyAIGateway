@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { numberFormatter, dateFormatter } from '@modern/components/ui/intl-formatters'
-import { ChevronDown, ChevronUp, KeyRound, UserRound } from '@lucide/vue'
+import { ChevronDown, ChevronUp, KeyRound, Plus, UserRound } from '@lucide/vue'
 import { useQuery } from '@tanstack/vue-query'
 import { computed, useId } from 'vue'
 import { useURLState } from '@modern/app/url-state'
@@ -27,16 +27,21 @@ import { useApiClient } from '@shared/http/client-context'
 const props = defineProps<{
   group: GroupRow
   expanded: boolean
-  pending?: 'toggle' | 'weight'
+  pending?: 'toggle' | 'priority' | 'weight'
   enabledOverride?: boolean
   usage?: GroupUsage
   usageLoading: boolean
   usageIncomplete: boolean
+  priorityError?: string
   weightError?: string
 }>()
 const emit = defineEmits<{
   expand: []
   toggle: [value: boolean]
+  priority: [value: number]
+  priorityEditing: [value: boolean]
+  priorityDirty: [value: boolean]
+  clearPriorityError: []
   weight: [value: number]
   weightEditing: [value: boolean]
   weightDirty: [value: boolean]
@@ -45,6 +50,13 @@ const emit = defineEmits<{
 const { t, n, locale } = useI18n()
 const client = useApiClient()
 const route = useRoute()
+const addCredentialsLabel = computed(() =>
+  t(
+    props.group.connectionType === 'subscription'
+      ? 'groupDetail.connectAccount'
+      : 'groupDetail.addCredentials',
+  ),
+)
 const id = useId()
 const searchKey = 'models_' + props.group.id
 const allKey = 'all_models_' + props.group.id
@@ -200,7 +212,28 @@ const lastActive = computed(() =>
       </div>
       <div class="modern-group-metric" role="group" :aria-label="t('groups.board.credentials')">
         <span class="modern-group-mobile-label">{{ t('groups.board.credentials') }}</span>
-        <strong>{{ n(group.credentials.total) }}</strong>
+        <div class="modern-group-credential-heading">
+          <strong>{{ n(group.credentials.total) }}</strong>
+          <AppTooltip :label="addCredentialsLabel">
+            <AppButton
+              :aria-label="addCredentialsLabel"
+              size="xs"
+              variant="ghost"
+              icon-only
+              :disabled="Boolean(pending)"
+              as-child
+            >
+              <RouterLink
+                :to="{
+                  name: 'modern-group-detail',
+                  params: { id: group.id },
+                  query: { panel: 'add', from: route.fullPath },
+                }"
+                ><AppIcon :icon="Plus" size="sm"
+              /></RouterLink>
+            </AppButton>
+          </AppTooltip>
+        </div>
         <div class="modern-group-bar-line">
           <AppSegmentedBar :segments="credentialSegments" :label="credentialSummary" />
         </div>
@@ -277,6 +310,19 @@ const lastActive = computed(() =>
           @update:model-value="emit('toggle', $event)"
         />
         <AppInlineNumber
+          :model-value="group.priority"
+          :label="t('groups.edit.priority')"
+          :min="-2147483648"
+          :max="2147483647"
+          :pending="pending === 'priority'"
+          :disabled="Boolean(pending)"
+          :error="priorityError"
+          @submit="emit('priority', $event)"
+          @editing="emit('priorityEditing', $event)"
+          @dirty="emit('priorityDirty', $event)"
+          @clear-error="emit('clearPriorityError')"
+        />
+        <AppInlineNumber
           :model-value="group.weight"
           :label="t('groups.edit.weight')"
           :min="1"
@@ -337,6 +383,11 @@ const lastActive = computed(() =>
 }
 .modern-group-row:hover {
   background: var(--modern-subtle);
+}
+.modern-group-credential-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--modern-space-2);
 }
 .modern-group-identity {
   display: flex;
@@ -413,7 +464,7 @@ const lastActive = computed(() =>
   grid-template-columns: var(--modern-group-action-columns);
   align-items: center;
   justify-items: start;
-  gap: var(--modern-space-4);
+  gap: var(--modern-space-2);
   text-align: left;
 }
 .modern-group-bar-line {
@@ -480,6 +531,7 @@ const lastActive = computed(() =>
   }
   .modern-group-actions {
     grid-column: 1 / -1;
+    width: 100%;
     justify-content: start;
   }
   .modern-group-details > :first-child {

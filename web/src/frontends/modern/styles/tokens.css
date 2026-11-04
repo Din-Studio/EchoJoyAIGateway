@@ -94,6 +94,7 @@
   --modern-protocol-rerank: light-dark(#a34c70, #eda7c2);
   --modern-protocol-anthropic: light-dark(#aa6132, #eeb38b);
   --modern-protocol-gemini: light-dark(#6154ad, #b9aff2);
+  --modern-protocol-gemini-embeddings: light-dark(#6a7518, #c9d37c);
 
   /* 控件状态：按钮、字段与选择器共用边框、底色和焦点反馈。 */
   --modern-control-border: light-dark(#dcdcd6, #4a4a45);
@@ -190,8 +191,8 @@
   --modern-channel-md: 36px;
   --modern-channel-hero: 48px;
   --modern-channel-hero-glyph: 32px;
-  --modern-inline-action-target: 24px;
-  --modern-inline-number-width: 104px;
+  --modern-inline-action-target: 16px;
+  --modern-inline-number-width: 68px;
   --modern-status-bar-height: 8px;
   --modern-status-success: var(--modern-success);
   --modern-status-warning: light-dark(#eeae36, #eab84f);

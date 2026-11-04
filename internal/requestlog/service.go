@@ -439,6 +439,7 @@ func (service *Service) warn(failureType string, failedBatchSize int) {
 
 func cloneEvent(event telemetry.RequestEvent) telemetry.RequestEvent {
 	cloned := event
+
 	if event.FirstResponseMs != nil {
 		value := *event.FirstResponseMs
 		cloned.FirstResponseMs = &value

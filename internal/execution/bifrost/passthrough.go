@@ -15,6 +15,7 @@ import (
 	"gpt-load/internal/channel"
 	"gpt-load/internal/dialect"
 	"gpt-load/internal/execution"
+	"gpt-load/internal/execution/geminiembedding"
 	"gpt-load/internal/execution/geminiimage"
 	"gpt-load/internal/platform/httpheader"
 	"gpt-load/internal/protocol"
@@ -201,6 +202,16 @@ func sanitizeNativePassthroughRequest(
 			return nil, nil, err
 		}
 		return bytes.Clone(request.Body), request.Header.Clone(), nil
+	}
+	if spec.ClientProtocol == protocol.GeminiEmbeddings && spec.Operation == execution.OperationEmbeddingsCreate {
+		request, err := dialect.NewGeminiEmbeddings().SanitizeRequestForAttempt(&dialect.ParsedRequest{
+			Method: spec.Method, Path: spec.Path, RawQuery: spec.RawQuery,
+			Header: spec.Header.Clone(), Body: spec.Body,
+		}, spec.UpstreamModel)
+		if err != nil {
+			return nil, nil, err
+		}
+		return request.Body, request.Header, nil
 	}
 	body, err := sanitizeNativeRequestBody(spec, stream)
 	if err != nil {
@@ -412,6 +423,21 @@ complete:
 			}
 			model = openAIResponseModel(bodyBytes, "")
 		}
+		if prepared.embeddingConversion != nil {
+			var err error
+			bodyBytes, usageEvidence, err = geminiembedding.ConvertResponse(bodyBytes, *prepared.embeddingConversion)
+			httpheader.StripRepresentationMetadata(headers)
+			headers.Set("Content-Type", "application/json")
+			if err != nil {
+				failure := startedUnaryFailure(http.StatusBadGateway, headers, execution.ErrorKindProvider, geminiembedding.ErrInvalidResponse.Error())
+				failure.Error.Code = "invalid_embedding_response"
+				failure.Error.StatusCode = http.StatusBadGateway
+				failure.Error.Hint = execution.FailureHintRequestRejected
+				failure.Error.OriginHint, failure.Error.ScopeHint = execution.ErrorOriginUpstream, execution.ErrorScopeRequest
+				return failure
+			}
+			model = openAIResponseModel(bodyBytes, "")
+		}
 		if rewrite := nativeResponseRewrite(spec, scrubber); rewrite != nil && headers.Get("Content-Encoding") == "" {
 			rewritten, err := rewrite(bodyBytes)
 			if err != nil {
@@ -557,6 +583,7 @@ func (r *Runtime) executeNativeStream(
 	model := spec.UpstreamModel
 	var usageEvidence *execution.UsageEvidence
 	var errorBody bytes.Buffer
+	firstData := execution.NewFirstResponseSSEObserver(parent)
 	firstEventGate := newNativeFirstSSEEventGate(spec)
 	scrubber := r.responseScrubber(spec)
 	responseRewriter := newNativeSSERewriter(spec, nativeResponseRewrite(spec, scrubber))
@@ -653,6 +680,7 @@ func (r *Runtime) executeNativeStream(
 					data = redactSecrets(data, prepared.secrets)
 				} else {
 					var err error
+					firstData(data)
 					data, err = firstEventGate.push(data)
 					if err != nil {
 						cancelCall()
@@ -716,7 +744,9 @@ func usageEvidenceFromPassthroughForSpec(
 	spec execution.AttemptSpec,
 	source *schemas.BifrostPassthroughUsage,
 ) (*execution.UsageEvidence, error) {
-	if spec.ClientProtocol == protocol.OpenAIImages || spec.ClientProtocol == protocol.Rerank || spec.ClientProtocol == protocol.Decisions {
+	// 转换路由由转换器提供用量证据；原生 OpenAI Embeddings 不经过透传。
+	if spec.ClientProtocol == protocol.OpenAIImages || spec.ClientProtocol == protocol.OpenAIEmbeddings ||
+		spec.ClientProtocol == protocol.Rerank || spec.ClientProtocol == protocol.Decisions {
 		return nil, nil
 	}
 	return usageEvidenceFromPassthrough(source)

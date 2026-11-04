@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 
@@ -22,6 +25,7 @@ import (
 // credentialUpdate is a validated CredentialUpdateRequest; nil pointers and
 // false *Set flags leave the stored value unchanged.
 type credentialUpdate struct {
+	name             *string
 	status           *state.CredentialStatus
 	weight           *int
 	weightSet        bool
@@ -34,10 +38,17 @@ func normalizeCredentialUpdate(
 	request CredentialUpdateRequest,
 	encryptionService encryption.Service,
 ) (credentialUpdate, error) {
-	if !request.Status.Set && !request.WeightManual.Set && !request.Proxy.Set && !request.ConcurrencyLimit.Set {
+	if !request.Name.Set && !request.Status.Set && !request.WeightManual.Set && !request.Proxy.Set && !request.ConcurrencyLimit.Set {
 		return credentialUpdate{}, app_errors.ErrBadRequest
 	}
 	var update credentialUpdate
+	if request.Name.Set {
+		name := strings.TrimSpace(request.Name.Value)
+		if request.Name.Null || utf8.RuneCountInString(name) > 255 || strings.ContainsFunc(name, unicode.IsControl) {
+			return credentialUpdate{}, app_errors.ErrValidation
+		}
+		update.name = &name
+	}
 	if request.Status.Set {
 		if request.Status.Null ||
 			(request.Status.Value != state.CredentialStatusActive && request.Status.Value != state.CredentialStatusDisabled) {
@@ -170,6 +181,11 @@ func (s *Service) UpdateGroupCredential(
 	var committedProxy, committedProxyFingerprint string
 	committedProxyUpdate := false
 	err = s.writeCredentialConfig(ctx, groupID, credentialID, func(tx *gorm.DB) error {
+		if update.proxySet {
+			if err := lockProxyCatalog(tx); err != nil {
+				return err
+			}
+		}
 		group, err := loadGroupRow(tx, groupID)
 		if err != nil {
 			return err
@@ -197,6 +213,10 @@ func (s *Service) UpdateGroupCredential(
 			return app_errors.ErrInternalServer
 		}
 		updates := map[string]any{"updated_at_ms": updatedAtMS}
+		if update.name != nil {
+			committed.Name = *update.name
+			updates["name"] = committed.Name
+		}
 		if update.status != nil {
 			committed.Status = models.CredentialStatus(*update.status)
 			updates["status"] = committed.Status
@@ -210,11 +230,15 @@ func (s *Service) UpdateGroupCredential(
 			updates["concurrency_limit"] = committed.ConcurrencyLimit
 		}
 		if update.proxySet {
+			update.proxy, err = s.managedProxyOverride(ctx, tx, update.proxy)
+			if err != nil {
+				return err
+			}
 			committed.ProxyConfig = update.proxy
 			updates["proxy_config"] = update.proxy
 		}
 		committed.UpdatedAtMS = updatedAtMS
-		committedProxy, committedProxyFingerprint, err = storedProxyIdentity(s.encryption, committed.ProxyConfig)
+		committedProxy, committedProxyFingerprint, err = s.storedProxyIdentity(ctx, tx, committed.ProxyConfig)
 		if err != nil {
 			return err
 		}
@@ -225,11 +249,18 @@ func (s *Service) UpdateGroupCredential(
 		return nil
 	}, func() error {
 		committedProxyUpdate = update.proxySet
+		if update.name != nil && update.status == nil && !update.weightSet && !update.proxySet && update.concurrencyLimit == nil {
+			if !s.registry.UpdateCredentialName(groupID, credentialID, committed.Name) {
+				return dbRegistryMismatch(mismatchMissingRegistry, groupID, credentialID)
+			}
+			return nil
+		}
 		entries, snapshotErr := s.registry.SnapshotGroupCredentialEntriesExact(groupID, []uint{credentialID})
 		if snapshotErr != nil {
 			return dbRegistryMismatch(mismatchMissingRegistry, groupID, credentialID)
 		}
 		entry := entries[0]
+		entry.Name = committed.Name
 		entry.Status = state.CredentialStatus(committed.Status)
 		entry.WeightManual = cloneInt(committed.WeightManual)
 		entry.ConcurrencyLimit = committed.ConcurrencyLimit
@@ -523,6 +554,7 @@ func (s *Service) mapCredentialItem(
 	if err != nil {
 		return CredentialItemResponse{}, err
 	}
+	item.Name = row.Name
 	item.ConnectionType = string(normalizeGroupConnectionType(group.ConnectionType))
 	item.SecretVersion = row.SecretVersion
 	item.AuthState = string(row.AuthState)
@@ -538,7 +570,7 @@ func (s *Service) mapCredentialItem(
 		if result.Error != nil && !errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return CredentialItemResponse{}, app_errors.ParseDBError(result.Error)
 		}
-		item.Observation = presentCredentialObservation(observation, row.IdentityFingerprint)
+		item.Observation = withCredentialPlan(presentCredentialObservation(observation, row.IdentityFingerprint), account.Plan)
 	}
 	return item, nil
 }

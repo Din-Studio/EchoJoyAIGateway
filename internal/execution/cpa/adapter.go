@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/reasoning"
 	"gpt-load/internal/subscription"
+	subscriptionproviders "gpt-load/internal/subscription/providers"
 	providerobservation "gpt-load/internal/subscription/providers/observation"
 	subscriptionruntime "gpt-load/internal/subscription/runtime"
 	"gpt-load/internal/usage"
@@ -48,19 +50,19 @@ type Adapter struct {
 
 type credentialPreparer interface {
 	Prepare(context.Context, channel.ID, execution.CredentialSnapshot, bool) (subscriptionruntime.Credential, *execution.ErrorEvidence)
-	RecordPassiveQuotaObservation(credentialID uint, identityGeneration uint64, observedAtMS int64, windows []providerobservation.QuotaWindow)
+	RecordPassiveQuotaObservation(credentialID uint, identityGeneration uint64, observedAtMS int64, windows []providerobservation.QuotaWindow, credits *providerobservation.CreditSummary)
 	RecordPassiveQuotaPair(credentialID uint, identityGeneration uint64, preceding, latest subscription.PassiveQuotaSample)
 }
 
 // recordPassiveQuotaObservation forwards one execution's passive quota
-// windows, if any, to the credential's pending observation. It is a no-op
-// for providers that never populate a response's QuotaWindows.
+// windows and credits, if any, to the credential's pending observation.
 func (a *Adapter) recordPassiveQuotaObservation(
 	spec execution.AttemptSpec,
 	observedAt time.Time,
 	windows []providerobservation.QuotaWindow,
+	credits *providerobservation.CreditSummary,
 ) {
-	if a == nil || a.credentials == nil || len(windows) == 0 {
+	if a == nil || a.credentials == nil || (len(windows) == 0 && credits == nil) {
 		return
 	}
 	a.credentials.RecordPassiveQuotaObservation(
@@ -68,6 +70,7 @@ func (a *Adapter) recordPassiveQuotaObservation(
 		spec.Credential.IdentityGeneration,
 		observedAt.UnixMilli(),
 		windows,
+		credits,
 	)
 }
 
@@ -208,7 +211,7 @@ func (a *Adapter) Execute(ctx context.Context, spec execution.AttemptSpec) (resu
 			credential,
 			request,
 		)
-		a.recordPassiveQuotaObservation(spec, response.QuotaObservedAt, response.QuotaWindows)
+		a.recordPassiveQuotaObservation(spec, response.QuotaObservedAt, response.QuotaWindows, response.Credits)
 	}
 	if err != nil {
 		result := unaryExecutionError(execCtx, provider, err, credential)
@@ -235,7 +238,7 @@ func (a *Adapter) Execute(ctx context.Context, spec execution.AttemptSpec) (resu
 			result.Error.Hint = execution.FailureHintRequestRejected
 		}
 		result.UpstreamProtocol = effectiveUpstreamProtocol(provider, response.UpstreamProtocol)
-		result.AppliedReasoning = appliedReasoning(response.AppliedReasoningEffort)
+		result.AppliedReasoning = appliedReasoning(response.AppliedReasoningEffort, response.AppliedReasoningMode, response.AppliedReasoningBudgetTokens)
 		return result
 	}
 	return unaryProviderSuccess(provider, spec, response)
@@ -266,7 +269,7 @@ func unaryProviderSuccess(
 	}
 	return execution.AttemptResult{
 		DispatchState: execution.DispatchMaybeSent, ResponseStarted: true,
-		UpstreamProtocol: effectiveUpstreamProtocol(provider, response.UpstreamProtocol), AppliedReasoning: appliedReasoning(response.AppliedReasoningEffort), StatusCode: statusCode,
+		UpstreamProtocol: effectiveUpstreamProtocol(provider, response.UpstreamProtocol), AppliedReasoning: appliedReasoning(response.AppliedReasoningEffort, response.AppliedReasoningMode, response.AppliedReasoningBudgetTokens), StatusCode: statusCode,
 		Header: headers, Body: body, Model: responseModel(body, spec.UpstreamModel),
 		UpstreamRequestID: upstreamRequestID(headers), Usage: observedUsage,
 	}
@@ -349,11 +352,14 @@ func (a *Adapter) ExecuteStream(
 	defer cancelStream(context.Canceled)
 	firstByte := startFirstByteGate(spec.Timeouts.FirstByte, cancelStream)
 	defer firstByte.stop()
+	streamCtx = subscriptionproviders.WithStreamBodyObserver(streamCtx, func(body io.ReadCloser, header http.Header) io.ReadCloser {
+		return observeStreamBody(streamCtx, body, header.Get("Content-Encoding"))
+	})
 	response, err := provider.ExecuteStream(streamCtx, strconv.FormatUint(uint64(spec.Credential.ID), 10), credential, request)
 	upstreamProtocol := provider.UpstreamProtocol()
 	if response != nil {
 		upstreamProtocol = effectiveUpstreamProtocol(provider, response.UpstreamProtocol)
-		a.recordPassiveQuotaObservation(spec, response.QuotaObservedAt, response.QuotaWindows)
+		a.recordPassiveQuotaObservation(spec, response.QuotaObservedAt, response.QuotaWindows, response.Credits)
 	}
 	if err != nil {
 		result := unaryExecutionError(streamCtx, provider, err, credential)
@@ -362,7 +368,7 @@ func (a *Adapter) ExecuteStream(
 		}
 		var applied *reasoning.Config
 		if response != nil {
-			applied = appliedReasoning(response.AppliedReasoningEffort)
+			applied = appliedReasoning(response.AppliedReasoningEffort, response.AppliedReasoningMode, response.AppliedReasoningBudgetTokens)
 		}
 		return execution.StreamResult{
 			DispatchState: result.DispatchState, ResponseStarted: result.ResponseStarted,
@@ -371,7 +377,7 @@ func (a *Adapter) ExecuteStream(
 			UpstreamRequestID: result.UpstreamRequestID, Error: result.Error,
 		}
 	}
-	applied := appliedReasoning(response.AppliedReasoningEffort)
+	applied := appliedReasoning(response.AppliedReasoningEffort, response.AppliedReasoningMode, response.AppliedReasoningBudgetTokens)
 	headers := subscriptionResponseHeaders(response.Headers, "text/event-stream")
 	sequence := uint64(1)
 	ready := false
@@ -887,17 +893,27 @@ func successfulStreamTerminal(
 	}
 }
 
-func appliedReasoning(effort string) *reasoning.Config {
-	effort = strings.ToLower(strings.TrimSpace(effort))
-	if effort == "" || len(effort) > 64 {
+func appliedReasoning(effort, mode string, budget *int64) *reasoning.Config {
+	config := reasoning.Config{
+		Effort: appliedReasoningValue(effort), Mode: appliedReasoningValue(mode), BudgetTokens: budget,
+	}.Clone()
+	if !config.Present() {
 		return nil
 	}
-	for _, character := range effort {
+	return &config
+}
+
+func appliedReasoningValue(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if len(value) > 64 {
+		return ""
+	}
+	for _, character := range value {
 		if (character < 'a' || character > 'z') && character != '-' && character != '_' {
-			return nil
+			return ""
 		}
 	}
-	return &reasoning.Config{Effort: effort}
+	return value
 }
 
 func nextChunk(ctx context.Context, chunks <-chan providerStreamChunk, timeout time.Duration) (providerStreamChunk, bool, error) {

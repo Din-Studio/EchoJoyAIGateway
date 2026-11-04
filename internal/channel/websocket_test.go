@@ -13,6 +13,7 @@ func TestResponsesWebsocketCapabilitiesAreIndependent(t *testing.T) {
 		{OpenAI, true, true, true}, {XAI, true, true, false},
 		{Codex, true, false, false}, {CLIProxyAPI, true, false, false},
 		{Sub2API, true, false, false}, {GPTLoad, true, true, true},
+		{Vercel, true, false, true},
 		{NewAPI, false, false, false}, {Grok, false, false, false},
 	} {
 		t.Run(string(test.id), func(t *testing.T) {

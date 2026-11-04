@@ -49,12 +49,13 @@ var reportProtocols = map[protocol.Protocol]string{
 
 // Record stores the usage report of a request admitted by Admit. chargeNano is
 // the request's charge in nano CNY, the same amount its cost limits consume.
+// startedAt is the recorder's response-timing origin, independent of log emission.
 // A report that cannot be stored is logged in full for manual replay.
-func (s *Service) Record(admission *Admission, event telemetry.RequestEvent, chargeNano int64) {
+func (s *Service) Record(admission *Admission, event telemetry.RequestEvent, chargeNano int64, startedAt time.Time) {
 	if admission == nil {
 		return
 	}
-	payload, err := json.Marshal(newUsageReport(admission, event, chargeNano))
+	payload, err := json.Marshal(newUsageReport(admission, event, chargeNano, startedAt))
 	if err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), enqueueTimeout)
 		defer cancel()
@@ -67,7 +68,7 @@ func (s *Service) Record(admission *Admission, event telemetry.RequestEvent, cha
 	}
 }
 
-func newUsageReport(admission *Admission, event telemetry.RequestEvent, chargeNano int64) usageReport {
+func newUsageReport(admission *Admission, event telemetry.RequestEvent, chargeNano int64, startedAt time.Time) usageReport {
 	var projectID *string
 	if admission.ProjectID != "" {
 		projectID = &admission.ProjectID
@@ -77,7 +78,6 @@ func newUsageReport(admission *Admission, event telemetry.RequestEvent, chargeNa
 		status = "success"
 	}
 	tokens := event.Usage.Result.Tokens
-	started := event.CompletedAt.Add(-time.Duration(event.DurationMs) * time.Millisecond)
 	return usageReport{
 		RequestID:    event.RequestID,
 		UserID:       admission.UserID,
@@ -96,7 +96,7 @@ func newUsageReport(admission *Admission, event telemetry.RequestEvent, chargeNa
 			CacheWriteTokens: tokens.CacheWrite5M + tokens.CacheWrite1H + tokens.CacheWriteUnknown,
 		},
 		Cost:       formatYuan(chargeNano),
-		StartedAt:  started.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
+		StartedAt:  startedAt.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
 		DurationMs: event.DurationMs,
 	}
 }

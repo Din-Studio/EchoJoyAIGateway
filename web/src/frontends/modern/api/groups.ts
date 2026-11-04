@@ -1,3 +1,6 @@
+import { readGroupPriority } from '@shared/group-priority'
+import { credentialDisplayText } from '@shared/credential-display'
+import { readConcurrency, type ConcurrencyView } from '@shared/concurrency'
 import type { ApiClient } from '@shared/http/client'
 import { InvalidResponseError } from '@shared/http/errors'
 import { boolean, integer, list, oneOf, record, text } from './response'
@@ -34,6 +37,8 @@ export interface CredentialCounts {
   modelCooldown: number
 }
 export interface GroupRow {
+  priority: number
+  concurrency: ConcurrencyView
   id: number
   name: string
   channelID: string
@@ -58,12 +63,14 @@ export interface GroupWorkspace {
   items: GroupRow[]
 }
 export interface GroupBasics {
+  priority: number
   name: string
   enabled: boolean
   weight: number | null
   priceMultiplier: string
 }
 export type GroupBasicsPatch = Partial<{
+  priority: number
   name: string
   enabled: boolean
   weight_manual: number | null
@@ -92,7 +99,11 @@ export async function getCredentialOptions(client: ApiClient, signal: AbortSigna
     return {
       key: readCredentialFilterKey(option.key),
       channelID: text(option.channel_id),
-      label: text(option.label),
+      label: credentialDisplayText(
+        option.names === undefined ? '' : list(option.names).map(text).join(' / '),
+        text(option.label),
+        text(option.connection_type ?? ''),
+      ),
       groupIDs: list(option.group_ids).map((value) => integer(value, 1)),
     }
   })
@@ -125,6 +136,7 @@ export async function getGroupWorkspace(
     const item = record(value)
     const counts = record(item.credentials)
     return {
+      concurrency: readConcurrency(item.concurrency),
       id: integer(item.id, 1),
       name: text(item.name),
       channelID: text(item.channel_id),
@@ -135,6 +147,7 @@ export async function getGroupWorkspace(
       endpoint: text(item.endpoint),
       enabled: boolean(item.enabled),
       availability: oneOf(item.availability, availabilityStates),
+      priority: readGroupPriority(item.priority),
       weight: integer(item.weight),
       priceMultiplier: text(item.price_multiplier),
       modelCount: integer(item.model_count),
@@ -171,6 +184,7 @@ export function readGroupBasics(value: unknown): GroupBasics {
   return {
     name: text(data.name),
     enabled: boolean(data.enabled),
+    priority: readGroupPriority(data.priority),
     weight,
     priceMultiplier: text(data.price_multiplier),
   }

@@ -14,6 +14,8 @@ import (
 
 // ModernGroupItem 只提供工作区需要的展示事实，不改变分组的配置或健康状态。
 type ModernGroupItem struct {
+	Priority               int32                           `json:"priority"`
+	Concurrency            ConcurrencyView                 `json:"concurrency"`
 	ID                     uint                            `json:"id"`
 	Name                   string                          `json:"name"`
 	ChannelID              channel.ID                      `json:"channel_id"`
@@ -44,6 +46,13 @@ func (s *Service) ListModernGroups(ctx context.Context) (ModernGroupsResponse, e
 	if err != nil {
 		return ModernGroupsResponse{}, err
 	}
+	items := make([]*GroupCollectionItem, len(records))
+	for i := range records {
+		items[i] = &records[i].GroupCollectionItem
+	}
+	if err := s.fillGroupConcurrency(ctx, items); err != nil {
+		return ModernGroupsResponse{}, err
+	}
 	channels, err := s.ListChannels(ctx, "")
 	if err != nil {
 		return ModernGroupsResponse{}, err
@@ -66,7 +75,9 @@ func (s *Service) ListModernGroups(ctx context.Context) (ModernGroupsResponse, e
 			endpoint = definition.DefaultBaseURL
 		}
 		result.Items = append(result.Items, ModernGroupItem{
-			ID: record.ID, Name: record.Name, ChannelID: record.ChannelID,
+			Priority:    record.Priority,
+			Concurrency: record.Concurrency,
+			ID:          record.ID, Name: record.Name, ChannelID: record.ChannelID,
 			ChannelName: definition.Name, ChannelMark: definition.Mark, ChannelIcon: definition.Icon,
 			ConnectionType: record.ConnectionType, Endpoint: endpoint,
 			Enabled: record.Enabled, Availability: modernGroupAvailability(record),

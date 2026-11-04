@@ -8,7 +8,7 @@ SBOM (`bom.cdx.json`) inventorying the resolved Go module graph.
 ## Bifrost Core
 
 - Module: `github.com/maximhq/bifrost/core`
-- Version: `v1.8.4`
+- Version: `v1.10.4`
 - Copyright: 2025 H3 Labs Inc.
 - License: Apache License 2.0
 
@@ -22,8 +22,8 @@ The complete Apache License 2.0 text is distributed in
 
 ## CLIProxyAPI
 
-- Module: `github.com/router-for-me/CLIProxyAPI/v7`
-- Version: `v7.3.15`
+- Module: `github.com/router-for-me/CLIProxyAPI/v8`
+- Version: `v8.0.8`
 - Copyright: 2025-2005.9 Luis Pater; 2025.9-present Router-For.ME
 - License: MIT License
 

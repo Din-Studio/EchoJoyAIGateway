@@ -164,6 +164,22 @@ func (handler *Handler) executeJevDecision(ctx context.Context, snapshot *state.
 		decision.Reason = "internal_error"
 		return decision, result
 	}
+	// 决策调用与回答请求共用分组并发上限；共享状态不可用时按尽力而为落到 fallback。
+	release, failure, err := handler.acquireGroupConcurrency(ctx, selection.GroupID)
+	if err != nil {
+		utils.LogPlaneBestEffort(handler.logger, logrus.WarnLevel, utils.LogPlaneData, logrus.Fields{
+			"event":     "limit_state.unavailable",
+			"operation": "concurrency.acquire_group_decision",
+			"error":     err.Error(),
+		}, "Shared limit state unavailable")
+		decision.Reason = "internal_error"
+		return decision, result
+	}
+	if failure != nil {
+		decision.Reason = failure.Code
+		return decision, result
+	}
+	defer release()
 	frozenPricing := handler.freezeAttemptPricing(selection, metadata, true, key.PriceMultiplier)
 	result = handler.forwarder.Forward(decisionCtx, ForwardInput{
 		Dialect: decisionDialect, ObserveUsage: true,
@@ -183,6 +199,7 @@ func (handler *Handler) executeJevDecision(ctx context.Context, snapshot *state.
 		),
 		Proxy: effectiveProxy, ProxyFingerprint: proxyFingerprint,
 	})
+	release()
 	result = normalizeUpstreamResultContract(result)
 	decision.Called = result.DispatchState == execution.DispatchMaybeSent
 	if decision.Called {

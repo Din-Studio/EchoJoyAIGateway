@@ -148,6 +148,7 @@ func TestReadHomeBaseUsesPersistedAndRuntimeSnapshots(t *testing.T) {
 	}
 	want := HomeBase{
 		GatewayName: "GPT-Load",
+		Concurrency: &ConcurrencyView{},
 		Inventory: HomeInventory{
 			GroupCount:               3,
 			CredentialCount:          4,

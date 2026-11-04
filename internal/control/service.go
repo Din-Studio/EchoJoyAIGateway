@@ -66,6 +66,7 @@ type Service struct {
 	mutations                         credentialMutationCoordinator
 	requestLogStats                   RequestLogStatsReader
 	clusterQuota                      *cluster.AccessQuota
+	clusterConcurrency                *cluster.Concurrency
 	rpmStats                          *cluster.RPMStats
 	clusterEvents                     configEventPublisher
 	sharedHealth                      state.SharedCredentialHealthStore
@@ -172,6 +173,7 @@ func NewService(
 	mutations *health.MutationCoordinator,
 	requestLogStats RequestLogStatsReader,
 	clusterQuota *cluster.AccessQuota,
+	clusterConcurrency *cluster.Concurrency,
 	sharedHealth state.SharedCredentialHealthStore,
 	refreshLeases *cluster.RefreshLease,
 	rpmStats *cluster.RPMStats,
@@ -196,7 +198,7 @@ func NewService(
 		encryption:      encryptionService, executor: executor, subscriptions: subscriptions, requestLogs: requestLogs,
 		usageStats: usageStats, homeStatistics: homeStatistics,
 		stats: stats, mutations: mutations, requestLogStats: requestLogStats,
-		clusterEvents: clusterEvents, clusterQuota: clusterQuota, rpmStats: rpmStats, sharedHealth: sharedHealth, refreshLeases: refreshLeases,
+		clusterEvents: clusterEvents, clusterQuota: clusterQuota, clusterConcurrency: clusterConcurrency, rpmStats: rpmStats, sharedHealth: sharedHealth, refreshLeases: refreshLeases,
 		modelDiscoveryTimeout: defaultModelDiscoveryTimeout,
 		random:                rand.Reader,
 		operationRandom:       rand.Reader,

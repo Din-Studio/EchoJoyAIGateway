@@ -13,6 +13,7 @@
     { "name": "monitor-health", "path": "/monitor/health" },
     { "name": "monitor-inspector", "path": "/monitor/inspector" },
     { "name": "models", "path": "/models" },
+    { "name": "proxies", "path": "/proxies" },
     { "name": "settings", "path": "/settings" }
   ]
 }

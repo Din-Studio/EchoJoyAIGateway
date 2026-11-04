@@ -39,7 +39,7 @@ func TestWebsocketQuotaComparisonUsesSharedClock(t *testing.T) {
 						"rate_limits":{"primary":{"used_percent":5,"window_minutes":10080,%s}},
 						"additional_rate_limits":{"Spark":{"secondary":{"used_percent":20,"window_minutes":10080,%s}}}
 					}`, top, other))
-					windows := NormalizeWebsocketQuotaWindows(payload, time.Unix(1799999900+delay, 0))
+					windows, _ := NormalizeWebsocketQuota(payload, time.Unix(1799999900+delay, 0))
 					account, named := 0, 0
 					for _, window := range windows {
 						if window.SourceID == "codex" {
@@ -64,7 +64,7 @@ func TestWebsocketQuotaNonQuotaEventsHaveBoundedAllocations(t *testing.T) {
 		[]byte(`{"delta":"` + text + `","type":"response.output_text.delta"}`),
 	} {
 		allocs := testing.AllocsPerRun(5, func() {
-			if len(NormalizeWebsocketQuotaWindows(payload, time.Time{})) != 0 {
+			if windows, _ := NormalizeWebsocketQuota(payload, time.Time{}); len(windows) != 0 {
 				t.Fatal("non-quota event produced quota")
 			}
 		})
@@ -83,7 +83,7 @@ func BenchmarkWebsocketQuotaNonQuotaEvent(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				NormalizeWebsocketQuotaWindows(payload, time.Time{})
+				NormalizeWebsocketQuota(payload, time.Time{})
 			}
 		})
 	}
@@ -106,7 +106,7 @@ func TestWebsocketQuotaDropsSameEventCopyWithinResetPrecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	windows := NormalizeWebsocketQuotaWindows(payload, time.Unix(1000, 0))
+	windows, _ := NormalizeWebsocketQuota(payload, time.Unix(1000, 0))
 	if len(windows) != 2 {
 		t.Fatalf("windows = %#v, want only named Spark windows", windows)
 	}
@@ -131,7 +131,7 @@ func TestWebsocketQuotaCapturedAccountAndSparkEvents(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			windows := NormalizeWebsocketQuotaWindows(payload, time.Unix(1789204875, 0))
+			windows, _ := NormalizeWebsocketQuota(payload, time.Unix(1789204875, 0))
 			if len(windows) != test.accountCount+2 {
 				t.Fatalf("windows=%#v", windows)
 			}
@@ -161,7 +161,7 @@ func TestWebsocketQuotaCapturedAccountAndSparkEvents(t *testing.T) {
 
 func TestWebsocketQuotaKeepsExplicitSourceAndExistingConversions(t *testing.T) {
 	observedAt := time.Unix(1000, 0)
-	windows := NormalizeWebsocketQuotaWindows([]byte(`{
+	windows, _ := NormalizeWebsocketQuota([]byte(`{
 		"type":"codex.rate_limits","metered_limit_name":"CODEX-BENGALFOX",
 		"rate_limits":{"allowed":false,"secondary":{"used_percent":1,"window_minutes":10080,
 			"reset_at":-1,"reset_after_seconds":60}}
@@ -182,14 +182,14 @@ func TestWebsocketQuotaRejectsUnusableOrAmbiguousSignals(t *testing.T) {
 		`{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":1}}}`,
 		`{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":1,"window_minutes":300}}} {}`,
 	} {
-		if got := NormalizeWebsocketQuotaWindows([]byte(payload), time.Unix(1000, 0)); len(got) != 0 {
+		if got, _ := NormalizeWebsocketQuota([]byte(payload), time.Unix(1000, 0)); len(got) != 0 {
 			t.Fatalf("invalid event produced quota: %s => %#v", payload, got)
 		}
 	}
 }
 
 func TestWebsocketQuotaDropsMeteredCopyEvenWhenSlotsDiffer(t *testing.T) {
-	windows := NormalizeWebsocketQuotaWindows([]byte(`{
+	windows, _ := NormalizeWebsocketQuota([]byte(`{
 		"type":"codex.rate_limits",
 		"rate_limits":{"primary":{"used_percent":5,"window_minutes":10080,"reset_at":1800000000}},
 		"additional_rate_limits":{"Spark":{"secondary":{"used_percent":5,"window_minutes":10080,"reset_at":1800000000}}}
@@ -202,12 +202,12 @@ func TestWebsocketQuotaDropsMeteredCopyEvenWhenSlotsDiffer(t *testing.T) {
 func TestWebsocketQuotaTreatsMissingOrEmptyAdditionalLimitsAsAccount(t *testing.T) {
 	for _, additional := range []string{"", `,"additional_rate_limits":null`, `,"additional_rate_limits":{}`, `,"additional_rate_limits":{"Unknown":null}`} {
 		payload := []byte(`{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":1,"window_minutes":300,"reset_at":1800000000}}` + additional + `}`)
-		windows := NormalizeWebsocketQuotaWindows(payload, time.Unix(1000, 0))
+		windows, _ := NormalizeWebsocketQuota(payload, time.Unix(1000, 0))
 		if len(windows) != 1 || windows[0].SourceID != "codex" {
 			t.Fatalf("additional=%q windows=%#v, want one account window", additional, windows)
 		}
 	}
-	windows := NormalizeWebsocketQuotaWindows([]byte(`{
+	windows, _ := NormalizeWebsocketQuota([]byte(`{
 		"type":"codex.rate_limits",
 		"rate_limits":{"primary":{"used_percent":1,"window_minutes":300}}
 	}`), time.Unix(1000, 0))
@@ -226,7 +226,7 @@ func TestWebsocketQuotaComparesEveryAdditionalWindow(t *testing.T) {
 		{"differs from every source", 1800000003, 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			windows := NormalizeWebsocketQuotaWindows([]byte(fmt.Sprintf(`{
+			windows, _ := NormalizeWebsocketQuota([]byte(fmt.Sprintf(`{
 				"type":"codex.rate_limits",
 				"rate_limits":{"primary":{"used_percent":40,"window_minutes":10080,"reset_at":%d}},
 				"additional_rate_limits":{
@@ -252,7 +252,7 @@ func TestWebsocketQuotaSkipsTopLevelWhenSamePeriodAdditionalCannotBeCompared(t *
 		`{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":40,"window_minutes":10080,"reset_at":1800000000}},"additional_rate_limits":{"Unknown":{"secondary":{"used_percent":20,"window_minutes":10080}}}}`,
 		`{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":40,"window_minutes":10080}},"additional_rate_limits":{"Unknown":{"secondary":{"used_percent":20,"window_minutes":10080,"reset_at":1800000000}}}}`,
 	} {
-		windows := NormalizeWebsocketQuotaWindows([]byte(payload), time.Unix(1000, 0))
+		windows, _ := NormalizeWebsocketQuota([]byte(payload), time.Unix(1000, 0))
 		if len(windows) != 1 || windows[0].SourceName != "Unknown" || windows[0].SourceID != "" {
 			t.Fatalf("ambiguous top-level window was retained: %#v", windows)
 		}
@@ -276,7 +276,7 @@ func TestWebsocketQuotaMalformedAdditionalWindowDoesNotMakeTopLevelAccount(t *te
 				"rate_limits":{"primary":{"used_percent":5,"window_minutes":10080,"reset_at":1800000000}},
 				"additional_rate_limits":{"Spark":{"primary":%s}}
 			}`, test.window))
-			windows := NormalizeWebsocketQuotaWindows(payload, time.Unix(1000, 0))
+			windows, _ := NormalizeWebsocketQuota(payload, time.Unix(1000, 0))
 			if len(windows) != 0 {
 				t.Fatalf("malformed additional window produced an update: %#v", windows)
 			}
@@ -285,7 +285,7 @@ func TestWebsocketQuotaMalformedAdditionalWindowDoesNotMakeTopLevelAccount(t *te
 }
 
 func TestWebsocketQuotaIsolatesMalformedWindowFields(t *testing.T) {
-	windows := NormalizeWebsocketQuotaWindows([]byte(`{
+	windows, _ := NormalizeWebsocketQuota([]byte(`{
 		"type":"codex.rate_limits","metered_limit_name":"premium",
 		"rate_limits":{
 			"primary":{"used_percent":5,"window_minutes":10080,"reset_at":1800000000},
@@ -308,7 +308,7 @@ func TestWebsocketQuotaIsolatesMalformedWindowFields(t *testing.T) {
 }
 
 func TestWebsocketQuotaDeduplicatesTopLevelPerWindow(t *testing.T) {
-	windows := NormalizeWebsocketQuotaWindows([]byte(`{
+	windows, _ := NormalizeWebsocketQuota([]byte(`{
 		"type":"codex.rate_limits",
 		"rate_limits":{
 			"primary":{"used_percent":40,"window_minutes":300,"reset_at":1700000000},
@@ -334,7 +334,7 @@ func TestWebsocketQuotaDeduplicatesTopLevelPerWindow(t *testing.T) {
 }
 
 func TestWebsocketQuotaKeepsExplicitDifferentSourcesWithEqualValues(t *testing.T) {
-	windows := NormalizeWebsocketQuotaWindows([]byte(`{
+	windows, _ := NormalizeWebsocketQuota([]byte(`{
 		"type":"codex.rate_limits","metered_limit_name":"premium",
 		"rate_limits":{"primary":{"used_percent":0,"window_minutes":10080,"reset_at":1800000000}},
 		"additional_rate_limits":{"Spark":{"secondary":{"used_percent":0,"window_minutes":10080,"reset_at":1800000000}}}

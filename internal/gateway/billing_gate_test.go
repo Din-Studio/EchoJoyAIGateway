@@ -37,6 +37,7 @@ type fakeBillingRecord struct {
 	admission  ly.Admission
 	event      telemetry.RequestEvent
 	chargeNano int64
+	startedAt  time.Time
 }
 
 func (f *fakeExternalBilling) Admit(_ context.Context, in ly.AdmitInput) ly.Decision {
@@ -46,10 +47,10 @@ func (f *fakeExternalBilling) Admit(_ context.Context, in ly.AdmitInput) ly.Deci
 	return f.decision
 }
 
-func (f *fakeExternalBilling) Record(admission *ly.Admission, event telemetry.RequestEvent, chargeNano int64) {
+func (f *fakeExternalBilling) Record(admission *ly.Admission, event telemetry.RequestEvent, chargeNano int64, startedAt time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.records = append(f.records, fakeBillingRecord{admission: *admission, event: event, chargeNano: chargeNano})
+	f.records = append(f.records, fakeBillingRecord{admission: *admission, event: event, chargeNano: chargeNano, startedAt: startedAt})
 }
 
 func (f *fakeExternalBilling) snapshot() ([]ly.AdmitInput, []fakeBillingRecord) {
