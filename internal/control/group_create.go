@@ -23,6 +23,7 @@ import (
 )
 
 type GroupCreateRequest struct {
+	Priority            optionalField[int32]                `json:"priority"`
 	PriceMultiplier     optionalField[string]               `json:"price_multiplier"`
 	Name                *string                             `json:"name"`
 	ChannelID           channel.ID                          `json:"channel_id"`
@@ -52,6 +53,7 @@ type SameTargetConflictData struct {
 }
 
 type normalizedGroupCreate struct {
+	priority            int32
 	priceMultiplier     pricing.PriceMultiplier
 	channelID           channel.ID
 	connectionType      models.ConnectionType
@@ -111,6 +113,7 @@ func (s *Service) CreateGroup(ctx context.Context, request GroupCreateRequest) (
 			return fmt.Errorf("encode group models: %w", err)
 		}
 		group := models.Group{
+			Priority:              normalized.priority,
 			PriceMultiplierMicros: priceMultiplierStorage(normalized.priceMultiplier),
 			Name:                  name,
 			ChannelID:             string(normalized.channelID),
@@ -173,7 +176,7 @@ func (s *Service) normalizeGroupCreate(
 	ctx context.Context,
 	request GroupCreateRequest,
 ) (normalizedGroupCreate, error) {
-	if s == nil || s.channelRegistry == nil || request.ChannelID == "" {
+	if s == nil || s.channelRegistry == nil || request.ChannelID == "" || request.Priority.Null {
 		return normalizedGroupCreate{}, app_errors.ErrValidation
 	}
 	priceMultiplier, err := normalizePriceMultiplier(request.PriceMultiplier)
@@ -280,6 +283,7 @@ func (s *Service) normalizeGroupCreate(
 		defaultName = hostname
 	}
 	return normalizedGroupCreate{
+		priority:            request.Priority.Value,
 		priceMultiplier:     priceMultiplier,
 		channelID:           request.ChannelID,
 		connectionType:      connectionType,

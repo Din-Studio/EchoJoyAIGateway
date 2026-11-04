@@ -1,5 +1,5 @@
 export const zhCN = {
-  groupWeight: '分组权重',
+  groupWeight: '权重',
   run: '检查路由',
   accessKey: '访问密钥',
   protocol: '协议',
@@ -81,7 +81,7 @@ export const zhCN = {
 }
 
 export const enUS = {
-  groupWeight: 'Group weight',
+  groupWeight: 'Weight',
   run: 'Inspect route',
   accessKey: 'Access key',
   protocol: 'Protocol',
@@ -163,7 +163,7 @@ export const enUS = {
 }
 
 export const jaJP = {
-  groupWeight: 'グループウェイト',
+  groupWeight: '重み',
   run: 'ルートを確認',
   accessKey: 'アクセスキー',
   protocol: 'プロトコル',
