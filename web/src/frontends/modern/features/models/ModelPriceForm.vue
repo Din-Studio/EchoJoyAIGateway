@@ -76,7 +76,9 @@ defineExpose({ canSave, unpricedRequested, request, validate })
     <div class="modern-model-price-form-hint">
       <span>{{ t('modelManager.unit', { currency: price.currency }) }}</span>
       <AppTooltip :label="t('modelManager.emptySlotsHint')">
-        <span tabindex="0" class="modern-model-price-help"><AppIcon :icon="Info" size="sm" /></span>
+        <span tabindex="0" class="modern-model-price-help modern-help-trigger"
+          ><AppIcon :icon="Info" size="sm"
+        /></span>
       </AppTooltip>
     </div>
     <div v-for="schedule in draft" :key="schedule.mode" class="modern-model-price-schedule">
@@ -84,7 +86,12 @@ defineExpose({ canSave, unpricedRequested, request, validate })
         <strong>{{ modeLabel(schedule.mode) }}</strong>
         <template v-if="schedule.mode !== 'standard'">
           <!-- 阶梯价只在标准档提供：Fast 后端直接驳回，Ultrafast 统一不做。 -->
-          <span class="modern-model-price-note">{{ t('modelManager.noTierMode') }}</span>
+          <AppIconButton
+            :icon="Info"
+            :label="t('modelManager.noTierMode')"
+            class="modern-help-trigger"
+            size="xxs"
+          />
           <AppIconButton
             :icon="Trash2"
             :label="t('modelManager.removeMode')"
@@ -176,11 +183,6 @@ defineExpose({ canSave, unpricedRequested, request, validate })
 .modern-model-price-schedule header strong {
   font-size: var(--modern-font-size-small);
   font-weight: var(--modern-weight-semibold);
-}
-.modern-model-price-note {
-  flex: 1;
-  color: var(--modern-muted);
-  font-size: var(--modern-font-size-caption);
 }
 .modern-model-price-add {
   justify-self: start;

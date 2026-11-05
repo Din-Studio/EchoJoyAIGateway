@@ -14,7 +14,6 @@ export const zhCN = {
     enabled: '启用智能护栏',
     scope: '生效访问密钥',
     scopeHelp: '留空表示全部访问密钥。',
-    rulesTitle: '审查规则',
     rulesHelp:
       '常用预设包含凭据泄露、个人隐私与提示注入，默认告警，可自行改为拦截。添加时仅补齐缺少的规则。所有待检规则合并处理，每个业务请求最多调用一次 JEV。',
     addPreset: '添加常用预设',
@@ -88,7 +87,6 @@ export const enUS = {
     enabled: 'Enable AI Guardrails',
     scope: 'Access key scope',
     scopeHelp: 'Leave empty to apply to all access keys.',
-    rulesTitle: 'Review rules',
     rulesHelp:
       'The common preset covers credential leakage, personal data and prompt injection. It defaults to warnings; change actions to block as needed. Adding it fills only missing rules. All pending rules share at most one JEV call per business request.',
     addPreset: 'Add common preset',
@@ -164,7 +162,6 @@ export const jaJP = {
     enabled: 'AI ガードレールを有効化',
     scope: '対象アクセスキー',
     scopeHelp: '未選択の場合はすべてのアクセスキーが対象です。',
-    rulesTitle: '確認ルール',
     rulesHelp:
       '標準プリセットは認証情報の漏洩・個人情報・プロンプトインジェクションを警告します。必要に応じてブロックに変更できます。追加時は不足しているルールだけを補います。未確認のルールをまとめ、業務リクエストごとに JEV を最大一回呼び出します。',
     addPreset: '標準プリセットを追加',
