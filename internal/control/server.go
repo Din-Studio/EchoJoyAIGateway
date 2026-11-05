@@ -1203,6 +1203,9 @@ func writeServiceErrorResponse(
 		if apiErr.HTTPStatus >= http.StatusInternalServerError {
 			logServiceError(operation, err, apiErr.Code)
 		}
+		if writeConfigDependencyError(c, apiErr) {
+			return
+		}
 		response.ErrorI18nFromAPIError(
 			c,
 			apiErr,

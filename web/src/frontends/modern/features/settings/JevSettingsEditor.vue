@@ -49,9 +49,7 @@ function selectGroup(value: string) {
 
 <template>
   <div class="modern-jev-settings">
-    <AppNotice v-if="error" class="modern-jev-error" tone="danger">{{
-      t('requestAudit.invalid')
-    }}</AppNotice>
+    <AppNotice v-if="error" class="modern-jev-error" tone="danger">{{ error }}</AppNotice>
     <AppSearchSelect
       :model-value="String(modelValue.group_id)"
       :options="groups"

@@ -6,6 +6,7 @@ import { deleteGroup, type GroupRow } from '@modern/api/groups'
 import { AppIconButton, AppConfirmDialog, AppTextField } from '@modern/components/ui'
 import { useApiClient } from '@shared/http/client-context'
 import { ApiError } from '@shared/http/errors'
+import { configDependencyMessage } from '@modern/api/config-dependency'
 
 const props = defineProps<{ group: GroupRow; disabled?: boolean }>()
 const emit = defineEmits<{ deleted: []; pending: [value: boolean] }>()
@@ -42,7 +43,7 @@ async function remove(): Promise<void> {
             .filter(Boolean)
         : []
       error.value = [t('groupWorkflows.deleteInUse'), names.join('、')].filter(Boolean).join(' ')
-    } else error.value = t('groupWorkflows.deleteFailed')
+    } else error.value = configDependencyMessage(cause, t('groupWorkflows.deleteFailed'))
   } finally {
     pending.value = false
     emit('pending', false)

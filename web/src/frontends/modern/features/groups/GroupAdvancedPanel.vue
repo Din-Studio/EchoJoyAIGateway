@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { configDependencyMessage } from '@modern/api/config-dependency'
 import { protocolLabel } from '@modern/i18n/protocols'
 import { Plus, Trash2 } from '@lucide/vue'
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
@@ -267,8 +268,9 @@ async function save(): Promise<void> {
     cache.setQueryData(groupSettingsKey(props.group.id), result)
     emit('saved')
     emit('close')
-  } catch {
-    if (!controller.signal.aborted) error.value = t('groups.edit.saveFailed')
+  } catch (cause) {
+    if (!controller.signal.aborted)
+      error.value = configDependencyMessage(cause, t('groups.edit.saveFailed'))
   } finally {
     saving.value = false
   }
@@ -332,7 +334,7 @@ async function confirmChannelSwitch(): Promise<void> {
       switchConflict.value = cause.conflict.groups
       return
     }
-    switchError.value = t('groupDetail.channelSwitchFailed')
+    switchError.value = configDependencyMessage(cause, t('groupDetail.channelSwitchFailed'))
   } finally {
     switching.value = false
   }
@@ -572,6 +574,7 @@ useMessageSource(() => (error.value ? { text: error.value, tone: 'danger' } : un
     "
     tone="danger"
     :pending="switching"
+    :error="switchError"
     @cancel="cancelChannelSwitch"
     @confirm="confirmChannelSwitch"
   />

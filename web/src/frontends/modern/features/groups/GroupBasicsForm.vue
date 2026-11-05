@@ -2,6 +2,7 @@
 import { isValidGroupPriority } from '@shared/group-priority'
 import { computed, nextTick, onScopeDispose, ref, watch } from 'vue'
 import { useMessageSource } from '@modern/app/messages'
+import { configDependencyMessage } from '@modern/api/config-dependency'
 import { useI18n } from 'vue-i18n'
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import AppDraftGuard from '@modern/components/AppDraftGuard.vue'
@@ -39,7 +40,7 @@ function groupDeleted(): void {
   deleted.value = true
   emit('deleted')
 }
-const saveFailed = ref(false)
+const saveError = ref('')
 const attempted = ref(false)
 const savedFeedback = ref(false)
 const nameInput = ref<InstanceType<typeof AppTextField>>()
@@ -120,7 +121,7 @@ async function load(): Promise<void> {
 }
 function discard(): void {
   if (query.data.value) accept(query.data.value)
-  saveFailed.value = false
+  saveError.value = ''
 }
 onScopeDispose(() => controller.abort())
 defineExpose({ refresh: load })
@@ -128,7 +129,7 @@ defineExpose({ refresh: load })
 async function save(): Promise<void> {
   if (!saved.value || saving.value || loading.value) return
   attempted.value = true
-  saveFailed.value = false
+  saveError.value = ''
   if (nameInvalid.value || priorityInvalid.value || weightInvalid.value || priceInvalid.value) {
     await nextTick()
     const field = nameInvalid.value
@@ -167,15 +168,14 @@ async function save(): Promise<void> {
     emit('saved', props.group.id, result)
     await nextTick()
     savedFeedback.value = true
-  } catch {
-    if (!signal.aborted) saveFailed.value = true
+  } catch (cause) {
+    if (!signal.aborted)
+      saveError.value = configDependencyMessage(cause, t('groups.edit.saveFailed'))
   } finally {
     if (!signal.aborted) saving.value = false
   }
 }
-useMessageSource(() =>
-  saveFailed.value ? { text: t('groups.edit.saveFailed'), tone: 'danger' } : undefined,
-)
+useMessageSource(() => (saveError.value ? { text: saveError.value, tone: 'danger' } : undefined))
 useMessageSource(() =>
   savedFeedback.value ? { text: t('groupDetail.saved'), tone: 'success' } : undefined,
 )

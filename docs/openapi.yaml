@@ -25,6 +25,30 @@ info:
     失败：`{"code": "<ERROR_CODE>", "message": "...", "data"?: ...}`，`message` 随
     `Accept-Language` 本地化。
 
+    ## 系统配置依赖冲突
+    分组删除、停用、渠道切换、模型删除或别名修改，以及全局设置保存，会校验候选配置的系统依赖。
+    新增分组中的模型名也会参与名称冲突校验。现有依赖不满足时返回
+    `409 CONFIG_DEPENDENCY_CONFLICT`（替代这些场景原来的泛化 400/500）。
+    `data` 为 `ConfigDependencyData`，包含首个失败原因及公开的依赖标识，不包含密钥或原始配置。
+    `message` 随 `Accept-Language` 提供具体对象和处理建议；界面应按纯文本展示。
+    对应写接口：`POST /api/groups`、`DELETE /api/groups/{id}`、
+    `PUT /api/groups/{id}/settings`、`PUT /api/groups/{id}/channel`、
+    `PUT /api/groups/{id}/models`、`PUT /api/settings`。
+    本次不增加删除限制，不自动关闭依赖功能，不自动删除预设，也不改变事务与集群发布机制。
+
+    - `jev_route_required`：缺少决策模型；护栏还要求显式决策分组。
+    - `jev_route_unavailable`：启用的自动模型或智能护栏失去其 JEV 决策路由。
+      显式引用绑定分组 ID，其他分组的同名模型不能替代；未指定分组的自动模型按启用的 Decisions 模型名匹配。
+    - `auto_model_target_missing`：启用的自动模型预设失去其客户端模型名（有别名时按别名）。
+      其他分组保留同名模型即可，包括停用分组；停用普通目标组本身不触发此错误。
+    - `auto_model_name_conflict`：普通模型或别名与自动入口重名；自动模型关闭时仍检查名称冲突。
+    - `auto_model_fallback_missing`：自动入口引用的回退预设 ID 不存在。
+    - `auto_model_recursive_target`：预设指向另一个自动入口或自身，不是普通模型。
+    - 自动模型和护栏均关闭时，允许删除原 JEV 分组并保留未使用引用。
+      客户端目录展示选择、访问密钥模型名过滤、护栏密钥范围不新增删除保护。
+    - 访问密钥显式分组引用仍返回既有 `409 GROUP_IN_USE`，包括停用密钥。
+      上游价格引用仍返回既有 `409 MODEL_PRICE_REFERENCED`；本次不改变这些错误契约。
+
     ## 幂等
     会生成或替换密钥明文的写操作，以及代理新增、修改、导入，要求 `Idempotency-Key` 请求头（小写规范 UUID v4）。
     AccessKey 写操作重放时返回首次结果，`replayed=true`，且**不再返回明文 `key`**。
@@ -1452,6 +1476,7 @@ paths:
         `alias_enabled=false` 时 `alias` 被丢弃。同一分组内多个上游模型 ID 可以共用一个客户端模型名，
         请求该名称时在所选凭据可用的模型之间轮询；客户端模型名与上游 ID 完全相同的重复条目会被去重。
         上游模型 ID 集合发生变化时，会在后台触发一次价格目录同步。
+        若删除模型或修改别名破坏 JEV 路由、自动模型预设目标或名称约束，返回 `409 CONFIG_DEPENDENCY_CONFLICT`。
       requestBody:
         required: true
         content:
@@ -1484,6 +1509,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/ConfigDependencyConflict' }
         '413': { $ref: '#/components/responses/RequestTooLarge' }
         '429': { $ref: '#/components/responses/AuthLocked' }
         '500': { $ref: '#/components/responses/InternalError' }
@@ -1612,6 +1638,18 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    ConfigDependencyConflict:
+      description: '系统配置依赖冲突；数据库和运行态不提交本次变更。'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorEnvelope'
+              - type: object
+                required: [data]
+                properties:
+                  code: { type: string, const: CONFIG_DEPENDENCY_CONFLICT }
+                  data: { $ref: '#/components/schemas/ConfigDependencyData' }
     BadRequest:
       description: '`BAD_REQUEST` / `INVALID_JSON` / `VALIDATION_FAILED`'
       content:
@@ -1708,6 +1746,36 @@ components:
         code: { type: string, examples: [VALIDATION_FAILED] }
         message: { type: string }
         data: {}
+
+    ConfigDependencyData:
+      type: object
+      required: [reason, features]
+      properties:
+        reason:
+          type: string
+          enum: [jev_route_required, jev_route_unavailable, auto_model_target_missing, auto_model_name_conflict, auto_model_fallback_missing, auto_model_recursive_target]
+        features:
+          type: array
+          items: { type: string, enum: [auto_model, request_audit] }
+          description: 依赖该资源或发生名称冲突的系统功能。
+        group_id:
+          type: integer
+          minimum: 1
+          description: 显式引用的 JEV 分组；按模型名匹配时省略。
+        model:
+          type: string
+          description: 客户端模型名或别名。
+        auto_model:
+          type: string
+          description: 自动模型入口名称。
+        preset:
+          type: string
+          description: 预设名称；auto_model_fallback_missing 时为缺失的预设 ID。
+      example:
+        reason: jev_route_unavailable
+        features: [auto_model]
+        group_id: 2
+        model: jev-latest
 
     IdempotencyKey:
       type: string

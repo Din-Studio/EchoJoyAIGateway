@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { computed, onScopeDispose, ref, watch } from 'vue'
 import { useURLState } from '@modern/app/url-state'
 import { useMessageSource } from '@modern/app/messages'
+import { configDependencyMessage } from '@modern/api/config-dependency'
 import { useI18n } from 'vue-i18n'
 import {
   discoverGroupModels,
@@ -116,8 +117,9 @@ async function save(): Promise<void> {
     void cache.invalidateQueries({ queryKey: ['modern', 'group-model-names', props.group.id] })
     emit('saved')
     emit('close')
-  } catch {
-    if (!controller.signal.aborted) error.value = t('groups.edit.saveFailed')
+  } catch (cause) {
+    if (!controller.signal.aborted)
+      error.value = configDependencyMessage(cause, t('groups.edit.saveFailed'))
   } finally {
     saving.value = false
   }
