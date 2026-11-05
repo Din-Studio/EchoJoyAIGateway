@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { configDependencyMessage } from '@modern/api/config-dependency'
 import { Layers2, Plus, Search, SlidersHorizontal, TriangleAlert } from '@lucide/vue'
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue'
@@ -612,12 +613,19 @@ async function mutate(
     const settings = await updateGroupBasics(client, group.id, patch, controller.signal)
     if (controller.signal.aborted) return
     await refreshGroup(group.id, settings)
-  } catch {
+  } catch (cause) {
     if (!controller.signal.aborted) {
       enabledOverrides.value.delete(group.id)
       if (kind !== 'toggle')
-        inlineErrors.value.set(`${group.id}:${kind}`, t('groups.row.saveFailed'))
-      else notice.value = { tone: 'danger', text: t('groups.operationFailed') }
+        inlineErrors.value.set(
+          `${group.id}:${kind}`,
+          configDependencyMessage(cause, t('groups.row.saveFailed')),
+        )
+      else
+        notice.value = {
+          tone: 'danger',
+          text: configDependencyMessage(cause, t('groups.operationFailed')),
+        }
     }
   } finally {
     pending.value.delete(group.id)

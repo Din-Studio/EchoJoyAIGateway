@@ -185,7 +185,7 @@ func (s *Service) CreateGroupIdempotent(
 				return idempotentMutationResult{}, err
 			}
 			if _, err := state.Compile(input); err != nil {
-				return idempotentMutationResult{}, err
+				return idempotentMutationResult{}, mapConfigCompileError(err)
 			}
 			if _, err := loadPriceTable(ctx, tx); err != nil {
 				return idempotentMutationResult{}, err

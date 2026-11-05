@@ -31,6 +31,7 @@ var (
 	ErrAccessKeyAdminConflict                 = &APIError{HTTPStatus: http.StatusBadRequest, Code: "ACCESS_KEY_ADMIN_CONFLICT", Message: "Access key must differ from the administrator key"}
 	ErrDuplicateResource                      = &APIError{HTTPStatus: http.StatusConflict, Code: "DUPLICATE_RESOURCE", Message: "Resource already exists"}
 	ErrResourceNotFound                       = &APIError{HTTPStatus: http.StatusNotFound, Code: "NOT_FOUND", Message: "Resource not found"}
+	ErrConfigDependencyConflict               = &APIError{HTTPStatus: http.StatusConflict, Code: "CONFIG_DEPENDENCY_CONFLICT", Message: "Configuration change breaks a system dependency"}
 	ErrGroupInUse                             = &APIError{HTTPStatus: http.StatusConflict, Code: "GROUP_IN_USE", Message: "Group is referenced by access keys"}
 	ErrInvalidCredentialState                 = &APIError{HTTPStatus: http.StatusConflict, Code: "INVALID_CREDENTIAL_STATE", Message: "Credential cannot be restored from its current state"}
 	ErrInternalServer                         = &APIError{HTTPStatus: http.StatusInternalServerError, Code: "INTERNAL_SERVER_ERROR", Message: "An unexpected error occurred"}

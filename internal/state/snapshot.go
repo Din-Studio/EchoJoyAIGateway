@@ -14,6 +14,7 @@ import (
 	"gpt-load/internal/automodel"
 	"gpt-load/internal/catalog"
 	"gpt-load/internal/channel"
+	"gpt-load/internal/configdependency"
 	"gpt-load/internal/connection"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/jev"
@@ -292,7 +293,10 @@ func Compile(input CompileInput) (*ConfigSnapshot, error) {
 		}
 	}
 	if audit.Enabled && (shared.GroupID == 0 || shared.Model == "") {
-		return nil, fmt.Errorf("%w: guardrails require an explicit Jev group and model", requestaudit.ErrInvalidConfig)
+		return nil, fmt.Errorf("%w: %w", requestaudit.ErrInvalidConfig, &configdependency.Error{
+			Reason: configdependency.JevRouteRequired, Features: []string{"request_audit"},
+			GroupID: shared.GroupID, Model: shared.Model,
+		})
 	}
 	if (autoConfig.Enabled || audit.Enabled) && shared.GroupID != 0 {
 		available := false
@@ -311,7 +315,17 @@ func Compile(input CompileInput) (*ConfigSnapshot, error) {
 			}
 		}
 		if !available {
-			return nil, fmt.Errorf("%w: configured Jev route unavailable", jev.ErrInvalidConfig)
+			features := make([]string, 0, 2)
+			if autoConfig.Enabled {
+				features = append(features, "auto_model")
+			}
+			if audit.Enabled {
+				features = append(features, "request_audit")
+			}
+			return nil, fmt.Errorf("%w: %w", jev.ErrInvalidConfig, &configdependency.Error{
+				Reason: configdependency.JevRouteUnavailable, Features: features,
+				GroupID: shared.GroupID, Model: shared.Model,
+			})
 		}
 	}
 	autoModels, err := automodel.Compile(autoConfig, ordinaryModels, decisionModels)
