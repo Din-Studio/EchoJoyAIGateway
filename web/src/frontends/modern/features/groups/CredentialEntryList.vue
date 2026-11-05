@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { Eye, EyeOff, Plus, Trash2 } from '@lucide/vue'
-import { computed, nextTick, ref, useId, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { GroupChannel } from '@modern/api/group-create'
-import { AppButton, AppIconButton, AppTextField } from '@modern/components/ui'
+import { AppButton, AppFormSection, AppIconButton, AppTextField } from '@modern/components/ui'
 import {
   concurrencyLimitInvalid,
   credentialEntryFilled,
@@ -20,7 +20,6 @@ const props = defineProps<{
 }>()
 const entries = defineModel<CredentialEntryDraft[]>({ required: true })
 const { t } = useI18n()
-const labelID = useId()
 const fields = computed(() => props.channel.credentialFields)
 // 只有单个 api_key 字段时按行拆分粘贴内容；结构化字段（如 JSON）保持原样。
 const plainKeys = computed(() => fields.value.length === 1 && fields.value[0]?.key === 'api_key')
@@ -125,13 +124,11 @@ defineExpose({
 </script>
 
 <template>
-  <div class="modern-credential-entries" role="group" :aria-labelledby="labelID">
-    <span :id="labelID" class="modern-credential-entries-title">{{
-      t('groupCreate.credentials')
-    }}</span>
-    <p class="modern-credential-entries-description">
-      {{ t(plainKeys ? 'groupCreate.credentialsHelp' : 'groupCreate.structuredHelp') }}
-    </p>
+  <AppFormSection
+    :title="t('groupCreate.credentials')"
+    :hint="t(plainKeys ? 'groupCreate.credentialsHelp' : 'groupCreate.structuredHelp')"
+    compact
+  >
     <div v-if="plainKeys" class="modern-credential-entry" aria-hidden="true">
       <span class="modern-credential-entries-label">{{ fields[0]?.label }}</span>
       <span class="modern-credential-entries-label">{{ t('groups.edit.concurrencyLimit') }}</span>
@@ -230,21 +227,10 @@ defineExpose({
     <p v-if="pasteError || error" class="modern-credential-entries-error" role="alert">
       {{ pasteError || error }}
     </p>
-  </div>
+  </AppFormSection>
 </template>
 
 <style scoped>
-.modern-credential-entries {
-  display: grid;
-  gap: var(--modern-space-2);
-}
-.modern-credential-entries-title {
-  color: var(--modern-text);
-  font-size: var(--modern-font-size-secondary);
-  font-weight: var(--modern-weight-medium);
-  line-height: var(--modern-leading-compact);
-}
-.modern-credential-entries-description,
 .modern-credential-entries-label {
   color: var(--modern-muted);
   font-size: var(--modern-font-size-small);

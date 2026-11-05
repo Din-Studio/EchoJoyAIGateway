@@ -17,9 +17,10 @@ import {
   AppBadge,
   AppButton,
   AppCollectionState,
+  AppFormSection,
   AppIcon,
   AppOverflowText,
-  AppSegmentedField,
+  AppSegmentedControl,
   AppTextField,
   AppTooltip,
 } from '@modern/components/ui'
@@ -103,9 +104,9 @@ const proxyInvalid = computed(
     !validProxySelection(proxyID.value.trim()),
 )
 const proxyOptions = computed(() => [
-  { value: 'inherit', label: t('credentialCards.proxyMode.inherit') },
+  { value: 'inherit', label: t('groupCreate.proxyInherit') },
   { value: 'direct', label: t('groupCreate.proxyDirect') },
-  { value: 'custom', label: t('proxies.select') },
+  { value: 'custom', label: t('credentialCards.proxyMode.custom') },
 ])
 function failure(): string {
   if (!item.value.failures) return '—'
@@ -309,30 +310,11 @@ useMessageSource(() =>
             </span>
           </AppTooltip>
         </div>
-        <div class="modern-credential-detail-routing">
-          <AppTextField
-            v-model="weight"
-            :label="t('groups.edit.weight')"
-            :placeholder="t('credentialCards.automatic')"
-            size="sm"
-            inputmode="numeric"
-            :disabled="saving"
-            :error="attempted && weightInvalid ? t('groups.edit.weightError') : undefined"
-          />
-          <AppSegmentedField
-            v-if="channel?.proxy"
-            v-model="proxyMode"
-            :label="t('groupCreate.proxy')"
-            :options="proxyOptions"
-            size="sm"
-            :disabled="saving"
-          />
-        </div>
         <AppTextField
           v-model="concurrency"
           :label="t('groups.edit.concurrencyLimit')"
           :placeholder="t('groups.edit.concurrencyUnlimited')"
-          :description="t('groups.edit.concurrencyLimitHelp')"
+          :hint="t('groups.edit.concurrencyLimitHelp')"
           size="sm"
           inputmode="numeric"
           :disabled="saving"
@@ -340,16 +322,37 @@ useMessageSource(() =>
             attempted && concurrencyInvalid ? t('groups.edit.concurrencyLimitError') : undefined
           "
         />
-        <ProxySelect
-          v-if="channel?.proxy && proxyMode === 'custom'"
-          v-model="proxyID"
-          :saved-id="saved?.proxy.id"
-          :saved-name="saved?.proxy.name"
-          :saved-address="saved?.proxy.display"
-          :reference-state="saved?.proxy.referenceState"
+        <AppTextField
+          v-model="weight"
+          :label="t('groups.edit.weight')"
+          :placeholder="t('credentialCards.automatic')"
+          size="sm"
+          inputmode="numeric"
           :disabled="saving"
-          :error="attempted && proxyInvalid ? t('proxies.selectHelp') : undefined"
+          :error="attempted && weightInvalid ? t('groups.edit.weightError') : undefined"
         />
+        <AppFormSection v-if="channel?.proxy" compact :title="t('groupCreate.proxy')">
+          <template #actions>
+            <AppSegmentedControl
+              v-model="proxyMode"
+              :label="t('groupCreate.proxy')"
+              :options="proxyOptions"
+              appearance="field"
+              size="xs"
+              :disabled="saving"
+            />
+          </template>
+          <ProxySelect
+            v-if="proxyMode === 'custom'"
+            v-model="proxyID"
+            :saved-id="saved?.proxy.id"
+            :saved-name="saved?.proxy.name"
+            :saved-address="saved?.proxy.display"
+            :reference-state="saved?.proxy.referenceState"
+            :disabled="saving"
+            :error="attempted && proxyInvalid ? t('proxies.selectHelp') : undefined"
+          />
+        </AppFormSection>
       </section>
     </template>
   </GroupWorkspacePanel>
@@ -422,23 +425,9 @@ useMessageSource(() =>
   display: inline-flex;
   color: var(--modern-muted);
 }
-.modern-credential-detail-routing {
-  display: grid;
-  grid-template-columns: minmax(0, 112px) minmax(0, 1fr);
-  align-items: start;
-  gap: var(--modern-space-3);
-}
 @container modern-workspace-panel (max-width: 380px) {
   .modern-credential-detail-metrics {
     grid-template-columns: max-content minmax(0, 1fr);
-  }
-}
-@container modern-workspace-panel (max-width: 340px) {
-  .modern-credential-detail-routing {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .modern-credential-detail-routing > :first-child {
-    max-width: 112px;
   }
 }
 </style>

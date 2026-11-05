@@ -126,8 +126,6 @@ export const zhCN = {
   timeouts: '请求超时',
   reliability: '重试与凭据健康',
   proxy: {
-    inherit: '继承环境',
-    direct: '直接连接',
     effective: '当前生效',
     environment: '环境代理',
     directValue: '直接连接',
@@ -156,7 +154,6 @@ export const zhCN = {
     removeHint: '移除此 Header',
     add: '添加规则',
     delete: '删除规则',
-    empty: '暂无规则',
   },
   publicBaseURLPlaceholder: '留空使用当前浏览器地址，例如 https://gateway.example.com',
   localOnly: '只影响当前浏览器，即时生效',
@@ -326,8 +323,6 @@ export const enUS = {
   timeouts: 'Request timeouts',
   reliability: 'Retries & credential health',
   proxy: {
-    inherit: 'Environment',
-    direct: 'Direct',
     effective: 'Currently active',
     environment: 'Environment proxy',
     directValue: 'Direct connection',
@@ -357,7 +352,6 @@ export const enUS = {
     removeHint: 'Remove this header',
     add: 'Add rule',
     delete: 'Delete rule',
-    empty: 'No rules',
   },
   publicBaseURLPlaceholder:
     'Leave empty to use the current browser address, e.g. https://gateway.example.com',
@@ -530,8 +524,6 @@ export const jaJP = {
   timeouts: 'リクエストのタイムアウト',
   reliability: 'リトライと認証情報の健全性',
   proxy: {
-    inherit: '環境設定',
-    direct: '直接接続',
     effective: '現在の接続',
     environment: '環境プロキシ',
     directValue: '直接接続',
@@ -561,7 +553,6 @@ export const jaJP = {
     removeHint: 'このヘッダーを削除',
     add: 'ルールを追加',
     delete: 'ルールを削除',
-    empty: 'ルールはありません',
   },
   publicBaseURLPlaceholder:
     '空欄で現在のブラウザのアドレスを使用（例: https://gateway.example.com）',
