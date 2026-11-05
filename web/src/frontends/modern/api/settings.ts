@@ -1,3 +1,4 @@
+import { readErrorRules, type ErrorRule } from '@shared/error-rules'
 import { readRedactionRules, type RedactionRule } from './request-redaction'
 import {
   readJev,
@@ -77,9 +78,11 @@ export type SettingsValues = Record<SettingNumber, number> &
     jev: JevConfig
     request_redaction: RedactionRule[]
     request_audit: AuditConfig
+    error_rules: ErrorRule[]
   }
 export type SettingKey = keyof SettingsValues
 export const settingKeys: readonly SettingKey[] = [
+  'error_rules',
   'route_strategy',
   'public_base_url',
   'gateway_name',
@@ -177,6 +180,7 @@ function readSettings(value: unknown): SettingsData {
     auditAccessKeys: readAuditAccessKeys(row.audit_access_keys),
     requestAuditPreset: readAudit(row.request_audit_preset),
     values: {
+      error_rules: readErrorRules(values.error_rules ?? []),
       ...numbers,
       ...switches,
       route_strategy: oneOf(values.route_strategy, routeStrategies),

@@ -69,6 +69,14 @@ Your application only needs one base URL and one AccessKey. Providers, accounts,
 Group priority is a signed 32-bit integer, defaulting to 0; higher values take precedence. The highest available tier is selected before route strategy, soft affinity, and weights within that tier. A retryable execution failure moves directly to the next available tier without exhausting peers; the lowest tier tries remaining candidates. All tiers share the forwarding-attempt budget. Preparation failures do not advance tiers, authentication refresh replays the original credential first, and bound sessions keep their constraints. Priority edits propagate through cluster configuration; scheduling progress remains per replica.
 - **Observable, self-hosted, and simple to deploy** — Inspect health, routes, logs, usage, and cost estimates in an embedded UI backed by PostgreSQL and Redis, with credentials encrypted at rest.
 
+### Custom upstream error rules
+
+Configure `error_rules` globally or per group. Rules match in order; the first match applies. Status codes and keywords must both match when both are specified. Keywords match code, type, or summary independently, without case sensitivity. A group list replaces the global list; an empty list disables custom rules for that group, not built-in error handling.
+
+Actions can request a retry, cool down a credential/model, record a failure toward the blacklist threshold, or skip the group for the current request. Existing replay-safety and committed-response boundaries remain authoritative. Ordinary successful responses are not reclassified. Credential health is shared through Redis; rule configuration propagates through the existing PostgreSQL configuration revision. Lists are limited to 100 entries and 65,535 serialized JSON bytes.
+
+Upgrade every replica before saving these settings. Older versions reject unknown group settings; after saving new rules, rolling back only the image is not sufficient.
+
 ## Quick start
 
 > [!WARNING]
