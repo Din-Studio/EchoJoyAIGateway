@@ -165,6 +165,9 @@ export const zhCN = {
     gatewayName: '请输入 1–64 位字母、数字、- 或 _，并以字母或数字开头。',
     exchangeRate: '请输入大于 0、最多 6 位小数的汇率。',
     experimental: '请检查决策分组、模型、审计规则和阈值。',
+    jevRequired:
+      '自动模型或智能护栏仍在启用。请保留有效的 JEV 决策模型，或先关闭依赖功能，再清空或恢复 JEV 配置。',
+    auditJevRequired: '智能护栏仍在启用。请指定有效的 JEV 决策分组，或先关闭智能护栏。',
     number: '请输入 {min}–{max} 之间的整数。',
     autoModel: '请补全自动入口、兜底、预设与合法参数覆盖。',
     proxy: '请选择已启用的代理。',
@@ -364,6 +367,10 @@ export const enUS = {
     gatewayName: 'Enter 1–64 letters, digits, - or _, starting with a letter or digit.',
     exchangeRate: 'Enter a rate greater than 0 with at most 6 decimals.',
     experimental: 'Check the decision group, model, audit rules, and thresholds.',
+    jevRequired:
+      'Automatic models or guardrails are enabled. Keep a valid JEV decision model, or disable the dependent features before clearing or resetting JEV configuration.',
+    auditJevRequired:
+      'Guardrails are enabled. Select a valid JEV decision group, or disable guardrails first.',
     number: 'Enter an integer between {min} and {max}.',
     autoModel: 'Complete automatic entries, fallbacks, presets and valid override rules.',
     proxy: 'Select an enabled proxy.',
@@ -565,6 +572,10 @@ export const jaJP = {
     gatewayName: '英字・数字で始まる 1～64 文字の英数字、- または _ を入力してください。',
     exchangeRate: '0 より大きく、小数 6 桁以内の為替レートを入力してください。',
     experimental: '判定グループ、モデル、ルール、しきい値を確認してください。',
+    jevRequired:
+      '自動モデルまたはガードレールが有効です。JEV 設定を消去またはリセットする前に、有効な決定モデルを残すか依存機能を無効にしてください。',
+    auditJevRequired:
+      'ガードレールが有効です。有効な JEV 決定グループを指定するか、先にガードレールを無効にしてください。',
     number: '{min}～{max} の整数を入力してください。',
     autoModel: '自動入口、フォールバック、プリセット、有効な上書きルールを入力してください。',
     proxy: '有効なプロキシを選択してください。',

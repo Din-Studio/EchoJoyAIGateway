@@ -11,19 +11,16 @@ import (
 
 	"gorm.io/gorm"
 
-	"gpt-load/internal/automodel"
 	"gpt-load/internal/catalog"
 	"gpt-load/internal/channel"
 	"gpt-load/internal/cluster"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/health"
-	"gpt-load/internal/jev"
 	"gpt-load/internal/outboundproxy"
 	"gpt-load/internal/platform/config"
 	"gpt-load/internal/platform/encryption"
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/pricing"
-	"gpt-load/internal/requestaudit"
 	"gpt-load/internal/requestlog"
 	"gpt-load/internal/state"
 	stateloader "gpt-load/internal/state/loader"
@@ -382,10 +379,7 @@ func (s *Service) writeGroupConfigLocked(
 			return err
 		}
 		if _, err := state.Compile(input); err != nil {
-			if errors.Is(err, automodel.ErrInvalidConfig) || errors.Is(err, jev.ErrInvalidConfig) || errors.Is(err, requestaudit.ErrInvalidConfig) {
-				return app_errors.ErrValidation
-			}
-			return err
+			return mapConfigCompileError(err)
 		}
 		priceTable, err := loadPriceTable(ctx, tx)
 		if err != nil {
@@ -443,7 +437,7 @@ func (s *Service) writeConfig(
 			return err
 		}
 		if _, err := state.Compile(input); err != nil {
-			return err
+			return mapConfigCompileError(err)
 		}
 		return nil
 	})

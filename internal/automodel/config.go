@@ -13,6 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"gpt-load/internal/configdependency"
 	"gpt-load/internal/parameteroverride"
 )
 
@@ -124,7 +125,7 @@ func DecodeStored(raw []byte) (Config, bool, error) {
 func Compile(config Config, ordinaryModels, decisionModels map[string]struct{}) (result *Compiled, compileErr error) {
 	defer func() {
 		if compileErr != nil {
-			compileErr = fmt.Errorf("%w: %v", ErrInvalidConfig, compileErr)
+			compileErr = fmt.Errorf("%w: %w", ErrInvalidConfig, compileErr)
 		}
 	}()
 	// 深拷贝自由 JSON 字段，保证请求使用不可变的配置版本。
@@ -144,10 +145,10 @@ func Compile(config Config, ordinaryModels, decisionModels map[string]struct{}) 
 	}
 	if config.Enabled {
 		if !validName(config.Model) {
-			return nil, fmt.Errorf("Jev decision model is required")
+			return nil, &configdependency.Error{Reason: configdependency.JevRouteRequired, Features: []string{"auto_model"}}
 		}
 		if _, exists := decisionModels[config.Model]; !exists {
-			return nil, fmt.Errorf("Jev decision model does not have an enabled Decisions route")
+			return nil, &configdependency.Error{Reason: configdependency.JevRouteUnavailable, Features: []string{"auto_model"}, Model: config.Model}
 		}
 	}
 	// 自动模型只有系统级总开关；保留字段用于读取早期实验配置，但入口始终随总开关启用。
@@ -168,7 +169,7 @@ func Compile(config Config, ordinaryModels, decisionModels map[string]struct{}) 
 			return nil, fmt.Errorf("duplicate automatic model name")
 		}
 		if _, exists := ordinaryModels[entry.Name]; exists {
-			return nil, fmt.Errorf("automatic model name conflicts with an ordinary model or alias")
+			return nil, &configdependency.Error{Reason: configdependency.AutoModelNameConflict, Features: []string{"auto_model"}, AutoModel: entry.Name, Model: entry.Name}
 		}
 		if len(entry.Presets) < 1 || len(entry.Presets) > 254 {
 			return nil, fmt.Errorf("automatic model requires 1 through 254 presets")
@@ -192,7 +193,7 @@ func Compile(config Config, ordinaryModels, decisionModels map[string]struct{}) 
 			criteria[preset.ID] = preset.Description
 			if config.Enabled {
 				if _, exists := ordinaryModels[preset.Model]; !exists {
-					return nil, fmt.Errorf("enabled preset target model does not exist")
+					return nil, &configdependency.Error{Reason: configdependency.AutoModelTargetMissing, Features: []string{"auto_model"}, AutoModel: entry.Name, Preset: preset.Name, Model: preset.Model}
 				}
 			}
 			if len(preset.ParameterOverrides) == 0 {
@@ -211,7 +212,7 @@ func Compile(config Config, ordinaryModels, decisionModels map[string]struct{}) 
 			value.Presets = append(value.Presets, CompiledPreset{Preset: preset, Rules: compiledRules})
 		}
 		if _, exists := criteria[entry.Fallback]; !exists {
-			return nil, fmt.Errorf("fallback preset does not exist")
+			return nil, &configdependency.Error{Reason: configdependency.AutoModelFallbackMissing, Features: []string{"auto_model"}, AutoModel: entry.Name, Preset: entry.Fallback}
 		}
 		payload, _ := json.Marshal(map[string]any{"model": config.Model, "state": map[string]any{}, "questions": map[string]any{
 			"preset": map[string]any{"type": "choice", "instructions": Instructions, "criteria": criteria},
@@ -224,7 +225,7 @@ func Compile(config Config, ordinaryModels, decisionModels map[string]struct{}) 
 	for _, entry := range compiled.entries {
 		for _, preset := range entry.Presets {
 			if _, recursive := compiled.entries[preset.Model]; recursive {
-				return nil, fmt.Errorf("preset cannot target another automatic model")
+				return nil, &configdependency.Error{Reason: configdependency.AutoModelRecursiveTarget, Features: []string{"auto_model"}, AutoModel: entry.Name, Preset: preset.Name, Model: preset.Model}
 			}
 		}
 	}
