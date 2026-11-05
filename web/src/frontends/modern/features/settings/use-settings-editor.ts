@@ -11,6 +11,7 @@ import {
   type SettingsData,
 } from '@modern/api/settings'
 import { currencyKey } from '@modern/api/currency'
+import { configDependencyMessage } from '@modern/api/config-dependency'
 import { useMessages, useMessageSource } from '@modern/app/messages'
 import { useLoadingActivity } from '@modern/components/ui/loading'
 import { useApiClient } from '@shared/http/client-context'
@@ -116,7 +117,13 @@ export function useSettingsEditor() {
   async function save(): Promise<'invalid' | 'saved' | undefined> {
     if (!effectiveBase.value || !draft.value || saving.value || !dirty.value) return
     attempted.value = true
-    if (Object.keys(errors.value).length) return 'invalid'
+    saveError.value = ''
+    if (Object.keys(errors.value).length) {
+      // Resetting a setting hides its editor. Keep dependency errors visible
+      // even when the field-level notice is not mounted.
+      saveError.value = fieldErrors.value.jev ?? fieldErrors.value.request_audit ?? ''
+      return 'invalid'
+    }
     const patch = buildSettingsPatch(effectiveBase.value, draft.value, changed.value, resets.value)
     if (!Object.keys(patch).length) {
       discard()
@@ -149,8 +156,9 @@ export function useSettingsEditor() {
       if (!controller.signal.aborted)
         messages.show({ tone: 'success', text: t('settingsForm.saved') })
       return 'saved'
-    } catch {
-      if (!controller.signal.aborted) saveError.value = t('settingsForm.saveFailed')
+    } catch (cause) {
+      if (!controller.signal.aborted)
+        saveError.value = configDependencyMessage(cause, t('settingsForm.saveFailed'))
     } finally {
       saving.value = false
     }

@@ -277,10 +277,10 @@ export function settingsErrors(
     const jev = resets.has('jev') ? defaultJev() : draft.jev
     const audit = resets.has('request_audit') ? defaultAudit() : draft.request_audit
     const autoEnabled = !resets.has('auto_model') && draft.auto_model.enabled
-    if (!validJev(jev) || ((autoEnabled || audit.enabled) && !jev.model))
-      errors.jev = 'experimental'
-    if (!validAudit(audit) || (audit.enabled && !jev.group_id))
-      errors.request_audit = 'experimental'
+    if (!validJev(jev)) errors.jev = 'experimental'
+    else if ((autoEnabled || audit.enabled) && !jev.model) errors.jev = 'jevRequired'
+    if (!validAudit(audit)) errors.request_audit = 'experimental'
+    else if (audit.enabled && !jev.group_id) errors.request_audit = 'auditJevRequired'
   }
   for (const key of changed) {
     if (resets.has(key) || base.readOnly.includes(key)) continue
