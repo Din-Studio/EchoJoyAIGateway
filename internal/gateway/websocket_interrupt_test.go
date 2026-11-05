@@ -40,6 +40,85 @@ func (s *interruptibleWebsocketFixture) Interrupt(ctx context.Context, payload [
 	}
 }
 
+// 模拟中断通过网关检查后，执行层先交付终态，再返回 response_not_active。
+func TestWebsocketInterruptCompletesBeforeSenderReturns(t *testing.T) {
+	completed := make(chan struct{})
+	session := &interruptibleWebsocketFixture{interrupts: make(chan []byte, 1)}
+	session.done = make(chan struct{})
+	session.afterInterrupt = func(ctx context.Context) error {
+		select {
+		case <-completed:
+			return execution.ErrWebsocketResponseNotActive
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	var turns atomic.Int32
+	session.turn = func(ctx context.Context, payload []byte, emit func(context.Context, []byte) error) execution.WebsocketResult {
+		if turns.Add(1) == 1 {
+			if err := emit(ctx, []byte(`{"type":"response.created","response":{"id":"resp_1","status":"in_progress","model":"upstream"}}`)); err != nil {
+				return execution.WebsocketResult{}
+			}
+			select {
+			case <-session.interrupts:
+			case <-ctx.Done():
+				return execution.WebsocketResult{}
+			}
+			_ = emit(ctx, websocketCompleted("resp_1", ""))
+			close(completed)
+		} else {
+			var request struct {
+				Previous string `json:"previous_response_id"`
+			}
+			if json.Unmarshal(payload, &request) != nil || request.Previous != "resp_1" {
+				t.Errorf("continuation lost: %s", payload)
+			}
+			_ = emit(ctx, websocketCompleted("resp_2", ""))
+		}
+		return execution.WebsocketResult{DispatchState: execution.DispatchMaybeSent}
+	}
+	h, engine, _ := websocketTestHandler(t, "http://unused.invalid", channel.OpenAI)
+	h.forwarder = websocketScriptForwarder{open: func(context.Context, ForwardInput) (execution.WebsocketSession, execution.WebsocketResult) {
+		return session, execution.WebsocketResult{}
+	}}
+	sink := &recordingRequestLogSink{}
+	h.requestLogSink = sink
+	server := httptest.NewServer(engine)
+	defer server.Close()
+	conn := dialGatewayWebsocket(t, server.URL)
+	defer conn.Close()
+	read := func(want string) {
+		t.Helper()
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, body, err := conn.ReadMessage()
+		var event struct{ Type string }
+		if err != nil || json.Unmarshal(body, &event) != nil || event.Type != want {
+			t.Fatalf("expected %s, got %s, err=%v", want, body, err)
+		}
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","model":"public","input":"question","store":false}`)); err != nil {
+		t.Fatal(err)
+	}
+	read("response.created")
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.interrupt","response_id":"resp_1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	read("response.completed")
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","model":"public","previous_response_id":"resp_1","input":"answer","store":false}`)); err != nil {
+		t.Fatal(err)
+	}
+	read("response.completed")
+	events := waitWebsocketLogs(t, sink, 2)
+	if turns.Load() != 2 || len(events) != 2 {
+		t.Fatalf("turns=%d logs=%d", turns.Load(), len(events))
+	}
+	for _, event := range events {
+		if event.Status != telemetry.RequestStatusSuccess {
+			t.Fatalf("completed turn status=%s", event.Status)
+		}
+	}
+}
+
 func TestWebsocketInterruptBypassesActiveTurnAndContinues(t *testing.T) {
 	interrupt := []byte(`{"type":"response.interrupt","response_id":"resp_1","mode":"discard_partial_items","extension":"preserve"}`)
 	session := &interruptibleWebsocketFixture{interrupts: make(chan []byte, 1)}
@@ -143,10 +222,12 @@ func TestWebsocketInterruptBypassesActiveTurnAndContinues(t *testing.T) {
 	read("response.incomplete")
 	waitWebsocketLogs(t, sink, 1)
 	waitConcurrencyEmpty(t, h)
-	if err := conn.WriteMessage(websocket.TextMessage, interrupt); err != nil {
-		t.Fatal(err)
+	// 迟到或重复的中断不能留下 error 帧，影响下一轮读取。
+	for range 2 {
+		if err := conn.WriteMessage(websocket.TextMessage, interrupt); err != nil {
+			t.Fatal(err)
+		}
 	}
-	read("error")
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","model":"public","previous_response_id":"resp_1","input":"answer","store":false}`)); err != nil {
 		t.Fatal(err)
 	}

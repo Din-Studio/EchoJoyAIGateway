@@ -28,8 +28,12 @@ func (s *websocketConnection) handleInterrupt(turn websocketTurn, fields map[str
 	binding := s.binding
 	parent, found := s.parents[responseID]
 	s.mu.Unlock()
-	if binding == nil || !found || parent.complete || (turn.lane != "" && turn.lane != parent.lane) {
+	if binding == nil || !found || (turn.lane != "" && turn.lane != parent.lane) {
 		s.emitReason(turn.lane, reasonWebsocketResponseNotActive)
+		return
+	}
+	// 已结束响应的迟到中断不应留下 error 帧污染下一轮。
+	if parent.complete {
 		return
 	}
 	if !websocketGroupEnabled(snapshot, key, binding.ref.GroupID) {
@@ -49,9 +53,13 @@ func (s *websocketConnection) handleInterrupt(turn websocketTurn, fields map[str
 	}
 	s.mu.Lock()
 	parent, found = s.parents[responseID]
-	if !found || parent.complete {
+	if !found {
 		s.mu.Unlock()
 		s.emitReason(turn.lane, reasonWebsocketResponseNotActive)
+		return
+	}
+	if parent.complete {
+		s.mu.Unlock()
 		return
 	}
 	// 先登记意图：上游可能在控制帧写入返回前就交付中断终态。
@@ -64,7 +72,8 @@ func (s *websocketConnection) handleInterrupt(turn websocketTurn, fields map[str
 	close(interrupt.done)
 	if err != nil {
 		s.mu.Lock()
-		if current, exists := s.parents[responseID]; exists {
+		current, exists := s.parents[responseID]
+		if exists {
 			current.interrupt = nil
 			s.parents[responseID] = current
 		}
@@ -76,7 +85,10 @@ func (s *websocketConnection) handleInterrupt(turn websocketTurn, fields map[str
 		case errors.Is(err, execution.ErrWebsocketInterruptUnsupported):
 			s.emitReason(parent.lane, reasonWebsocketCapability)
 		case errors.Is(err, execution.ErrWebsocketResponseNotActive):
-			s.emitReason(parent.lane, reasonWebsocketResponseNotActive)
+			// 终态可能在最后一次检查后、执行层处理中断前到达。
+			if !exists || !current.complete {
+				s.emitReason(parent.lane, reasonWebsocketResponseNotActive)
+			}
 		default:
 			s.emitReason(parent.lane, reasonUpstreamConnect)
 			s.cancel()
