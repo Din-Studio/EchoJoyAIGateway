@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { BookOpen, Heart, Send } from '@lucide/vue'
 import { computed, ref, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RouterLink, useRoute } from 'vue-router'
@@ -8,9 +7,8 @@ import { navigationSections } from '@modern/app/navigation'
 import { usePreferences } from '@modern/app/preferences'
 import { useNavigation } from '@modern/app/use-navigation'
 import BrandLogo from '@modern/components/BrandLogo.vue'
-import GitHubIcon from '@modern/components/GitHubIcon.vue'
 import AppTooltip from '@modern/components/ui/AppTooltip.vue'
-import { AppExternalLink, AppIcon } from '@modern/components/ui'
+import { AppIcon } from '@modern/components/ui'
 import SystemStatus from '@modern/features/system/SystemStatus.vue'
 
 defineProps<{ collapsed?: boolean }>()
@@ -24,12 +22,6 @@ const navigation = useNavigation()
 const sections = computed(() =>
   navigationSections.filter((section) => navigation.value.some((item) => item.section === section)),
 )
-const footerLinks = computed(() => [
-  { label: t('shell.documentation'), href: 'https://www.gpt-load.com/docs', icon: BookOpen },
-  { label: t('shell.sponsor'), href: 'https://www.gpt-load.com/sponsor', icon: Heart },
-  { label: 'GitHub', href: 'https://github.com/tbphp/gpt-load', icon: GitHubIcon },
-  { label: 'Telegram', href: 'https://t.me/+GHpy5SwEllg3MTUx', icon: Send },
-])
 </script>
 
 <template>
@@ -70,17 +62,6 @@ const footerLinks = computed(() => [
       </div>
     </nav>
     <div class="modern-sidebar-footer">
-      <div v-if="!collapsed" class="modern-footer-links">
-        <AppExternalLink
-          v-for="link in footerLinks"
-          :key="link.href"
-          class="modern-footer-link"
-          :href="link.href"
-        >
-          <AppIcon :icon="link.icon" size="sm" />
-          <span>{{ link.label }}</span>
-        </AppExternalLink>
-      </div>
       <SystemStatus :collapsed="collapsed" />
     </div>
   </div>
@@ -153,33 +134,6 @@ const footerLinks = computed(() => [
   margin-top: auto;
   padding-top: var(--modern-space-4);
 }
-.modern-footer-links {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--modern-space-1);
-}
-.modern-footer-link {
-  display: flex;
-  min-width: 0;
-  min-height: var(--modern-control-sm);
-  align-items: center;
-  justify-content: center;
-  gap: var(--modern-space-1-5);
-  border-radius: var(--modern-radius-control);
-  padding: var(--modern-space-1-5) var(--modern-space-2);
-  color: var(--modern-muted);
-  font-size: var(--modern-font-size-small);
-  font-weight: var(--modern-weight-regular);
-  white-space: nowrap;
-}
-/* 文字保持同一最小宽度，四个外链的图标才落在同一竖线上。 */
-.modern-footer-link span {
-  min-width: 5em;
-}
-.modern-footer-link:hover {
-  background: var(--modern-surface);
-  color: var(--modern-text);
-}
 .is-collapsed .modern-sidebar-brand {
   justify-content: flex-start;
   padding-inline: var(--modern-space-2) 0;
@@ -196,9 +150,6 @@ const footerLinks = computed(() => [
 @media (max-width: 760px) {
   .modern-nav-link {
     font-size: var(--modern-font-size-section);
-    min-height: var(--modern-touch-target);
-  }
-  .modern-footer-link {
     min-height: var(--modern-touch-target);
   }
 }
