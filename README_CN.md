@@ -172,6 +172,8 @@ OpenCode Go / Zen 使用 API Key，通过现有多协议网关适配器接入原
 
 ### 参数覆盖与协议转换
 
+数组字段覆盖使用 `*`：`{"remove":["/messages/*/reasoning_content"],"set":{"messages":{"*":{"tag":"gateway"}}}}`。通配符遍历已有数组，不创建缺失数组，也不删除数组元素。每条规则先删除字段，再设置字段；后续规则读取前面的结果。显式删除可阻止 DeepSeek 从推理别名补回字段。覆盖后的最终请求大小上限为 HTTP 128 MiB、WebSocket 10 MiB。
+
 分组参数覆盖在协议转换前应用。普通参数按客户端协议填写，例如 Responses 的 `max_output_tokens` 会由 SDK 转换成 Anthropic 的 `max_tokens`。对于 Bifrost 对话转换，覆盖规则明确设置、但 SDK 客户端请求结构未定义的顶层字段，会作为扩展参数交给 SDK；是否保留仍取决于 SDK 对目标协议的支持，不会开启任意字段透传。客户端自行附加的未知字段不因此获得透传能力，内容块内已有的缓存标记保持原有行为。
 
 例如，在 Anthropic 分组中为 Responses 请求设置顶层缓存参数：

@@ -172,6 +172,8 @@ OpenCode Go / Zen use API keys and the existing multi-protocol gateway adapter f
 
 ### Parameter overrides and protocol conversion
 
+Array field overrides use `*`: `{"remove":["/messages/*/reasoning_content"],"set":{"messages":{"*":{"tag":"gateway"}}}}`. Wildcards traverse existing arrays without creating missing arrays or deleting elements. Each rule removes fields before setting fields; later rules see earlier edits. Explicit removal prevents DeepSeek reasoning-alias backfill. Overrides are limited to the final request size: 128 MiB for HTTP and 10 MiB for WebSocket.
+
 Group parameter overrides run before protocol conversion. Use client-protocol names for ordinary parameters: the SDK converts Responses `max_output_tokens` to Anthropic `max_tokens`, for example. For Bifrost conversation conversions, top-level fields explicitly set by an override but absent from the SDK's client request schema are supplied as SDK extra parameters. The SDK still determines whether the target protocol supports them; arbitrary parameter passthrough is not enabled. Unknown client-supplied fields are not automatically forwarded, and existing content-block cache markers retain their behavior.
 
 For example, configure an Anthropic group to supply top-level caching for Responses requests:
