@@ -1,3 +1,4 @@
+import { credentialTestMessages } from './credential-test'
 import { errorRuleMessages } from '@shared/error-rule-messages'
 import { enUS as proxies } from './proxies'
 import { enUS as concurrency } from './concurrency'
@@ -25,6 +26,7 @@ import { enUS as autoModel } from './auto-model'
 import { enUS as subscriptions } from './subscriptions'
 
 export default {
+  credentialBatchTest: credentialTestMessages['en-US'],
   errorRules: errorRuleMessages['en-US'],
   proxies,
   concurrency,
