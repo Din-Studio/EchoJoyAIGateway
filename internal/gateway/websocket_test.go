@@ -64,7 +64,8 @@ func websocketCompleted(id, lane string) []byte {
 
 func waitWebsocketLogs(t *testing.T, sink *recordingRequestLogSink, count int) []telemetry.RequestEvent {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
+	// race 模式下异步日志写入可能延迟；只放宽等待上限，日志到达后立即返回。
+	deadline := time.After(10 * time.Second)
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 	for {
