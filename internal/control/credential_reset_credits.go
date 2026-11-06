@@ -12,6 +12,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"gpt-load/internal/channel"
 	"gpt-load/internal/platform/canonicaljson"
@@ -38,6 +39,10 @@ type storedResetCreditResult struct {
 	Status       string `json:"status"`
 	WindowsReset int    `json:"windows_reset"`
 	RedeemedAtMS *int64 `json:"redeemed_at_ms,omitempty"`
+}
+
+type storedResetCreditRequest struct {
+	Request json.RawMessage `json:"request"`
 }
 
 // ConsumeCredentialResetCredit idempotently consumes one provider reset credit
@@ -105,21 +110,34 @@ func (s *Service) ConsumeCredentialResetCredit(
 	}
 
 	if s.consumeSubscriptionResetCredit == nil {
-		_ = s.finishResetCreditOperation(operation.IdempotencyKey, models.CredentialResetOperationOutcomeUnknown, nil, app_errors.ErrResetCreditOutcomeUnknown.Code)
+		_ = s.finishResetCreditOperation(operation, models.CredentialResetOperationOutcomeUnknown, nil, app_errors.ErrResetCreditOutcomeUnknown.Code)
 		return ResetCreditConsumeResponse{}, app_errors.ErrResetCreditOutcomeUnknown
 	}
 	callContext, cancel := context.WithTimeout(ctx, defaultSubscriptionControlTimeout)
-	upstream, consumeErr := s.consumeSubscriptionResetCredit(callContext, channelID, preparedCredential, target, operation.RedeemRequestID)
+	request, prepareErr := s.prepareResetCreditRequest(callContext, operation, channelID, preparedCredential, target)
+	if prepareErr != nil {
+		cancel()
+		state, apiErr := models.CredentialResetOperationRejected, classifyResetCreditPreparationError(prepareErr)
+		// 已持久化选卡的操作可能发送过兑换，不能因恢复参数失败而解除保护。
+		if len(operation.ResultJSON) > 0 {
+			state, apiErr = models.CredentialResetOperationOutcomeUnknown, app_errors.ErrResetCreditOutcomeUnknown
+		}
+		if err := s.finishResetCreditOperation(operation, state, nil, apiErr.Code); err != nil {
+			return ResetCreditConsumeResponse{}, app_errors.ErrResetCreditOutcomeUnknown
+		}
+		return ResetCreditConsumeResponse{}, apiErr
+	}
+	upstream, consumeErr := s.consumeSubscriptionResetCredit(callContext, channelID, preparedCredential, target, request)
 	cancel()
 	if consumeErr != nil {
 		state, apiErr := classifyResetCreditConsumeError(consumeErr)
-		if persistErr := s.finishResetCreditOperation(operation.IdempotencyKey, state, nil, apiErr.Code); persistErr != nil {
+		if persistErr := s.finishResetCreditOperation(operation, state, nil, apiErr.Code); persistErr != nil {
 			return ResetCreditConsumeResponse{}, app_errors.ErrResetCreditOutcomeUnknown
 		}
 		return ResetCreditConsumeResponse{}, apiErr
 	}
 	if upstream.Status != "succeeded" || upstream.WindowsReset < 0 {
-		_ = s.finishResetCreditOperation(operation.IdempotencyKey, models.CredentialResetOperationOutcomeUnknown, nil, app_errors.ErrResetCreditOutcomeUnknown.Code)
+		_ = s.finishResetCreditOperation(operation, models.CredentialResetOperationOutcomeUnknown, nil, app_errors.ErrResetCreditOutcomeUnknown.Code)
 		return ResetCreditConsumeResponse{}, app_errors.ErrResetCreditOutcomeUnknown
 	}
 	result := storedResetCreditResult{
@@ -128,7 +146,7 @@ func (s *Service) ConsumeCredentialResetCredit(
 	runtimeRestored, targetCurrent, targetErr := s.restoreCredentialRuntimeForTarget(ctx, group, credentialID)
 	canonicalResult, err := canonicaljson.Marshal(result)
 	if err != nil || s.finishResetCreditOperation(
-		operation.IdempotencyKey,
+		operation,
 		models.CredentialResetOperationSucceeded,
 		canonicalResult,
 		"",
@@ -228,62 +246,71 @@ func (s *Service) beginResetCreditOperation(
 	credentialID uint,
 	digest [sha256.Size]byte,
 	idempotencyKey string,
-) (models.CredentialResetOperation, bool, error) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	nowMS := s.now().UTC().UnixMilli()
-
-	var existing models.CredentialResetOperation
-	err := s.db.WithContext(ctx).Where("idempotency_key = ?", idempotencyKey).Take(&existing).Error
-	if err == nil {
-		if !bytes.Equal(existing.RequestDigest, digest[:]) ||
-			existing.GroupID != groupID || existing.CredentialID != credentialID {
-			return models.CredentialResetOperation{}, false, app_errors.ErrIdempotencyKeyReused
+) (operation models.CredentialResetOperation, replayed bool, err error) {
+	// Serialize admission across replicas without holding a transaction during
+	// provider calls. The durable operation protects the interval after commit.
+	err = s.withBookkeepingTransaction(ctx, func(tx *gorm.DB) error {
+		var credential models.Credential
+		if err := tx.Select("id").Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND group_id = ?", credentialID, groupID).Take(&credential).Error; err != nil {
+			return app_errors.ParseDBError(err)
 		}
-		if resetCreditOperationCanRetry(existing, nowMS) {
-			result := s.db.WithContext(ctx).Model(&models.CredentialResetOperation{}).
-				Where("idempotency_key = ? AND state = ? AND updated_at_ms = ?", existing.IdempotencyKey, existing.State, existing.UpdatedAtMS).
-				Updates(map[string]any{
-					"state":           models.CredentialResetOperationPrepared,
-					"result_json":     models.JSON(nil),
-					"error_code":      "",
-					"updated_at_ms":   nowMS,
-					"completed_at_ms": nil,
-				})
-			if result.Error != nil {
-				return models.CredentialResetOperation{}, false, app_errors.ParseDBError(result.Error)
+		nowMS := s.now().UTC().UnixMilli()
+		var existing models.CredentialResetOperation
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("idempotency_key = ?", idempotencyKey).Take(&existing).Error
+		if err == nil {
+			if !bytes.Equal(existing.RequestDigest, digest[:]) ||
+				existing.GroupID != groupID || existing.CredentialID != credentialID {
+				return app_errors.ErrIdempotencyKeyReused
 			}
-			if result.RowsAffected != 1 {
-				return models.CredentialResetOperation{}, false, app_errors.ErrResetCreditOutcomeUnknown
+			if resetCreditOperationCanRetry(existing, nowMS) {
+				if existing.State == models.CredentialResetOperationRejected && !resetCreditOperationAllowsNewKey(tx, credentialID) {
+					return app_errors.ErrResetCreditOutcomeUnknown
+				}
+				// The timestamp is also a fencing token. Even same-millisecond
+				// retries must receive a different token.
+				nowMS = max(nowMS, existing.UpdatedAtMS+1)
+				result := tx.Model(&models.CredentialResetOperation{}).
+					Where("idempotency_key = ? AND state = ? AND updated_at_ms = ?", existing.IdempotencyKey, existing.State, existing.UpdatedAtMS).
+					Updates(map[string]any{
+						"state":      models.CredentialResetOperationPrepared,
+						"error_code": "", "updated_at_ms": nowMS, "completed_at_ms": nil,
+					})
+				if result.Error != nil {
+					return app_errors.ParseDBError(result.Error)
+				}
+				if result.RowsAffected != 1 {
+					return app_errors.ErrResetCreditOutcomeUnknown
+				}
+				existing.State = models.CredentialResetOperationPrepared
+				existing.ErrorCode = ""
+				existing.UpdatedAtMS = nowMS
+				existing.CompletedAtMS = nil
+				operation = existing
+				return nil
 			}
-			existing.State = models.CredentialResetOperationPrepared
-			existing.ResultJSON = nil
-			existing.ErrorCode = ""
-			existing.UpdatedAtMS = nowMS
-			existing.CompletedAtMS = nil
-			return existing, false, nil
+			operation = existing
+			replayed, err = classifyExistingResetCreditOperation(existing, digest, groupID, credentialID)
+			return err
 		}
-		replayed, existingErr := classifyExistingResetCreditOperation(existing, digest, groupID, credentialID)
-		if existingErr != nil {
-			return models.CredentialResetOperation{}, false, existingErr
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return app_errors.ParseDBError(err)
 		}
-		return existing, replayed, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return models.CredentialResetOperation{}, false, app_errors.ParseDBError(err)
-	}
-	if !s.resetCreditOperationAllowsNewKey(ctx, credentialID) {
-		return models.CredentialResetOperation{}, false, app_errors.ErrResetCreditOutcomeUnknown
-	}
-	operation := models.CredentialResetOperation{
-		IdempotencyKey: idempotencyKey, RequestDigest: append([]byte(nil), digest[:]...),
-		GroupID: groupID, CredentialID: credentialID, RedeemRequestID: idempotencyKey,
-		State: models.CredentialResetOperationPrepared, CreatedAtMS: nowMS, UpdatedAtMS: nowMS,
-	}
-	if err := s.db.WithContext(ctx).Create(&operation).Error; err != nil {
-		return models.CredentialResetOperation{}, false, app_errors.ParseDBError(err)
-	}
-	return operation, false, nil
+		if !resetCreditOperationAllowsNewKey(tx, credentialID) {
+			return app_errors.ErrResetCreditOutcomeUnknown
+		}
+		operation = models.CredentialResetOperation{
+			IdempotencyKey: idempotencyKey, RequestDigest: append([]byte(nil), digest[:]...),
+			GroupID: groupID, CredentialID: credentialID, RedeemRequestID: idempotencyKey,
+			State: models.CredentialResetOperationPrepared, CreatedAtMS: nowMS, UpdatedAtMS: nowMS,
+		}
+		if err := tx.Create(&operation).Error; err != nil {
+			return app_errors.ParseDBError(err)
+		}
+		return nil
+	})
+	return
 }
 
 func (s *Service) replayResetCreditOperationIfExists(
@@ -363,6 +390,9 @@ func resetCreditRequestDigest(groupID, credentialID uint, identityFingerprint, b
 }
 
 func resetCreditOperationCanRetry(operation models.CredentialResetOperation, nowMS int64) bool {
+	if operation.State == models.CredentialResetOperationRejected && operation.ErrorCode == app_errors.ErrResetCreditPreparationFailed.Code {
+		return true
+	}
 	if operation.State == models.CredentialResetOperationOutcomeUnknown {
 		return true
 	}
@@ -393,43 +423,34 @@ func classifyExistingResetCreditOperation(
 	}
 }
 
-func (s *Service) resetCreditOperationAllowsNewKey(
-	ctx context.Context,
-	credentialID uint,
-) bool {
-	var latest models.CredentialResetOperation
-	err := s.db.WithContext(ctx).
-		Where("credential_id = ? AND state IN ?", credentialID, []models.CredentialResetOperationState{
-			models.CredentialResetOperationPrepared,
-			models.CredentialResetOperationSucceeded,
-			models.CredentialResetOperationOutcomeUnknown,
-		}).
-		Order("updated_at_ms DESC").
-		Order("idempotency_key DESC").
-		Take(&latest).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return true
-	}
-	return err == nil && latest.State == models.CredentialResetOperationSucceeded
+func resetCreditOperationAllowsNewKey(tx *gorm.DB, credentialID uint) bool {
+	var pending models.CredentialResetOperation
+	err := tx.Where("credential_id = ? AND state IN ?", credentialID, []models.CredentialResetOperationState{
+		models.CredentialResetOperationPrepared,
+		models.CredentialResetOperationOutcomeUnknown,
+	}).Take(&pending).Error
+	return errors.Is(err, gorm.ErrRecordNotFound)
 }
 
 func (s *Service) finishResetCreditOperation(
-	idempotencyKey string,
+	operation models.CredentialResetOperation,
 	state models.CredentialResetOperationState,
 	result []byte,
 	errorCode string,
 ) error {
 	cleanupContext, cancel := context.WithTimeout(context.Background(), controlTransactionCleanupTimeout)
 	defer cancel()
-	nowMS := s.now().UTC().UnixMilli()
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
+	nowMS := max(s.now().UTC().UnixMilli(), operation.UpdatedAtMS+1)
 	updates := map[string]any{
-		"state": state, "result_json": models.JSON(result), "error_code": errorCode,
+		"state": state, "error_code": errorCode,
 		"updated_at_ms": nowMS, "completed_at_ms": nowMS,
 	}
+	// 结果不确定时保留选卡参数，重试不得改用另一张卡。
+	if state != models.CredentialResetOperationOutcomeUnknown || result != nil {
+		updates["result_json"] = models.JSON(result)
+	}
 	resultUpdate := s.db.WithContext(cleanupContext).Model(&models.CredentialResetOperation{}).
-		Where("idempotency_key = ? AND state = ?", idempotencyKey, models.CredentialResetOperationPrepared).
+		Where("idempotency_key = ? AND state = ? AND updated_at_ms = ?", operation.IdempotencyKey, models.CredentialResetOperationPrepared, operation.UpdatedAtMS).
 		Updates(updates)
 	if resultUpdate.Error != nil {
 		return resultUpdate.Error
@@ -438,6 +459,62 @@ func (s *Service) finishResetCreditOperation(
 		return fmt.Errorf("credential reset operation state changed")
 	}
 	return nil
+}
+
+func (s *Service) prepareResetCreditRequest(
+	ctx context.Context,
+	operation models.CredentialResetOperation,
+	channelID channel.ID,
+	credential subscriptionruntime.Credential,
+	target subscriptionruntime.Target,
+) (subscriptionruntime.ResetCreditRequest, error) {
+	request := subscriptionruntime.ResetCreditRequest{ID: operation.RedeemRequestID}
+	if len(operation.ResultJSON) > 0 {
+		var stored storedResetCreditRequest
+		if json.Unmarshal(operation.ResultJSON, &stored) != nil || len(stored.Request) == 0 {
+			return request, errors.New("invalid stored reset credit request")
+		}
+		request.Data = stored.Request
+		return request, nil
+	}
+	if s.prepareSubscriptionResetCredit == nil {
+		return request, nil
+	}
+	data, err := s.prepareSubscriptionResetCredit(ctx, channelID, credential, target)
+	if err != nil || len(data) == 0 {
+		return request, err
+	}
+	if len(data) > 4096 || !json.Valid(data) {
+		return request, errors.New("invalid reset credit request data")
+	}
+	raw, err := json.Marshal(storedResetCreditRequest{Request: data})
+	if err != nil {
+		return request, err
+	}
+	result := s.db.WithContext(ctx).Model(&models.CredentialResetOperation{}).
+		Where("idempotency_key = ? AND state = ? AND updated_at_ms = ?", operation.IdempotencyKey, models.CredentialResetOperationPrepared, operation.UpdatedAtMS).
+		Updates(map[string]any{"result_json": models.JSON(raw), "updated_at_ms": operation.UpdatedAtMS})
+	if result.Error != nil {
+		return request, app_errors.ParseDBError(result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return request, errors.New("reset credit operation changed before dispatch")
+	}
+	request.Data = data
+	return request, nil
+}
+
+func classifyResetCreditPreparationError(err error) *app_errors.APIError {
+	var upstream *subscriptionruntime.UpstreamHTTPError
+	if errors.As(err, &upstream) {
+		switch upstream.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return app_errors.ErrCredentialReauthorizationRequired
+		case http.StatusConflict:
+			return app_errors.ErrResetCreditUnavailable
+		}
+	}
+	return app_errors.ErrResetCreditPreparationFailed
 }
 
 func classifyResetCreditConsumeError(err error) (models.CredentialResetOperationState, *app_errors.APIError) {
@@ -457,6 +534,8 @@ func classifyResetCreditConsumeError(err error) (models.CredentialResetOperation
 
 func resetCreditErrorByCode(code string) *app_errors.APIError {
 	switch code {
+	case app_errors.ErrResetCreditPreparationFailed.Code:
+		return app_errors.ErrResetCreditPreparationFailed
 	case app_errors.ErrCredentialReauthorizationRequired.Code:
 		return app_errors.ErrCredentialReauthorizationRequired
 	case app_errors.ErrResetCreditUnavailable.Code:

@@ -45,4 +45,5 @@ var MessagesJaJP = map[string]string{
 	"group.model_name_conflict":                     "グループ内のクライアントモデル名は一意である必要があります",
 	"group.no_active_credential":                    "このグループには利用可能な認証情報がありません",
 	"credential.not_found":                          "認証情報が存在しません",
+	"reset_credit.preparation_failed":               "リセットの準備に失敗しました。リセットカードは消費されていません。しばらくしてから再試行してください",
 }
