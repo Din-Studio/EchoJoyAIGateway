@@ -45,4 +45,5 @@ var MessagesEnUS = map[string]string{
 	"group.model_name_conflict":                     "Client model names must be unique within the group",
 	"group.no_active_credential":                    "No active credential is available for this group",
 	"credential.not_found":                          "Credential not found",
+	"reset_credit.preparation_failed":               "Reset preparation failed; no reset credit was consumed. Please try again later",
 }

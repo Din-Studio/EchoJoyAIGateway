@@ -45,4 +45,5 @@ var MessagesZhCN = map[string]string{
 	"group.model_name_conflict":                     "分组内客户端模型名称必须唯一",
 	"group.no_active_credential":                    "该分组没有可用凭据",
 	"credential.not_found":                          "凭据不存在",
+	"reset_credit.preparation_failed":               "重置准备失败，尚未使用重置卡，请稍后重试",
 }
