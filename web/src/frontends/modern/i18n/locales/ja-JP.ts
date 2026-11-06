@@ -1,3 +1,4 @@
+import { credentialTestMessages } from './credential-test'
 import { errorRuleMessages } from '@shared/error-rule-messages'
 import { jaJP as proxies } from './proxies'
 import { jaJP as concurrency } from './concurrency'
@@ -25,6 +26,7 @@ import { jaJP as autoModel } from './auto-model'
 import { jaJP as subscriptions } from './subscriptions'
 
 export default {
+  credentialBatchTest: credentialTestMessages['ja-JP'],
   errorRules: errorRuleMessages['ja-JP'],
   proxies,
   concurrency,

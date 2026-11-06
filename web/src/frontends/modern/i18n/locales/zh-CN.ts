@@ -1,3 +1,4 @@
+import { credentialTestMessages } from './credential-test'
 import { errorRuleMessages } from '@shared/error-rule-messages'
 import { zhCN as proxies } from './proxies'
 import { zhCN as concurrency } from './concurrency'
@@ -25,6 +26,7 @@ import { zhCN as autoModel } from './auto-model'
 import { zhCN as subscriptions } from './subscriptions'
 
 export default {
+  credentialBatchTest: credentialTestMessages['zh-CN'],
   errorRules: errorRuleMessages['zh-CN'],
   proxies,
   concurrency,
