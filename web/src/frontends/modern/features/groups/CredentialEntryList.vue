@@ -3,7 +3,13 @@ import { Eye, EyeOff, Plus, Trash2 } from '@lucide/vue'
 import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { GroupChannel } from '@modern/api/group-create'
-import { AppButton, AppFormSection, AppIconButton, AppTextField } from '@modern/components/ui'
+import {
+  AppButton,
+  AppExternalLink,
+  AppFormSection,
+  AppIconButton,
+  AppTextField,
+} from '@modern/components/ui'
 import {
   concurrencyLimitInvalid,
   credentialEntryFilled,
@@ -16,6 +22,7 @@ const props = defineProps<{
   channel: GroupChannel
   disabled?: boolean
   attempted?: boolean
+  showPartnerSignup?: boolean
   error?: string
 }>()
 const entries = defineModel<CredentialEntryDraft[]>({ required: true })
@@ -129,6 +136,14 @@ defineExpose({
     :hint="t(plainKeys ? 'groupCreate.credentialsHelp' : 'groupCreate.structuredHelp')"
     compact
   >
+    <template v-if="showPartnerSignup && channel.partner" #actions>
+      <span
+        >{{ t('groupCreate.partnerChannel') }} ·
+        <AppExternalLink :href="channel.partner.signupURL"
+          >{{ t('groupCreate.partnerSignup', { name: channel.name }) }} ↗</AppExternalLink
+        >
+      </span>
+    </template>
     <div v-if="plainKeys" class="modern-credential-entry" aria-hidden="true">
       <span class="modern-credential-entries-label">{{ fields[0]?.label }}</span>
       <span class="modern-credential-entries-label">{{ t('groups.edit.concurrencyLimit') }}</span>

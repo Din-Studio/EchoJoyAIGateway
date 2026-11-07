@@ -622,6 +622,7 @@ useMessageSource(() => (errorText.value ? { text: errorText.value, tone: 'danger
             v-if="!subscription"
             ref="credentialInput"
             v-model="credentials"
+            show-partner-signup
             :channel="channel"
             :disabled="inputLocked"
             :attempted="attempted"
