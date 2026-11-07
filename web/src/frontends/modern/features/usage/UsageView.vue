@@ -275,6 +275,8 @@ usePageRefresh({
   refresh,
   pending: () => query.isFetching.value,
   updatedAt: () => report.value?.observed_at_ms,
+  // 只刷新报告；页面本身保留旧数据，不需要额外的静默请求状态。
+  autoRefresh: async () => !(await query.refetch({ cancelRefetch: false })).isError,
 })
 useMessageSource(() =>
   query.isError.value && report.value

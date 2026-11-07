@@ -2,6 +2,8 @@ import { computed, inject, readonly, ref, type InjectionKey } from 'vue'
 
 import type { AppLocale } from '@shared/preferences/locale'
 
+export const autoRefreshIntervals = [5_000, 10_000, 30_000, 60_000] as const
+
 export const themes = ['system', 'light', 'dark'] as const
 export type Theme = (typeof themes)[number]
 
@@ -32,6 +34,10 @@ export function createPreferences(
   systemScheme.addEventListener('change', updateSystemTheme)
   const locale = ref(initialLocale)
   const sidebarCollapsed = ref(readPreference('gpt-load.modern.sidebar-collapsed') === 'true')
+  const storedInterval = Number(readPreference('gpt-load.auto-refresh'))
+  const autoRefreshInterval = ref(
+    (autoRefreshIntervals as readonly number[]).includes(storedInterval) ? storedInterval : 0,
+  )
   const persistenceFailed = ref(false)
 
   function persist(key: string, value: string): void {
@@ -56,6 +62,7 @@ export function createPreferences(
     resolvedTheme,
     locale: readonly(locale),
     sidebarCollapsed: readonly(sidebarCollapsed),
+    autoRefreshInterval: readonly(autoRefreshInterval),
     persistenceFailed: readonly(persistenceFailed),
     dispose() {
       systemScheme.removeEventListener('change', updateSystemTheme)
@@ -70,6 +77,10 @@ export function createPreferences(
       applyLocale(value)
       document.documentElement.lang = value
       persist('gpt-load.locale', value)
+    },
+    setAutoRefreshInterval(value: number) {
+      autoRefreshInterval.value = value
+      persist('gpt-load.auto-refresh', String(value))
     },
     toggleSidebar() {
       sidebarCollapsed.value = !sidebarCollapsed.value

@@ -8,6 +8,7 @@ import {
   LogOut,
   Menu,
   RefreshCw,
+  Timer,
   X,
 } from '@lucide/vue'
 import { DialogClose, DialogRoot, DialogTrigger } from 'reka-ui'
@@ -17,7 +18,7 @@ import { useI18n } from 'vue-i18n'
 import { isNavigationFailure, RouterLink, useRoute, useRouter } from 'vue-router'
 import { desktopMediaQuery } from '@modern/app/breakpoints'
 import { pagePath } from '@modern/app/navigation'
-import { usePreferences } from '@modern/app/preferences'
+import { autoRefreshIntervals, usePreferences } from '@modern/app/preferences'
 import { providePageRefresh } from '@modern/app/page-refresh'
 import { useMessageSource } from '@modern/app/messages'
 import { usePageTitle } from '@modern/app/use-page-title'
@@ -28,6 +29,7 @@ import {
   AppIcon,
   AppIconButton,
   AppLoadingIndicator,
+  AppSelectMenu,
   AppTooltip,
 } from '@modern/components/ui'
 import { useAuthSession } from '@modern/features/auth/auth-session'
@@ -45,7 +47,13 @@ const createGroupLocation = computed(() => ({
   name: 'modern-groups',
   query: { ...(route.name === 'modern-groups' ? route.query : {}), panel: 'create' },
 }))
-const { sidebarCollapsed, toggleSidebar, persistenceFailed } = usePreferences()
+const {
+  sidebarCollapsed,
+  toggleSidebar,
+  persistenceFailed,
+  autoRefreshInterval,
+  setAutoRefreshInterval,
+} = usePreferences()
 provideSystemStatus()
 const mobileOpen = ref(false)
 const failedNavigation = ref<string | null>(null)
@@ -100,6 +108,16 @@ const refreshedAt = computed(() =>
         }).format(pageRefresh.updatedAt.value),
       }),
 )
+const autoRefreshOptions = computed(() => [
+  { value: '0', label: t('shell.autoRefreshOff') },
+  ...autoRefreshIntervals.map((ms) => ({
+    value: String(ms),
+    label:
+      ms < 60_000
+        ? t('shell.autoRefreshSeconds', { count: ms / 1_000 })
+        : t('shell.autoRefreshMinutes', { count: ms / 60_000 }),
+  })),
+])
 watch(
   () => route.fullPath,
   () => {
@@ -188,7 +206,10 @@ useMessageSource(() =>
       </button>
     </AppTooltip>
     <div class="modern-main-column">
-      <header class="modern-topbar">
+      <header
+        class="modern-topbar"
+        :class="{ 'has-auto-refresh': pageRefresh.autoAvailable.value }"
+      >
         <h1>{{ pageTitle }}</h1>
         <div v-if="pageRefresh.available.value" class="modern-topbar-refresh">
           <span v-if="refreshedAt">{{ refreshedAt }}</span>
@@ -198,6 +219,15 @@ useMessageSource(() =>
             :loading="pageRefresh.pending.value"
             :disabled="pageRefresh.busy.value"
             @click="pageRefresh.run()"
+          />
+          <AppSelectMenu
+            v-if="pageRefresh.autoAvailable.value"
+            :label="t('shell.autoRefresh')"
+            :icon="Timer"
+            :model-value="String(autoRefreshInterval)"
+            :options="autoRefreshOptions"
+            :show-value="autoRefreshInterval > 0"
+            @update:model-value="setAutoRefreshInterval(Number($event))"
           />
         </div>
         <span
@@ -427,10 +457,14 @@ useMessageSource(() =>
     gap: var(--modern-space-2);
     padding-block: var(--modern-space-2);
   }
-  /* 移动端顶栏只留刷新按钮，时间文字和竖线让位给标题。 */
-  .modern-topbar-refresh span,
+  /* 移动端顶栏只留刷新控件，时间文字和竖线让位给标题。 */
+  .modern-topbar-refresh > span,
   .modern-topbar-divider {
     display: none;
+  }
+  /* 多出自动刷新按钮的页面，标题独占首行，避免被挤成省略号。 */
+  .modern-topbar.has-auto-refresh h1 {
+    flex: 1 0 100%;
   }
   .modern-session-scope {
     order: 1;

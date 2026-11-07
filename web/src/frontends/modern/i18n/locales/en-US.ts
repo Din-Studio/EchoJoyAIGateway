@@ -60,6 +60,10 @@ export default {
   shell: {
     refresh: 'Refresh',
     refreshedAt: 'Updated {time}',
+    autoRefresh: 'Auto refresh',
+    autoRefreshOff: 'Off',
+    autoRefreshSeconds: '{count}s',
+    autoRefreshMinutes: '{count} min',
     goHome: 'GPT-Load overview',
     mascotHint:
       'Hold the mascot or press Space when focused to play. Press Enter for the overview.',
