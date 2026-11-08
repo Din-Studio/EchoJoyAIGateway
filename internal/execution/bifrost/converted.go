@@ -15,6 +15,7 @@ import (
 
 	"gpt-load/internal/channel"
 	"gpt-load/internal/execution"
+	"gpt-load/internal/execution/responsemodel"
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/reasoning"
 )
@@ -686,7 +687,7 @@ func (r *Runtime) executeConvertedResponsesStream(
 	encoder := newConvertedResponsesStreamEncoder(prepared.clientProtocol)
 	encoder.anthropicSource = wireUsage != nil
 	sequence := uint64(1)
-	model := spec.UpstreamModel
+	modelObserver := responsemodel.New(prepared.upstreamProtocol, spec.UpstreamModel)
 	var usageEvidence *execution.UsageEvidence
 	idleTimer := newIdleTimer(spec.Timeouts.StreamIdle)
 	defer idleTimer.stop()
@@ -695,26 +696,26 @@ func (r *Runtime) executeConvertedResponsesStream(
 		select {
 		case <-requestContext.Done():
 			callCancel()
-			return streamContextFailure(requestContext, false, true, headers, requestID, model, usageEvidence)
+			return streamContextFailure(requestContext, false, true, headers, requestID, modelObserver.Model, usageEvidence)
 		case <-idleTimer.channel():
 			callCancel()
-			return streamContextFailure(requestContext, true, true, headers, requestID, model, usageEvidence)
+			return streamContextFailure(requestContext, true, true, headers, requestID, modelObserver.Model, usageEvidence)
 		case chunk, open := <-outcome.stream:
 			idleTimer.pause()
 			if requestContext.Err() != nil {
 				callCancel()
-				return streamContextFailure(requestContext, false, true, headers, requestID, model, usageEvidence)
+				return streamContextFailure(requestContext, false, true, headers, requestID, modelObserver.Model, usageEvidence)
 			}
 			if !open {
 				if !sdkStreamEndedNormally(bifrostContext) {
-					return terminatedStreamFailure(headers, requestID, model, usageEvidence)
+					return terminatedStreamFailure(headers, requestID, modelObserver.Model, usageEvidence)
 				}
 				return execution.StreamResult{
 					DispatchState:     execution.DispatchMaybeSent,
 					ResponseStarted:   true,
 					StatusCode:        http.StatusOK,
 					Header:            headers,
-					Model:             model,
+					Model:             modelObserver.Model,
 					UpstreamRequestID: requestID,
 					Usage:             usageEvidence,
 				}
@@ -724,9 +725,9 @@ func (r *Runtime) executeConvertedResponsesStream(
 				if chunk != nil && chunk.BifrostError != nil {
 					wireUsage.discardErrorRaw(chunk.BifrostError)
 					captureAppliedReasoning(&chunk.BifrostError.ExtraFields.RawRequest, &appliedReasoning)
-					return streamErrorResult(chunk.BifrostError, bifrostContext, prepared.secrets, true, http.StatusOK, headers, model, usageEvidence)
+					return streamErrorResult(chunk.BifrostError, bifrostContext, prepared.secrets, true, http.StatusOK, headers, modelObserver.Model, usageEvidence)
 				}
-				return streamErrorResult(nil, bifrostContext, prepared.secrets, true, http.StatusOK, headers, model, usageEvidence)
+				return streamErrorResult(nil, bifrostContext, prepared.secrets, true, http.StatusOK, headers, modelObserver.Model, usageEvidence)
 			}
 
 			response := chunk.BifrostResponsesStreamResponse
@@ -741,17 +742,17 @@ func (r *Runtime) executeConvertedResponsesStream(
 			var chunkUsage *execution.UsageEvidence
 			if response.Response != nil {
 				if response.Response.Model != "" {
-					model = response.Response.Model
+					modelObserver.ObserveModel(response.Response.Model)
 				}
 				var err error
 				if err = wireUsage.applyResponses(response.Response.Usage); err != nil {
 					callCancel()
-					return streamErrorResult(nil, bifrostContext, prepared.secrets, true, http.StatusOK, headers, model, usageEvidence)
+					return streamErrorResult(nil, bifrostContext, prepared.secrets, true, http.StatusOK, headers, modelObserver.Model, usageEvidence)
 				}
 				chunkUsage, err = usageEvidenceFromResponses(response.Response.Usage)
 				if err != nil {
 					callCancel()
-					return streamErrorResult(nil, bifrostContext, prepared.secrets, true, http.StatusOK, headers, model, usageEvidence)
+					return streamErrorResult(nil, bifrostContext, prepared.secrets, true, http.StatusOK, headers, modelObserver.Model, usageEvidence)
 				}
 			}
 			if evidence := wireUsage.evidence(); evidence != nil {
@@ -760,20 +761,20 @@ func (r *Runtime) executeConvertedResponsesStream(
 			frames, err := encoder.encode(bifrostContext, response, raw)
 			if err != nil {
 				callCancel()
-				return streamErrorResult(nil, bifrostContext, prepared.secrets, true, http.StatusOK, headers, model, usageEvidence)
+				return streamErrorResult(nil, bifrostContext, prepared.secrets, true, http.StatusOK, headers, modelObserver.Model, usageEvidence)
 			}
 			for _, frame := range frames {
 				if needsClientModelAlias(spec) {
 					frame, err = rewriteClientSSEEvent(frame, spec.ClientProtocol, spec.ClientModel)
 					if err != nil {
 						callCancel()
-						return streamAliasFailure(http.StatusOK, headers, requestID, model, usageEvidence)
+						return streamAliasFailure(http.StatusOK, headers, requestID, modelObserver.Model, usageEvidence)
 					}
 				}
 				sequence++
 				if err := sink(execution.StreamEvent{Sequence: sequence, Kind: execution.StreamEventData, Data: frame}); err != nil {
 					callCancel()
-					return streamSinkFailure(headers, requestID, model, usageEvidence)
+					return streamSinkFailure(headers, requestID, modelObserver.Model, usageEvidence)
 				}
 			}
 			if chunkUsage != nil {
@@ -781,7 +782,7 @@ func (r *Runtime) executeConvertedResponsesStream(
 				sequence++
 				if err := sink(execution.StreamEvent{Sequence: sequence, Kind: execution.StreamEventUsage, Usage: cloneUsage(chunkUsage)}); err != nil {
 					callCancel()
-					return streamSinkFailure(headers, requestID, model, usageEvidence)
+					return streamSinkFailure(headers, requestID, modelObserver.Model, usageEvidence)
 				}
 			}
 			idleTimer.resume()
