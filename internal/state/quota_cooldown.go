@@ -40,24 +40,15 @@ func (r *CredentialRegistry) SetQuotaCooldown(ref CredentialRef, model string, u
 	return true, true
 }
 
-// RestoreQuotaCooldowns 只解除限额冷却，保留其他健康状态。
-func (r *CredentialRegistry) RestoreQuotaCooldowns(credentialID uint) bool {
-	return r.restoreQuotaCooldowns(credentialID, time.Time{})
-}
-
 // RestoreObservedQuotaCooldowns 仅在额度样本严格晚于最近拒绝时恢复两级冷却。
 func (r *CredentialRegistry) RestoreObservedQuotaCooldowns(credentialID uint, observedAtMS int64) bool {
 	if observedAtMS <= 0 {
 		return false
 	}
-	return r.restoreQuotaCooldowns(credentialID, time.UnixMilli(observedAtMS))
-}
-
-func (r *CredentialRegistry) restoreQuotaCooldowns(credentialID uint, observedAt time.Time) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entry, ok := r.entryLocked(credentialID)
-	if !ok || !observedAt.IsZero() && !observedAt.After(entry.lastQuotaRejectedAt) {
+	if !ok || !time.UnixMilli(observedAtMS).After(entry.lastQuotaRejectedAt) {
 		return false
 	}
 	entry.QuotaCooldownUntil = time.Time{}

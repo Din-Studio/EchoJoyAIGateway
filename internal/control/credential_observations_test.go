@@ -315,6 +315,7 @@ func TestRefreshCredentialObservationPersistsLKGAndAllowsImmediateManualRefresh(
 	if first.State != string(models.CredentialObservationFresh) || first.Snapshot == nil || calls != 1 {
 		t.Fatalf("first = %#v, calls=%d", first, calls)
 	}
+	now = now.Add(time.Millisecond)
 	second, err := fixture.service.RefreshCredentialObservation(t.Context(), groupID, credentialID)
 	if err != nil || second.ObservationVersion != 2 {
 		t.Fatalf("second = %#v, %v", second, err)
@@ -332,8 +333,8 @@ func TestRefreshCredentialObservationPersistsLKGAndAllowsImmediateManualRefresh(
 		failed.LastErrorCode != "observation_upstream_failed" {
 		t.Fatalf("failed = %#v, %v", failed, err)
 	}
-	if !reflect.DeepEqual(failed.Snapshot, first.Snapshot) {
-		t.Fatalf("LKG changed = %#v / %#v", first.Snapshot, failed.Snapshot)
+	if !reflect.DeepEqual(failed.Snapshot, second.Snapshot) {
+		t.Fatalf("LKG changed = %#v / %#v", second.Snapshot, failed.Snapshot)
 	}
 }
 
@@ -816,6 +817,7 @@ func TestRefreshClaudeCredentialObservationPublishesAccountAndQuota(t *testing.T
 	for _, count := range []int64{2, 0} {
 		resetCredits = count
 		if count == 0 {
+			now = now.Add(time.Millisecond)
 			if _, err := fixture.service.RefreshCredentialObservation(t.Context(), created.GroupID, credential.ID); err != nil {
 				t.Fatal(err)
 			}

@@ -384,10 +384,25 @@ func (s *Service) refreshCredentialObservationOnce(
 		}
 		state := models.CredentialObservationFresh
 		lastErrorCode := ""
-		var previousSnapshot CredentialObservationSnapshot
+		var previousSnapshot struct {
+			CredentialObservationSnapshot
+			QuotaObservedAtMS *int64 `json:"quota_observed_at_ms"`
+		}
 		previousSnapshotOK := len(previous.SnapshotJSON) > 0 &&
 			json.Unmarshal(previous.SnapshotJSON, &previousSnapshot) == nil
 		previousQuotaFresh := previousSnapshotOK && previous.State == models.CredentialObservationFresh
+		var previousWindowMS int64
+		if previous.ObservedAtMS != nil {
+			previousWindowMS = *previous.ObservedAtMS
+		}
+		if previousSnapshot.QuotaObservedAtMS != nil {
+			previousWindowMS = *previousSnapshot.QuotaObservedAtMS
+		}
+		// A response can wait for this lock while another replica stores a newer
+		// quota sample. It must neither replace that sample nor recover from it.
+		if previousQuotaFresh && previous.IdentityFingerprint == credential.IdentityFingerprint && completedMS <= previousWindowMS {
+			return mapCredentialObservation(previous), nil
+		}
 		if observation.Partial {
 			lastErrorCode = "observation_partial"
 			if previousSnapshotOK {
@@ -436,14 +451,35 @@ func (s *Service) refreshCredentialObservationOnce(
 				snapshot.Credits.ObservedAtMS = &completedMS
 			}
 		}
-		encoded, err := json.Marshal(snapshot)
+		// A later credit-only write must not prevent a fresh quota sample, or
+		// be overwritten by it. Keep both clocks separate in the stored JSON.
+		observedMS := completedMS
+		if previous.ObservedAtMS != nil {
+			observedMS = max(observedMS, *previous.ObservedAtMS)
+		}
+		if previousSnapshot.Credits != nil && previousSnapshot.Credits.ObservedAtMS != nil &&
+			*previousSnapshot.Credits.ObservedAtMS > completedMS {
+			snapshot.Credits = previousSnapshot.Credits
+		}
+		windowMS := completedMS
+		if observation.Partial && !observation.QuotaObserved && len(observation.ObservedQuotaScopes) == 0 {
+			windowMS = previousWindowMS
+		}
+		var windowClock *int64
+		if windowMS != observedMS {
+			windowClock = &windowMS
+		}
+		encoded, err := json.Marshal(struct {
+			CredentialObservationSnapshot
+			QuotaObservedAtMS *int64 `json:"quota_observed_at_ms,omitempty"`
+		}{snapshot, windowClock})
 		if err != nil {
 			return CredentialObservationResponse{}, app_errors.ErrInternalServer
 		}
 		row := models.CredentialObservation{
 			CredentialID: credential.ID, IdentityFingerprint: credential.IdentityFingerprint,
 			SchemaVersion: 1, ObservationVersion: version, SnapshotJSON: models.JSON(encoded),
-			State: state, ObservedAtMS: &completedMS,
+			State: state, ObservedAtMS: &observedMS,
 			LastAttemptAtMS: &attemptMS,
 			LastErrorCode:   lastErrorCode, UpdatedAtMS: completedMS,
 		}

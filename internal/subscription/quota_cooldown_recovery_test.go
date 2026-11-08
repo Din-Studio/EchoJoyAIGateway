@@ -29,7 +29,7 @@ func TestPassiveQuotaRecoveryClearsBothLevelsOnce(t *testing.T) {
 	setQuotaCooldown(t, manager.health, ref, "a", now.Add(time.Hour), now)
 	period, used, utilization := int64(604800), 95.0, 0.95
 	patches := []providerobservation.QuotaWindow{{ID: "secondary", SourceID: "codex", WindowSeconds: &period, State: "available", Used: &used, Utilization: &utilization}}
-	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 2000, patches)
+	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 2000, patches, nil)
 	if _, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestPassiveQuotaRecoveryClearsBothLevelsOnce(t *testing.T) {
 	}
 	after, _ := registry.CredentialRef(row.ID)
 	setQuotaCooldown(t, manager.health, after, "a", now.Add(time.Hour), now)
-	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 3000, patches)
+	manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, 3000, patches, nil)
 	if _, err := manager.FlushPassiveQuotaObservations(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestPassiveQuotaRecoveryPreservesNewerRejections(t *testing.T) {
 			}}}
 			record := func() {
 				if test.latest == "" {
-					manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, recovery.ObservedAtMS, recovery.Windows)
+					manager.RecordPassiveQuotaObservation(row.ID, ref.IdentityGeneration, recovery.ObservedAtMS, recovery.Windows, nil)
 					return
 				}
 				latest := PassiveQuotaSample{ObservedAtMS: 3000}

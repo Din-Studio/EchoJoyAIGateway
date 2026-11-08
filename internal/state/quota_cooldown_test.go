@@ -14,7 +14,7 @@ func TestQuotaRecoveryClearsBothLevelsAndPreservesOtherHealth(t *testing.T) {
 	entry.ModelCooldowns = map[string]time.Time{"a": now.Add(2 * time.Minute)}
 	entry.Blacklisted, entry.FailureCount = true, 3
 	entry.Status, entry.AuthState = CredentialStatusDisabled, CredentialAuthStateReauthorizationRequired
-	if !r.RestoreQuotaCooldowns(1) {
+	if !r.RestoreObservedQuotaCooldowns(1, now.Add(time.Second).UnixMilli()) {
 		t.Fatal("quota recovery was not applied")
 	}
 	if !entry.QuotaCooldownUntil.IsZero() || len(entry.QuotaModelCooldowns) != 0 || entry.QuotaCooldownGeneration != 1 {
@@ -27,8 +27,8 @@ func TestQuotaRecoveryClearsBothLevelsAndPreservesOtherHealth(t *testing.T) {
 }
 
 func TestQuotaRecoveryWithoutCooldownStillAdvancesGeneration(t *testing.T) {
-	r, _, _ := modelCooldownFixture(t)
-	if !r.RestoreQuotaCooldowns(1) {
+	r, _, now := modelCooldownFixture(t)
+	if !r.RestoreObservedQuotaCooldowns(1, now.Add(time.Second).UnixMilli()) {
 		t.Fatal("recovery without existing cooldown was skipped")
 	}
 	entry, _ := r.entryLocked(1)
@@ -80,7 +80,7 @@ func TestQuotaCooldownRecoveryPreservesSharedMirrorIdentityAndOtherCauses(t *tes
 	mirrored := SharedCredentialHealth{Epoch: "test", Version: 1, IdentityGeneration: before.IdentityGeneration,
 		QuotaCooldownUntil: now.Add(time.Hour), QuotaModelCooldowns: map[string]time.Time{"a": now.Add(time.Hour)},
 		ModelCooldowns: map[string]time.Time{"a": now.Add(time.Minute)}}
-	r.RestoreQuotaCooldowns(1)
+	r.RestoreObservedQuotaCooldowns(1, now.Add(time.Second).UnixMilli())
 	if accepted, _ := r.SetQuotaCooldown(before, "", now.Add(time.Hour), now); accepted {
 		t.Fatal("old account limit was restored")
 	}
@@ -95,7 +95,7 @@ func TestQuotaCooldownRecoveryPreservesSharedMirrorIdentityAndOtherCauses(t *tes
 	if !view.CooldownUntil.Equal(now.Add(time.Hour)) || !view.ModelCooldowns["a"].Equal(now.Add(time.Hour)) {
 		t.Fatal("shared mirror lost quota cooldowns")
 	}
-	r.RestoreQuotaCooldowns(1)
+	r.RestoreObservedQuotaCooldowns(1, now.Add(time.Second).UnixMilli())
 	view = r.Snapshot()[0]
 	if !view.CooldownUntil.IsZero() || !view.ModelCooldowns["a"].Equal(now.Add(time.Minute)) {
 		t.Fatal("quota recovery did not preserve the shorter non-quota cooldown")
