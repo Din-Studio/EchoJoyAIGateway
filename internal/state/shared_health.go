@@ -19,6 +19,10 @@ type SharedCredentialHealth struct {
 	FailureGeneration       uint64
 	ModelCooldownGeneration uint64
 	ModelCooldowns          map[string]time.Time
+	QuotaCooldownUntil      time.Time
+	QuotaModelCooldowns     map[string]time.Time
+	QuotaCooldownGeneration uint64
+	LastQuotaRejectedAt     time.Time
 	// AuthState applies only to the secret version AuthSecretVersion.
 	AuthState         CredentialAuthState
 	AuthSecretVersion uint64
@@ -44,6 +48,11 @@ type SharedCredentialHealthStore interface {
 	// CooldownModel extends one model cooldown while ref's model cooldown
 	// generation is still current.
 	CooldownModel(ctx context.Context, ref CredentialRef, model string, until, now time.Time) (SharedHealthResult, error)
+	// CooldownQuota records a built-in quota rejection; an empty model is account-wide.
+	CooldownQuota(ctx context.Context, ref CredentialRef, model string, until, now time.Time) (SharedHealthResult, error)
+	// RestoreObservedQuota clears only quota cooldowns older than the sample,
+	// while ref's quota generation remains current.
+	RestoreObservedQuota(ctx context.Context, ref CredentialRef, observedAtMS int64) (SharedHealthResult, error)
 	// RecordFailure counts one failure and blacklists at threshold (> 0).
 	RecordFailure(ctx context.Context, ref CredentialRef, threshold int) (SharedHealthResult, error)
 	ClearFailure(ctx context.Context, ref CredentialRef) (SharedHealthResult, error)
@@ -109,6 +118,10 @@ func (r *CredentialRegistry) ApplySharedHealth(credentialID uint, health SharedC
 	entry.FailureGeneration = health.FailureGeneration
 	entry.ModelCooldownGeneration = health.ModelCooldownGeneration
 	entry.ModelCooldowns = cloneModelCooldowns(health.ModelCooldowns)
+	entry.QuotaCooldownUntil = health.QuotaCooldownUntil
+	entry.QuotaModelCooldowns = cloneModelCooldowns(health.QuotaModelCooldowns)
+	entry.QuotaCooldownGeneration = health.QuotaCooldownGeneration
+	entry.lastQuotaRejectedAt = health.LastQuotaRejectedAt
 	entry.sharedEpoch, entry.sharedVersion = health.Epoch, health.Version
 	if health.AuthState != "" && health.AuthSecretVersion == entry.Version && health.AuthState.valid() {
 		setEntryAuthStateLocked(entry, health.AuthState)
@@ -154,6 +167,10 @@ func preserveSharedHealth(next *CredentialEntry, previous *CredentialEntry) {
 		// which resets its record when it sees the new identity.
 		next.ModelCooldowns = nil
 		next.ModelCooldownGeneration = 0
+		next.QuotaCooldownUntil = time.Time{}
+		next.QuotaModelCooldowns = nil
+		next.QuotaCooldownGeneration = 0
+		next.lastQuotaRejectedAt = time.Time{}
 		next.FailureGeneration = 0
 		return
 	}
@@ -163,6 +180,10 @@ func preserveSharedHealth(next *CredentialEntry, previous *CredentialEntry) {
 	next.FailureGeneration = previous.FailureGeneration
 	next.ModelCooldowns = cloneModelCooldowns(previous.ModelCooldowns)
 	next.ModelCooldownGeneration = previous.ModelCooldownGeneration
+	next.QuotaCooldownUntil = previous.QuotaCooldownUntil
+	next.QuotaModelCooldowns = cloneModelCooldowns(previous.QuotaModelCooldowns)
+	next.QuotaCooldownGeneration = previous.QuotaCooldownGeneration
+	next.lastQuotaRejectedAt = previous.lastQuotaRejectedAt
 	next.sharedEpoch, next.sharedVersion = previous.sharedEpoch, previous.sharedVersion
 	if next.Version == previous.Version {
 		next.AuthState = previous.AuthState

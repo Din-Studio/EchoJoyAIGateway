@@ -94,6 +94,26 @@ func (health *CredentialHealth) CooldownModel(
 	}})
 }
 
+// CooldownQuota keeps quota causes separate from ordinary cooldowns.
+func (health *CredentialHealth) CooldownQuota(ctx context.Context, ref state.CredentialRef, model string, until, now time.Time) (state.SharedHealthResult, error) {
+	if strings.TrimSpace(model) != model || model != "" && !until.After(now) {
+		return state.SharedHealthResult{}, nil
+	}
+	return health.apply(ctx, ref, healthOp{"quota_cooldown", []string{
+		model, formatHealthMS(until), formatHealthMS(now), strconv.FormatUint(ref.QuotaCooldownGeneration, 10),
+	}})
+}
+
+// RestoreObservedQuota atomically checks the rejection time and recovery generation.
+func (health *CredentialHealth) RestoreObservedQuota(ctx context.Context, ref state.CredentialRef, observedAtMS int64) (state.SharedHealthResult, error) {
+	if observedAtMS <= 0 {
+		return state.SharedHealthResult{}, nil
+	}
+	return health.apply(ctx, ref, healthOp{"restore_observed_quota", []string{
+		strconv.FormatInt(observedAtMS, 10), strconv.FormatUint(ref.QuotaCooldownGeneration, 10),
+	}})
+}
+
 // RecordFailure implements state.SharedCredentialHealthStore.
 func (health *CredentialHealth) RecordFailure(
 	ctx context.Context,
@@ -439,9 +459,18 @@ func decodeCredentialHealth(fields map[string]string) (state.SharedCredentialHea
 	record.FailureCount = int(parseUint("fc"))
 	record.FailureGeneration = parseUint("fg")
 	record.ModelCooldownGeneration = parseUint("mg")
+	record.QuotaCooldownUntil = parseMS("qcd")
+	record.QuotaCooldownGeneration = parseUint("qg")
+	record.LastQuotaRejectedAt = parseMS("qr")
 	record.AuthState = state.CredentialAuthState(fields["auth"])
 	record.AuthSecretVersion = parseUint("asv")
 	for field := range fields {
+		if model, isModel := strings.CutPrefix(field, "qm:"); isModel {
+			if record.QuotaModelCooldowns == nil {
+				record.QuotaModelCooldowns = make(map[string]time.Time)
+			}
+			record.QuotaModelCooldowns[model] = parseMS(field)
+		}
 		if model, isModel := strings.CutPrefix(field, "m:"); isModel {
 			if record.ModelCooldowns == nil {
 				record.ModelCooldowns = make(map[string]time.Time)

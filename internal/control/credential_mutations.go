@@ -803,13 +803,9 @@ func (s *Service) sharedBatchRestores(group models.Group, entries []state.Creden
 	restores := make([]func() error, 0, len(entries))
 	restored := make([]uint, 0, len(entries))
 	for _, entry := range entries {
-		view := state.CredentialRuntimeView{
-			ID: entry.ID, GroupID: entry.GroupID,
-			Status: entry.Status, AuthState: entry.AuthState, WeightManual: entry.WeightManual,
-			CooldownUntil: entry.CooldownUntil, Blacklisted: entry.Blacklisted,
-		}
+		view := entry.RuntimeView()
 		bucket := classifyHealthKey(groupView, view, now)
-		if bucket != healthBucketCooldown && bucket != healthBucketBlacklisted && !hasModelCooldown(entry.ModelCooldowns, now) {
+		if bucket != healthBucketCooldown && bucket != healthBucketBlacklisted && !hasModelCooldown(view.ModelCooldowns, now) {
 			continue
 		}
 		restores = append(restores, s.sharedRestoreFor(groupView, view, nil, now))
