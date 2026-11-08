@@ -169,6 +169,8 @@ Embeddings には 2 つの独立したネイティブプロトコルがありま
 
 Rerank は独立した `rerank` プロトコルを使用し、OpenAI Compatible、New API、GPT-Load の API Key チャネルで `POST /v1/rerank` に対応します。リクエストには `model`、`query`、テキストのみの `documents` 配列を指定し、`top_n` や `return_documents` などの上流パラメーターも利用できます。ストリーミング、サブスクリプション、プロトコル変換には対応しません。OpenAI Compatible には完全な API プレフィックス（例：`https://host/v1`）、New API / GPT-Load にはゲートウェイのルートを設定します。上流は互換 Rerank API を提供する必要があります。プロトコルフィルターのない AccessKey は Rerank へのアクセス権も得ます。`search_units` など Token 以外の単位のみが返る場合は未計価とし、Token 数や無料リクエストとして扱いません。
 
+CLIProxyAPI、New API、GPT-Load の API Key チャネルは、非ストリーミングの `POST /v1/alpha/search` と Responses 拡張パスの透過転送に対応します。Base URL はゲートウェイのルートを指定し、上流は対象 API を実装する必要があります。検索は `openai-responses` のプロトコルフィルターを使用し、検索レスポンス本文を保持します。レスポンス内の `usage` はモデルの Token 使用量や費用に計上しません。CLIProxyAPI と New API は `previous_response_id` と `store` を上流に転送できますが、保存済み Responses の取得・削除・キャンセル・入力項目 API は宣言しません。GPT-Load はこれらのリソース機能を維持します。
+
 ### 組み込みチャネル
 
 - **公式・クラウド**：OpenAI、Anthropic、Gemini、xAI、Azure OpenAI、AWS Bedrock、Google Vertex AI

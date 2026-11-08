@@ -169,6 +169,8 @@ Embeddings 有两个独立的原生协议：`openai-embeddings`（`POST /v1/embe
 
 Rerank 使用独立的 `rerank` 协议，在 OpenAI Compatible、New API、GPT-Load API Key 渠道支持 `POST /v1/rerank`。请求使用 `model`、`query` 和纯文本 `documents` 数组，可传 `top_n`、`return_documents` 等上游参数；不支持流式、订阅渠道或协议互转。OpenAI Compatible 的 Base URL 是完整 API 前缀（如 `https://host/v1`），New API / GPT-Load 使用网关根地址；上游必须提供兼容 Rerank 接口。未设置协议过滤器的 AccessKey 也会获得 Rerank 访问能力。仅有 `search_units` 等非 Token 计量时保持未计价，不将其视为 Token 或免费请求。
 
+CLIProxyAPI、New API 和 GPT-Load API Key 渠道支持非流式 `POST /v1/alpha/search`，并透传 Responses 扩展路径。Base URL 使用网关根地址；上游必须实现对应接口。搜索使用 `openai-responses` 协议过滤，保留搜索响应正文，不将响应中的 `usage` 计为模型 Token 用量或费用。CLIProxyAPI 和 New API 可以向上游传递 `previous_response_id` 与 `store`，但不声明存储型 Responses 的查询、删除、取消或输入项接口；GPT-Load 保留这些资源能力。
+
 ### 内置渠道
 
 - **官方与云平台**：OpenAI、Anthropic、Gemini、xAI、Azure OpenAI、AWS Bedrock、Google Vertex AI
