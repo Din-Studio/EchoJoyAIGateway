@@ -172,13 +172,12 @@ func writeRequestLogBatch(tx *gorm.DB, rows []models.RequestLog) error {
 	for _, row := range rows {
 		attemptRows = append(attemptRows, row.AttemptRows...)
 	}
-	if len(attemptRows) == 0 {
-		return nil
+	if len(attemptRows) > 0 {
+		if err := tx.CreateInBatches(attemptRows, batchSize).Error; err != nil {
+			return fmt.Errorf("insert request log attempts: %w", err)
+		}
 	}
-	if err := tx.CreateInBatches(attemptRows, batchSize).Error; err != nil {
-		return fmt.Errorf("insert request log attempts: %w", err)
-	}
-	return nil
+	return writeRequestBodies(tx, rows)
 }
 
 type credentialAttemptStatKey struct {
@@ -643,12 +642,14 @@ func (service *Service) drain(ctx context.Context, batch []queuedEvent) {
 func (service *Service) writeBatch(ctx context.Context, events []queuedEvent) error {
 	rows := make([]models.RequestLog, 0, len(events))
 	projectionFailures := 0
+	defer service.releaseRequestBodies(events)
 	for _, event := range events {
 		row, err := mapEvent(service.redactor, event.Event)
 		if err != nil {
 			projectionFailures++
 			continue
 		}
+		row.RequestBodyRow = mapRequestBody(row.ID, event)
 		rows = append(rows, row)
 	}
 	if projectionFailures > 0 {
@@ -766,10 +767,12 @@ func (service *Service) recordAccessQuotaCheckpointFailure() {
 }
 
 func (service *Service) dropUnattempted(batch []queuedEvent) {
+	service.releaseRequestBodies(batch)
 	dropped := uint64(len(batch))
 	for {
 		select {
-		case <-service.queue:
+		case event := <-service.queue:
+			service.releaseRequestBodies([]queuedEvent{event})
 			dropped++
 		default:
 			service.droppedShutdownTotal.Add(dropped)

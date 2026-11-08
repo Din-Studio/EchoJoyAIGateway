@@ -163,6 +163,7 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		s.cancel()
 		return
 	}
+	recorder.recordRequestBody(key, turn.body)
 	release, failure, err := h.acquireRequestConcurrency(s.ctx, key.ID)
 	if err != nil {
 		reject(limitStateFailureReason(err))

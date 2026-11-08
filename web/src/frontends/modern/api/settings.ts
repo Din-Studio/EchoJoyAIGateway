@@ -33,6 +33,7 @@ export const settingNumbers = {
 } as const
 export type SettingNumber = keyof typeof settingNumbers
 export const settingSwitches = [
+  'default_access_key_record_request_body',
   'affinity_enabled',
   'responses_websocket_enabled',
   'empty_response_retry',

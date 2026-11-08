@@ -1319,12 +1319,22 @@ func assertAccessKeyLogRedaction(t *testing.T, body []byte, detail bool) {
 }
 
 type recordingRequestLogReader struct {
-	pages       []requestlog.Page
-	queries     []requestlog.ListQuery
-	err         error
-	details     map[string]requestlog.Record
-	getErr      error
-	getRequests []string
+	pages        []requestlog.Page
+	queries      []requestlog.ListQuery
+	err          error
+	details      map[string]requestlog.Record
+	getErr       error
+	getRequests  []string
+	bodies       map[string]*requestlog.RequestBody
+	bodyRequests []string
+}
+
+func (reader *recordingRequestLogReader) GetRequestBody(
+	_ context.Context,
+	requestID string,
+) (*requestlog.RequestBody, error) {
+	reader.bodyRequests = append(reader.bodyRequests, requestID)
+	return reader.bodies[requestID], nil
 }
 
 func (reader *recordingRequestLogReader) List(

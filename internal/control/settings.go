@@ -47,36 +47,37 @@ type CORSConfigResponse struct {
 }
 
 type SettingsValuesResponse struct {
-	ErrorRules                       []health.ErrorRule    `json:"error_rules"`
-	GlobalConcurrencyLimit           int64                 `json:"global_concurrency_limit"`
-	DefaultAccessKeyConcurrencyLimit int64                 `json:"default_access_key_concurrency_limit"`
-	DefaultGroupConcurrencyLimit     int64                 `json:"default_group_concurrency_limit"`
-	RequestRedaction                 []requestredact.Rule  `json:"request_redaction"`
-	Jev                              jev.Config            `json:"jev"`
-	RequestAudit                     requestaudit.Config   `json:"request_audit"`
-	AutoModel                        AutoModelSettingsView `json:"auto_model"`
-	FirstByteTimeout                 int64                 `json:"first_byte_timeout"`
-	RequestTimeout                   int64                 `json:"request_timeout"`
-	StreamIdleTimeout                int64                 `json:"stream_idle_timeout"`
-	HeaderRules                      HeaderRulesResponse   `json:"header_rules"`
-	CORS                             CORSConfigResponse    `json:"cors"`
-	ResponseHeaderRules              HeaderRulesResponse   `json:"response_header_rules"`
-	RetryCount                       int                   `json:"retry_count"`
-	RouteStrategy                    state.RouteStrategy   `json:"route_strategy"`
-	BlacklistThreshold               int                   `json:"blacklist_threshold"`
-	AffinityEnabled                  bool                  `json:"affinity_enabled"`
-	ResponsesWebsocketEnabled        bool                  `json:"responses_websocket_enabled"`
-	EmptyResponseRetry               bool                  `json:"empty_response_retry"`
-	AffinityTTL                      int64                 `json:"affinity_ttl"`
-	AffinityCapacity                 int                   `json:"affinity_capacity"`
-	ValidationInterval               int64                 `json:"validation_interval"`
-	RequestLogRetentionDays          int                   `json:"request_log_retention_days"`
-	ModelsDevAutoSyncEnabled         bool                  `json:"models_dev_auto_sync_enabled"`
-	PublicBaseURL                    string                `json:"public_base_url"`
-	GatewayName                      string                `json:"gateway_name"`
-	Currency                         pricing.CurrencyCode  `json:"currency"`
-	ExchangeRate                     *string               `json:"exchange_rate"`
-	ProxyConfig                      outboundproxy.View    `json:"proxy_config"`
+	DefaultAccessKeyRecordRequestBody bool                  `json:"default_access_key_record_request_body"`
+	ErrorRules                        []health.ErrorRule    `json:"error_rules"`
+	GlobalConcurrencyLimit            int64                 `json:"global_concurrency_limit"`
+	DefaultAccessKeyConcurrencyLimit  int64                 `json:"default_access_key_concurrency_limit"`
+	DefaultGroupConcurrencyLimit      int64                 `json:"default_group_concurrency_limit"`
+	RequestRedaction                  []requestredact.Rule  `json:"request_redaction"`
+	Jev                               jev.Config            `json:"jev"`
+	RequestAudit                      requestaudit.Config   `json:"request_audit"`
+	AutoModel                         AutoModelSettingsView `json:"auto_model"`
+	FirstByteTimeout                  int64                 `json:"first_byte_timeout"`
+	RequestTimeout                    int64                 `json:"request_timeout"`
+	StreamIdleTimeout                 int64                 `json:"stream_idle_timeout"`
+	HeaderRules                       HeaderRulesResponse   `json:"header_rules"`
+	CORS                              CORSConfigResponse    `json:"cors"`
+	ResponseHeaderRules               HeaderRulesResponse   `json:"response_header_rules"`
+	RetryCount                        int                   `json:"retry_count"`
+	RouteStrategy                     state.RouteStrategy   `json:"route_strategy"`
+	BlacklistThreshold                int                   `json:"blacklist_threshold"`
+	AffinityEnabled                   bool                  `json:"affinity_enabled"`
+	ResponsesWebsocketEnabled         bool                  `json:"responses_websocket_enabled"`
+	EmptyResponseRetry                bool                  `json:"empty_response_retry"`
+	AffinityTTL                       int64                 `json:"affinity_ttl"`
+	AffinityCapacity                  int                   `json:"affinity_capacity"`
+	ValidationInterval                int64                 `json:"validation_interval"`
+	RequestLogRetentionDays           int                   `json:"request_log_retention_days"`
+	ModelsDevAutoSyncEnabled          bool                  `json:"models_dev_auto_sync_enabled"`
+	PublicBaseURL                     string                `json:"public_base_url"`
+	GatewayName                       string                `json:"gateway_name"`
+	Currency                          pricing.CurrencyCode  `json:"currency"`
+	ExchangeRate                      *string               `json:"exchange_rate"`
+	ProxyConfig                       outboundproxy.View    `json:"proxy_config"`
 }
 
 type DecisionRouteOption struct {
@@ -471,14 +472,15 @@ func mapSettingsResponse(
 		DecisionModels: decisionModelNames(snapshot),
 		Revision:       snapshot.Revision,
 		Values: SettingsValuesResponse{
-			ErrorRules:        settings.ErrorRules.Rules(),
-			RequestRedaction:  snapshot.RequestRedaction.Rules(),
-			AutoModel:         autoModel,
-			Jev:               snapshot.Jev,
-			RequestAudit:      snapshot.RequestAudit,
-			FirstByteTimeout:  durationSeconds(settings.FirstByteTimeout),
-			RequestTimeout:    durationSeconds(settings.RequestTimeout),
-			StreamIdleTimeout: durationSeconds(settings.StreamIdleTimeout),
+			DefaultAccessKeyRecordRequestBody: settings.DefaultAccessKeyRecordRequestBody,
+			ErrorRules:                        settings.ErrorRules.Rules(),
+			RequestRedaction:                  snapshot.RequestRedaction.Rules(),
+			AutoModel:                         autoModel,
+			Jev:                               snapshot.Jev,
+			RequestAudit:                      snapshot.RequestAudit,
+			FirstByteTimeout:                  durationSeconds(settings.FirstByteTimeout),
+			RequestTimeout:                    durationSeconds(settings.RequestTimeout),
+			StreamIdleTimeout:                 durationSeconds(settings.StreamIdleTimeout),
 			HeaderRules: HeaderRulesResponse{
 				Set:    set,
 				Remove: remove,

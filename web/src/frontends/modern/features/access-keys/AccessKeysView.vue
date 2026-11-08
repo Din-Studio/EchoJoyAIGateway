@@ -2,9 +2,13 @@
 import { dateFormatter } from '@modern/components/ui/intl-formatters'
 import {
   ChartNoAxesCombined,
+  ChevronDown,
   CopyPlus,
   KeyRound,
+  Layers,
+  Pause,
   Pencil,
+  Play,
   Plus,
   RotateCcw,
   ScrollText,
@@ -24,6 +28,7 @@ import {
   getAccessKeys,
   revealAccessKey,
   updateAccessKey,
+  setAllAccessKeyRecording,
   type AccessFilters,
   type AccessKey,
   type AccessKeyRow,
@@ -43,6 +48,7 @@ import {
   AppConfirmDialog,
   AppCopyValue,
   AppFilterSummary,
+  AppIcon,
   AppIconButton,
   AppListFrame,
   AppOverflowText,
@@ -101,6 +107,9 @@ const mutating = ref(new Set<number>())
 const deleting = ref<AccessKeyRow>()
 const resetting = ref<AccessKeyRow>()
 const deleteError = ref('')
+const recordingPending = ref(false)
+const recordingConfirmOpen = ref(false)
+const recordingError = ref('')
 const query = useQuery(
   computed(() => ({
     queryKey: [...accessKeysKey, filters.value],
@@ -131,7 +140,11 @@ const expiryOptions = computed(() =>
   })),
 )
 const rows = computed(() => query.data.value?.items ?? [])
-const busy = computed(() => mutating.value.size > 0)
+const busy = computed(() => mutating.value.size > 0 || recordingPending.value)
+const recordingActions = computed(() => [
+  { id: 'enable', label: t('accessKeys.recordRequestBody.enableAll'), icon: Play },
+  { id: 'disable', label: t('accessKeys.recordRequestBody.disableAll'), icon: Pause },
+])
 const panel = computed(() => {
   const mode = route.query.panel
   return mode === 'create' || mode === 'detail' || mode === 'copy' || mode === 'share'
@@ -316,6 +329,40 @@ async function remove(): Promise<void> {
     mutating.value.delete(row.id)
   }
 }
+function requestAllRecording(enabled: boolean): void {
+  if (busy.value) return
+  recordingError.value = ''
+  if (enabled) recordingConfirmOpen.value = true
+  else void setAllRecording(false)
+}
+async function setAllRecording(enabled: boolean): Promise<void> {
+  if (busy.value) return
+  recordingPending.value = true
+  recordingError.value = ''
+  try {
+    const count = await setAllAccessKeyRecording(client, enabled, controller.signal)
+    if (controller.signal.aborted) return
+    recordingConfirmOpen.value = false
+    await Promise.all([
+      cache.invalidateQueries({ queryKey: accessKeysKey }),
+      cache.invalidateQueries({ queryKey: ['modern', 'access-key-detail'] }),
+      cache.invalidateQueries({ queryKey: ['modern', 'home'] }),
+    ])
+    messages.show({
+      text: t('accessKeys.recordRequestBody.bulkSaved', { count: n(count) }),
+      tone: 'success',
+    })
+  } catch {
+    if (!controller.signal.aborted) recordingError.value = t('accessKeys.failed')
+  } finally {
+    recordingPending.value = false
+  }
+}
+useMessageSource(() =>
+  recordingError.value && !recordingConfirmOpen.value
+    ? { text: recordingError.value, tone: 'danger' }
+    : undefined,
+)
 async function deleted(id = selectedID.value): Promise<void> {
   await setPanel(undefined)
   cache.removeQueries({ queryKey: accessDetailKey(id) })
@@ -326,6 +373,7 @@ async function saved(row: AccessKey, created: boolean): Promise<void> {
   await setPanel(created ? 'share' : undefined, row.id)
   await cache.invalidateQueries({ queryKey: accessKeysKey })
   await cache.invalidateQueries({ queryKey: accessDetailKey(row.id) })
+  await cache.invalidateQueries({ queryKey: ['modern', 'home'] })
   messages.show({
     text: t(created ? 'accessKeys.created' : 'accessKeys.saved', { name: row.name }),
     tone: 'success',
@@ -377,6 +425,18 @@ onScopeDispose(() => {
 </script>
 <template>
   <div class="modern-access-workspace">
+    <AppConfirmDialog
+      :open="recordingConfirmOpen"
+      :title="t('accessKeys.recordRequestBody.enableAll')"
+      :description="t('accessKeys.recordRequestBody.bulkDescription')"
+      :confirm-label="t('accessKeys.recordRequestBody.confirm')"
+      :cancel-label="t('ui.cancel')"
+      :pending="recordingPending"
+      :error="recordingError"
+      tone="danger"
+      @confirm="setAllRecording(true)"
+      @cancel="!recordingPending && (recordingConfirmOpen = false)"
+    />
     <form
       class="modern-access-toolbar"
       role="search"
@@ -436,12 +496,38 @@ onScopeDispose(() => {
     </form>
     <div class="modern-access-filterbar">
       <AppSegmentedControl
+        class="modern-access-status"
         :model-value="filters.status"
         :label="t('accessKeys.state')"
         :options="states"
         :disabled="busy"
         @update:model-value="change({ status: $event as AccessFilters['status'] })"
-      /><AppFilterSummary :items="summary" :disabled="busy" @remove="reset" @reset="reset()" />
+      />
+      <AppActionMenu
+        :label="t('accessKeys.fullActions')"
+        :items="recordingActions"
+        :disabled="busy"
+        @select="requestAllRecording($event === 'enable')"
+      >
+        <template #trigger>
+          <AppButton
+            :icon="Layers"
+            variant="ghost"
+            size="sm"
+            :loading="recordingPending"
+            :disabled="busy"
+          >
+            {{ t('accessKeys.fullActions') }}<AppIcon :icon="ChevronDown" size="xs" />
+          </AppButton>
+        </template>
+      </AppActionMenu>
+      <AppFilterSummary
+        class="modern-access-filter-summary"
+        :items="summary"
+        :disabled="busy"
+        @remove="reset"
+        @reset="reset()"
+      />
     </div>
     <AppListFrame
       ref="frame"
@@ -455,6 +541,7 @@ onScopeDispose(() => {
           ><span>{{ t('accessKeys.restrictions') }}</span
           ><span>{{ t('rpm.hourPeakShort') }}</span
           ><span>{{ t('accessKeys.state') }}</span
+          ><span>{{ t('accessKeys.recordRequestBody.column') }}</span
           ><span>{{ t('accessKeys.expires') }}</span
           ><span>{{ t('accessKeys.lastRequest') }}</span
           ><span>{{ t('accessKeys.actions') }}</span>
@@ -502,6 +589,15 @@ onScopeDispose(() => {
         <div>
           <AppBadge :tone="accessState(row).tone" variant="plain" size="xs" dot>{{
             t('accessKeys.' + accessState(row).key)
+          }}</AppBadge>
+        </div>
+        <div>
+          <span class="modern-sr-only">{{ t('accessKeys.recordRequestBody.column') }}</span>
+          <AppBadge v-if="row.record_request_body" tone="warning" size="xs" dot>{{
+            t('accessKeys.recordRequestBody.enabled')
+          }}</AppBadge>
+          <AppBadge v-else variant="plain" size="xs">{{
+            t('accessKeys.recordRequestBody.disabled')
           }}</AppBadge>
         </div>
         <div class="modern-access-expiry">
@@ -633,22 +729,29 @@ onScopeDispose(() => {
   margin-left: auto;
 }
 .modern-access-filterbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  flex-wrap: wrap;
   flex: none;
-  justify-content: space-between;
   gap: var(--modern-space-2);
   padding-bottom: var(--modern-space-4);
+}
+.modern-access-status {
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+.modern-access-filter-summary {
+  grid-column: 1 / -1;
 }
 .modern-access-row {
   display: grid;
   grid-template-columns:
     minmax(150px, 1.5fr) minmax(150px, 1.1fr) minmax(380px, 2.4fr)
-    112px 96px 110px minmax(148px, 1fr) 116px;
+    112px 96px 96px 110px minmax(148px, 1fr) 116px;
   align-items: center;
   gap: var(--modern-space-3);
-  min-width: 1364px;
+  min-width: 1472px;
   padding-inline: var(--modern-space-2);
   text-align: left;
 }
@@ -712,8 +815,8 @@ onScopeDispose(() => {
   .modern-access-row {
     grid-template-columns:
       minmax(140px, 1.4fr) minmax(140px, 1.2fr) minmax(320px, 2.4fr)
-      112px 96px 104px 148px 148px;
-    min-width: 1272px;
+      112px 96px 96px 104px 148px 148px;
+    min-width: 1376px;
     gap: var(--modern-space-2);
   }
   .modern-access-row-actions {

@@ -19,33 +19,34 @@ import (
 )
 
 const (
-	SettingGlobalConcurrencyLimit           = "global_concurrency_limit"
-	SettingDefaultAccessKeyConcurrencyLimit = "default_access_key_concurrency_limit"
-	SettingDefaultGroupConcurrencyLimit     = "default_group_concurrency_limit"
-	SettingConcurrencyLimit                 = "concurrency_limit"
-	SettingFirstByteTimeout                 = "first_byte_timeout"
-	SettingRequestTimeout                   = "request_timeout"
-	SettingStreamIdleTimeout                = "stream_idle_timeout"
-	SettingHeaderRules                      = "header_rules"
-	SettingCORS                             = "cors"
-	SettingResponseHeaderRules              = "response_header_rules"
-	SettingRetryCount                       = "retry_count"
-	SettingRouteStrategy                    = "route_strategy"
-	SettingBlacklistThreshold               = "blacklist_threshold"
-	SettingAffinityEnabled                  = "affinity_enabled"
-	SettingResponsesWebsocketEnabled        = "responses_websocket_enabled"
-	SettingEmptyResponseRetry               = "empty_response_retry"
-	SettingAffinityTTL                      = "affinity_ttl"
-	SettingAffinityCapacity                 = "affinity_capacity"
-	SettingValidationInterval               = "validation_interval"
-	SettingRequestLogRetentionDays          = "request_log_retention_days"
-	SettingModelsDevAutoSyncEnabled         = "models_dev_auto_sync_enabled"
-	SettingParameterOverrides               = "parameter_overrides"
-	SettingPublicBaseURL                    = "public_base_url"
-	SettingGatewayName                      = "gateway_name"
-	SettingCurrency                         = "currency"
-	SettingExchangeRate                     = "exchange_rate"
-	SettingErrorRules                       = "error_rules"
+	SettingDefaultAccessKeyRecordRequestBody = "default_access_key_record_request_body"
+	SettingGlobalConcurrencyLimit            = "global_concurrency_limit"
+	SettingDefaultAccessKeyConcurrencyLimit  = "default_access_key_concurrency_limit"
+	SettingDefaultGroupConcurrencyLimit      = "default_group_concurrency_limit"
+	SettingConcurrencyLimit                  = "concurrency_limit"
+	SettingFirstByteTimeout                  = "first_byte_timeout"
+	SettingRequestTimeout                    = "request_timeout"
+	SettingStreamIdleTimeout                 = "stream_idle_timeout"
+	SettingHeaderRules                       = "header_rules"
+	SettingCORS                              = "cors"
+	SettingResponseHeaderRules               = "response_header_rules"
+	SettingRetryCount                        = "retry_count"
+	SettingRouteStrategy                     = "route_strategy"
+	SettingBlacklistThreshold                = "blacklist_threshold"
+	SettingAffinityEnabled                   = "affinity_enabled"
+	SettingResponsesWebsocketEnabled         = "responses_websocket_enabled"
+	SettingEmptyResponseRetry                = "empty_response_retry"
+	SettingAffinityTTL                       = "affinity_ttl"
+	SettingAffinityCapacity                  = "affinity_capacity"
+	SettingValidationInterval                = "validation_interval"
+	SettingRequestLogRetentionDays           = "request_log_retention_days"
+	SettingModelsDevAutoSyncEnabled          = "models_dev_auto_sync_enabled"
+	SettingParameterOverrides                = "parameter_overrides"
+	SettingPublicBaseURL                     = "public_base_url"
+	SettingGatewayName                       = "gateway_name"
+	SettingCurrency                          = "currency"
+	SettingExchangeRate                      = "exchange_rate"
+	SettingErrorRules                        = "error_rules"
 )
 
 type RouteStrategy string
@@ -69,7 +70,8 @@ const (
 var gatewayNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 
 type RuntimeSettings struct {
-	ErrorRules health.ErrorRules
+	DefaultAccessKeyRecordRequestBody bool
+	ErrorRules                        health.ErrorRules
 	// Concurrency limits are cluster-wide; 0 means unlimited.
 	GlobalConcurrencyLimit           int64
 	DefaultAccessKeyConcurrencyLimit int64
@@ -137,7 +139,7 @@ func DefaultRuntimeSettings() RuntimeSettings {
 
 func IsRuntimeSettingKey(key string) bool {
 	switch key {
-	case SettingGlobalConcurrencyLimit, SettingDefaultAccessKeyConcurrencyLimit, SettingDefaultGroupConcurrencyLimit,
+	case SettingDefaultAccessKeyRecordRequestBody, SettingGlobalConcurrencyLimit, SettingDefaultAccessKeyConcurrencyLimit, SettingDefaultGroupConcurrencyLimit,
 		SettingFirstByteTimeout,
 		SettingRequestTimeout,
 		SettingStreamIdleTimeout,
@@ -291,6 +293,12 @@ func ResolveRuntimeSettings(settings config.Settings) (RuntimeSettings, error) {
 				return RuntimeSettings{}, err
 			}
 			resolved.RequestLogRetentionDays = days
+		case SettingDefaultAccessKeyRecordRequestBody:
+			value, err := strictBoolean(key, value)
+			if err != nil {
+				return RuntimeSettings{}, err
+			}
+			resolved.DefaultAccessKeyRecordRequestBody = value
 		case SettingModelsDevAutoSyncEnabled:
 			value, err := strictBoolean(key, value)
 			if err != nil {
@@ -480,7 +488,7 @@ func ValidateRuntimeSetting(key string, value any) error {
 	case SettingRouteStrategy:
 		_, err := parseRouteStrategy(value)
 		return err
-	case SettingAffinityEnabled, SettingResponsesWebsocketEnabled, SettingEmptyResponseRetry:
+	case SettingDefaultAccessKeyRecordRequestBody, SettingAffinityEnabled, SettingResponsesWebsocketEnabled, SettingEmptyResponseRetry:
 		_, err := strictBoolean(key, value)
 		return err
 	case SettingAffinityTTL:

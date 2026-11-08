@@ -537,6 +537,13 @@ func (s *Server) HTTPModule() httproute.Module {
 				s.handleGetAccessKey,
 			),
 			controlRoute(
+				"control.access-keys.record-request-body",
+				http.MethodPut,
+				"/access-keys/record-request-body",
+				s.auditMutation(newMutationDescriptor("access_keys_record_request_body", "access_key", staticMutationLocator("all"))),
+				s.handleSetAccessKeyRecordRequestBody,
+			),
+			controlRoute(
 				"control.access-keys.update",
 				http.MethodPut,
 				"/access-keys/:id",

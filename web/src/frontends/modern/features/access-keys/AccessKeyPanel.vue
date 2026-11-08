@@ -3,7 +3,7 @@ import { protocolLabel } from '@modern/i18n/protocols'
 import { Eye, EyeOff, RefreshCw, Trash2 } from '@lucide/vue'
 import { useQuery } from '@tanstack/vue-query'
 import { DialogRoot } from 'reka-ui'
-import { computed, nextTick, onScopeDispose, ref, watch } from 'vue'
+import { computed, nextTick, onScopeDispose, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   accessDetailKey,
@@ -17,6 +17,7 @@ import {
   type AccessKey,
 } from '@modern/api/access-keys'
 import { getGroupWorkspace, groupQueryKey } from '@modern/api/groups'
+import { getSettings, settingsKey } from '@modern/api/settings'
 import { useMessageSource } from '@modern/app/messages'
 import {
   AppProtocolTag,
@@ -76,6 +77,12 @@ const groups = useQuery({
   queryKey: groupQueryKey,
   queryFn: ({ signal }) => getGroupWorkspace(client, signal),
 })
+// 新建和复制必须成功读取默认值后才初始化草稿；后续刷新不得重置草稿。
+const settings = useQuery({
+  queryKey: settingsKey,
+  queryFn: ({ signal }) => getSettings(client, signal),
+  gcTime: 0,
+})
 const base = ref<AccessKey>()
 const usageRow = computed(() => (props.mode === 'detail' ? query.data.value : undefined))
 const draft = ref<AccessDraft>(draftFor())
@@ -92,6 +99,20 @@ const showKey = ref(false)
 const revealing = ref(false)
 const deleteOpen = ref(false)
 const resetOpen = ref(false)
+const recordConfirmOpen = ref(false)
+const recordConfirmed = ref(false)
+let saveAfterRecordConfirm = false
+const recordNoteId = useId()
+const recordConfirmDescription = computed(() =>
+  t('accessKeys.recordRequestBody.confirmDescription', {
+    retention:
+      settings.data.value === undefined
+        ? t('accessKeys.recordRequestBody.retentionDefault')
+        : t('accessKeys.recordRequestBody.retentionDays', {
+            days: settings.data.value.values.request_log_retention_days,
+          }),
+  }),
+)
 let submission: { payload: string; operation: string } | undefined
 const dirty = computed(
   () =>
@@ -178,7 +199,12 @@ const modelMismatch = computed(
 const strength = computed(() => keyStrength(draft.value.key))
 const scopeLocked = computed(() => pending.value || groups.isPending.value || groups.isError.value)
 function restore(value?: AccessKey): void {
-  draft.value = draftFor(value, props.mode === 'copy')
+  draft.value = draftFor(
+    value,
+    props.mode === 'copy',
+    settings.data.value?.values.default_access_key_record_request_body,
+  )
+  recordConfirmed.value = props.mode === 'detail' && value?.record_request_body === true
   if (props.mode === 'copy' && value)
     draft.value.name = t('accessKeys.copyName', { name: value.name })
   initial.value = JSON.stringify(draft.value)
@@ -187,16 +213,32 @@ function restore(value?: AccessKey): void {
   secret.value = ''
   showKey.value = false
 }
-if (!props.id) restore()
 watch(
-  query.data,
-  (row) => {
-    if (!row || dirty.value || pending.value || completed.value) return
-    base.value = props.mode === 'detail' ? row : undefined
-    restore(row)
+  [query.data, settings.data, settings.isFetching, settings.isSuccess],
+  ([row]) => {
+    if (dirty.value || pending.value || completed.value) return
+    if (props.mode !== 'detail') {
+      if (initialized.value || settings.isFetching.value || !settings.isSuccess.value) return
+      if (props.mode === 'copy' && !row) return
+      restore(row ?? undefined)
+    } else if (row) {
+      base.value = row
+      restore(row)
+    }
   },
   { immediate: true },
 )
+const initialLoading = computed(
+  () =>
+    (Boolean(props.id) && query.isPending.value) ||
+    (props.mode !== 'detail' && (settings.isPending.value || settings.isFetching.value)),
+)
+async function retryLoad(): Promise<void> {
+  await Promise.all([
+    ...(props.id ? [query.refetch()] : []),
+    ...(props.mode !== 'detail' ? [settings.refetch()] : []),
+  ])
+}
 function revert(): void {
   draft.value = JSON.parse(initial.value) as AccessDraft
   attempted.value = false
@@ -236,8 +278,25 @@ function generate(): void {
     error.value = t('accessKeys.failed')
   }
 }
+function setRecordRequestBody(value: boolean): void {
+  if (pending.value) return
+  // 关闭立即生效；开启必须先在确认框中确认。
+  if (value && !draft.value.recordRequestBody) {
+    saveAfterRecordConfirm = false
+    recordConfirmOpen.value = true
+    return
+  }
+  draft.value.recordRequestBody = value
+}
+function confirmRecordRequestBody(): void {
+  recordConfirmOpen.value = false
+  if (pending.value) return
+  draft.value.recordRequestBody = true
+  recordConfirmed.value = true
+  if (saveAfterRecordConfirm) void requestSave()
+}
 async function requestSave(): Promise<void> {
-  if (pending.value || revealing.value) return
+  if (pending.value || revealing.value || !initialized.value) return
   if (!dirty.value) return
   attempted.value = true
   if (Object.keys(errors.value).length) {
@@ -259,6 +318,11 @@ async function requestSave(): Promise<void> {
     )
   ) {
     error.value = t('accessKeys.catalogFailed')
+    return
+  }
+  if (input.record_request_body && !recordConfirmed.value) {
+    saveAfterRecordConfirm = true
+    recordConfirmOpen.value = true
     return
   }
   const current = base.value
@@ -398,15 +462,23 @@ onScopeDispose(() => {
         @close="close"
       />
       <AppCollectionState
-        v-if="!initialized && query.isPending.value"
+        v-if="!initialized && initialLoading"
         :title="t('collection.loading')"
         loading
       />
       <AppCollectionState
         v-else-if="!initialized"
-        :title="t(query.isError.value ? 'accessKeys.loadFailed' : 'accessKeys.notFound')"
+        :title="
+          t(
+            mode !== 'detail' && settings.isError.value
+              ? 'accessKeys.recordRequestBody.defaultFailed'
+              : query.isError.value
+                ? 'accessKeys.loadFailed'
+                : 'accessKeys.notFound',
+          )
+        "
         error
-        ><AppButton @click="query.refetch()">{{ t('ui.retry') }}</AppButton></AppCollectionState
+        ><AppButton @click="retryLoad">{{ t('ui.retry') }}</AppButton></AppCollectionState
       >
       <form v-else ref="form" class="modern-access-editor" novalidate @submit.prevent="requestSave">
         <div class="modern-access-editor-body">
@@ -558,6 +630,20 @@ onScopeDispose(() => {
               :disabled="pending"
               :error="fieldError('expires')"
             />
+            <div class="modern-access-setting">
+              <span>{{ t('accessKeys.recordRequestBody.label') }}</span
+              ><AppSwitch
+                :model-value="draft.recordRequestBody"
+                :label="t('accessKeys.recordRequestBody.label')"
+                :aria-describedby="recordNoteId"
+                size="sm"
+                :disabled="pending"
+                @update:model-value="setRecordRequestBody"
+              />
+            </div>
+            <p :id="recordNoteId" class="modern-access-note">
+              {{ t('accessKeys.recordRequestBody.description') }}
+            </p>
           </AppFormSection>
           <AppFormSection
             :title="t('accessKeys.scope')"
@@ -782,6 +868,15 @@ onScopeDispose(() => {
     @pending="pending = $event"
     @close="resetOpen = false"
     @reset="quotaReset"
+  />
+  <AppConfirmDialog
+    :open="recordConfirmOpen"
+    :title="t('accessKeys.recordRequestBody.confirmTitle')"
+    :description="recordConfirmDescription"
+    :confirm-label="t('accessKeys.recordRequestBody.confirm')"
+    tone="danger"
+    @cancel="recordConfirmOpen = false"
+    @confirm="confirmRecordRequestBody"
   />
 </template>
 <style scoped>
