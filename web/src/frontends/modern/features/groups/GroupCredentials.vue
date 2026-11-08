@@ -537,18 +537,12 @@ async function syncQuota(row: CredentialRow): Promise<void> {
     )
     if (controller.signal.aborted) return
     if (!observation) throw new Error('Missing observation')
-    // 同步只更新该账号的观测数据，不覆盖其他并行操作，也不刷新整个列表。
-    cache.setQueriesData<CredentialCollection>(
-      { queryKey: groupCredentialsKey(props.group.id) },
-      (data) =>
-        data && {
-          ...data,
-          items: data.items.map((item) => (item.id === row.id ? { ...item, observation } : item)),
-        },
-    )
-    cache.setQueryData<CredentialRow>(credentialDetailKey(props.group.id, row.id), (data) =>
-      data ? { ...data, observation } : undefined,
-    )
+    // 额度恢复也会解除冷却；重新读取健康状态、筛选计数与详情，不只覆盖观测字段。
+    await Promise.all([
+      cache.invalidateQueries({ queryKey: groupCredentialsKey(props.group.id) }),
+      cache.invalidateQueries({ queryKey: credentialDetailKey(props.group.id, row.id) }),
+    ])
+    if (controller.signal.aborted) return
     if (observation.state !== 'fresh') throw new Error('Observation failed')
     syncSucceeded.value.add(row.id)
     syncSuccessTimers.set(
