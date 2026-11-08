@@ -228,14 +228,6 @@ const currencyOptions = computed(() =>
 // 切换币种会换算全部费用限额并清零已用额度，保存前单独确认。
 const currencySwitchOpen = ref(false)
 const recordingDefaultOpen = ref(false)
-const recordingDefaultDescription = computed(
-  () =>
-    t('accessKeys.recordRequestBody.defaultDescription') +
-    '\n\n' +
-    t('accessKeys.recordRequestBody.confirmDescription', {
-      retention: t('accessKeys.recordRequestBody.retentionDefault'),
-    }),
-)
 function setRecordingDefault(enabled: boolean): void {
   if (!draft.value || disabled('default_access_key_record_request_body')) return
   if (enabled) recordingDefaultOpen.value = true
@@ -1067,7 +1059,7 @@ onScopeDispose(() => {
     <AppConfirmDialog
       :open="recordingDefaultOpen"
       :title="t('settingsForm.fields.default_access_key_record_request_body')"
-      :description="recordingDefaultDescription"
+      :description="t('accessKeys.recordRequestBody.defaultDescription')"
       :confirm-label="t('accessKeys.recordRequestBody.confirm')"
       :cancel-label="t('ui.cancel')"
       tone="danger"

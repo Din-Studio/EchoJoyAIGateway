@@ -2,9 +2,13 @@
 import { dateFormatter } from '@modern/components/ui/intl-formatters'
 import {
   ChartNoAxesCombined,
+  ChevronDown,
   CopyPlus,
   KeyRound,
+  Layers,
+  Pause,
   Pencil,
+  Play,
   Plus,
   RotateCcw,
   ScrollText,
@@ -44,6 +48,7 @@ import {
   AppConfirmDialog,
   AppCopyValue,
   AppFilterSummary,
+  AppIcon,
   AppIconButton,
   AppListFrame,
   AppOverflowText,
@@ -136,6 +141,10 @@ const expiryOptions = computed(() =>
 )
 const rows = computed(() => query.data.value?.items ?? [])
 const busy = computed(() => mutating.value.size > 0 || recordingPending.value)
+const recordingActions = computed(() => [
+  { id: 'enable', label: t('accessKeys.recordRequestBody.enableAll'), icon: Play },
+  { id: 'disable', label: t('accessKeys.recordRequestBody.disableAll'), icon: Pause },
+])
 const panel = computed(() => {
   const mode = route.query.panel
   return mode === 'create' || mode === 'detail' || mode === 'copy' || mode === 'share'
@@ -419,13 +428,7 @@ onScopeDispose(() => {
     <AppConfirmDialog
       :open="recordingConfirmOpen"
       :title="t('accessKeys.recordRequestBody.enableAll')"
-      :description="
-        t('accessKeys.recordRequestBody.bulkDescription') +
-        '\n\n' +
-        t('accessKeys.recordRequestBody.confirmDescription', {
-          retention: t('accessKeys.recordRequestBody.retentionDefault'),
-        })
-      "
+      :description="t('accessKeys.recordRequestBody.bulkDescription')"
       :confirm-label="t('accessKeys.recordRequestBody.confirm')"
       :cancel-label="t('ui.cancel')"
       :pending="recordingPending"
@@ -480,12 +483,6 @@ onScopeDispose(() => {
         @update:model-value="change({ expiry: $event as AccessFilters['expiry'] })"
       />
       <div class="modern-access-toolbar-actions">
-        <AppButton :disabled="busy" @click="requestAllRecording(true)">{{
-          t('accessKeys.recordRequestBody.enableAll')
-        }}</AppButton>
-        <AppButton :disabled="busy" @click="requestAllRecording(false)">{{
-          t('accessKeys.recordRequestBody.disableAll')
-        }}</AppButton>
         <AppSortMenu
           :model-value="filters.sort"
           :label="t('accessKeys.sort')"
@@ -499,12 +496,38 @@ onScopeDispose(() => {
     </form>
     <div class="modern-access-filterbar">
       <AppSegmentedControl
+        class="modern-access-status"
         :model-value="filters.status"
         :label="t('accessKeys.state')"
         :options="states"
         :disabled="busy"
         @update:model-value="change({ status: $event as AccessFilters['status'] })"
-      /><AppFilterSummary :items="summary" :disabled="busy" @remove="reset" @reset="reset()" />
+      />
+      <AppActionMenu
+        :label="t('accessKeys.fullActions')"
+        :items="recordingActions"
+        :disabled="busy"
+        @select="requestAllRecording($event === 'enable')"
+      >
+        <template #trigger>
+          <AppButton
+            :icon="Layers"
+            variant="ghost"
+            size="sm"
+            :loading="recordingPending"
+            :disabled="busy"
+          >
+            {{ t('accessKeys.fullActions') }}<AppIcon :icon="ChevronDown" size="xs" />
+          </AppButton>
+        </template>
+      </AppActionMenu>
+      <AppFilterSummary
+        class="modern-access-filter-summary"
+        :items="summary"
+        :disabled="busy"
+        @remove="reset"
+        @reset="reset()"
+      />
     </div>
     <AppListFrame
       ref="frame"
@@ -706,13 +729,20 @@ onScopeDispose(() => {
   margin-left: auto;
 }
 .modern-access-filterbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  flex-wrap: wrap;
   flex: none;
-  justify-content: space-between;
   gap: var(--modern-space-2);
   padding-bottom: var(--modern-space-4);
+}
+.modern-access-status {
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+.modern-access-filter-summary {
+  grid-column: 1 / -1;
 }
 .modern-access-row {
   display: grid;

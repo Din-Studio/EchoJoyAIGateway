@@ -20,6 +20,7 @@ export const zhCN = {
   state: '状态',
   expires: '有效期',
   actions: '操作',
+  fullActions: '全量操作',
   create: '新建密钥',
   edit: '密钥详情',
   search: '搜索名称、备注或密钥末四位…',
@@ -138,11 +139,9 @@ export const zhCN = {
     column: '内容记录',
     enableAll: '全部开启内容记录',
     disableAll: '全部关闭内容记录',
-    bulkDescription:
-      '此操作影响全部现存访问密钥，包括停用、过期和筛选分页外的密钥。不会修改新建密钥的默认设置。',
+    bulkDescription: '将记录全部请求内容',
     bulkSaved: '已更新 {count} 个访问密钥的内容记录设置。',
-    defaultDescription:
-      '此设置只影响之后新建或复制的密钥，不修改现存密钥。创建接口省略记录开关时也使用此默认值。',
+    defaultDescription: '新密钥默认记录请求',
     defaultFailed: '无法读取新建密钥的记录默认值。请重试后再创建。',
     label: '记录请求内容',
     description: '开启后会保存这个密钥的客户端原始请求，用于排查问题。',
@@ -183,6 +182,7 @@ export const enUS: typeof zhCN = {
   state: 'Status',
   expires: 'Expiration',
   actions: 'Actions',
+  fullActions: 'All access keys',
   create: 'Create key',
   edit: 'Key details',
   search: 'Search name, note, or last four characters…',
@@ -303,11 +303,9 @@ export const enUS: typeof zhCN = {
     column: 'Body recording',
     enableAll: 'Enable recording for all',
     disableAll: 'Disable recording for all',
-    bulkDescription:
-      'This affects every existing access key, including disabled, expired and filtered-out keys on all pages. It does not change the default for new keys.',
+    bulkDescription: 'All request content will be recorded.',
     bulkSaved: 'Updated recording settings for {count} access keys.',
-    defaultDescription:
-      'This setting applies only to newly created or copied keys, not existing keys. The create API also uses this default when the recording field is omitted.',
+    defaultDescription: 'New keys will record request bodies.',
     defaultFailed:
       'Could not load the recording default for new keys. Retry before creating a key.',
     label: 'Record request bodies',
@@ -351,6 +349,7 @@ export const jaJP: typeof zhCN = {
   state: '状態',
   expires: '有効期限',
   actions: '操作',
+  fullActions: '全件操作',
   create: 'キーを作成',
   edit: 'キーの詳細',
   search: '名前、メモ、末尾 4 文字で検索…',
@@ -471,11 +470,9 @@ export const jaJP: typeof zhCN = {
     column: '内容記録',
     enableAll: 'すべての内容記録を有効化',
     disableAll: 'すべての内容記録を無効化',
-    bulkDescription:
-      '無効・期限切れ・検索対象外のキーを含め、すべてのページの既存アクセスキーに適用します。新規キーの既定値は変更しません。',
+    bulkDescription: '全リクエスト内容を記録します。',
     bulkSaved: '{count} 件のアクセスキーの記録設定を更新しました。',
-    defaultDescription:
-      '新規作成またはコピーするキーにのみ適用し、既存キーは変更しません。作成 API で記録設定を省略した場合もこの既定値を使います。',
+    defaultDescription: '新規キーはリクエストを記録します。',
     defaultFailed: '新規キーの記録の既定値を取得できません。再試行してから作成してください。',
     label: 'リクエスト内容を記録',
     description:
