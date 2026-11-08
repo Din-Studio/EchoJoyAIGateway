@@ -169,6 +169,8 @@ Embeddings has two independent native protocols: `openai-embeddings` (`POST /v1/
 
 Rerank uses the independent `rerank` protocol through `POST /v1/rerank` on the OpenAI Compatible, New API, and GPT-Load API-key channels. Requests contain `model`, `query`, and a text-only `documents` array, with optional upstream parameters such as `top_n` and `return_documents`. Streaming, subscription channels, and protocol conversion are not supported. OpenAI Compatible takes a complete API prefix (for example, `https://host/v1`); New API / GPT-Load take the gateway root. The upstream must implement a compatible Rerank endpoint. AccessKeys without a protocol filter also gain Rerank access. Responses containing only non-token units such as `search_units` remain unpriced; these units are not treated as tokens or free requests.
 
+The CLIProxyAPI, New API, and GPT-Load API-key channels support non-streaming `POST /v1/alpha/search` and Responses extension-path passthrough. Base URLs use the gateway root; the upstream must implement the requested endpoint. Search uses the `openai-responses` protocol filter, preserves the search response body, and does not count response `usage` as model tokens or costs. CLIProxyAPI and New API can forward `previous_response_id` and `store`, but do not advertise stored Responses retrieval, deletion, cancellation, or input-item endpoints; GPT-Load retains those resource capabilities.
+
 ### Built-in channels
 
 - **Official and cloud** — OpenAI, Anthropic, Gemini, xAI, Azure OpenAI, AWS Bedrock, Google Vertex AI
