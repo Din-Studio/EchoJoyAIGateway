@@ -170,6 +170,9 @@ type RequestEvent struct {
 	Usage                 UsageObservation
 	// Currency 是请求授权时快照中的系统货币与汇率，费用按它折算为本币入账。
 	Currency pricing.Currency
+	// RequestBody 只在访问密钥开启记录时携带解码后的客户端原始请求体。
+	// 生产方和消费方都只读此缓冲区；异步日志队列直接持有引用。
+	RequestBody []byte
 }
 
 type RequestLogSink interface {

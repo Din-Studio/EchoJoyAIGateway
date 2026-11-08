@@ -126,7 +126,11 @@ const sectionFields: Record<SectionID, readonly SettingKey[]> = {
     'validation_interval',
   ],
   browser: ['gateway_name', 'public_base_url', 'cors', 'header_rules', 'response_header_rules'],
-  maintenance: ['request_log_retention_days', 'models_dev_auto_sync_enabled'],
+  maintenance: [
+    'request_log_retention_days',
+    'default_access_key_record_request_body',
+    'models_dev_auto_sync_enabled',
+  ],
   billing: ['currency', 'exchange_rate'],
   redaction: ['request_redaction'],
   experimental: ['jev', 'auto_model', 'request_audit'],
@@ -223,6 +227,25 @@ const currencyOptions = computed(() =>
 )
 // 切换币种会换算全部费用限额并清零已用额度，保存前单独确认。
 const currencySwitchOpen = ref(false)
+const recordingDefaultOpen = ref(false)
+const recordingDefaultDescription = computed(
+  () =>
+    t('accessKeys.recordRequestBody.defaultDescription') +
+    '\n\n' +
+    t('accessKeys.recordRequestBody.confirmDescription', {
+      retention: t('accessKeys.recordRequestBody.retentionDefault'),
+    }),
+)
+function setRecordingDefault(enabled: boolean): void {
+  if (!draft.value || disabled('default_access_key_record_request_body')) return
+  if (enabled) recordingDefaultOpen.value = true
+  else draft.value.default_access_key_record_request_body = false
+}
+function confirmRecordingDefault(): void {
+  recordingDefaultOpen.value = false
+  if (draft.value && !disabled('default_access_key_record_request_body'))
+    draft.value.default_access_key_record_request_body = true
+}
 const switchingCurrency = computed(() =>
   Boolean(base.value && draft.value && draft.value.currency !== base.value.values.currency),
 )
@@ -854,6 +877,21 @@ onScopeDispose(() => {
                 />
               </div>
               <SettingItem
+                v-if="matches('default_access_key_record_request_body')"
+                v-bind="settingItem('default_access_key_record_request_body')"
+                class="modern-settings-block"
+                @reset="restore('default_access_key_record_request_body')"
+                @undo="undoRestore('default_access_key_record_request_body')"
+              >
+                <AppSwitch
+                  id="settings-default_access_key_record_request_body"
+                  :model-value="draft.default_access_key_record_request_body"
+                  :label="t('settingsForm.fields.default_access_key_record_request_body')"
+                  :disabled="disabled('default_access_key_record_request_body')"
+                  @update:model-value="setRecordingDefault"
+                />
+              </SettingItem>
+              <SettingItem
                 v-if="matches('models_dev_auto_sync_enabled')"
                 v-bind="settingItem('models_dev_auto_sync_enabled')"
                 class="modern-settings-block"
@@ -1026,6 +1064,16 @@ onScopeDispose(() => {
       </div>
     </footer>
     <AppDraftGuard ref="guard" :dirty="dirty" :pending="saving" />
+    <AppConfirmDialog
+      :open="recordingDefaultOpen"
+      :title="t('settingsForm.fields.default_access_key_record_request_body')"
+      :description="recordingDefaultDescription"
+      :confirm-label="t('accessKeys.recordRequestBody.confirm')"
+      :cancel-label="t('ui.cancel')"
+      tone="danger"
+      @confirm="confirmRecordingDefault"
+      @cancel="recordingDefaultOpen = false"
+    />
     <AppConfirmDialog
       :open="currencySwitchOpen"
       :title="t('settingsForm.currencySwitchTitle')"

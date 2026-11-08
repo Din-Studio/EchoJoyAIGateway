@@ -74,6 +74,7 @@ export const zhCN = {
     blacklist_threshold: '连续失败拉黑阈值',
     validation_interval: '凭据检测间隔',
     request_log_retention_days: '日志保留时间',
+    default_access_key_record_request_body: '新建密钥默认记录请求内容',
     models_dev_auto_sync_enabled: '自动同步模型目录与价格',
     header_rules: '上游请求头',
     response_header_rules: '下游响应头',
@@ -110,6 +111,8 @@ export const zhCN = {
     blacklist_threshold: '连续失败达到此值后拉黑凭据；0 表示关闭自动拉黑。',
     validation_interval: '后台重新检测凭据的时间间隔。',
     request_log_retention_days: '后台自动清理超出保留期的日志，可设置 1–365 天。',
+    default_access_key_record_request_body:
+      '默认关闭。新建和复制密钥使用此值，不继承源密钥，不修改现存密钥。开启前必须确认隐私风险。',
     models_dev_auto_sync_enabled: '按计划同步 Models.dev 目录与自动价格，关闭后仍可手动同步。',
     header_rules: '发往上游之前设置或移除的请求头。',
     response_header_rules: '返回客户端之前设置或移除的响应头。',
@@ -265,6 +268,7 @@ export const enUS = {
     blacklist_threshold: 'Consecutive failure threshold',
     validation_interval: 'Credential check interval',
     request_log_retention_days: 'Log retention',
+    default_access_key_record_request_body: 'Record request bodies for new keys by default',
     models_dev_auto_sync_enabled: 'Sync model catalog and prices automatically',
     header_rules: 'Upstream request headers',
     response_header_rules: 'Downstream response headers',
@@ -303,6 +307,8 @@ export const enUS = {
       'Blacklist a credential after this many consecutive failures. 0 disables automatic blacklisting.',
     validation_interval: 'Interval between background credential checks.',
     request_log_retention_days: 'Automatically delete older logs. Allowed range: 1–365 days.',
+    default_access_key_record_request_body:
+      'Off by default. New and copied keys use this value, not the source key setting. Existing keys are unchanged. Enabling requires privacy confirmation.',
     models_dev_auto_sync_enabled:
       'Sync the Models.dev catalog and automatic prices on schedule. Manual sync remains available.',
     header_rules: 'Set or remove request headers before sending upstream.',
@@ -466,6 +472,7 @@ export const jaJP = {
     blacklist_threshold: '連続失敗の閾値',
     validation_interval: '認証情報の確認間隔',
     request_log_retention_days: 'ログ保持期間',
+    default_access_key_record_request_body: '新規キーのリクエスト内容を既定で記録',
     models_dev_auto_sync_enabled: 'モデルカタログと料金の自動同期',
     header_rules: '上流リクエストヘッダー',
     response_header_rules: '下流レスポンスヘッダー',
@@ -504,6 +511,8 @@ export const jaJP = {
       '連続失敗が閾値に達すると認証情報をブラックリスト化します。0 で無効になります。',
     validation_interval: 'バックグラウンドで認証情報を再確認する間隔。',
     request_log_retention_days: '保持期間を超えたログを自動削除します。1～365 日。',
+    default_access_key_record_request_body:
+      '既定は無効です。新規作成・コピー時に使用し、コピー元の値は継承しません。既存キーは変更しません。有効化にはプライバシーの確認が必要です。',
     models_dev_auto_sync_enabled:
       'Models.dev のカタログと自動料金を定期同期します。無効でも手動同期できます。',
     header_rules: '上流に送信する前にヘッダーを設定または削除します。',

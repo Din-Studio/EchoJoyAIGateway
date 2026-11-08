@@ -186,6 +186,14 @@ func TestBuildContainerExposesUnifiedRouteCatalog(t *testing.T) {
 		},
 		{
 			ModuleName: "control",
+			RouteName:  "control.access-keys.record-request-body",
+			Owner:      httproute.OwnerControl,
+			Auth:       httproute.AuthControl,
+			Methods:    []string{http.MethodPut},
+			Path:       "/api/access-keys/record-request-body",
+		},
+		{
+			ModuleName: "control",
 			RouteName:  "control.access-keys.reveal",
 			Owner:      httproute.OwnerControl,
 			Auth:       httproute.AuthControl,

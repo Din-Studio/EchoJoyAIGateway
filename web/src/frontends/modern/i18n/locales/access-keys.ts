@@ -134,6 +134,27 @@ export const zhCN = {
   copyHandoff: '复制发放说明',
   handoffText:
     '名称：{name}\nAPI Key：{key}\nBase URL：{endpoint}\n登录地址：{login}\n有效期：{expires}\n使用此密钥登录，可查看自己的用量、额度和可用模型。',
+  recordRequestBody: {
+    column: '内容记录',
+    enableAll: '全部开启内容记录',
+    disableAll: '全部关闭内容记录',
+    bulkDescription:
+      '此操作影响全部现存访问密钥，包括停用、过期和筛选分页外的密钥。不会修改新建密钥的默认设置。',
+    bulkSaved: '已更新 {count} 个访问密钥的内容记录设置。',
+    defaultDescription:
+      '此设置只影响之后新建或复制的密钥，不修改现存密钥。创建接口省略记录开关时也使用此默认值。',
+    defaultFailed: '无法读取新建密钥的记录默认值。请重试后再创建。',
+    label: '记录请求内容',
+    description: '开启后会保存这个密钥的客户端原始请求，用于排查问题。',
+    enabled: '开启',
+    disabled: '关闭',
+    confirmTitle: '开启请求内容记录？',
+    confirmDescription:
+      '开启后，启用记录的密钥的每个请求都会把完整请求内容保存到数据库，包括对话、工具调用和图片，超长部分会截断；{retention}。这些内容可能包含个人信息、密码、密钥或商业机密。请只在排查问题时开启，用完及时关闭，并确认你有权记录这些内容。持有这个密钥的人登录管理页面后，会看到「已开启记录」的提示，也能查看记录的内容；只通过 API 调用的人看不到这条提示，请另行告知。',
+    retentionDays: '内容保存 {days} 天后自动删除',
+    retentionDefault: '内容按请求日志保留期自动删除',
+    confirm: '我已了解，开启',
+  },
 }
 export const enUS: typeof zhCN = {
   viewLogs: 'View logs',
@@ -278,6 +299,30 @@ export const enUS: typeof zhCN = {
   copyHandoff: 'Copy sharing instructions',
   handoffText:
     'Name: {name}\nAPI Key: {key}\nBase URL: {endpoint}\nSign-in URL: {login}\nExpiration: {expires}\nSign in with this key to view your usage, quota and available models.',
+  recordRequestBody: {
+    column: 'Body recording',
+    enableAll: 'Enable recording for all',
+    disableAll: 'Disable recording for all',
+    bulkDescription:
+      'This affects every existing access key, including disabled, expired and filtered-out keys on all pages. It does not change the default for new keys.',
+    bulkSaved: 'Updated recording settings for {count} access keys.',
+    defaultDescription:
+      'This setting applies only to newly created or copied keys, not existing keys. The create API also uses this default when the recording field is omitted.',
+    defaultFailed:
+      'Could not load the recording default for new keys. Retry before creating a key.',
+    label: 'Record request bodies',
+    description:
+      'When enabled, the original client requests sent with this key are saved for troubleshooting.',
+    enabled: 'On',
+    disabled: 'Off',
+    confirmTitle: 'Enable request body recording?',
+    confirmDescription:
+      'Once enabled, the full content of every request sent with a recording-enabled key is saved to the database, including conversations, tool calls and images; oversized parts are truncated. {retention} This content may include personal information, passwords, keys or trade secrets. Enable it only while troubleshooting, turn it off as soon as you are done, and make sure you are authorized to record this content. People who hold this key will see a “recording enabled” notice when they sign in to the console and can view the recorded content; people who only call the API will not see the notice, so tell them separately.',
+    retentionDays: 'Saved content is deleted automatically after {days} days.',
+    retentionDefault:
+      'Saved content is deleted automatically according to the request log retention period.',
+    confirm: 'I understand, enable',
+  },
 }
 export const jaJP: typeof zhCN = {
   viewLogs: 'ログを表示',
@@ -422,4 +467,26 @@ export const jaJP: typeof zhCN = {
   copyHandoff: '配布情報をコピー',
   handoffText:
     '名前：{name}\nAPI Key：{key}\nBase URL：{endpoint}\nログイン URL：{login}\n有効期限：{expires}\nこのキーでログインすると使用量、上限、利用可能なモデルを確認できます。',
+  recordRequestBody: {
+    column: '内容記録',
+    enableAll: 'すべての内容記録を有効化',
+    disableAll: 'すべての内容記録を無効化',
+    bulkDescription:
+      '無効・期限切れ・検索対象外のキーを含め、すべてのページの既存アクセスキーに適用します。新規キーの既定値は変更しません。',
+    bulkSaved: '{count} 件のアクセスキーの記録設定を更新しました。',
+    defaultDescription:
+      '新規作成またはコピーするキーにのみ適用し、既存キーは変更しません。作成 API で記録設定を省略した場合もこの既定値を使います。',
+    defaultFailed: '新規キーの記録の既定値を取得できません。再試行してから作成してください。',
+    label: 'リクエスト内容を記録',
+    description:
+      '有効にすると、このキーで送信されたクライアントの元のリクエストをトラブルシューティング用に保存します。',
+    enabled: 'オン',
+    disabled: 'オフ',
+    confirmTitle: 'リクエスト内容の記録を有効にしますか？',
+    confirmDescription:
+      '有効にすると、記録を有効にしたキーによるすべてのリクエストの完全な内容（会話、ツール呼び出し、画像を含む）がデータベースに保存されます。長すぎる部分は切り詰められます。{retention}これらの内容には個人情報、パスワード、キー、営業秘密が含まれる可能性があります。トラブルシューティングの間だけ有効にし、終わったらすぐに無効にしてください。また、これらの内容を記録する権限があることを確認してください。このキーを持つ人が管理画面にログインすると「記録が有効」の通知が表示され、記録された内容も閲覧できます。API だけを利用する人には通知が表示されないため、別途お知らせください。',
+    retentionDays: '保存された内容は {days} 日後に自動削除されます。',
+    retentionDefault: '保存された内容はリクエストログの保持期間に従って自動削除されます。',
+    confirm: '理解しました。有効にする',
+  },
 }

@@ -83,6 +83,17 @@ export const zhCN = {
   upstreamPricingInfo: '上游计价明细',
   upstreamPricingNote: '按上游价格与分组倍率计算网关付给上游的成本，只对管理员可见。',
   frozenPricing: '按请求发生时记录的价格与倍率展示。',
+  requestBody: {
+    title: '请求内容',
+    originalSize: '原始大小 {size}',
+    copy: '复制请求内容',
+    states: {
+      truncated: '超长字符串已截断，结构保持不变',
+      non_json: '不是 JSON 请求，未记录正文',
+      too_large: '请求体过大，未记录正文',
+      queue_full: '记录队列繁忙，未记录正文',
+    },
+  },
   noResponse: '未响应',
   willRetry: '继续重试',
   committed: '返回结果',
@@ -396,6 +407,17 @@ export const enUS: typeof zhCN = {
   upstreamPricingNote:
     'What the gateway pays upstream, from upstream prices and the group multiplier. Visible to administrators only.',
   frozenPricing: 'Prices and multipliers captured at request time.',
+  requestBody: {
+    title: 'Request body',
+    originalSize: 'Original size {size}',
+    copy: 'Copy request body',
+    states: {
+      truncated: 'Overlong strings were truncated; the structure is unchanged',
+      non_json: 'Not a JSON request; the body was not recorded',
+      too_large: 'The request body is too large; the body was not recorded',
+      queue_full: 'The recording queue was busy; the body was not recorded',
+    },
+  },
   noResponse: 'No response',
   willRetry: 'Retrying',
   committed: 'Response used',
@@ -707,6 +729,17 @@ export const jaJP: typeof zhCN = {
   upstreamPricingNote:
     '上流料金とグループ倍率から計算した、ゲートウェイが上流に支払う費用です。管理者にのみ表示されます。',
   frozenPricing: 'リクエスト時点で記録された単価と倍率です。',
+  requestBody: {
+    title: 'リクエスト内容',
+    originalSize: '元のサイズ {size}',
+    copy: 'リクエスト内容をコピー',
+    states: {
+      truncated: '長すぎる文字列は切り詰められています（構造は変わりません）',
+      non_json: 'JSON リクエストではないため、本文は記録されていません',
+      too_large: 'リクエスト本文が大きすぎるため、本文は記録されていません',
+      queue_full: '記録キューが混雑していたため、本文は記録されていません',
+    },
+  },
   noResponse: '応答なし',
   willRetry: '再試行',
   committed: '採用した応答',

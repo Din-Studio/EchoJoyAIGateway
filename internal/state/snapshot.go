@@ -87,19 +87,20 @@ func externalModelName(model ModelConfig) string {
 }
 
 type AccessKeyConfig struct {
-	ConcurrencyLimit *int64
-	KeyPrefix        string
-	PriceMultiplier  *pricing.PriceMultiplier
-	ID               uint
-	Name             string
-	KeyHash          string
-	KeySuffix        string
-	Status           AccessKeyStatus
-	Filters          FilterSet
-	ExpiresAtMS      *int64
-	AllowedPeerCIDRs []netip.Prefix
-	RPMLimit         int64
-	CostLimitRules   []accessquota.Rule
+	ConcurrencyLimit  *int64
+	KeyPrefix         string
+	PriceMultiplier   *pricing.PriceMultiplier
+	ID                uint
+	Name              string
+	KeyHash           string
+	KeySuffix         string
+	Status            AccessKeyStatus
+	Filters           FilterSet
+	ExpiresAtMS       *int64
+	AllowedPeerCIDRs  []netip.Prefix
+	RPMLimit          int64
+	CostLimitRules    []accessquota.Rule
+	RecordRequestBody bool
 }
 
 type AccessKeyStatus string
@@ -192,18 +193,19 @@ type GroupCatalogView struct {
 type AccessKeyView struct {
 	// ConcurrencyLimit is the effective cluster-wide limit: the key's own
 	// value, or the default setting when the key inherits; 0 is unlimited.
-	ConcurrencyLimit int64
-	KeyPrefix        string
-	PriceMultiplier  pricing.PriceMultiplier
-	ID               uint
-	Name             string
-	KeySuffix        string
-	Status           AccessKeyStatus
-	Filters          FilterSet
-	ExpiresAtMS      *int64
-	AllowedPeerCIDRs []netip.Prefix
-	RPMLimit         int64
-	CostLimitRules   []accessquota.Rule
+	ConcurrencyLimit  int64
+	KeyPrefix         string
+	PriceMultiplier   pricing.PriceMultiplier
+	ID                uint
+	Name              string
+	KeySuffix         string
+	Status            AccessKeyStatus
+	Filters           FilterSet
+	ExpiresAtMS       *int64
+	AllowedPeerCIDRs  []netip.Prefix
+	RPMLimit          int64
+	CostLimitRules    []accessquota.Rule
+	RecordRequestBody bool
 }
 
 type ConfigSnapshot struct {
@@ -440,14 +442,15 @@ func newAccessKeyView(input AccessKeyConfig, defaultConcurrencyLimit int64) Acce
 	return AccessKeyView{
 		PriceMultiplier: resolvePriceMultiplier(input.PriceMultiplier),
 		ID:              input.ID, Name: input.Name, Status: input.Status,
-		KeySuffix:        input.KeySuffix,
-		KeyPrefix:        input.KeyPrefix,
-		Filters:          cloneFilterSet(input.Filters),
-		ExpiresAtMS:      cloneAccessKeyExpiry(input.ExpiresAtMS),
-		AllowedPeerCIDRs: cloneAllowedPeerCIDRs(input.AllowedPeerCIDRs),
-		RPMLimit:         input.RPMLimit,
-		ConcurrencyLimit: concurrencyLimit,
-		CostLimitRules:   rules,
+		KeySuffix:         input.KeySuffix,
+		KeyPrefix:         input.KeyPrefix,
+		Filters:           cloneFilterSet(input.Filters),
+		ExpiresAtMS:       cloneAccessKeyExpiry(input.ExpiresAtMS),
+		AllowedPeerCIDRs:  cloneAllowedPeerCIDRs(input.AllowedPeerCIDRs),
+		RPMLimit:          input.RPMLimit,
+		ConcurrencyLimit:  concurrencyLimit,
+		CostLimitRules:    rules,
+		RecordRequestBody: input.RecordRequestBody,
 	}
 }
 

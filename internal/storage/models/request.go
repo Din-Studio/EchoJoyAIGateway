@@ -65,9 +65,22 @@ type RequestLog struct {
 
 	// Upstream* 是同一请求按上游价格与分组倍率计算的上游费用，只记美元；
 	// 上面的 EstimatedCost* 是按客户端模型统一价与密钥倍率计算的费用。
-	UpstreamCostNanoUSD         int64  `gorm:"column:upstream_cost_nano_usd;not null;default:0"`
-	UpstreamCostState           string `gorm:"type:varchar(32);not null;default:'not_applicable'"`
-	UpstreamPricingCompleteness string `gorm:"type:varchar(32);not null;default:'not_applicable'"`
+	UpstreamCostNanoUSD         int64           `gorm:"column:upstream_cost_nano_usd;not null;default:0"`
+	UpstreamCostState           string          `gorm:"type:varchar(32);not null;default:'not_applicable'"`
+	UpstreamPricingCompleteness string          `gorm:"type:varchar(32);not null;default:'not_applicable'"`
+	RequestBodyRow              *RequestLogBody `gorm:"-"`
+}
+
+// RequestLogBody is deleted with its parent request log.
+type RequestLogBody struct {
+	RequestID     string  `gorm:"type:varchar(36);primaryKey;not null"`
+	State         string  `gorm:"type:varchar(32);not null"`
+	OriginalBytes int64   `gorm:"not null"`
+	Body          *string `gorm:"type:text;column:body"`
+}
+
+func (RequestLogBody) TableName() string {
+	return "request_log_bodies"
 }
 
 // RequestLogAttempt is one durable upstream attempt belonging to a client

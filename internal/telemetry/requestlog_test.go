@@ -42,6 +42,7 @@ func TestRequestTelemetryContractUsesExactFieldAllowlist(t *testing.T) {
 			"Attempts",
 			"Usage",
 			"Currency",
+			"RequestBody",
 		},
 		reflect.TypeOf(Attempt{}): {
 			"Sequence",

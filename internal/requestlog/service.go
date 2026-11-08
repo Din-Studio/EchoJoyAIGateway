@@ -79,6 +79,9 @@ type Service struct {
 	shutdownDone  chan struct{}
 	shutdownErr   error
 
+	requestBodyBudget       int64
+	pendingRequestBodyBytes atomic.Int64
+
 	enqueuedTotal                          atomic.Uint64
 	persistedTotal                         atomic.Uint64
 	droppedNotRunningTotal                 atomic.Uint64
@@ -205,6 +208,8 @@ func newService(
 		now:           time.Now,
 		state:         lifecycleNew,
 		stopRequested: make(chan struct{}),
+
+		requestBodyBudget: maxPendingRequestBodyBytes,
 	}
 }
 
@@ -251,11 +256,13 @@ func (service *Service) Emit(event telemetry.RequestEvent) {
 	}
 
 	cloned := cloneEvent(event)
+	queued := service.reserveRequestBody(cloned)
 	queueFull := false
 	select {
-	case service.queue <- queuedEvent{Event: cloned}:
+	case service.queue <- queued:
 		service.enqueuedTotal.Add(1)
 	default:
+		service.releaseRequestBodies([]queuedEvent{queued})
 		service.droppedQueueFullTotal.Add(1)
 		queueFull = true
 	}

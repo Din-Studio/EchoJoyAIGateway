@@ -18,6 +18,7 @@ export interface AccessDraft {
   concurrency: string
   rpm: string
   price: string
+  recordRequestBody: boolean
   scope: AccessScope
   modes: Record<ScopeDimension, string>
   source: string
@@ -38,7 +39,11 @@ export function ruleDraft(rule: CostRule): RuleDraft {
     unit,
   }
 }
-export function draftFor(row?: AccessKey, duplicate = false): AccessDraft {
+export function draftFor(
+  row?: AccessKey,
+  duplicate = false,
+  defaultRecording = false,
+): AccessDraft {
   const scope = row
     ? {
         groups: [...row.filters.groups],
@@ -57,6 +62,8 @@ export function draftFor(row?: AccessKey, duplicate = false): AccessDraft {
     concurrency: row?.concurrency_limit == null ? '' : String(row.concurrency_limit),
     rpm: String(row?.rpm_limit ?? 0),
     price: row?.price_multiplier ?? '1',
+    // 新建和复制使用本次打开编辑器时读取的系统默认值，不继承源密钥。
+    recordRequestBody: row && !duplicate ? row.record_request_body : defaultRecording,
     scope,
     modes: {
       groups: scope.groups.length ? 'specified' : 'all',
@@ -95,6 +102,7 @@ export function inputFor(draft: AccessDraft): AccessInput {
     concurrency_limit: draft.concurrency === '' ? null : Number(draft.concurrency),
     rpm_limit: Number(draft.rpm || 0),
     price_multiplier: normalizeDecimal(draft.price),
+    record_request_body: draft.recordRequestBody,
     filters: {
       groups: draft.modes.groups === 'all' ? [] : unique(draft.scope.groups),
       protocols: draft.modes.protocols === 'all' ? [] : clean(draft.scope.protocols),
@@ -135,6 +143,8 @@ export function patchFor(base: AccessKey, input: AccessInput): Partial<AccessInp
   if (base.concurrency_limit !== input.concurrency_limit)
     patch.concurrency_limit = input.concurrency_limit
   if (base.rpm_limit !== input.rpm_limit) patch.rpm_limit = input.rpm_limit
+  if (base.record_request_body !== input.record_request_body)
+    patch.record_request_body = input.record_request_body
   if (normalizeDecimal(base.price_multiplier) !== input.price_multiplier)
     patch.price_multiplier = input.price_multiplier
   if (scopeJSON(base.filters) !== scopeJSON(input.filters)) patch.filters = input.filters

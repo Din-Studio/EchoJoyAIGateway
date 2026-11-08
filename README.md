@@ -69,6 +69,14 @@ Your application only needs one base URL and one AccessKey. Providers, accounts,
 Group priority is a signed 32-bit integer, defaulting to 0; higher values take precedence. The highest available tier is selected before route strategy, soft affinity, and weights within that tier. A retryable execution failure moves directly to the next available tier without exhausting peers; the lowest tier tries remaining candidates. All tiers share the forwarding-attempt budget. Preparation failures do not advance tiers, authentication refresh replays the original credential first, and bound sessions keep their constraints. Priority edits propagate through cluster configuration; scheduling progress remains per replica.
 - **Observable, self-hosted, and simple to deploy** — Inspect health, routes, logs, usage, and cost estimates in an embedded UI backed by PostgreSQL and Redis, with credentials encrypted at rest.
 
+### Request body recording
+
+Administrators can enable request body recording per access key and view or copy the original body in log details. Bodies may contain conversations, tool calls, images and secrets. Oversized content is truncated and recorded bodies expire with request logs. Redacted exports always exclude request bodies. Key holders see a persistent notice after signing in and can view their own recorded requests. Notify API-only users separately.
+
+The access key page can enable or disable recording for all existing keys, including disabled, expired and filtered-out keys on every page. Enabling requires privacy confirmation. This operation does not change the creation default. The boolean global setting `default_access_key_record_request_body` defaults to `false`; enabling it also requires privacy confirmation. New and copied keys use the system default, not the source key setting. The editor requires a successful default read before creation, then preserves the draft and explicit user choices and sends an explicit recording value.
+
+The create API accepts an omitted `record_request_body` and reads the default inside the transaction. Explicit values take precedence; idempotent replay preserves the first result. The admin-only bulk endpoint is `PUT /api/access-keys/record-request-body`, with `{"record_request_body":true}` or `false` and response data `{"updated_count":N}`. The default affects only future keys. Disabling recording does not delete previously recorded bodies.
+
 ### Custom upstream error rules
 
 Configure `error_rules` globally or per group. Rules match in order; the first match applies. Status codes and keywords must both match when both are specified. Keywords match code, type, or summary independently, without case sensitivity. A group list replaces the global list; an empty list disables custom rules for that group, not built-in error handling.

@@ -55,6 +55,19 @@ info:
     代理写操作重放返回首次脱敏 DTO，不增加 `replayed` 或操作账本字段。
     相同 key + 不同规范化请求返回 `409 IDEMPOTENCY_KEY_REUSED`。
 
+    ## 请求内容记录
+    AccessKey 元数据返回 `record_request_body`。创建时可以省略该字段，服务端在创建事务内读取
+    `default_access_key_record_request_body`（boolean，默认 false）；显式 true/false 优先，
+    幂等重放保持首次创建结果，不随默认值变化。复制创建使用系统默认值，不继承源密钥。
+    管理员通过 `PUT /api/settings` 的
+    `{"settings":{"default_access_key_record_request_body":true}}` 修改默认值，
+    通过 `GET /api/settings` 的 `values` 读取；设置为 null 恢复默认 false。
+    默认值只影响之后创建的密钥，批量记录开关只影响现存密钥，两者独立。
+    开启前必须确认隐私风险并告知调用方。原始请求内容可能包含对话、工具调用、图片与秘密；
+    内容按请求日志保留期清理，超长内容可能截断。
+    AccessKey 登录后的常驻通知告知记录状态，但 API 调用方必须另行通知。
+    日志详情仅允许管理员或该日志所属密钥查看记录内容；脱敏导出不包含请求正文。
+
     ## 灵影镜像密钥
     灵影通过 `/api/access-keys` 把用户的个人 API Key 镜像为 AccessKey，并通过 `GET /api/models` 读取模型目录。
     控制面不校验下列约定，但数据面按名称前缀识别：
@@ -490,6 +503,8 @@ paths:
       description: |
         不传 `key` 时服务端生成 `sk-gl-` + 32 位十六进制的密钥。明文 `key` 只在首次成功响应中返回，
         之后需通过 reveal 接口获取。响应带 `Cache-Control: no-store`。
+        `record_request_body` 省略时采用创建事务内读取的系统默认值；显式 boolean 优先。
+        幂等重放返回首次创建结果，不重新应用当前默认值。
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -545,6 +560,57 @@ paths:
         '429': { $ref: '#/components/responses/AuthLocked' }
         '500': { $ref: '#/components/responses/InternalError' }
         '503': { $ref: '#/components/responses/OperationIncomplete' }
+
+  /api/access-keys/record-request-body:
+    put:
+      tags: [AccessKeys]
+      operationId: setAllAccessKeyRecording
+      summary: 开启或关闭全部现存 AccessKey 的请求内容记录
+      description: |
+        仅限管理员。在一个控制事务内更新全部现存密钥，包括停用、过期以及筛选和分页外的密钥，
+        并向全部副本传播配置。不修改新建密钥的系统默认值。开启前必须确认隐私风险并告知调用方。
+        不要求 Idempotency-Key；重复请求仍将全部现存密钥设置为指定值。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [record_request_body]
+              properties:
+                record_request_body:
+                  type: boolean
+                  description: true 开启，false 关闭；不可省略或为 null。
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        type: object
+                        required: [updated_count]
+                        properties:
+                          updated_count:
+                            type: integer
+                            minimum: 0
+                            description: 本次更新的现存密钥数量，包含原本已为目标值的密钥。
+        '400':
+          description: BAD_REQUEST / INVALID_JSON / VALIDATION_FAILED
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
 
   /api/access-keys/options:
     get:
@@ -1965,6 +2031,9 @@ components:
             - $ref: '#/components/schemas/PriceMultiplier'
           default: '1'
           description: 不可为 `null`。
+        record_request_body:
+          type: [boolean, 'null']
+          description: 省略或 null 时采用创建事务内读取的 default_access_key_record_request_body（系统默认 false）。显式 boolean 优先；幂等重放保持首次结果。
         filters: { $ref: '#/components/schemas/AccessKeyFilters' }
         rpm_limit:
           type: integer
@@ -1999,6 +2068,9 @@ components:
           description: 替换为自定义密钥；需要 `Idempotency-Key`。
         status: { $ref: '#/components/schemas/AccessKeyStatus' }
         price_multiplier: { $ref: '#/components/schemas/PriceMultiplier' }
+        record_request_body:
+          type: [boolean, 'null']
+          description: 是否记录请求内容；省略或 null 时保持不变。
         filters: { $ref: '#/components/schemas/AccessKeyFilters' }
         rpm_limit: { type: integer, minimum: 0 }
         concurrency_limit:
@@ -2019,6 +2091,7 @@ components:
         - name
         - note
         - masked_key
+        - record_request_body
         - status
         - price_multiplier
         - filters
@@ -2043,6 +2116,9 @@ components:
           examples: [sk-gl-****ab12]
         status: { $ref: '#/components/schemas/AccessKeyStatus' }
         price_multiplier: { $ref: '#/components/schemas/PriceMultiplier' }
+        record_request_body:
+          type: boolean
+          description: 该密钥当前的请求内容记录开关，不随新建默认值自动变化。
         filters: { $ref: '#/components/schemas/AccessKeyFiltersOutput' }
         rpm_limit: { type: integer }
         concurrency_limit:
