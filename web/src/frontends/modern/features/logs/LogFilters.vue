@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { useSystemCurrency } from '@modern/app/currency'
+import { useMobileLayout } from '@modern/app/use-mobile-layout'
+import { DialogRoot, DialogTrigger, DialogClose } from 'reka-ui'
 import { SlidersHorizontal, X } from '@lucide/vue'
 import { PopoverClose, PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from 'reka-ui'
 import { computed, onScopeDispose, ref, watch } from 'vue'
@@ -10,6 +12,8 @@ import type { GroupChannel } from '@modern/api/group-create'
 import { getGroupCredentials } from '@modern/api/group-detail'
 import { channelSearchOption } from '@modern/components/channel-options'
 import {
+  AppButton,
+  AppDialogContent,
   AppAdvancedFilterSection,
   AppProtocolTag,
   AppOverflowText,
@@ -58,6 +62,7 @@ const emit = defineEmits<{
 const { t, te } = useI18n()
 // 费用筛选只匹配以当前系统货币结算的请求，金额单位即系统货币。
 const systemCurrency = useSystemCurrency()
+const isMobile = useMobileLayout()
 const client = useApiClient()
 const draft = ref<LogQuery>({})
 const from = ref('')
@@ -111,11 +116,36 @@ const errors = computed(() => {
       result[key] = 'invalidAmount'
   return result
 })
+const activeCount = computed(
+  () =>
+    Object.entries(draft.value).filter(
+      ([key, value]) => !['from_ms', 'to_ms', 'limit'].includes(key) && value?.trim(),
+    ).length,
+)
+function resetFilters(): void {
+  const { from_ms, to_ms, limit } = draft.value
+  draft.value = { from_ms, to_ms, limit }
+  edited = true
+  apply()
+}
+function sectionKeys(section: {
+  id: string
+  fields: readonly LogFilterDefinition[]
+}): LogFilterName[] {
+  return [
+    ...section.fields.map((field) => field.key),
+    ...(section.id === 'routing' && props.admin ? ['credential_id' as const] : []),
+  ]
+}
 function apply(): void {
   clearTimeout(searchTimer)
   if (composing.value || Object.keys(errors.value).length) return
   edited = false
   emit('change', request.value, draftPreset.value)
+}
+function closeFilters(): void {
+  apply()
+  emit('more', false)
 }
 function scheduleApply(): void {
   clearTimeout(searchTimer)
@@ -290,6 +320,7 @@ const loadCredentials = computed(() => {
       <AppDateTimeRangePicker
         v-model:from="from"
         v-model:to="to"
+        :mobile="isMobile"
         class="modern-log-filter-date"
         :label="t('logs.timeRange')"
         label-hidden
@@ -298,87 +329,104 @@ const loadCredentials = computed(() => {
         @update:preset="draftPreset = $event"
         @apply="dateApply"
       />
-      <AppSearchSelect
-        v-if="admin"
-        class="modern-log-filter-choice"
-        :model-value="draft.group_id ?? ''"
-        :options="groupOptions"
-        :label="t('logs.filters.group_id')"
-        :placeholder="t('logs.filters.group_id')"
-        label-hidden
-        :loading="groupsLoading"
-        @update:model-value="update('group_id', $event)"
-        ><template #option="{ option }"
-          ><AppChannelIcon
-            v-if="groupMap.get(option.value)"
-            :icon="groupMap.get(option.value)!.channelIcon"
-            :name="groupMap.get(option.value)!.channelName"
-            :mark="groupMap.get(option.value)!.channelMark"
-            size="sm"
-          /><span>{{ option.label }}</span></template
-        ></AppSearchSelect
-      >
-      <AppSearchSelect
-        v-if="admin"
-        class="modern-log-filter-choice"
-        :model-value="draft.channel_id ?? ''"
-        :options="channelOptions"
-        :label="t('logs.filters.channel_id')"
-        :placeholder="t('logs.filters.channel_id')"
-        label-hidden
-        @update:model-value="update('channel_id', $event)"
-        ><template #option="{ option }"
-          ><AppChannelIcon
-            v-if="channelMap.get(option.value)"
-            :icon="channelMap.get(option.value)!.icon"
-            :name="channelMap.get(option.value)!.name"
-            :mark="channelMap.get(option.value)!.mark"
-            size="sm"
-          /><span>{{ option.label }}</span></template
-        ></AppSearchSelect
-      >
-      <AppSearchSelect
-        v-if="admin"
-        class="modern-log-filter-choice"
-        :model-value="draft.access_key_id ?? ''"
-        :options="keyOptions"
-        :label="t('logs.filters.access_key_id')"
-        :placeholder="t('logs.filters.access_key_id')"
-        label-hidden
-        :loading="keysLoading"
-        @update:model-value="update('access_key_id', $event)"
-      />
-      <AppModelSelect
-        class="modern-log-filter-model"
-        :model-value="draft.client_model ?? ''"
-        :models="models"
-        :label="t('logs.filters.client_model')"
-        :error="errors.client_model ? t('logs.errors.' + errors.client_model) : undefined"
-        label-hidden
-        fuzzy
-        @update:model-value="update('client_model', $event, false)"
-      />
+      <template v-if="!isMobile">
+        <AppSearchSelect
+          v-if="admin"
+          class="modern-log-filter-choice"
+          :model-value="draft.group_id ?? ''"
+          :options="groupOptions"
+          :label="t('logs.filters.group_id')"
+          :placeholder="t('logs.filters.group_id')"
+          label-hidden
+          :loading="groupsLoading"
+          @update:model-value="update('group_id', $event)"
+          ><template #option="{ option }"
+            ><AppChannelIcon
+              v-if="groupMap.get(option.value)"
+              :icon="groupMap.get(option.value)!.channelIcon"
+              :name="groupMap.get(option.value)!.channelName"
+              :mark="groupMap.get(option.value)!.channelMark"
+              size="sm"
+            /><span>{{ option.label }}</span></template
+          ></AppSearchSelect
+        >
+        <AppSearchSelect
+          v-if="admin"
+          class="modern-log-filter-choice"
+          :model-value="draft.channel_id ?? ''"
+          :options="channelOptions"
+          :label="t('logs.filters.channel_id')"
+          :placeholder="t('logs.filters.channel_id')"
+          label-hidden
+          @update:model-value="update('channel_id', $event)"
+          ><template #option="{ option }"
+            ><AppChannelIcon
+              v-if="channelMap.get(option.value)"
+              :icon="channelMap.get(option.value)!.icon"
+              :name="channelMap.get(option.value)!.name"
+              :mark="channelMap.get(option.value)!.mark"
+              size="sm"
+            /><span>{{ option.label }}</span></template
+          ></AppSearchSelect
+        >
+        <AppSearchSelect
+          v-if="admin"
+          class="modern-log-filter-choice"
+          :model-value="draft.access_key_id ?? ''"
+          :options="keyOptions"
+          :label="t('logs.filters.access_key_id')"
+          :placeholder="t('logs.filters.access_key_id')"
+          label-hidden
+          :loading="keysLoading"
+          @update:model-value="update('access_key_id', $event)"
+        />
+        <AppModelSelect
+          class="modern-log-filter-model"
+          :model-value="draft.client_model ?? ''"
+          :models="models"
+          :label="t('logs.filters.client_model')"
+          :error="errors.client_model ? t('logs.errors.' + errors.client_model) : undefined"
+          label-hidden
+          fuzzy
+          @update:model-value="update('client_model', $event, false)"
+        />
+      </template>
       <div class="modern-log-filter-actions">
-        <PopoverRoot :open="more" @update:open="emit('more', $event)">
-          <PopoverTrigger as-child>
+        <component
+          :is="isMobile ? DialogRoot : PopoverRoot"
+          :open="more"
+          @update:open="emit('more', $event)"
+        >
+          <component :is="isMobile ? DialogTrigger : PopoverTrigger" as-child>
             <AppIconButton
               :icon="SlidersHorizontal"
               :label="t('logs.moreFilters')"
-              :variant="more ? 'brand' : 'ghost'"
+              :variant="more || (isMobile && activeCount > 0) ? 'brand' : 'ghost'"
             />
-          </PopoverTrigger>
+          </component>
           <PopoverPortal>
-            <PopoverContent
-              as-child
-              align="end"
-              :side-offset="overlaySideOffset"
-              :collision-padding="16"
+            <component
+              :is="isMobile ? AppDialogContent : PopoverContent"
+              v-bind="
+                isMobile
+                  ? {
+                      placement: 'bottom',
+                      title: t('logs.moreFilters'),
+                      description: t('logs.moreFilters'),
+                    }
+                  : {
+                      asChild: true,
+                      align: 'end',
+                      sideOffset: overlaySideOffset,
+                      collisionPadding: 16,
+                    }
+              "
               :aria-label="t('logs.moreFilters')"
               @keydown.enter="keyApply"
               @compositionstart="startComposition"
               @compositionend="endComposition"
             >
-              <div class="modern-log-more-filters">
+              <div class="modern-log-more-filters" :class="{ 'is-mobile': isMobile }">
                 <header class="modern-log-more-filter-heading">
                   <strong>
                     <AppIcon
@@ -388,15 +436,82 @@ const loadCredentials = computed(() => {
                     />
                     {{ t('logs.moreFilters') }}
                   </strong>
-                  <PopoverClose as-child>
+                  <component :is="isMobile ? DialogClose : PopoverClose" as-child>
                     <AppIconButton :icon="X" :label="t('ui.close')" size="xs" />
-                  </PopoverClose>
+                  </component>
                 </header>
                 <div class="modern-log-more-filter-sections">
+                  <div v-if="isMobile" class="modern-log-mobile-filters">
+                    <AppSearchSelect
+                      v-if="admin"
+                      class="modern-log-filter-choice"
+                      :model-value="draft.group_id ?? ''"
+                      :options="groupOptions"
+                      :label="t('logs.filters.group_id')"
+                      :placeholder="t('logs.filters.group_id')"
+                      :label-hidden="false"
+                      :loading="groupsLoading"
+                      @update:model-value="update('group_id', $event)"
+                      ><template #option="{ option }"
+                        ><AppChannelIcon
+                          v-if="groupMap.get(option.value)"
+                          :icon="groupMap.get(option.value)!.channelIcon"
+                          :name="groupMap.get(option.value)!.channelName"
+                          :mark="groupMap.get(option.value)!.channelMark"
+                          size="sm"
+                        /><span>{{ option.label }}</span></template
+                      ></AppSearchSelect
+                    >
+                    <AppSearchSelect
+                      v-if="admin"
+                      class="modern-log-filter-choice"
+                      :model-value="draft.channel_id ?? ''"
+                      :options="channelOptions"
+                      :label="t('logs.filters.channel_id')"
+                      :placeholder="t('logs.filters.channel_id')"
+                      :label-hidden="false"
+                      @update:model-value="update('channel_id', $event)"
+                      ><template #option="{ option }"
+                        ><AppChannelIcon
+                          v-if="channelMap.get(option.value)"
+                          :icon="channelMap.get(option.value)!.icon"
+                          :name="channelMap.get(option.value)!.name"
+                          :mark="channelMap.get(option.value)!.mark"
+                          size="sm"
+                        /><span>{{ option.label }}</span></template
+                      ></AppSearchSelect
+                    >
+                    <AppSearchSelect
+                      v-if="admin"
+                      class="modern-log-filter-choice"
+                      :model-value="draft.access_key_id ?? ''"
+                      :options="keyOptions"
+                      :label="t('logs.filters.access_key_id')"
+                      :placeholder="t('logs.filters.access_key_id')"
+                      :label-hidden="false"
+                      :loading="keysLoading"
+                      @update:model-value="update('access_key_id', $event)"
+                    />
+                    <AppModelSelect
+                      class="modern-log-filter-model"
+                      :model-value="draft.client_model ?? ''"
+                      :models="models"
+                      :label="t('logs.filters.client_model')"
+                      :error="
+                        errors.client_model ? t('logs.errors.' + errors.client_model) : undefined
+                      "
+                      :label-hidden="false"
+                      fuzzy
+                      @update:model-value="update('client_model', $event, false)"
+                    />
+                  </div>
                   <AppAdvancedFilterSection
                     v-for="section in sections"
                     :key="section.id"
                     :title="t('logs.filterSections.' + section.id)"
+                    :collapsible="isMobile"
+                    :active-count="sectionKeys(section).filter((key) => draft[key]?.trim()).length"
+                    :invalid="sectionKeys(section).some((key) => errors[key])"
                     compact
                   >
                     <template v-if="section.id === 'routing' && admin">
@@ -501,10 +616,21 @@ const loadCredentials = computed(() => {
                     </template>
                   </AppAdvancedFilterSection>
                 </div>
+                <div v-if="isMobile" class="modern-log-mobile-filter-footer">
+                  <AppButton :disabled="!activeCount" @click="resetFilters">{{
+                    t('ui.filters.reset')
+                  }}</AppButton>
+                  <AppButton
+                    variant="primary"
+                    :disabled="Object.keys(errors).length > 0"
+                    @click="closeFilters"
+                    >{{ t('ui.mobile.showResults') }}</AppButton
+                  >
+                </div>
               </div>
-            </PopoverContent>
+            </component>
           </PopoverPortal>
-        </PopoverRoot>
+        </component>
         <slot name="actions" />
       </div>
     </div>
@@ -512,6 +638,31 @@ const loadCredentials = computed(() => {
 </template>
 
 <style scoped>
+.modern-log-more-filters.is-mobile {
+  width: 100%;
+  max-height: none;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.modern-log-mobile-filters {
+  display: grid;
+  gap: var(--modern-space-3);
+  padding-block: var(--modern-space-4);
+}
+.modern-log-mobile-filter-footer {
+  display: flex;
+  flex: none;
+  justify-content: flex-end;
+  padding: var(--modern-space-4);
+  border-top: var(--modern-line-width) solid var(--modern-border);
+  gap: var(--modern-space-2);
+}
+.modern-log-mobile-filter-footer > * {
+  flex: 1;
+}
+
 .modern-log-filter-area {
   flex: none;
 }
@@ -607,5 +758,17 @@ const loadCredentials = computed(() => {
   align-items: center;
   gap: var(--modern-space-1);
   min-width: 0;
+}
+@media (max-width: 760px) {
+  .modern-log-primary-filters {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--modern-space-2);
+    padding-top: var(--modern-space-3);
+  }
+  .modern-log-filter-date,
+  .modern-log-filter-actions {
+    grid-column: auto;
+  }
 }
 </style>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useMobileLayout } from '@modern/app/use-mobile-layout'
 import { customErrorRuleLabel } from '@shared/error-rules'
 import { Activity, ArrowDownToLine, Clock3, Coins, Copy, ShieldCheck } from '@lucide/vue'
 import { timeRangeQuery } from '@modern/app/time-range'
@@ -45,6 +46,7 @@ import LogModelWarning from './LogModelWarning.vue'
 import LogCredentialValue from './LogCredentialValue.vue'
 import LogFilterLink from './LogFilterLink.vue'
 
+const isMobile = useMobileLayout()
 const props = defineProps<{
   id: string
   admin: boolean
@@ -328,7 +330,12 @@ function decisionRuleLabel(ruleID: string): string {
               </div>
             </dl>
           </section>
-          <AppFormSection v-if="log.request_body" :title="t('logs.requestBody.title')" compact>
+          <AppFormSection
+            v-if="log.request_body"
+            :collapsible="isMobile"
+            :title="t('logs.requestBody.title')"
+            compact
+          >
             <template #actions>
               <span class="modern-log-detail-note">{{ requestBodySize }}</span>
               <AppCopyValue
@@ -363,6 +370,7 @@ function decisionRuleLabel(ruleID: string): string {
               log.request_audit &&
               (log.request_audit.outcome !== 'allowed' || log.request_audit.reason)
             "
+            :collapsible="isMobile"
             :title="t('requestAudit.title')"
             compact
           >
@@ -383,7 +391,12 @@ function decisionRuleLabel(ruleID: string): string {
               </div>
             </dl>
           </AppFormSection>
-          <AppFormSection v-if="log.auto_decision" :title="t('autoModel.log')" compact>
+          <AppFormSection
+            v-if="log.auto_decision"
+            :collapsible="isMobile"
+            :title="t('autoModel.log')"
+            compact
+          >
             <dl class="modern-log-detail-grid">
               <div>
                 <dt>{{ t('autoModel.source') }}</dt>
@@ -459,7 +472,12 @@ function decisionRuleLabel(ruleID: string): string {
               </div>
             </dl>
           </AppFormSection>
-          <AppFormSection v-if="admin" :title="t('logs.routingInfo')" compact>
+          <AppFormSection
+            v-if="admin"
+            :collapsible="isMobile"
+            :title="t('logs.routingInfo')"
+            compact
+          >
             <dl class="modern-log-detail-grid">
               <div v-for="field in routingFields" :key="field">
                 <dt>{{ t('logs.columns.' + field) }}</dt>
@@ -469,7 +487,7 @@ function decisionRuleLabel(ruleID: string): string {
               </div>
             </dl>
           </AppFormSection>
-          <AppFormSection :title="t('logs.usageInfo')" compact>
+          <AppFormSection :collapsible="isMobile" :title="t('logs.usageInfo')" compact>
             <dl class="modern-log-detail-grid is-numeric">
               <div v-for="field in tokenFields" :key="field">
                 <dt>{{ t('logs.columns.' + field) }}</dt>
@@ -479,7 +497,7 @@ function decisionRuleLabel(ruleID: string): string {
               </div>
             </dl>
           </AppFormSection>
-          <AppFormSection :title="t('logs.costInfo')" compact>
+          <AppFormSection :collapsible="isMobile" :title="t('logs.costInfo')" compact>
             <dl class="modern-log-detail-grid is-numeric">
               <div v-for="field in costFields" :key="field">
                 <dt>{{ t('logs.columns.' + field) }}</dt>
@@ -503,6 +521,7 @@ function decisionRuleLabel(ruleID: string): string {
             v-if="
               receipt || log.auto_decision || log.request_audit?.calls.some((call) => call.called)
             "
+            :collapsible="isMobile"
             :title="t('logs.pricingInfo')"
             :hint="t('logs.frozenPricing')"
             compact
@@ -518,6 +537,7 @@ function decisionRuleLabel(ruleID: string): string {
             v-if="admin && upstreamReceipt && log.upstream_cost"
             :title="t('logs.upstreamPricingInfo')"
             :description="t('logs.upstreamPricingNote')"
+            :collapsible="isMobile"
             compact
             ><LogPricingReceipt
               :receipt="upstreamReceipt"
@@ -525,7 +545,12 @@ function decisionRuleLabel(ruleID: string): string {
               :currency="log.currency"
               :exchange-rate="log.exchange_rate"
           /></AppFormSection>
-          <AppFormSection v-if="admin && log.attempts.length" :title="t('logs.attempts')" compact>
+          <AppFormSection
+            v-if="admin && log.attempts.length"
+            :collapsible="isMobile"
+            :title="t('logs.attempts')"
+            compact
+          >
             <template #actions
               ><span class="modern-log-detail-note">{{
                 t('logs.attemptCount', { count: n(log.attempts.length) })
