@@ -19,9 +19,9 @@ require (
 	github.com/tidwall/sjson v1.2.5
 	github.com/tink-crypto/tink-go/v2 v2.8.0
 	go.uber.org/dig v1.19.0
-	golang.org/x/crypto v0.57.0
-	golang.org/x/net v0.60.0
-	golang.org/x/text v0.42.0
+	golang.org/x/crypto v0.58.0
+	golang.org/x/net v0.61.0
+	golang.org/x/text v0.43.0
 	gorm.io/driver/postgres v1.6.3
 	gorm.io/gorm v1.31.2
 )
@@ -93,7 +93,7 @@ require (
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.1 // indirect
 	github.com/refraction-networking/utls v1.8.2 // indirect
-	github.com/router-for-me/CLIProxyAPI/v8 v8.0.28 // indirect
+	github.com/router-for-me/CLIProxyAPI/v8 v8.0.29 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/savsgio/gotils v0.0.0-20250408102913-196191ec6287 // indirect
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966 // indirect
@@ -113,7 +113,7 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/arch v0.23.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
