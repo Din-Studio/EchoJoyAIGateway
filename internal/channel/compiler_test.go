@@ -335,6 +335,17 @@ func TestCompilerProjectsPartnerTierAndSignupURL(t *testing.T) {
 	if got := definitions[1].descriptor.Partner; got != nil {
 		t.Fatalf("non-partner channel compiled partner = %#v", got)
 	}
+	registry, err := newRegistry(definitions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Public projections must not allow callers to mutate the compiled registry.
+	descriptor, _ := registry.Get(Wafer)
+	descriptor.Partner.SignupURL = "https://changed.example"
+	fresh, _ := registry.Get(Wafer)
+	if !reflect.DeepEqual(fresh.Partner, want) {
+		t.Fatalf("registry partner mutated through descriptor: %+v", fresh.Partner)
+	}
 }
 
 func TestCompilerRejectsInvalidPartner(t *testing.T) {

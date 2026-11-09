@@ -2,34 +2,23 @@ package channel
 
 import (
 	"encoding/json"
-	"reflect"
 	"testing"
 
 	"gpt-load/internal/execution"
 	"gpt-load/internal/protocol"
 )
 
-func TestModelflarePresetIsPrincipalPartnerWithVerifiedRoutes(t *testing.T) {
+func TestModelflarePresetIsRegularAPIProviderWithVerifiedRoutes(t *testing.T) {
 	registry := NewRegistry()
 	descriptor, ok := registry.Get(Modelflare)
 	if !ok {
 		t.Fatal("Get(modelflare) missing")
 	}
-	wantPartner := &PartnerDescriptor{
-		Tier:      PartnerPrincipal,
-		SignupURL: "https://modelflare.dev/sign-up?utm_source=gptload&utm_campaign=gptload",
-	}
-	if !reflect.DeepEqual(descriptor.Partner, wantPartner) {
-		t.Fatalf("modelflare partner = %#v, want %#v", descriptor.Partner, wantPartner)
+	if descriptor.Partner != nil {
+		t.Fatalf("modelflare must be a regular API provider, got partner %#v", descriptor.Partner)
 	}
 	if descriptor.Connection.Type != "api_key" || descriptor.Connection.CredentialInput != "entries" {
 		t.Fatalf("modelflare connection = %+v", descriptor.Connection)
-	}
-	// Public projections must not allow callers to mutate the compiled registry.
-	descriptor.Partner.SignupURL = "https://changed.example"
-	fresh, _ := registry.Get(Modelflare)
-	if !reflect.DeepEqual(fresh.Partner, wantPartner) {
-		t.Fatalf("registry partner mutated through descriptor: %+v", fresh.Partner)
 	}
 	for _, route := range descriptor.Routes {
 		if route.RouteMode != RouteNative {

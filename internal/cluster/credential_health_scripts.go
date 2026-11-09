@@ -8,7 +8,9 @@ import "github.com/redis/go-redis/v9"
 // (identity generation), cd (cooldown deadline ms), bl ("1" when
 // blacklisted), fc (failure count), fg/mg (failure and model cooldown
 // generations), m:<model> (model cooldown deadline ms), auth and asv (auth
-// state and the secret version it belongs to). Absent cd/bl/fc mean zero.
+// state and the secret version it belongs to). qcd/qm:<model> keep quota
+// cooldowns separate; qg is their recovery generation and qr the last rejection
+// time. Absent fields mean zero, so historical cooldowns stay unclassified.
 // Identity generations and the fg/mg generations are compared as decimal
 // strings; deadlines and secret versions stay far below 2^53.
 //
@@ -32,10 +34,10 @@ local function num(field)
   return tonumber(redis.call('HGET', key, field) or '0')
 end
 
-local function clear_model_cooldowns()
+local function clear_model_cooldowns(prefix)
   local fields = redis.call('HKEYS', key)
   for _, field in ipairs(fields) do
-    if string.sub(field, 1, 2) == 'm:' then redis.call('HDEL', key, field) end
+    if string.sub(field, 1, #prefix) == prefix then redis.call('HDEL', key, field) end
   end
 end
 
@@ -43,8 +45,9 @@ if redis.call('HSETNX', key, 'ep', ARGV[5]) == 1 then
   redis.call('HSET', key, 'ver', '0', 'idg', idg, 'fg', '0', 'mg', '0')
   mutated = true
 elseif redis.call('HGET', key, 'idg') ~= idg then
-  clear_model_cooldowns()
-  redis.call('HDEL', key, 'cd', 'bl', 'fc', 'auth', 'asv')
+  clear_model_cooldowns('m:')
+  clear_model_cooldowns('qm:')
+  redis.call('HDEL', key, 'cd', 'bl', 'fc', 'auth', 'asv', 'qcd', 'qg', 'qr')
   redis.call('HSET', key, 'idg', idg, 'fg', '0', 'mg', '0')
   mutated = true
 end
@@ -92,23 +95,63 @@ elseif op == 'model_cooldown' then
       changed = true
     end
   end
+elseif op == 'quota_cooldown' then
+  local model, untilMS, now = ARGV[8], tonumber(ARGV[9]), tonumber(ARGV[10])
+  if (redis.call('HGET', key, 'qg') or '0') ~= ARGV[11] then
+    accepted = false
+  else
+    if now > num('qr') then
+      redis.call('HSET', key, 'qr', ARGV[10])
+      mutated = true
+    end
+    local field = 'qcd'
+    if model ~= '' then
+      field = 'qm:' .. model
+      local fields = redis.call('HGETALL', key)
+      for i = 1, #fields, 2 do
+        if string.sub(fields[i], 1, 3) == 'qm:' and tonumber(fields[i + 1]) <= now then
+          redis.call('HDEL', key, fields[i])
+          mutated = true
+        end
+      end
+    end
+    if untilMS > num(field) then
+      redis.call('HSET', key, field, ARGV[9])
+      changed = true
+    end
+  end
+elseif op == 'restore_observed_quota' then
+  if (redis.call('HGET', key, 'qg') or '0') ~= ARGV[9] or tonumber(ARGV[8]) <= num('qr') then
+    accepted = false
+  else
+    redis.call('HDEL', key, 'qcd')
+    clear_model_cooldowns('qm:')
+    redis.call('HINCRBY', key, 'qg', 1)
+    changed = true
+  end
 elseif op == 'restore' then
   if ARGV[8] == '1' then
-    redis.call('HDEL', key, 'cd', 'bl', 'fc')
+    redis.call('HDEL', key, 'cd', 'bl', 'fc', 'qcd')
     redis.call('HINCRBY', key, 'fg', 1)
+    redis.call('HINCRBY', key, 'qg', 1)
   end
   if ARGV[9] == '1' then
-    clear_model_cooldowns()
+    clear_model_cooldowns('m:')
+    clear_model_cooldowns('qm:')
     redis.call('HINCRBY', key, 'mg', 1)
+    redis.call('HINCRBY', key, 'qg', 1)
   end
   changed = true
 elseif op == 'recover_if_match' then
   local cooldown = ARGV[9]
   if redis.call('HGET', key, 'bl') ~= '1' or redis.call('HGET', key, 'fg') ~= ARGV[8] or
-      cooldown ~= '' and num('cd') ~= tonumber(cooldown) then
+      cooldown ~= '' and math.max(num('cd'), num('qcd')) ~= tonumber(cooldown) then
     accepted = false
   else
-    if cooldown ~= '' then redis.call('HDEL', key, 'cd') end
+    if cooldown ~= '' then
+      redis.call('HDEL', key, 'cd', 'qcd')
+      redis.call('HINCRBY', key, 'qg', 1)
+    end
     redis.call('HDEL', key, 'bl', 'fc')
     redis.call('HINCRBY', key, 'fg', 1)
     changed = true

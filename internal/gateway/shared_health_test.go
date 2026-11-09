@@ -48,6 +48,14 @@ func (store *recordingHealthStore) CooldownModel(_ context.Context, ref state.Cr
 	return store.record("model_cooldown", ref)
 }
 
+func (store *recordingHealthStore) CooldownQuota(_ context.Context, ref state.CredentialRef, _ string, _, _ time.Time) (state.SharedHealthResult, error) {
+	return store.record("quota_cooldown", ref)
+}
+
+func (store *recordingHealthStore) RestoreObservedQuota(_ context.Context, ref state.CredentialRef, _ int64) (state.SharedHealthResult, error) {
+	return store.record("restore_observed_quota", ref)
+}
+
 func (store *recordingHealthStore) RecordFailure(_ context.Context, ref state.CredentialRef, threshold int) (state.SharedHealthResult, error) {
 	store.mu.Lock()
 	store.threshold = threshold

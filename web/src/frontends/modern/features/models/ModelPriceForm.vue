@@ -75,7 +75,7 @@ defineExpose({ canSave, unpricedRequested, request, validate })
   <div class="modern-model-price-form">
     <div class="modern-model-price-form-hint">
       <span>{{ t('modelManager.unit', { currency: price.currency }) }}</span>
-      <AppTooltip :label="t('modelManager.emptySlotsHint')">
+      <AppTooltip :label="t('modelManager.emptySlotsHint')" touchable>
         <span tabindex="0" class="modern-model-price-help modern-help-trigger"
           ><AppIcon :icon="Info" size="sm"
         /></span>

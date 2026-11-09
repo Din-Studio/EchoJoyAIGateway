@@ -9,6 +9,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"gpt-load/internal/state"
 	"gpt-load/internal/storage/models"
 	providerobservation "gpt-load/internal/subscription/providers/observation"
 )
@@ -51,25 +52,37 @@ func (manager *CredentialManager) flushOnePassiveQuotaObservation(
 	observation PassiveQuotaObservation,
 ) error {
 	var err error
+	var recoveryRef state.CredentialRef
+	var recoveryAtMS int64
 	// 身份校验、CAS 重试和额度投影必须与目标切换处于同一互斥边界，
 	// 避免旧目标已落盘的结果在切换之后继续写入新目标的运行时额度。
 	manager.mutations.Do(observation.CredentialID, func() {
-		err = manager.flushOnePassiveQuotaObservationLocked(ctx, observation)
+		recoveryRef, recoveryAtMS, err = manager.flushOnePassiveQuotaObservationLocked(ctx, observation)
 	})
+	if err == nil && recoveryAtMS > 0 {
+		if _, healthErr := manager.health.RestoreObservedQuota(ctx, recoveryRef, recoveryAtMS); healthErr != nil {
+			manager.logSharedHealthUnavailable(observation.CredentialID, "restore_observed_quota", healthErr)
+			manager.mutations.Do(observation.CredentialID, func() {
+				if current, ok := manager.registry.CredentialRef(observation.CredentialID); ok && current.IdentityGeneration == recoveryRef.IdentityGeneration && current.QuotaCooldownGeneration == recoveryRef.QuotaCooldownGeneration {
+					manager.registry.RestoreObservedQuotaCooldowns(observation.CredentialID, recoveryAtMS)
+				}
+			})
+		}
+	}
 	return err
 }
 
 func (manager *CredentialManager) flushOnePassiveQuotaObservationLocked(
 	ctx context.Context,
 	observation PassiveQuotaObservation,
-) error {
+) (state.CredentialRef, int64, error) {
 	if manager.registry == nil {
-		return nil
+		return state.CredentialRef{}, 0, nil
 	}
 	ref, ok := manager.registry.CredentialRef(observation.CredentialID)
 	if !ok || ref.IdentityGeneration != observation.IdentityGeneration {
 		manager.passiveQuota.ack(observation.CredentialID, observation.Version)
-		return nil
+		return ref, 0, nil
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		var row models.CredentialObservation
@@ -77,22 +90,22 @@ func (manager *CredentialManager) flushOnePassiveQuotaObservationLocked(
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				manager.passiveQuota.ack(observation.CredentialID, observation.Version)
-				return nil
+				return ref, 0, nil
 			}
-			return fmt.Errorf("read credential observation %d: %w", observation.CredentialID, err)
+			return ref, 0, fmt.Errorf("read credential observation %d: %w", observation.CredentialID, err)
 		}
 		merge, observedAtMS, mergeErr := mergePassiveQuotaSamples(row.SnapshotJSON, row.ObservedAtMS, observation)
 		if mergeErr != nil {
 			// A snapshot this malformed cannot be repaired by retrying the
 			// same merge; drop the observation instead of retrying forever.
 			manager.passiveQuota.ack(observation.CredentialID, observation.Version)
-			return nil
+			return ref, 0, nil
 		}
 		if !merge.Matched {
 			// 没有点数、也未能唯一匹配已有窗口的样本不能推进同步时间。
 			// 窗口创建和身份变更仍由主动观测负责。
 			manager.passiveQuota.ack(observation.CredentialID, observation.Version)
-			return nil
+			return ref, 0, nil
 		}
 		// A matched window whose values did not move is still evidence the
 		// credential was observed just now, so the sync time advances even
@@ -114,19 +127,22 @@ func (manager *CredentialManager) flushOnePassiveQuotaObservationLocked(
 			).
 			Updates(updates)
 		if result.Error != nil {
-			return fmt.Errorf("update credential observation %d: %w", observation.CredentialID, result.Error)
+			return ref, 0, fmt.Errorf("update credential observation %d: %w", observation.CredentialID, result.Error)
 		}
 		if result.RowsAffected == 1 {
 			manager.passiveQuota.ack(observation.CredentialID, observation.Version)
 			if row.State == models.CredentialObservationFresh {
 				manager.registry.ApplyQuotaWindows(observation.CredentialID, merge.Windows)
+				if merge.Recovered {
+					return ref, merge.RecoveredAtMS, nil
+				}
 			}
-			return nil
+			return ref, 0, nil
 		}
 		// An active refresh or a reset committed between our read and our
 		// write. Retry once against the row it left behind.
 	}
-	return fmt.Errorf("passive quota observation for credential %d conflicted with a concurrent write", observation.CredentialID)
+	return ref, 0, fmt.Errorf("passive quota observation for credential %d conflicted with a concurrent write", observation.CredentialID)
 }
 
 // mergePassiveQuotaSamples 按原始时间处理握手和事件，再通过同一次 CAS 写入。
@@ -140,6 +156,7 @@ func mergePassiveQuotaSamples(raw []byte, storedAtMS *int64, observation Passive
 	var snapshot struct {
 		Credits           *providerobservation.CreditSummary `json:"credits"`
 		QuotaObservedAtMS *int64                             `json:"quota_observed_at_ms"`
+		QuotaWindows      []providerobservation.QuotaWindow  `json:"quota_windows"`
 	}
 	if err := json.Unmarshal(raw, &snapshot); err != nil {
 		return passiveQuotaMerge{}, 0, fmt.Errorf("decode credential observation snapshot: %w", err)
@@ -150,6 +167,7 @@ func mergePassiveQuotaSamples(raw []byte, storedAtMS *int64, observation Passive
 	}
 	storedWindowAtMS := windowAtMS
 	creditAccepted := false
+	windowObservedAtMS := make([]int64, len(snapshot.QuotaWindows))
 	creditAtMS := storedAtMS
 	if snapshot.Credits != nil && snapshot.Credits.ObservedAtMS != nil {
 		creditAtMS = snapshot.Credits.ObservedAtMS
@@ -193,6 +211,9 @@ func mergePassiveQuotaSamples(raw []byte, storedAtMS *int64, observation Passive
 			creditAccepted = true
 			observedAtMS = max(observedAtMS, *credits.ObservedAtMS)
 		}
+		for _, position := range merged.ObservedWindowPositions {
+			windowObservedAtMS[position] = sample.ObservedAtMS
+		}
 		merged.Matched = merged.Matched || result.Matched
 		merged.Changed = merged.Changed || result.Changed
 		result = merged
@@ -213,6 +234,25 @@ func mergePassiveQuotaSamples(raw []byte, storedAtMS *int64, observation Passive
 		}
 		result.Encoded, result.Changed = encoded, true
 	}
+	if result.Changed {
+		// 同次落盘只比较原始基线与最终窗口，不将中间样本视为一次独立恢复。
+		windows := append([]providerobservation.QuotaWindow(nil), result.Windows...)
+		for index := range windows {
+			windows[index].State = ""
+		}
+		for index, window := range result.Windows {
+			if windowObservedAtMS[index] == 0 || window.State != "available" {
+				continue
+			}
+			// 保留完整窗口集合校验唯一性，只取真正恢复窗口自己的用量观测时间。
+			windows[index].State = window.State
+			if providerobservation.QuotaRecovered(snapshot.QuotaWindows, windows) {
+				result.Recovered = true
+				result.RecoveredAtMS = max(result.RecoveredAtMS, windowObservedAtMS[index])
+			}
+			windows[index].State = ""
+		}
+	}
 	return result, observedAtMS, nil
 }
 
@@ -222,11 +262,14 @@ func mergePassiveQuotaSamples(raw []byte, storedAtMS *int64, observation Passive
 // observation of that credential, while a response naming no tracked window
 // is no observation of this snapshot at all.
 type passiveQuotaMerge struct {
-	Encoded       []byte
-	Windows       []providerobservation.QuotaWindow
-	Matched       bool
-	WindowMatched bool
-	Changed       bool
+	Encoded                 []byte
+	Windows                 []providerobservation.QuotaWindow
+	ObservedWindowPositions []int
+	Matched                 bool
+	Changed                 bool
+	Recovered               bool
+	RecoveredAtMS           int64
+	WindowMatched           bool
 }
 
 // mergePassiveQuotaSnapshot 更新已有且唯一匹配的窗口及已通过时间校验的点数。
@@ -287,6 +330,9 @@ func mergePassiveQuotaSnapshot(
 		}
 		outcome.Matched = true
 		outcome.WindowMatched = true
+		if patch.Utilization != nil {
+			outcome.ObservedWindowPositions = append(outcome.ObservedWindowPositions, position)
+		}
 		patch.ID = previous.ID // 响应槽位可以变化，卡片窗口身份不变。
 		next := providerobservation.MergeQuotaWindow(previous, patch)
 		if !reflect.DeepEqual(next, previous) {

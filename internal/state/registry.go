@@ -28,19 +28,23 @@ const (
 )
 
 type CredentialEntry struct {
-	Name                    string // 管理面展示别名，不参与调度或身份比较。
-	ID                      uint
-	GroupID                 uint
-	Version                 uint64
-	IdentityGeneration      uint64
-	Fingerprint             string
-	WeightManual            *int
-	ConcurrencyLimit        int
-	Status                  CredentialStatus
-	AuthState               CredentialAuthState
+	Name               string // 管理面展示别名，不参与调度或身份比较。
+	ID                 uint
+	GroupID            uint
+	Version            uint64
+	IdentityGeneration uint64
+	Fingerprint        string
+	WeightManual       *int
+	ConcurrencyLimit   int
+	Status             CredentialStatus
+	AuthState          CredentialAuthState
+	// 原字段保留其他原因和未分类的历史冷却，额度恢复不猜测历史原因。
 	CooldownUntil           time.Time
 	ModelCooldowns          map[string]time.Time
 	ModelCooldownGeneration uint64
+	QuotaCooldownUntil      time.Time
+	QuotaModelCooldowns     map[string]time.Time
+	QuotaCooldownGeneration uint64
 	Blacklisted             bool
 	FailureCount            int
 	FailureGeneration       uint64
@@ -51,8 +55,9 @@ type CredentialEntry struct {
 	quotaResetAt            time.Time
 	// sharedEpoch and sharedVersion order the cluster health state this
 	// entry mirrors; both stay empty until the first state is mirrored.
-	sharedEpoch   string
-	sharedVersion uint64
+	sharedEpoch         string
+	sharedVersion       uint64
+	lastQuotaRejectedAt time.Time
 }
 
 type CredentialMeta struct {
@@ -77,6 +82,7 @@ type CredentialRef struct {
 	FailureGeneration       uint64
 	ModelCooldownGeneration uint64
 	ConcurrencyLimit        int
+	QuotaCooldownGeneration uint64
 }
 
 type CredentialRegistry struct {
@@ -700,6 +706,7 @@ func credentialRef(entry *CredentialEntry) CredentialRef {
 		ProxyFingerprint: entry.ProxyFingerprint, FailureGeneration: entry.FailureGeneration,
 		ModelCooldownGeneration: entry.ModelCooldownGeneration,
 		ConcurrencyLimit:        entry.ConcurrencyLimit,
+		QuotaCooldownGeneration: entry.QuotaCooldownGeneration,
 	}
 }
 
@@ -841,11 +848,21 @@ func (r *CredentialRegistry) CredentialCooldownUntil(credentialID uint) (time.Ti
 	if !ok {
 		return time.Time{}, false
 	}
+	return effectiveCooldownUntil(entry), true
+}
+
+// CredentialNonQuotaCooldownUntil 返回令牌刷新可以恢复的非额度类账号冷却。
+func (r *CredentialRegistry) CredentialNonQuotaCooldownUntil(credentialID uint) (time.Time, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry, ok := r.entryLocked(credentialID)
+	if !ok {
+		return time.Time{}, false
+	}
 	return entry.CooldownUntil, true
 }
 
-// ClearCooldownIfMatch clears only the runtime cooldown observed by a caller.
-// A newer concurrent cooldown is preserved.
+// ClearCooldownIfMatch 只清除调用方记录的非额度类账号冷却，保留并发更新和额度冷却。
 func (r *CredentialRegistry) ClearCooldownIfMatch(credentialID uint, expected time.Time) bool {
 	if expected.IsZero() {
 		return false
@@ -921,6 +938,8 @@ func (r *CredentialRegistry) RestoreRuntimeState(credentialID uint) bool {
 		return false
 	}
 	entry.CooldownUntil = time.Time{}
+	entry.QuotaCooldownUntil = time.Time{}
+	entry.QuotaCooldownGeneration++
 	entry.Blacklisted = false
 	entry.FailureCount = 0
 	entry.FailureGeneration++
@@ -1002,11 +1021,13 @@ func (r *CredentialRegistry) restoreRuntimeStateIfMatch(
 	if !ok || entry.Status != CredentialStatusActive || !entry.Blacklisted ||
 		!sameCredentialIdentity(entry, ref) ||
 		entry.FailureGeneration != ref.FailureGeneration ||
-		cooldownUntil != nil && !entry.CooldownUntil.Equal(*cooldownUntil) {
+		cooldownUntil != nil && !effectiveCooldownUntil(entry).Equal(*cooldownUntil) {
 		return false
 	}
 	if cooldownUntil != nil {
 		entry.CooldownUntil = time.Time{}
+		entry.QuotaCooldownUntil = time.Time{}
+		entry.QuotaCooldownGeneration++
 	}
 	entry.Blacklisted = false
 	entry.FailureCount = 0
@@ -1050,6 +1071,7 @@ func cloneCredentialEntry(entry CredentialEntry) CredentialEntry {
 	entry.quotaRemaining = cloneFloat(entry.quotaRemaining)
 	entry.FailureGeneration = 0
 	entry.ModelCooldowns = cloneModelCooldowns(entry.ModelCooldowns)
+	entry.QuotaModelCooldowns = cloneModelCooldowns(entry.QuotaModelCooldowns)
 	return entry
 }
 
@@ -1074,6 +1096,7 @@ func detachCredentialEntryExact(entry CredentialEntry) CredentialEntry {
 	entry.WeightManual = cloneWeight(entry.WeightManual)
 	entry.quotaRemaining = cloneFloat(entry.quotaRemaining)
 	entry.ModelCooldowns = cloneModelCooldowns(entry.ModelCooldowns)
+	entry.QuotaModelCooldowns = cloneModelCooldowns(entry.QuotaModelCooldowns)
 	return entry
 }
 

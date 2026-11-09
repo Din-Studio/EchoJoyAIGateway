@@ -17,6 +17,7 @@ import (
 	"gpt-load/internal/execution"
 	"gpt-load/internal/execution/geminiembedding"
 	"gpt-load/internal/execution/geminiimage"
+	"gpt-load/internal/execution/responsemodel"
 	"gpt-load/internal/platform/httpheader"
 	"gpt-load/internal/protocol"
 )
@@ -406,7 +407,14 @@ complete:
 	if headers.Get("Content-Encoding") == "" && looksLikeEncodedResponse(bodyBytes) {
 		return startedUnaryFailure(status, headers, execution.ErrorKindInternal, "encoded upstream response cannot be safely forwarded")
 	}
-	model := openAIResponseModel(bodyBytes, spec.UpstreamModel)
+	var model string
+	if responsemodel.IsConversation(spec.ClientProtocol, spec.Operation) {
+		modelObserver := responsemodel.New(spec.ClientProtocol, spec.UpstreamModel)
+		modelObserver.ObserveJSON(bodyBytes)
+		model = modelObserver.Model
+	} else {
+		model = openAIResponseModel(bodyBytes, spec.UpstreamModel)
+	}
 	if status >= http.StatusOK && status < http.StatusMultipleChoices {
 		if prepared.mode == channel.RouteConverted && spec.ClientProtocol == protocol.OpenAIImages {
 			var err error
@@ -580,7 +588,7 @@ func (r *Runtime) executeNativeStream(
 	status := 0
 	var headers http.Header
 	requestID := ""
-	model := spec.UpstreamModel
+	modelObserver := responsemodel.New(spec.ClientProtocol, spec.UpstreamModel)
 	var usageEvidence *execution.UsageEvidence
 	var errorBody bytes.Buffer
 	firstData := execution.NewFirstResponseSSEObserver(parent)
@@ -608,17 +616,17 @@ func (r *Runtime) executeNativeStream(
 	for {
 		select {
 		case <-callContext.Done():
-			return nativeStreamContextFailure(requestContext, preResponse.expired(), started, status, headers, requestID, model, usageEvidence)
+			return nativeStreamContextFailure(requestContext, preResponse.expired(), started, status, headers, requestID, modelObserver.Model, usageEvidence)
 		case <-requestContext.Done():
 			cancelCall()
-			return nativeStreamContextFailure(requestContext, false, started, status, headers, requestID, model, usageEvidence)
+			return nativeStreamContextFailure(requestContext, false, started, status, headers, requestID, modelObserver.Model, usageEvidence)
 		case <-idleTimer.channel():
 			cancelCall()
-			return nativeStreamContextFailure(requestContext, true, started, status, headers, requestID, model, usageEvidence)
+			return nativeStreamContextFailure(requestContext, true, started, status, headers, requestID, modelObserver.Model, usageEvidence)
 		case chunk, open := <-outcome.stream:
 			idleTimer.pause()
 			if callContext.Err() != nil || requestContext.Err() != nil || preResponse.expired() {
-				return nativeStreamContextFailure(requestContext, preResponse.expired(), started, status, headers, requestID, model, usageEvidence)
+				return nativeStreamContextFailure(requestContext, preResponse.expired(), started, status, headers, requestID, modelObserver.Model, usageEvidence)
 			}
 			if !open {
 				if !responseObserved {
@@ -632,29 +640,30 @@ func (r *Runtime) executeNativeStream(
 				if responseRewriter != nil && status >= http.StatusOK && status < http.StatusMultipleChoices {
 					data, err := responseRewriter.finish()
 					if err != nil {
-						return streamAliasFailure(status, headers, requestID, model, usageEvidence)
+						return streamAliasFailure(status, headers, requestID, modelObserver.Model, usageEvidence)
 					}
 					if len(data) > 0 {
 						sequence++
 						if err := sink(execution.StreamEvent{Sequence: sequence, Kind: execution.StreamEventData, Data: data}); err != nil {
-							return nativeStreamSinkFailure(status, headers, requestID, model, usageEvidence)
+							return nativeStreamSinkFailure(status, headers, requestID, modelObserver.Model, usageEvidence)
 						}
 					}
 				}
-				return finishNativeStream(status, headers, requestID, model, usageEvidence, errorBody.Bytes(), prepared.secrets)
+				modelObserver.FinishSSE()
+				return finishNativeStream(status, headers, requestID, modelObserver.Model, usageEvidence, errorBody.Bytes(), prepared.secrets)
 			}
 			if chunk == nil {
 				cancelCall()
-				return nativeStreamRuntimeFailure(bifrostContext, prepared.secrets, started, status, headers, model, usageEvidence)
+				return nativeStreamRuntimeFailure(bifrostContext, prepared.secrets, started, status, headers, modelObserver.Model, usageEvidence)
 			}
 			if chunk.BifrostError != nil {
 				cancelCall()
-				return streamErrorResult(chunk.BifrostError, bifrostContext, prepared.secrets, started, status, headers, model, usageEvidence)
+				return streamErrorResult(chunk.BifrostError, bifrostContext, prepared.secrets, started, status, headers, modelObserver.Model, usageEvidence)
 			}
 			response := chunk.BifrostPassthroughResponse
 			if response == nil || !validUpstreamStatus(response.StatusCode) {
 				cancelCall()
-				return nativeStreamRuntimeFailure(bifrostContext, prepared.secrets, started, status, headers, model, usageEvidence)
+				return nativeStreamRuntimeFailure(bifrostContext, prepared.secrets, started, status, headers, modelObserver.Model, usageEvidence)
 			}
 			if !responseObserved {
 				responseObserved = true
@@ -665,12 +674,12 @@ func (r *Runtime) executeNativeStream(
 				if status < http.StatusOK || status >= http.StatusMultipleChoices {
 					if err := emitReady(); err != nil {
 						callCancel()
-						return nativeStreamSinkFailure(status, headers, requestID, model, usageEvidence)
+						return nativeStreamSinkFailure(status, headers, requestID, modelObserver.Model, usageEvidence)
 					}
 				}
 			} else if response.StatusCode != status {
 				cancelCall()
-				return nativeStreamRuntimeFailure(bifrostContext, prepared.secrets, started, status, headers, model, usageEvidence)
+				return nativeStreamRuntimeFailure(bifrostContext, prepared.secrets, started, status, headers, modelObserver.Model, usageEvidence)
 			}
 
 			if len(response.Body) > 0 {
@@ -681,13 +690,14 @@ func (r *Runtime) executeNativeStream(
 				} else {
 					var err error
 					firstData(data)
+					modelObserver.ObserveSSE(data)
 					data, err = firstEventGate.push(data)
 					if err != nil {
 						cancelCall()
 						if !started {
 							return attemptedStreamFailure(execution.ErrorKindInternal, "invalid upstream SSE stream")
 						}
-						return nativeStreamProtocolFailure(status, headers, requestID, model, usageEvidence)
+						return nativeStreamProtocolFailure(status, headers, requestID, modelObserver.Model, usageEvidence)
 					}
 					if responseRewriter != nil && len(data) > 0 {
 						data, err = responseRewriter.push(data)
@@ -696,19 +706,19 @@ func (r *Runtime) executeNativeStream(
 							if !started {
 								return attemptedStreamFailure(execution.ErrorKindInternal, "rewrite client response model")
 							}
-							return streamAliasFailure(status, headers, requestID, model, usageEvidence)
+							return streamAliasFailure(status, headers, requestID, modelObserver.Model, usageEvidence)
 						}
 					}
 				}
 				if len(data) > 0 {
 					if err := emitReady(); err != nil {
 						cancelCall()
-						return nativeStreamSinkFailure(status, headers, requestID, model, usageEvidence)
+						return nativeStreamSinkFailure(status, headers, requestID, modelObserver.Model, usageEvidence)
 					}
 					sequence++
 					if err := sink(execution.StreamEvent{Sequence: sequence, Kind: execution.StreamEventData, Data: data}); err != nil {
 						cancelCall()
-						return nativeStreamSinkFailure(status, headers, requestID, model, usageEvidence)
+						return nativeStreamSinkFailure(status, headers, requestID, modelObserver.Model, usageEvidence)
 					}
 				}
 			}
@@ -716,7 +726,7 @@ func (r *Runtime) executeNativeStream(
 				chunkUsage, err := usageEvidenceFromPassthroughForSpec(spec, response.PassthroughUsage)
 				if err != nil {
 					cancelCall()
-					return nativeStreamRuntimeFailure(bifrostContext, prepared.secrets, started, status, headers, model, usageEvidence)
+					return nativeStreamRuntimeFailure(bifrostContext, prepared.secrets, started, status, headers, modelObserver.Model, usageEvidence)
 				}
 				if chunkUsage != nil {
 					usageEvidence = cloneUsage(chunkUsage)
@@ -731,7 +741,7 @@ func (r *Runtime) executeNativeStream(
 						Usage:    cloneUsage(chunkUsage),
 					}); err != nil {
 						cancelCall()
-						return nativeStreamSinkFailure(status, headers, requestID, model, usageEvidence)
+						return nativeStreamSinkFailure(status, headers, requestID, modelObserver.Model, usageEvidence)
 					}
 				}
 			}
