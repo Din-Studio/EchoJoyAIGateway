@@ -1497,8 +1497,8 @@ func (r *Runtime) newStreamingSDKContext(parent context.Context, spec execution.
 	bifrostContext.SetValue(schemas.BifrostContextKeySSEReaderFactory, &providerUtils.SSEReaderFactory{
 		NewDataReader: func(reader io.Reader) providerUtils.SSEDataReader {
 			dataReader := providerUtils.GetSSEDataReader(nil, execution.ObserveFirstResponseReader(parent, reader))
-			if capture, _ := bifrostContext.Value(streamErrorStatusKey{}).(*streamErrorStatus); capture != nil {
-				return &streamErrorDataReader{SSEDataReader: dataReader, status: capture}
+			if _, capture := bifrostContext.Value(streamErrorStatusKey{}).(int); capture {
+				return &streamErrorDataReader{SSEDataReader: dataReader, ctx: bifrostContext}
 			}
 			return dataReader
 		},

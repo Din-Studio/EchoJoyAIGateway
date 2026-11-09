@@ -124,11 +124,7 @@ func TestQueryCredentialActivityReturnsZeroActivityAndIncompleteRetention(t *tes
 }
 
 func TestQueryCredentialActivityRetainsLatestFailureAfterSuccess(t *testing.T) {
-	assertCredentialLatestFailureSummary(t, openRequestLogQueryDB(t))
-}
-
-func assertCredentialLatestFailureSummary(t *testing.T, db *gorm.DB) {
-	t.Helper()
+	db := openRequestLogQueryDB(t)
 	service := newRequestLogTestService(db)
 	now := time.Date(2026, time.October, 19, 10, 0, 0, 0, time.UTC)
 	const message = "Selected model is at capacity. Please try a different model."
@@ -156,11 +152,6 @@ func assertCredentialLatestFailureSummary(t *testing.T, db *gorm.DB) {
 		}})
 		row.AttemptRows[0].CompletedAtMS = at.UnixMilli()
 		createRequestLogQueryRow(t, db, row)
-		t.Cleanup(func() {
-			if err := db.Where("id = ?", id).Delete(&models.RequestLog{}).Error; err != nil {
-				t.Errorf("delete diagnostic request: %v", err)
-			}
-		})
 	}
 	result, err := service.QueryCredentialActivity(t.Context(), CredentialActivityQuery{
 		CredentialIDs: []uint{91, 92, 93, 94},
