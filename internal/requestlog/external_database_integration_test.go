@@ -178,6 +178,9 @@ func TestExternalDatabaseRequestLogLifecycle(t *testing.T) {
 		1,
 	)
 	assertExternalCredentialAttemptStat(t, db, row.CompletedAtMS, credentialID, 1)
+	t.Run("latest credential failure", func(t *testing.T) {
+		assertCredentialLatestFailureSummary(t, db)
+	})
 }
 
 func assertExternalCredentialAttemptStat(

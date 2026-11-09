@@ -929,6 +929,7 @@ func (s *Service) enrichCredentialActivityIDs(ctx context.Context, items []Crede
 			continue
 		}
 		items[index].LastUsedAtMS = activity.LastUsedAtMS
+		items[index].LastFailureSummary = activity.LastFailureSummary
 		items[index].DailyUsage = &CredentialDailyUsageResponse{
 			WindowSeconds: int64(credentialDailyUsageWindow / time.Second),
 			SuccessCount:  activity.SuccessCount,
