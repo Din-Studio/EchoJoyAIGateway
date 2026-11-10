@@ -302,6 +302,11 @@ func (r *Runtime) executeConvertedResponses(
 	bifrostContext := r.newSDKContext(callContext, spec, prepared.directKey)
 	enableConvertedWireCapture(bifrostContext, prepared)
 	setTypedRequestURL(bifrostContext, prepared.typedURL)
+	cancellationUsage := captureCancellationUsage(bifrostContext, false)
+	defer func() {
+		callCancel()
+		result.Usage = retainedCancellationUsage(result.Error, result.Usage, cancellationUsage)
+	}()
 	outcomeChannel := make(chan responsesUnarySDKResult, 1)
 	go func() {
 		var response *schemas.BifrostResponsesResponse
@@ -620,6 +625,7 @@ func (r *Runtime) executeConvertedResponsesStream(
 	defer preResponse.stop()
 
 	bifrostContext := r.newStreamingSDKContext(callContext, spec, prepared.directKey)
+	cancellationUsage := captureCancellationUsage(bifrostContext, true)
 	captureStreamErrorStatus(bifrostContext, prepared.upstreamProtocol)
 	enableConvertedWireCapture(bifrostContext, prepared)
 	if prepared.request != nil && prepared.upstreamProtocol == protocol.Anthropic {
@@ -634,6 +640,9 @@ func (r *Runtime) executeConvertedResponsesStream(
 	}
 	wireUsage := captureAnthropicWireUsage(bifrostContext, prepared)
 	defer func() {
+		callCancel()
+		result.Usage = retainedCancellationUsage(result.Error, result.Usage, cancellationUsage)
+		// Raw Anthropic corrections remain authoritative over SDK maxima.
 		if evidence := wireUsage.evidence(); evidence != nil {
 			result.Usage = evidence
 		}

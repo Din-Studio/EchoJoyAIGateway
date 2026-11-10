@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -143,7 +144,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 	}
 	bifrostCore, err := core.Init(ctx, schemas.BifrostConfig{
 		Account:         r.account,
-		LLMPlugins:      []schemas.LLMPlugin{anthropicUsageStreamHook{}},
+		LLMPlugins:      []schemas.LLMPlugin{usageCaptureHook{}},
 		MCPPlugins:      []schemas.MCPPlugin{},
 		Logger:          r.logger,
 		InitialPoolSize: 64,
@@ -283,8 +284,8 @@ func cloneProviderConfig(source *schemas.ProviderConfig) *schemas.ProviderConfig
 		return nil
 	}
 	clone := *source
-	clone.NetworkConfig.ExtraHeaders = cloneStringMap(source.NetworkConfig.ExtraHeaders)
-	clone.NetworkConfig.BetaHeaderOverrides = cloneBoolMap(source.NetworkConfig.BetaHeaderOverrides)
+	clone.NetworkConfig.ExtraHeaders = maps.Clone(source.NetworkConfig.ExtraHeaders)
+	clone.NetworkConfig.BetaHeaderOverrides = maps.Clone(source.NetworkConfig.BetaHeaderOverrides)
 	if source.ProxyConfig != nil {
 		proxy := *source.ProxyConfig
 		proxy.URL = cloneSecretVar(source.ProxyConfig.URL)
@@ -318,28 +319,6 @@ func cloneSecretVar(source *schemas.SecretVar) *schemas.SecretVar {
 	}
 	clone := *source
 	return &clone
-}
-
-func cloneStringMap(source map[string]string) map[string]string {
-	if source == nil {
-		return nil
-	}
-	clone := make(map[string]string, len(source))
-	for key, value := range source {
-		clone[key] = value
-	}
-	return clone
-}
-
-func cloneBoolMap(source map[string]bool) map[string]bool {
-	if source == nil {
-		return nil
-	}
-	clone := make(map[string]bool, len(source))
-	for key, value := range source {
-		clone[key] = value
-	}
-	return clone
 }
 
 var _ execution.Executor = (*Runtime)(nil)
