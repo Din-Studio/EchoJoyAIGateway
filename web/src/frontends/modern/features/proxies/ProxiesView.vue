@@ -108,6 +108,11 @@ usePageRefresh({
   pending: query.isFetching,
   updatedAt: query.dataUpdatedAt,
 })
+const frame = ref<InstanceType<typeof AppListFrame>>()
+watch(
+  () => JSON.stringify(filters.value),
+  () => frame.value?.scrollToTop(),
+)
 const selected = ref(new Set<number>())
 const search = ref(filters.value.q)
 watch(
@@ -614,6 +619,7 @@ onScopeDispose(() => {
       </AppNotice>
     </div>
     <AppListFrame
+      ref="frame"
       mobile-flow
       :label="t('proxies.title')"
       :loading="Boolean(query.data.value) && query.isFetching.value"
