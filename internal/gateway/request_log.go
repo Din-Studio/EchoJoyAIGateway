@@ -377,7 +377,8 @@ func (recorder *requestRecorder) recordAttempt(
 		return -1
 	}
 	rules := state.HeaderRules{}
-	if result.HasResponse() && !result.ProviderErrorBeforeCommit {
+	if (result.HasResponse() && !result.ProviderErrorBeforeCommit) ||
+		(result.ExecutionError != nil && result.ExecutionError.Kind == execution.ErrorKindProvider) {
 		rules = selection.Group.HeaderRules
 	}
 	summarySecrets := resolvedErrorSummarySecretValues(
