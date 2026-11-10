@@ -125,6 +125,11 @@ func (r *Runtime) Execute(parent context.Context, spec execution.AttemptSpec) (r
 	defer callCancel()
 
 	bifrostContext := r.newSDKContext(callContext, spec, prepared.directKey)
+	cancellationUsage := captureCancellationUsage(bifrostContext, false)
+	defer func() {
+		callCancel()
+		result.Usage = retainedCancellationUsage(result.Error, result.Usage, cancellationUsage)
+	}()
 	enableConvertedWireCapture(bifrostContext, prepared)
 	setTypedRequestURL(bifrostContext, prepared.typedURL)
 	outcomeChannel := make(chan unarySDKResult, 1)
@@ -241,6 +246,11 @@ func (r *Runtime) ExecuteStream(
 	defer preResponse.stop()
 
 	bifrostContext := r.newStreamingSDKContext(callContext, spec, prepared.directKey)
+	cancellationUsage := captureCancellationUsage(bifrostContext, true)
+	defer func() {
+		callCancel()
+		result.Usage = retainedCancellationUsage(result.Error, result.Usage, cancellationUsage)
+	}()
 	captureStreamErrorStatus(bifrostContext, prepared.upstreamProtocol)
 	enableConvertedWireCapture(bifrostContext, prepared)
 	setTypedRequestURL(bifrostContext, prepared.typedURL)

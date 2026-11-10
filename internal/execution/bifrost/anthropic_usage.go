@@ -113,20 +113,3 @@ func (capture *anthropicWireUsage) applyResponses(target *schemas.ResponsesRespo
 type anthropicUsageContextKey struct{}
 
 var anthropicUsageCaptureKey anthropicUsageContextKey
-
-type anthropicUsageStreamHook struct{}
-
-func (anthropicUsageStreamHook) GetName() string { return "gpt-load-anthropic-usage" }
-func (anthropicUsageStreamHook) Cleanup() error  { return nil }
-func (anthropicUsageStreamHook) PreRequestHook(_ *schemas.BifrostContext, _ *schemas.BifrostRequest) error {
-	return nil
-}
-func (anthropicUsageStreamHook) PreLLMHook(_ *schemas.BifrostContext, req *schemas.BifrostRequest) (*schemas.BifrostRequest, *schemas.LLMPluginShortCircuit, error) {
-	return req, nil, nil
-}
-func (anthropicUsageStreamHook) PostLLMHook(ctx *schemas.BifrostContext, resp *schemas.BifrostResponse, err *schemas.BifrostError) (*schemas.BifrostResponse, *schemas.BifrostError, error) {
-	if enabled, _ := ctx.Value(anthropicUsageCaptureKey).(bool); enabled && resp != nil && resp.ResponsesStreamResponse != nil {
-		ctx.Root().SetValue(schemas.BifrostContextKeyIntegrationType, "anthropic")
-	}
-	return resp, err, nil
-}
