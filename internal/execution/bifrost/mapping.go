@@ -548,6 +548,7 @@ func streamErrorResult(
 	model string,
 	usageEvidence *execution.UsageEvidence,
 ) execution.StreamResult {
+	bifrostError = restoreStreamErrorStatus(bifrostContext, bifrostError)
 	if headers == nil {
 		headers = responseHeaders(nil, bifrostContext, true)
 	}
