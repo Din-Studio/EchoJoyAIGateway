@@ -303,6 +303,7 @@ func newGatewaySharedState(
 		Affinity:          cluster.NewAffinity(client),
 		Concurrency:       concurrency,
 		GuardrailEvidence: cluster.NewGuardrailVerdicts(client, requestaudit.EvidenceTTL),
+		InvalidLineage:    cluster.NewInvalidLineage(client),
 	}
 }
 

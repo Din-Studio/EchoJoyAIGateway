@@ -34,6 +34,7 @@ func newTestSharedStateOn(client *cluster.Client, registry *state.CredentialRegi
 		Affinity:          cluster.NewAffinity(client),
 		Concurrency:       cluster.NewConcurrency(client),
 		GuardrailEvidence: cluster.NewGuardrailVerdicts(client, requestaudit.EvidenceTTL),
+		InvalidLineage:    cluster.NewInvalidLineage(client),
 	}
 }
 
