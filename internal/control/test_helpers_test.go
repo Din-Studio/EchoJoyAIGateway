@@ -286,6 +286,7 @@ func newTestGatewaySharedState(fixture serviceFixture) gateway.SharedState {
 		Affinity:          cluster.NewAffinity(fixture.cluster),
 		Concurrency:       fixture.concurrency,
 		GuardrailEvidence: cluster.NewGuardrailVerdicts(fixture.cluster, requestaudit.EvidenceTTL),
+		InvalidLineage:    cluster.NewInvalidLineage(fixture.cluster),
 	}
 }
 

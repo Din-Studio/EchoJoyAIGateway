@@ -222,6 +222,7 @@ func newAggregationSearchGateway(t *testing.T, id channel.ID, endpoint string) (
 		Affinity:          cluster.NewAffinity(client),
 		Concurrency:       cluster.NewConcurrency(client),
 		GuardrailEvidence: cluster.NewGuardrailVerdicts(client, requestaudit.EvidenceTTL),
+		InvalidLineage:    cluster.NewInvalidLineage(client),
 	}
 	handler := gateway.NewHandler(manager, registry, crypto, gateway.NewExecutionForwarder(runtime), dialect.NewSet(dialect.NewOpenAIResponses(), dialect.NewAnthropic(), dialect.NewGemini()),
 		stats, health.NewMutationCoordinator(), cluster.NewAccessKeyRPM(client), sink, nil, shared)
