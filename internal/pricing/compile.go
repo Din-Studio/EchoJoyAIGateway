@@ -189,7 +189,7 @@ func validateModelID(modelID string) error {
 }
 
 func validateReceiptRule(rule ReceiptRule, schemaVersion int) error {
-	if schemaVersion == ClientModelReceiptSchemaVersion {
+	if schemaVersion == ClientModelReceiptSchemaVersion || schemaVersion == ClientAdvisorReceiptSchemaVersion {
 		if rule.ScopeKey != "" || rule.ChannelID != "" || rule.ModelID != "" {
 			return fmt.Errorf("client model receipt must contain only a client model")
 		}
@@ -221,7 +221,7 @@ func validateReceiptRule(rule ReceiptRule, schemaVersion int) error {
 			return fmt.Errorf("global receipt must not contain a channel ID")
 		}
 		return nil
-	case 3, 4, 5, 6:
+	case 3, 4, 5, UpstreamReceiptSchemaVersion, UpstreamAdvisorReceiptSchemaVersion:
 		if rule.ScopeKey != "" {
 			return fmt.Errorf("channel receipt must not contain a scope key")
 		}

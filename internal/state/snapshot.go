@@ -79,7 +79,8 @@ type ModelConfig struct {
 	Alias string
 }
 
-func externalModelName(model ModelConfig) string {
+// ExternalName 是客户端可见、访问密钥模型过滤使用的模型名。
+func (model ModelConfig) ExternalName() string {
 	if alias := strings.TrimSpace(model.Alias); alias != "" {
 		return alias
 	}
@@ -268,7 +269,7 @@ func Compile(input CompileInput) (*ConfigSnapshot, error) {
 	decisionModels := map[string]struct{}{}
 	for _, group := range input.Groups {
 		for _, model := range group.Models {
-			ordinaryModels[externalModelName(model)] = struct{}{}
+			ordinaryModels[model.ExternalName()] = struct{}{}
 		}
 		if !group.Enabled {
 			continue
@@ -283,7 +284,7 @@ func Compile(input CompileInput) (*ConfigSnapshot, error) {
 				execution.OperationDecisionsCreate,
 				model.ID,
 			); supported {
-				decisionModels[externalModelName(model)] = struct{}{}
+				decisionModels[model.ExternalName()] = struct{}{}
 			}
 		}
 	}
@@ -304,7 +305,7 @@ func Compile(input CompileInput) (*ConfigSnapshot, error) {
 				continue
 			}
 			for _, model := range group.Models {
-				if _, supported := target.ModeForModel(protocol.Decisions, execution.OperationDecisionsCreate, model.ID); supported && externalModelName(model) == shared.Model {
+				if _, supported := target.ModeForModel(protocol.Decisions, execution.OperationDecisionsCreate, model.ID); supported && model.ExternalName() == shared.Model {
 					available = true
 				}
 			}
@@ -523,7 +524,7 @@ func appendExecutionTargets(
 					if !supported {
 						return fmt.Errorf("compile group %d channel has no route mode for %q/%q model %q", group.ID, clientProtocol, operation, model.ID)
 					}
-					appendExecutionTarget(index, clientProtocol, operation, externalModelName(model), RouteTarget{
+					appendExecutionTarget(index, clientProtocol, operation, model.ExternalName(), RouteTarget{
 						GroupID: group.ID, UpstreamModelID: strings.TrimSpace(model.ID),
 						Mode: modelMode, ResolvedTarget: cloneResolvedTarget(target),
 					})
@@ -633,7 +634,7 @@ func validateCompileInput(input CompileInput) error {
 			if strings.TrimSpace(model.ID) == "" {
 				return fmt.Errorf("group %d model id is required", group.ID)
 			}
-			external := externalModelName(model)
+			external := model.ExternalName()
 			mapping := [2]string{external, strings.TrimSpace(model.ID)}
 			if _, duplicate := seenModels[mapping]; duplicate {
 				return fmt.Errorf("group %d has duplicate model mapping %q -> %q", group.ID, external, model.ID)

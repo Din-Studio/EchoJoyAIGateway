@@ -1285,7 +1285,7 @@ func TestRequestRecorderDoesNotReuseClientMetadataWhenAttemptObservationIsUnavai
 		selection,
 		dialect.RequestMetadata{ObserveUsage: true},
 		false,
-		pricing.DefaultPriceMultiplier,
+		state.AccessKeyView{PriceMultiplier: pricing.DefaultPriceMultiplier},
 	))
 	index := recorder.appendAttempt(
 		selection,

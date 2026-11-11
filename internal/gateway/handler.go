@@ -159,18 +159,20 @@ func (handler *Handler) freezeAttemptPricing(
 	selection scheduler.Selection,
 	observations dialect.RequestMetadata,
 	observationsAvailable bool,
-	accessKeyMultiplier pricing.PriceMultiplier,
+	key state.AccessKeyView,
 ) frozenAttemptPricing {
 	frozen := frozenAttemptPricing{
 		channelID:     string(selection.ChannelID),
 		groupID:       selection.GroupID,
 		upstreamModel: optionalModelValue(selection.UpstreamModelID),
+		models:        selection.Group.Models,
+		modelFilter:   key.Filters.Models,
 		applicable:    observations.ObserveUsage,
 		metadataSet:   true,
 		pricingMode:   observations.PricingMode,
 		priceMultipliers: pricing.PriceMultipliers{
 			Group:     selection.Group.PriceMultiplier,
-			AccessKey: accessKeyMultiplier,
+			AccessKey: key.PriceMultiplier,
 		},
 		usageDiagnostics: observations.UsageDiagnostics,
 		reasoning:        observations.Reasoning.Clone(),
@@ -668,7 +670,6 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 			handler.requestNow,
 		)
 		recorder.clientIP = requestPeerIP(ginContext.Request)
-		recorder.accessKeyMultiplier = accessKey.PriceMultiplier
 		recorder.currency = snapshot.Settings.Currency
 		defer func() {
 			recorder.completeMissingOutcome(
@@ -870,6 +871,7 @@ func (handler *Handler) Handle(ginContext *gin.Context) {
 		RouteRequirement:         metadata.RouteRequirement,
 		ResponsesStorePreference: metadata.ResponsesStorePreference,
 		ExternalModel:            metadata.Model,
+		AdvisorModels:            metadata.AdvisorModels,
 		AccessKey:                accessKey,
 	}
 	candidateGroupIDs := scheduler.CandidateGroupIDsForQuery(snapshot, query)
@@ -1153,6 +1155,13 @@ func (handler *Handler) executeAttempts(
 			Method: parsed.Method, Path: parsed.Path, RawQuery: parsed.RawQuery,
 			Header: parsed.Header.Clone(), Body: body,
 		}
+		// Advisor tools introduced by overrides must satisfy the same native route and model access rules.
+		advisors, advisorErr := dialect.InspectAdvisorModels(body)
+		if advisorErr != nil || !scheduler.AdvisorModelsAllowed(selection.Group.Models, advisors, snapshot.AccessKeysByID[recorder.accessKeyID]) ||
+			(len(advisors) > 0 && selection.RouteMode != execution.RouteNative) {
+			prepared.err = ErrUpstreamProtocol
+			return prepared
+		}
 		// Routing metadata is frozen from the original client request. Refresh only
 		// attempt-local observations, and never block dispatch when observation fails.
 		// An unavailable observation stays unknown instead of reusing client values.
@@ -1213,7 +1222,7 @@ func (handler *Handler) executeAttempts(
 					selection,
 					attemptObservations,
 					attemptObservationsAvailable,
-					recorder.accessKeyMultiplier,
+					snapshot.AccessKeysByID[recorder.accessKeyID],
 				),
 			)
 		}
@@ -1517,7 +1526,7 @@ func (handler *Handler) executeAttempts(
 					selection,
 					attemptObservations,
 					attemptObservationsAvailable,
-					recorder.accessKeyMultiplier,
+					snapshot.AccessKeysByID[recorder.accessKeyID],
 				),
 			)
 		}
@@ -1800,6 +1809,10 @@ func (handler *Handler) executeAttempts(
 	}
 	if iterator.StaticReason() == scheduler.ReasonModelRequiredByFilter {
 		handler.completeReason(ginContext, recorder, reasonModelRequiredByFilter)
+		return
+	}
+	if iterator.StaticReason() == scheduler.ReasonAdvisorModelUnavailable {
+		handler.completeReason(ginContext, recorder, reasonAdvisorModelUnavailable)
 		return
 	}
 	if parameterOverrideFailure != nil && lastAttemptIndex < 0 {

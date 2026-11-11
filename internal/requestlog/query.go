@@ -358,7 +358,7 @@ func decodeAttemptUpstreamPricingReceipt(row models.RequestLogAttempt) (*pricing
 	if err != nil || decoded == nil {
 		return nil, err
 	}
-	if decoded.SchemaVersion != pricing.UpstreamReceiptSchemaVersion ||
+	if (decoded.SchemaVersion != pricing.UpstreamReceiptSchemaVersion && decoded.SchemaVersion != pricing.UpstreamAdvisorReceiptSchemaVersion) ||
 		decoded.Rule != (pricing.ReceiptRule{ChannelID: row.ChannelID, ModelID: row.UpstreamModel}) {
 		return nil, fmt.Errorf("decode request log upstream pricing receipt: channel identity does not match attempt")
 	}

@@ -99,6 +99,7 @@ func (handler *Handler) prepareAutoModel(ctx context.Context, snapshot *state.Co
 	query.ClientProtocol, query.AccessKey = selectedDialect.Protocol(), key
 	query.Operation, query.RouteRequirement = metadata.Operation, metadata.RouteRequirement
 	query.ResponsesStorePreference = metadata.ResponsesStorePreference
+	query.AdvisorModels = metadata.AdvisorModels
 	view, extractReason := automodel.Extract(selectedDialect.Protocol(), parsed.Body)
 	if !snapshot.RequestRedaction.Empty() {
 		cipher, err := handler.encryption.NewRedactionCipher(key.ID)

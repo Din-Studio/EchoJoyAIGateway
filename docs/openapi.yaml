@@ -97,6 +97,9 @@ info:
       请求日志接口（`/api/logs`，本文档未收录）中，上游费用为条目的 `upstream_cost` 对象；
       日志详情的 `attempts[].pricing_receipt` 是费用明细（规则为 `client_model`），
       `attempts[].upstream_pricing_receipt` 是上游费用明细（规则为 `channel_id` + `model_id`）。AccessKey 身份下两者都不返回。
+    - Anthropic Advisor 轮次逐次按上下文长度选档，收费使用选中分组中 Advisor 对外模型名的统一价，上游成本使用渠道模型价。
+      Advisor 收据版本为 v8（上游成本）或 v9（收费），明细行 `advisor_*` 的 `model_id` 分别表示上游模型 ID 或对外模型名。
+      普通请求仍用 v6/v7，历史记录不重写。缺少统一价不回退到渠道价；无法映射 Advisor 对外名称时，本次收费标记为未定价，上游成本仍独立计算。
 servers:
   - url: http://localhost:3001
     description: 本地默认端口（`PORT`，默认 3001）

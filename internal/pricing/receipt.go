@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // UnmarshalJSON 区分缺省字段与显式 null，并保持历史版本的字段边界。
@@ -38,7 +39,8 @@ func (receipt *Receipt) UnmarshalJSON(data []byte) error {
 func ValidateReceipt(receipt Receipt) error {
 	if (receipt.SchemaVersion != 1 && receipt.SchemaVersion != 2 &&
 		receipt.SchemaVersion != 3 && receipt.SchemaVersion != 4 && receipt.SchemaVersion != 5 &&
-		receipt.SchemaVersion != UpstreamReceiptSchemaVersion && receipt.SchemaVersion != ClientModelReceiptSchemaVersion) ||
+		receipt.SchemaVersion != UpstreamReceiptSchemaVersion && receipt.SchemaVersion != ClientModelReceiptSchemaVersion &&
+		receipt.SchemaVersion != UpstreamAdvisorReceiptSchemaVersion && receipt.SchemaVersion != ClientAdvisorReceiptSchemaVersion) ||
 		receipt.Method != ReceiptMethodUnitRateSum || receipt.MethodVersion != 1 || receipt.Currency != "USD" {
 		return fmt.Errorf("unsupported pricing receipt contract")
 	}
@@ -81,16 +83,33 @@ func ValidateReceipt(receipt Receipt) error {
 		"input": {}, "cache_read": {}, "cache_write_5m": {},
 		"cache_write_1h": {}, "cache_write": {}, "output": {},
 	}
-	seen := make(map[string]struct{}, len(receipt.LineItems))
+	type lineKey struct {
+		code, model string
+		rate        int64
+	}
+	seen := make(map[lineKey]struct{}, len(receipt.LineItems))
 	total := NanoUSD(0)
 	for _, line := range receipt.LineItems {
-		if _, ok := allowed[line.Code]; !ok {
+		component, advisor := strings.CutPrefix(line.Code, advisorLinePrefix)
+		if _, ok := allowed[component]; !ok {
 			return fmt.Errorf("invalid pricing receipt line code %q", line.Code)
 		}
-		if _, exists := seen[line.Code]; exists {
+		if advisor {
+			if receipt.SchemaVersion < UpstreamAdvisorReceiptSchemaVersion || validateModelID(line.ModelID) != nil {
+				return fmt.Errorf("invalid pricing receipt advisor line")
+			}
+		} else if line.ModelID != "" {
+			return fmt.Errorf("pricing receipt line %q must not name a model", line.Code)
+		}
+		key := lineKey{code: line.Code, model: line.ModelID, rate: -1}
+		if advisor && line.RateNanoUSDPerMillion != nil {
+			// 同一 advisor 模型的多次调用可能落在不同价格档，按单价区分。
+			key.rate = *line.RateNanoUSDPerMillion
+		}
+		if _, exists := seen[key]; exists {
 			return fmt.Errorf("duplicate pricing receipt line code %q", line.Code)
 		}
-		seen[line.Code] = struct{}{}
+		seen[key] = struct{}{}
 		if line.Quantity <= 0 || line.Multiplier.Numerator <= 0 ||
 			line.Multiplier.Denominator <= 0 {
 			return fmt.Errorf("invalid pricing receipt line quantity or multiplier")

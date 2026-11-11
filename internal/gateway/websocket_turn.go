@@ -174,7 +174,6 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		return
 	}
 	releaseRequest = release
-	recorder.accessKeyMultiplier = key.PriceMultiplier
 	recorder.currency = snapshot.Settings.Currency
 	decision, err := h.accessQuota.Check(s.ctx, snapshot, key.ID, h.quotaNow())
 	if err != nil {
@@ -294,7 +293,7 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		}
 		original = effective
 	}
-	query := scheduler.Query{ClientProtocol: protocol.OpenAIResponses, Operation: execution.OperationResponsesCreate, RouteRequirement: execution.RouteRequirementNative, ResponsesStorePreference: original.metadata.ResponsesStorePreference, ExternalModel: original.metadata.Model, AccessKey: key, AllowedCredentialIDs: make(map[uint]struct{}), AllowedCredentialRefs: make(map[uint]state.CredentialRef)}
+	query := scheduler.Query{ClientProtocol: protocol.OpenAIResponses, Operation: execution.OperationResponsesCreate, RouteRequirement: execution.RouteRequirementNative, ResponsesStorePreference: original.metadata.ResponsesStorePreference, ExternalModel: original.metadata.Model, AdvisorModels: original.metadata.AdvisorModels, AccessKey: key, AllowedCredentialIDs: make(map[uint]struct{}), AllowedCredentialRefs: make(map[uint]state.CredentialRef)}
 	query.ResponsesWebsocket = &original.required
 	groups := scheduler.CandidateGroupIDsForQuery(snapshot, query)
 	for _, ref := range h.registry.CaptureActiveCredentialRefs(groups) {
@@ -307,6 +306,9 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 	}
 	if len(query.AllowedCredentialIDs) == 0 {
 		value := reasonNoCandidate
+		if scheduler.New(snapshot, h.registry, query).StaticReason() == scheduler.ReasonAdvisorModelUnavailable {
+			value = reasonAdvisorModelUnavailable
+		}
 		if binding == nil {
 			// 只有存在匹配模型和访问范围的候选，却缺少所需 WS 能力时才报能力错误。
 			capabilityQuery := query
@@ -426,6 +428,15 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 			iterator.SkipGroup(selection.GroupID)
 			continue
 		}
+		if !scheduler.AdvisorModelsAllowed(selection.Group.Models, effective.metadata.AdvisorModels, key) {
+			if binding != nil || requiredRef != nil {
+				reject(reasonAdvisorModelUnavailable)
+				return
+			}
+			parameterOverrideFailure = &reasonAdvisorModelUnavailable
+			iterator.SkipGroup(selection.GroupID)
+			continue
+		}
 		payload, err = snapshot.RequestRedaction.ApplyWithCipher(payload, redactionCipher)
 		if err != nil || len(payload) > maxWebsocketPayloadBytes {
 			reject(reasonRedactionFailed)
@@ -536,7 +547,7 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		recorder.setUsageApplicable(effective.metadata.ObserveUsage)
 		recorder.setPricingMode(effective.metadata.PricingMode)
 		recorder.setUsageDiagnostics(effective.metadata.UsageDiagnostics)
-		recorder.freezeNextAttemptPricing(h.freezeAttemptPricing(selection, effective.metadata, true, key.PriceMultiplier))
+		recorder.freezeNextAttemptPricing(h.freezeAttemptPricing(selection, effective.metadata, true, key))
 		if sequence == 1 {
 			kind := affinity.kind
 			if requiredRef != nil {

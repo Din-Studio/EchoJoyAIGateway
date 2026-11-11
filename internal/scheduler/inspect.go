@@ -22,6 +22,7 @@ const (
 	ReasonProtocolFiltered          ReasonCode = "protocol_filtered"
 	ReasonModelFiltered             ReasonCode = "model_filtered"
 	ReasonModelRequiredByFilter     ReasonCode = "model_required_by_filter"
+	ReasonAdvisorModelUnavailable   ReasonCode = "advisor_model_unavailable"
 	ReasonOperationUnsupported      ReasonCode = "operation_unsupported"
 	ReasonNativeRouteRequired       ReasonCode = "native_route_required"
 	ReasonNoRouteTarget             ReasonCode = "no_route_target"
@@ -175,6 +176,9 @@ func evaluateTargets(
 		case query.responsesWebsocket != nil && !snapshot.Groups[route.GroupID].ResponsesWebsocketEnabled:
 			decision.included = false
 			decision.reason = ReasonWebsocketDisabled
+		case !AdvisorModelsAllowed(snapshot.Groups[route.GroupID].Models, query.advisorModels, query.accessKey):
+			decision.included = false
+			decision.reason = ReasonAdvisorModelUnavailable
 		}
 		if decision.included {
 			included++
@@ -239,6 +243,41 @@ func routeRequirementSatisfied(
 	default:
 		return false, false, ReasonOperationUnsupported
 	}
+}
+
+// advisor 子推理用同一上游凭据执行并按 advisor 模型计费：该模型须由分组提供，
+// 且对外名称通过访问密钥的模型过滤。advisor 工具写的是上游模型 ID，按 ID 匹配。
+func AdvisorModelsAllowed(models []state.ModelConfig, advisors []string, key state.AccessKeyView) bool {
+	for _, advisor := range advisors {
+		if _, allowed := AdvisorModelName(models, advisor, key.Filters.Models); !allowed {
+			return false
+		}
+	}
+	return true
+}
+
+// AdvisorModelName resolves the authorized public identity. Multiple allowed
+// aliases still permit dispatch, but return no pricing identity rather than
+// choosing a price by configuration order.
+func AdvisorModelName(models []state.ModelConfig, advisor string, filter map[string]struct{}) (string, bool) {
+	name, allowed, ambiguous := "", false, false
+	for _, model := range models {
+		if model.ID != advisor {
+			continue
+		}
+		external := model.ExternalName()
+		if _, permitted := filter[external]; len(filter) > 0 && !permitted {
+			continue
+		}
+		if allowed && name != external {
+			ambiguous = true
+		}
+		name, allowed = external, true
+	}
+	if ambiguous {
+		name = ""
+	}
+	return name, allowed
 }
 
 func accessKeyAllowsGroup(accessKey state.AccessKeyView, groupID uint) bool {
