@@ -102,8 +102,10 @@ type Quote struct {
 // UpstreamReceiptSchemaVersion and ClientModelReceiptSchemaVersion are the
 // receipt contracts written for upstream costs and client-model charges.
 const (
-	UpstreamReceiptSchemaVersion    = 6
-	ClientModelReceiptSchemaVersion = 7
+	UpstreamReceiptSchemaVersion        = 6
+	ClientModelReceiptSchemaVersion     = 7
+	UpstreamAdvisorReceiptSchemaVersion = 8
+	ClientAdvisorReceiptSchemaVersion   = 9
 )
 
 // ReceiptMethodUnitRateSum identifies the stable line-item calculation used by
@@ -121,7 +123,9 @@ const (
 
 // ReceiptLine is one frozen term in the request-time cost calculation.
 type ReceiptLine struct {
-	Code                  string           `json:"code"`
+	Code string `json:"code"`
+	// ModelID 仅用于 advisor 行：v8 是上游模型 ID，v9 是客户端对外名称。
+	ModelID               string           `json:"model_id,omitempty"`
 	Quantity              int64            `json:"quantity"`
 	RateNanoUSDPerMillion *int64           `json:"rate_nano_usd_per_million,omitempty"`
 	Multiplier            Multiplier       `json:"multiplier"`

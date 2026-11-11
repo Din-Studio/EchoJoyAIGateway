@@ -45,6 +45,8 @@ type frozenAttemptPricing struct {
 	channelID        string
 	groupID          uint
 	upstreamModel    string
+	models           []state.ModelConfig // immutable group snapshot used to resolve advisor aliases
+	modelFilter      map[string]struct{} // immutable access-key filter from the same request snapshot
 	table            *pricing.Table
 	applicable       bool
 	metadataSet      bool
@@ -64,7 +66,6 @@ type requestRecorder struct {
 	timingStarted        bool
 	finishedAt           time.Time
 	accessKeyID          uint
-	accessKeyMultiplier  pricing.PriceMultiplier
 	currency             pricing.Currency
 	protocol             protocol.Protocol
 	operation            execution.Operation
@@ -113,12 +114,11 @@ func newRequestRecorder(
 	return &requestRecorder{
 		sink: sink, requestID: requestID, startedAt: startedAt,
 		accessKeyID: accessKeyID, protocol: value, now: now,
-		accessKeyMultiplier: pricing.DefaultPriceMultiplier,
-		currency:            pricing.USDCurrency,
-		pendingRetry:        -1,
-		redactor:            redact.New(),
-		usageApplicable:     true,
-		usage:               notApplicableUsageObservation(),
+		currency:        pricing.USDCurrency,
+		pendingRetry:    -1,
+		redactor:        redact.New(),
+		usageApplicable: true,
+		usage:           notApplicableUsageObservation(),
 	}
 }
 
@@ -702,8 +702,22 @@ func quoteFrozenAttempt(
 	if frozen.table == nil {
 		return observation
 	}
-	if clientModel != "" {
-		quote, receipt := frozen.table.QuoteClientModel(clientModel, result, pricingMode, frozen.priceMultipliers.AccessKey)
+	// Clone only advisor calls: upstream evidence must keep its original model IDs.
+	chargeUsage := result
+	mapped := true
+	if result.Advisor != nil {
+		chargeUsage.Advisor = &usage.AdvisorUsage{Calls: append([]usage.ModelTokens(nil), result.Advisor.Calls...)}
+		for index, call := range chargeUsage.Advisor.Calls {
+			name, _ := scheduler.AdvisorModelName(frozen.models, call.Model, frozen.modelFilter)
+			if name == "" {
+				mapped = false
+				break
+			}
+			chargeUsage.Advisor.Calls[index].Model = name
+		}
+	}
+	if clientModel != "" && mapped {
+		quote, receipt := frozen.table.QuoteClientModel(clientModel, chargeUsage, pricingMode, frozen.priceMultipliers.AccessKey)
 		observation.CostState, observation.PricingCompleteness = string(quote.State), string(quote.Completeness)
 		observation.EstimatedCostNanoUSD, observation.ReceiptJSON = int64(quote.EstimatedCostNanoUSD), encodedReceipt(receipt)
 	}

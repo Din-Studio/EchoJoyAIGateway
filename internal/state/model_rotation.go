@@ -44,7 +44,7 @@ func (s *SchedulingState) syncModelCursorsLocked(snapshot *ConfigSnapshot) {
 	for groupID, group := range snapshot.Groups {
 		modelsByName := make(map[string][]string)
 		for _, model := range group.Models {
-			name := externalModelName(model)
+			name := model.ExternalName()
 			modelsByName[name] = append(modelsByName[name], strings.TrimSpace(model.ID))
 		}
 		for name, models := range modelsByName {

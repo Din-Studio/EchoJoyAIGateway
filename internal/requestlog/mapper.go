@@ -290,7 +290,10 @@ func canonicalPricingReceipt(
 	if err := pricing.ValidateReceipt(receipt); err != nil {
 		return nil, err
 	}
-	if receipt.SchemaVersion != schemaVersion || receipt.Rule != rule || receipt.TotalNanoUSD != totalNanoUSD {
+	versionMatches := receipt.SchemaVersion == schemaVersion ||
+		(schemaVersion == pricing.UpstreamReceiptSchemaVersion && receipt.SchemaVersion == pricing.UpstreamAdvisorReceiptSchemaVersion) ||
+		(schemaVersion == pricing.ClientModelReceiptSchemaVersion && receipt.SchemaVersion == pricing.ClientAdvisorReceiptSchemaVersion)
+	if !versionMatches || receipt.Rule != rule || receipt.TotalNanoUSD != totalNanoUSD {
 		return nil, fmt.Errorf("receipt does not match frozen pricing observation")
 	}
 	encoded, err := json.Marshal(receipt)

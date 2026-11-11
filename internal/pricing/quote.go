@@ -1,6 +1,10 @@
 package pricing
 
-import "gpt-load/internal/usage"
+import (
+	"slices"
+
+	"gpt-load/internal/usage"
+)
 
 const tokensPerMillion = 1_000_000
 
@@ -46,7 +50,7 @@ func (table *Table) QuoteClientModel(clientModel string, result usage.Result, mo
 	if table != nil {
 		rule, found = table.clientRules[clientModel]
 	}
-	quote, receipt := quoteSchedules(
+	quote, receipt := table.quoteSchedules(
 		rule.Prices, rule.ContextTiers, rule.ModeSchedules, found,
 		ReceiptRule{ClientModel: clientModel}, result, mode,
 	)
@@ -70,7 +74,9 @@ func applyQuoteMultipliers(quote Quote, receipt *Receipt, multipliers PriceMulti
 		quote.EstimatedCostNanoUSD = adjusted
 		receipt.TotalNanoUSD = int64(adjusted)
 	}
-	receipt.SchemaVersion = schemaVersion
+	if receipt.SchemaVersion != UpstreamAdvisorReceiptSchemaVersion && receipt.SchemaVersion != ClientAdvisorReceiptSchemaVersion {
+		receipt.SchemaVersion = schemaVersion
+	}
 	receipt.BaseTotalNanoUSD = &baseTotal
 	receipt.PriceMultipliers = &multipliers
 	return quote, receipt
@@ -85,7 +91,7 @@ func (table *Table) QuoteForModeWithReceipt(
 	mode Mode,
 ) (Quote, *Receipt) {
 	rule, found := table.Lookup(identity)
-	return quoteSchedules(
+	return table.quoteSchedules(
 		rule.Prices, rule.ContextTiers, rule.ModeSchedules, found,
 		ReceiptRule{ChannelID: identity.ChannelID, ModelID: identity.ModelID}, result, mode,
 	)
@@ -93,7 +99,7 @@ func (table *Table) QuoteForModeWithReceipt(
 
 // quoteSchedules prices usage against one rule's schedules; found reports
 // whether a rule exists for the receipt identity.
-func quoteSchedules(
+func (table *Table) quoteSchedules(
 	basePrices Prices,
 	contextTiers []ContextTier,
 	modeSchedules map[Mode]Schedule,
@@ -136,18 +142,6 @@ func quoteSchedules(
 		}
 	}
 
-	components := [...]struct {
-		code       string
-		tokens     int64
-		price      Price
-		multiplier Multiplier
-	}{
-		{code: "input", tokens: result.Tokens.UncachedInput, price: prices.Input, multiplier: directPriceMultiplier},
-		{code: "cache_read", tokens: result.Tokens.CacheRead, price: prices.CacheRead, multiplier: directPriceMultiplier},
-		{code: "cache_write_5m", tokens: result.Tokens.CacheWrite5M, price: prices.CacheWrite, multiplier: directPriceMultiplier},
-		{code: "cache_write_1h", tokens: result.Tokens.CacheWrite1H, price: prices.CacheWrite, multiplier: cacheWriteOneHourMultiplier},
-		{code: "output", tokens: result.Tokens.Output, price: prices.Output, multiplier: directPriceMultiplier},
-	}
 	receipt := &Receipt{
 		SchemaVersion:          4,
 		Method:                 ReceiptMethodUnitRateSum,
@@ -156,72 +150,158 @@ func quoteSchedules(
 		PricingMode:            selectedMode,
 		Rule:                   receiptRule,
 		ContextThresholdTokens: selectedThreshold,
-		LineItems:              make([]ReceiptLine, 0, len(components)+1),
+		LineItems:              make([]ReceiptLine, 0, 6),
 	}
 
-	positiveBillable := result.Tokens.CacheWriteUnknown > 0
-	pricedPositive := false
-	partial := result.State == usage.StatePartial ||
-		result.Tokens.CacheWriteUnknown > 0
-	cost := NanoUSD(0)
-	for _, component := range components {
-		if component.tokens == 0 {
-			continue
-		}
-		positiveBillable = true
-		line := ReceiptLine{
-			Code:       component.code,
-			Quantity:   component.tokens,
-			Multiplier: component.multiplier,
-			State:      ReceiptLineUnpriced,
-		}
-		if !component.price.Set {
-			partial = true
-			receipt.LineItems = append(receipt.LineItems, line)
-			continue
-		}
-		componentCost, ok := QuoteComponent(
-			component.tokens,
-			component.price.NanoUSDPerMillion,
-			component.multiplier,
-		)
-		if !ok {
+	lines := quoteLines{receipt: receipt, partial: result.State == usage.StatePartial}
+	for _, component := range quoteComponents(result.Tokens, prices) {
+		if !lines.add("", "", component) {
 			return unavailableQuote(), nil
 		}
-		cost, ok = CheckedAddNanoUSD(cost, componentCost)
-		if !ok {
+	}
+	if result.Advisor != nil && len(result.Advisor.Calls) > 0 {
+		if !table.addAdvisorLines(&lines, receiptRule, result.Advisor.Calls) {
 			return unavailableQuote(), nil
 		}
-		rate := int64(component.price.NanoUSDPerMillion)
-		amount := int64(componentCost)
-		line.RateNanoUSDPerMillion = &rate
-		line.AmountNanoUSD = &amount
-		line.State = ReceiptLinePriced
-		receipt.LineItems = append(receipt.LineItems, line)
-		pricedPositive = true
+		receipt.SchemaVersion = UpstreamAdvisorReceiptSchemaVersion
+		if receiptRule.ClientModel != "" {
+			receipt.SchemaVersion = ClientAdvisorReceiptSchemaVersion
+		}
+		baseTotal := int64(lines.cost)
+		receipt.BaseTotalNanoUSD = &baseTotal
+		receipt.PriceMultipliers = &PriceMultipliers{Group: DefaultPriceMultiplier, AccessKey: DefaultPriceMultiplier}
 	}
-	if result.Tokens.CacheWriteUnknown > 0 {
-		receipt.LineItems = append(receipt.LineItems, ReceiptLine{
-			Code:       "cache_write",
-			Quantity:   result.Tokens.CacheWriteUnknown,
-			Multiplier: directPriceMultiplier,
-			State:      ReceiptLineUnpriced,
-		})
-	}
-	receipt.TotalNanoUSD = int64(cost)
+	receipt.TotalNanoUSD = int64(lines.cost)
 
-	if positiveBillable && !pricedPositive {
+	if lines.positiveBillable && !lines.pricedPositive {
 		return unavailableQuote(), receipt
 	}
 	completeness := CompletenessComplete
-	if partial {
+	if lines.partial {
 		completeness = CompletenessPartial
 	}
 	return Quote{
 		State:                CostStatePriced,
 		Completeness:         completeness,
-		EstimatedCostNanoUSD: cost,
+		EstimatedCostNanoUSD: lines.cost,
 	}, receipt
+}
+
+// advisorLinePrefix 标记 v8 上游成本或 v9 客户端收费中的 advisor 明细。
+const advisorLinePrefix = "advisor_"
+
+// quoteLines 逐项写入明细行并累计请求总价。
+type quoteLines struct {
+	receipt          *Receipt
+	cost             NanoUSD
+	positiveBillable bool
+	pricedPositive   bool
+	partial          bool
+}
+
+// quoteComponent 是一项计价分量；未知 TTL 的缓存写入没有单价，始终未计价。
+type quoteComponent struct {
+	code       string
+	tokens     int64
+	price      Price
+	multiplier Multiplier
+}
+
+func quoteComponents(tokens usage.Tokens, prices Prices) [6]quoteComponent {
+	return [...]quoteComponent{
+		{code: "input", tokens: tokens.UncachedInput, price: prices.Input, multiplier: directPriceMultiplier},
+		{code: "cache_read", tokens: tokens.CacheRead, price: prices.CacheRead, multiplier: directPriceMultiplier},
+		{code: "cache_write_5m", tokens: tokens.CacheWrite5M, price: prices.CacheWrite, multiplier: directPriceMultiplier},
+		{code: "cache_write_1h", tokens: tokens.CacheWrite1H, price: prices.CacheWrite, multiplier: cacheWriteOneHourMultiplier},
+		{code: "output", tokens: tokens.Output, price: prices.Output, multiplier: directPriceMultiplier},
+		{code: "cache_write", tokens: tokens.CacheWriteUnknown, multiplier: directPriceMultiplier},
+	}
+}
+
+// add 为正数分量追加明细行；prefix 与 modelID 只用于 advisor 行。
+func (lines *quoteLines) add(prefix, modelID string, component quoteComponent) bool {
+	if component.tokens == 0 {
+		return true
+	}
+	lines.positiveBillable = true
+	line := ReceiptLine{
+		Code:       prefix + component.code,
+		ModelID:    modelID,
+		Quantity:   component.tokens,
+		Multiplier: component.multiplier,
+		State:      ReceiptLineUnpriced,
+	}
+	if !component.price.Set {
+		lines.partial = true
+		lines.receipt.LineItems = append(lines.receipt.LineItems, line)
+		return true
+	}
+	componentCost, ok := QuoteComponent(
+		component.tokens,
+		component.price.NanoUSDPerMillion,
+		component.multiplier,
+	)
+	if !ok {
+		return false
+	}
+	lines.cost, ok = CheckedAddNanoUSD(lines.cost, componentCost)
+	if !ok {
+		return false
+	}
+	rate := int64(component.price.NanoUSDPerMillion)
+	amount := int64(componentCost)
+	line.RateNanoUSDPerMillion = &rate
+	line.AmountNanoUSD = &amount
+	line.State = ReceiptLinePriced
+	lines.receipt.LineItems = append(lines.receipt.LineItems, line)
+	lines.pricedPositive = true
+	return true
+}
+
+// addAdvisorLines 按收据身份选择统一价或渠道价，每次调用独立选标准上下文档。
+// 客户端调用的 Model 已由网关按冻结分组映射为对外名称；两类价格不互相回退。
+func (table *Table) addAdvisorLines(lines *quoteLines, identity ReceiptRule, calls []usage.ModelTokens) bool {
+	type advisorComponent struct {
+		model string
+		quoteComponent
+	}
+	var merged []advisorComponent
+	for _, call := range calls {
+		inputTokens, inputOK := checkedInputTokens(call.Tokens)
+		if _, totalOK := usage.CheckedTotal(call.Tokens); !totalOK || !inputOK || validateModelID(call.Model) != nil {
+			return false
+		}
+		var prices Prices
+		if identity.ClientModel != "" {
+			if rule, found := table.clientRules[call.Model]; found {
+				prices, _ = selectSchedulePrices(rule.Prices, rule.ContextTiers, inputTokens)
+			}
+		} else if rule, found := table.rules[Identity{ChannelID: identity.ChannelID, ModelID: call.Model}]; found {
+			prices, _ = selectSchedulePrices(rule.Prices, rule.ContextTiers, inputTokens)
+		}
+		for _, component := range quoteComponents(call.Tokens, prices) {
+			if component.tokens == 0 {
+				continue
+			}
+			index := slices.IndexFunc(merged, func(existing advisorComponent) bool {
+				return existing.model == call.Model && existing.code == component.code && existing.price == component.price
+			})
+			if index < 0 {
+				merged = append(merged, advisorComponent{model: call.Model, quoteComponent: component})
+				continue
+			}
+			var ok bool
+			if merged[index].tokens, ok = usage.CheckedAdd(merged[index].tokens, component.tokens); !ok {
+				return false
+			}
+		}
+	}
+	for _, component := range merged {
+		if !lines.add(advisorLinePrefix, component.model, component.quoteComponent) {
+			return false
+		}
+	}
+	return true
 }
 
 func selectSchedulePrices(
