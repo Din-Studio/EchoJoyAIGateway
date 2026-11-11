@@ -508,6 +508,8 @@ func (recorder *requestRecorder) completeReason(value reason) {
 	recorder.outcome = requestOutcome{
 		status: telemetry.RequestStatusError, statusCode: value.Status,
 		errorCode: value.Code, errorSummary: value.Message,
+		// A local terminal after dispatch still owns the selected attempt's usage.
+		upstreamModel: recorder.usage.Pricing.UpstreamModel,
 	}
 }
 
