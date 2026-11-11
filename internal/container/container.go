@@ -27,6 +27,7 @@ import (
 	"gpt-load/internal/platform/encryption"
 	"gpt-load/internal/platform/httpclient"
 	"gpt-load/internal/platform/httproute"
+	"gpt-load/internal/platform/memlimit"
 	"gpt-load/internal/platform/redact"
 	"gpt-load/internal/pricing"
 	"gpt-load/internal/provideradapter"
@@ -51,6 +52,7 @@ func BuildContainer() (*dig.Container, error) {
 
 	providers := []any{
 		config.Load,
+		memlimit.Detect,
 		func(cfg *config.Config) (encryption.Service, error) {
 			return encryption.NewService(cfg.EncryptionKey)
 		},
@@ -256,7 +258,9 @@ func BuildContainer() (*dig.Container, error) {
 		engine *gin.Engine,
 		registry *httproute.Registry,
 		gatewayHandler *gateway.Handler,
+		memory memlimit.Memory,
 	) error {
+		gatewayHandler.ConfigureRequestBodyLimit(memory)
 		engine.Use(gatewayHandler.DownstreamHeadersMiddleware())
 		return registry.Bind(engine)
 	}); err != nil {
