@@ -21,7 +21,6 @@ import (
 	"gpt-load/internal/platform/config"
 	"gpt-load/internal/platform/encryption"
 	app_errors "gpt-load/internal/platform/errors"
-	"gpt-load/internal/pricing"
 	"gpt-load/internal/requestlog"
 	"gpt-load/internal/state"
 	stateloader "gpt-load/internal/state/loader"
@@ -333,11 +332,6 @@ func subscriptionsDevice(runtime *subscriptionruntime.Runtime, channelID channel
 	return runtime.DeviceAuthorization(channelID)
 }
 
-type configMutationPublication struct {
-	ConfigInput state.CompileInput
-	PriceTable  *pricing.Table
-}
-
 func (s *Service) writeGroupConfig(
 	ctx context.Context,
 	mutate func(*gorm.DB) error,
@@ -373,7 +367,7 @@ func (s *Service) writeGroupConfigLocked(
 	if s.catalogRuntime != nil {
 		catalogSnapshot = s.catalogRuntime.Load()
 	}
-	publication := configMutationPublication{}
+	var committedInput state.CompileInput
 	err := s.withControlTransaction(ctx, func(tx *gorm.DB) error {
 		if err := mutate(tx); err != nil {
 			return err
@@ -393,18 +387,19 @@ func (s *Service) writeGroupConfigLocked(
 		if _, err := state.Compile(input); err != nil {
 			return mapConfigCompileError(err)
 		}
-		priceTable, err := loadPriceTable(ctx, tx)
-		if err != nil {
+		if err := refreshPriceTable(ctx, tx); err != nil {
 			return err
 		}
-		publication = configMutationPublication{ConfigInput: input, PriceTable: priceTable}
+		committedInput = input
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	s.priceRuntime.Publish(publication.PriceTable)
+	if err := s.publishCommittedPriceTable(ctx); err != nil {
+		return nil, joinCommittedRuntimeRecovery(err, s.recoverCommittedRuntime(ctx, true))
+	}
 	if afterCommitBeforePublish != nil {
 		if err := afterCommitBeforePublish(); err != nil {
 			operationErr := newControlOperationError(stageApplyCommittedRegistryMutation)
@@ -414,7 +409,7 @@ func (s *Service) writeGroupConfigLocked(
 			)
 		}
 	}
-	snapshot, err := s.publishSnapshot(publication.ConfigInput)
+	snapshot, err := s.publishSnapshot(committedInput)
 	if err != nil {
 		operationErr := newControlOperationError(stagePublishCommittedSnapshot)
 		return nil, joinCommittedRuntimeRecovery(
@@ -528,17 +523,14 @@ func (s *Service) recoverCommittedRuntime(ctx context.Context, includePrices boo
 	if _, err := state.Compile(input); err != nil {
 		return fmt.Errorf("compile committed configuration: %w", err)
 	}
-	var priceTable *pricing.Table
 	if includePrices {
 		entries, entriesErr := stateloader.BuildCredentialEntriesWithProxy(ctx, s.db, s.encryption)
 		if entriesErr != nil {
 			return fmt.Errorf("reload committed credentials: %w", entriesErr)
 		}
-		priceTable, err = loadPriceTable(ctx, s.db)
-		if err != nil {
+		if err := s.publishCommittedPriceTable(ctx); err != nil {
 			return fmt.Errorf("reload committed prices: %w", err)
 		}
-		s.priceRuntime.Publish(priceTable)
 		if err := s.registry.ReplaceCredentials(entries); err != nil {
 			return fmt.Errorf("replace committed credentials: %w", err)
 		}
@@ -600,12 +592,14 @@ func (s *Service) runControlTransaction(
 	callback := mutate
 	if announce {
 		callback = func(tx *gorm.DB) error {
-			if err := mutate(tx); err != nil {
-				return err
-			}
+			// Lock the revision row first. Peer writers then see the committed
+			// state before reading or mutating the price graph or catalog.
 			var err error
 			revision, err = bumpClusterConfigRevision(tx, s.now().UnixMilli())
-			return err
+			if err != nil {
+				return err
+			}
+			return mutate(tx)
 		}
 	}
 	err := dbtx.Run(ctx, s.db, dbtx.Options{

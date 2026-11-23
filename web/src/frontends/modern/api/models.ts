@@ -56,7 +56,8 @@ export interface ModelPrice extends PriceSchedules {
   model: string
   channel: { id: string; name: string; icon: string; mark: string }
   status: 'pending' | 'configured'
-  method: 'auto_sync' | 'user_set' | 'user_marked_unpriced' | null
+  method: 'auto_sync' | 'user_set' | 'user_marked_unpriced' | 'model_reference' | null
+  sourcePriceID: number | null
   provider: string | null
   canReset: boolean
   updatedAt: number
@@ -125,10 +126,13 @@ export interface ModelSourceDetail {
   groupCount: number
   modelCount: number
 }
+export const modelPricingMethods = ['all', 'automatic', 'manual', 'linked'] as const
+export type ModelPricingMethod = (typeof modelPricingMethods)[number]
 export interface ModelFilters {
   q: string
   groups: 'enabled' | 'all'
   pricing: 'all' | 'pending' | 'configured'
+  method: ModelPricingMethod
   page: number
   pageSize: number
 }
@@ -190,8 +194,10 @@ export function readModelPrice(value: unknown): ModelPrice {
             'auto_sync',
             'user_set',
             'user_marked_unpriced',
+            'model_reference',
           ]) as ModelPrice['method']),
     provider: row.matched_provider_id === null ? null : text(row.matched_provider_id),
+    sourcePriceID: row.source_price_id == null ? null : integer(row.source_price_id, 1),
     canReset: boolean(row.can_reset),
     updatedAt: integer(row.updated_at_ms),
   }
@@ -335,6 +341,7 @@ export async function getModels(client: ApiClient, filters: ModelFilters, signal
   const params = new URLSearchParams({
     group_status: filters.groups,
     pricing_status: filters.pricing,
+    pricing_method: filters.method,
     page: String(filters.page),
     page_size: String(filters.pageSize),
   })
@@ -357,6 +364,7 @@ export async function getModels(client: ApiClient, filters: ModelFilters, signal
         sources: list(model.upstream_models).map(source),
       }
     }),
+    accessKeyMultiplier: decimal(row.access_key_price_multiplier ?? null),
     total: integer(pagination.total_items),
     pages: integer(pagination.total_pages),
   }
@@ -371,7 +379,14 @@ export async function getModelContext(
   for (let page = 1; ; page++) {
     const result = await getModels(
       client,
-      { q: Array.from(name).slice(0, 200).join(''), groups, pricing: 'all', page, pageSize: 100 },
+      {
+        q: Array.from(name).slice(0, 200).join(''),
+        groups,
+        pricing: 'all',
+        method: 'all',
+        page,
+        pageSize: 100,
+      },
       signal,
     )
     const model = result.items.find((item) => item.name === name)
@@ -408,14 +423,34 @@ export interface ModelPriceUpdate extends PriceSlots {
   >
   confirm_unpriced: boolean
 }
-export async function saveModelPrice(
+export const priceSourcesKey = [...modelsKey, 'price-sources'] as const
+export interface ModelPriceSource {
+  price: ModelPrice
+  groups: { id: number; name: string; enabled: boolean }[]
+  aliases: string[]
+}
+export async function getPriceSources(client: ApiClient, signal: AbortSignal) {
+  const result = record(await client.request('/api/model-prices/sources', { signal }))
+  return list(result.items).map((value): ModelPriceSource => {
+    const row = record(value)
+    return {
+      price: readModelPrice(row.price),
+      groups: list(row.groups).map((value) => {
+        const group = record(value)
+        return { id: integer(group.id, 1), name: text(group.name), enabled: boolean(group.enabled) }
+      }),
+      aliases: list(row.aliases).map(text),
+    }
+  })
+}
+export async function batchModelPrices(
   client: ApiClient,
-  id: number,
-  patch: ModelPriceUpdate,
+  request: { ids: number[] } & (
+    { mode: 'copy'; price: ModelPriceUpdate } | { mode: 'link'; reference: { price_id: number } }
+  ),
   signal: AbortSignal,
-): Promise<ModelPrice> {
-  const path = `/api/model-prices/${id}` as const
-  return readModelPrice(await client.request(path, { method: 'PUT', json: patch, signal }))
+) {
+  await client.request('/api/model-prices/batch', { method: 'POST', json: request, signal })
 }
 // 统一价没有「标记为未定价」：未设置即待定价，提交时至少要有一项基础价格。
 export async function saveClientModelPrice(

@@ -171,7 +171,8 @@ func TestProjectModelsHTTPScopesAccessKeyFiltersAndRelationships(t *testing.T) {
 	}
 	if envelope.Data.Summary.ClientModelCount != 2 ||
 		envelope.Data.Summary.UpstreamModelCount != 4 ||
-		envelope.Data.Summary.PriceCount != 4 ||
+		envelope.Data.Summary.PriceCount != 2 ||
+		envelope.Data.Summary.PendingPriceCount != 2 ||
 		len(envelope.Data.Items) != 2 ||
 		envelope.Data.Items[0].ClientModel != "client-a" ||
 		envelope.Data.Items[1].ClientModel != "shared" {

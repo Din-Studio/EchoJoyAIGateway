@@ -1,14 +1,15 @@
 package control
 
 import (
+	"maps"
+	"slices"
+
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/pricing"
 )
 
-// Model prices come from upstreams in USD and the service stores and returns
-// them in USD. The HTTP handlers convert at the boundary: responses show the
-// prices in the system currency at the current rate, and request prices given
-// in the system currency are converted back to USD before the service runs.
+// Persist prices in USD. Batch edits, unified-price edits and source listings
+// convert using the currency settings of their database transaction.
 
 // PriceSchedulesDTO is the price shape shared by an upstream model price and a
 // client model's unified price.
@@ -94,6 +95,12 @@ func contextTiersInCurrency(tiers []ModelPriceContextTierDTO, currency pricing.C
 
 // convertToUSD turns every decoded price, given in the currency, into nano USD.
 func (request *ModelPriceUpdateRequest) convertToUSD(currency pricing.Currency) error {
+	if currency == pricing.USDCurrency {
+		return nil
+	}
+	// Service requests are passed by value; do not rewrite the caller's slices or map.
+	request.ContextTiers.tiers = slices.Clone(request.ContextTiers.tiers)
+	request.ModeSchedules.schedules = maps.Clone(request.ModeSchedules.schedules)
 	if err := convertDecimalsToUSD(currency, &request.Input, &request.Output, &request.CacheRead, &request.CacheWrite); err != nil {
 		return err
 	}

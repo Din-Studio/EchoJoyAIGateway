@@ -46,4 +46,7 @@ var MessagesEnUS = map[string]string{
 	"group.no_active_credential":                    "No active credential is available for this group",
 	"credential.not_found":                          "Credential not found",
 	"reset_credit.preparation_failed":               "Reset preparation failed; no reset credit was consumed. Please try again later",
+	"model_price.reference_cycle":                   "A model cannot follow itself or form a cycle; choose another model",
+	"model_price.source_referenced":                 "Cannot remove {{.source}}: {{.dependents}} still follow it. Change their source or switch to manual pricing first",
+	"model_price.source_unavailable":                "The reference price source is no longer available; select another source",
 }

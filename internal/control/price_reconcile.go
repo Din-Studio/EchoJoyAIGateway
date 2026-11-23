@@ -89,12 +89,13 @@ func loadPriceReferenceSnapshot(tx *gorm.DB) (priceReferenceSnapshot, error) {
 	if err := tx.Order("id ASC").Find(&groups).Error; err != nil {
 		return priceReferenceSnapshot{}, fmt.Errorf("load groups for price reconciliation: %w", app_errors.ParseDBError(err))
 	}
-	return buildPriceReferenceSnapshot(groups)
+	return buildPriceReferenceSnapshot(groups, nil)
 }
 
-func buildPriceReferenceSnapshot(groups []models.Group) (priceReferenceSnapshot, error) {
+func buildPriceReferenceSnapshot(groups []models.Group, visit func(pricing.Identity, *models.Group, string)) (priceReferenceSnapshot, error) {
 	references := make(map[pricing.Identity]referencedPrice)
-	for _, group := range groups {
+	for i := range groups {
+		group := &groups[i]
 		var groupModels []GroupModel
 		if err := decodeGroupDiscoveryJSON(group.Models, &groupModels); err != nil {
 			return priceReferenceSnapshot{}, fmt.Errorf("decode group price references: %w", app_errors.ErrInternalServer)
@@ -111,6 +112,9 @@ func buildPriceReferenceSnapshot(groups []models.Group) (priceReferenceSnapshot,
 			reference.referenceCount++
 			reference.groupIDs[group.ID] = struct{}{}
 			references[identity] = reference
+			if visit != nil {
+				visit(identity, group, model.Alias)
+			}
 		}
 	}
 	return priceReferenceSnapshot{references: references}, nil

@@ -8,7 +8,6 @@ import (
 
 	"gpt-load/internal/catalog"
 	app_errors "gpt-load/internal/platform/errors"
-	"gpt-load/internal/pricing"
 	"gpt-load/internal/storage/models"
 
 	"github.com/sirupsen/logrus"
@@ -27,7 +26,6 @@ func (s *Service) EnsureInitialState(ctx context.Context) error {
 		catalogSnapshot = s.catalogRuntime.Load()
 	}
 
-	var priceTable *pricing.Table
 	err := s.withControlTransaction(ctx, func(tx *gorm.DB) error {
 		// Serialize the default-key marker across concurrent startup replicas.
 		if err := lockProxyCatalog(tx); err != nil {
@@ -90,17 +88,14 @@ func (s *Service) EnsureInitialState(ctx context.Context) error {
 		if err := cleanupUnreferencedAutomaticPrices(tx); err != nil {
 			return err
 		}
-		var err error
-		priceTable, err = loadPriceTable(ctx, tx)
-		if err != nil {
-			return err
-		}
-		return nil
+		return refreshPriceTable(ctx, tx)
 	})
 	if err != nil {
 		return fmt.Errorf("ensure initial control state: %w", err)
 	}
-	s.priceRuntime.Publish(priceTable)
+	if err := s.publishCommittedPriceTable(ctx); err != nil {
+		return err
+	}
 	logrus.WithField("event", "startup.model_prices_publish").Info("model prices published")
 	if err := s.syncSubscriptionAuth(ctx); err != nil {
 		logrus.WithError(err).WithField("event", "subscription.refresh_sweep_failed").

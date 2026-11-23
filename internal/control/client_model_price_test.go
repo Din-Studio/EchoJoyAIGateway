@@ -81,6 +81,54 @@ func TestClientModelPriceHTTPCreatesReplacesAndPublishes(t *testing.T) {
 	}
 }
 
+// An administrator reads a CNY schedule and changes only output on a replica whose
+// local settings still say USD. The other rates and the USD billing rule must not move.
+func TestClientModelPriceEditUsesCommittedDisplayCurrency(t *testing.T) {
+	fixture, engine, _ := newModelPriceHTTPFixture(t, false)
+	rows, _ := priceReferenceFixture(t, fixture, 1)
+	model, _ := json.Marshal(rows[0].ModelID)
+	put := func(body string) map[string]any {
+		t.Helper()
+		response := serveModelPriceHTTPRequest(engine, http.MethodPut, "/api/client-model-prices", body, authTestKey)
+		if response.Code != http.StatusOK {
+			t.Fatalf("save unified price: %d %s", response.Code, response.Body.String())
+		}
+		return decodeModelPriceHTTPData(t, response)
+	}
+	put(clientModelPriceBody(string(model), `"1"`))
+	peer := newServiceFixtureWithDatabase(t, fixture.db)
+	if _, err := updateCurrencySettings(t, peer, `{"currency":"CNY","exchange_rate":"7"}`); err != nil {
+		t.Fatal(err)
+	}
+	page, _ := getProjectModelPage(t, engine, authTestKey, "")
+	if len(page.Items) != 1 || page.Items[0].Price == nil {
+		t.Fatal("missing unified price")
+	}
+	shown := page.Items[0].Price
+	if shown.Currency != pricing.CurrencyCNY || shown.Prices.Input == nil || *shown.Prices.Input != "7" {
+		t.Fatalf("expected 7 CNY in list, got %+v", shown)
+	}
+	if local, err := fixture.service.currentCurrency(); err != nil || local != pricing.USDCurrency {
+		t.Fatalf("expected a stale local USD snapshot, got %+v, %v", local, err)
+	}
+	input, _ := json.Marshal(*shown.Prices.Input)
+	data := put(`{"client_model":` + string(model) + `,"input":` + string(input) +
+		`,"output":"14","cache_read":null,"cache_write":null,"context_tiers":[],"mode_schedules":{}}`)
+	prices := data["prices"].(map[string]any)
+	if data["currency"] != "CNY" || prices["input"] != "7" || prices["output"] != "14" {
+		t.Fatalf("wrong save response: %+v", data)
+	}
+	var row models.ClientModelPrice
+	if err := fixture.db.Where("client_model = ?", rows[0].ModelID).Take(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.InputPriceNanoUSDPerMillionTokens == nil || *row.InputPriceNanoUSDPerMillionTokens != 1_000_000_000 ||
+		row.OutputPriceNanoUSDPerMillionTokens == nil || *row.OutputPriceNanoUSDPerMillionTokens != 2_000_000_000 ||
+		quoteClientModel(fixture, rows[0].ModelID, pricing.ModeStandard).EstimatedCostNanoUSD != 1_000_000_000 {
+		t.Fatal("saving 14 CNY output changed the USD input rule or stored the wrong output rule")
+	}
+}
+
 func TestClientModelPriceHTTPRejectsInvalidRequests(t *testing.T) {
 	t.Parallel()
 	fixture, engine, _ := newModelPriceHTTPFixture(t, false)

@@ -46,4 +46,7 @@ var MessagesJaJP = map[string]string{
 	"group.no_active_credential":                    "このグループには利用可能な認証情報がありません",
 	"credential.not_found":                          "認証情報が存在しません",
 	"reset_credit.preparation_failed":               "リセットの準備に失敗しました。リセットカードは消費されていません。しばらくしてから再試行してください",
+	"model_price.reference_cycle":                   "自身や循環するモデルは関連付けできません。別のモデルを選択してください",
+	"model_price.source_referenced":                 "{{.source}} は削除できません。{{.dependents}} が参照中です。参照先を変更するか手動価格に切り替えてください",
+	"model_price.source_unavailable":                "参照元の価格は利用できなくなりました。別の参照元を選択してください",
 }

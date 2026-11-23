@@ -137,6 +137,17 @@ When working over SSH or from a remote browser, the browser's `localhost` may no
 
 </details>
 
+## Batch upstream cost prices and links
+
+Administrators can configure 1–100 channel/model prices at once on the Models page. The source list (`GET /api/model-prices/sources`) and batch write (`POST /api/model-prices/batch`) are admin-only.
+
+- **Copy** (`mode=copy`) replaces the complete manual price: all four base slots, context tiers, and mode schedules. It removes any previous link. Amounts use the current system currency in the API and UI; storage remains USD. Clearing all prices requires explicit confirmation.
+- **Link** (`mode=link`, `reference.price_id`) follows an existing, priced model still used by a group. Sources may themselves be linked. Each target retains its direct source (`source_price_id`), while base prices, tiers, and mode prices propagate through the chain in the same control transaction. Self-links and indirect cycles are rejected.
+- A source cannot be deleted or removed from its last group while models still follow it. Change or remove the dependent links first. Automatic catalog sync retains the last valid price when the catalog or a match is unavailable. Explicit reset removes a link/manual price and returns to catalog matching; no match means pending pricing.
+- Admin model queries can combine `pricing_method=all|automatic|manual|linked` with `pricing_status`. For administrators, both filters apply to upstream costs. For AccessKey callers, `pricing_status` filters by the client model’s unified price before pagination: zero is configured; no price is pending. The response lists the unified rates in the system currency and the key’s multiplier separately. Valid `pricing_method` values have no effect. Upstream cost changes do not affect this view. Batch editing does not change unified prices, charges, or cost-limit accounting.
+
+> Upgrade requirement: upstream migration `0031_model_price_reference` is numbered `0033_model_price_reference` in this fork. Back up PostgreSQL before upgrading and test restoration in a separate database. Stop all old replicas, then upgrade every replica before saving links. The migration adds a nullable source column, an index, and a RESTRICT self-reference without changing existing IDs or price JSON. Old images do not understand the 0033 migration ledger or links. Do not roll back only the image; restore a tested pre-upgrade database backup with its matching image, or use a separately verified compatible rollback procedure.
+
 ## Screenshots
 
 **Groups** — View channels, models, credential counts, traffic, and health in one place

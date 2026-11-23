@@ -46,4 +46,7 @@ var MessagesZhCN = map[string]string{
 	"group.no_active_credential":                    "该分组没有可用凭据",
 	"credential.not_found":                          "凭据不存在",
 	"reset_credit.preparation_failed":               "重置准备失败，尚未使用重置卡，请稍后重试",
+	"model_price.reference_cycle":                   "不能关联自身或形成循环，请选择其他模型",
+	"model_price.source_referenced":                 "无法移除 {{.source}}：{{.dependents}} 仍在关联它，请先更换关联或转为手动价格",
+	"model_price.source_unavailable":                "参考价格来源已不可用，请重新选择",
 }
