@@ -36,6 +36,23 @@ func (runtime *PriceRuntime) Publish(table *pricing.Table) {
 	runtime.current.Store(table)
 }
 
+// Callers hold writeMu, as does cluster reload. Re-read both upstream and
+// client prices in one PG snapshot after commit so a delayed writer publishes
+// peer updates rather than its obsolete transaction-local table.
+func (s *Service) publishCommittedPriceTable(ctx context.Context) error {
+	var table *pricing.Table
+	err := s.withReadSnapshot(ctx, func(tx *gorm.DB) error {
+		var err error
+		table, err = loadPriceTable(ctx, tx)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	s.priceRuntime.Publish(table)
+	return nil
+}
+
 func loadPriceTable(
 	ctx context.Context,
 	tx *gorm.DB,
@@ -44,6 +61,14 @@ func loadPriceTable(
 	if err := tx.WithContext(ctx).Order("id ASC").Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("load persisted model prices: %w", app_errors.ParseDBError(err))
 	}
+	if err := resolveModelPriceReferences(rows); err != nil {
+		return nil, err
+	}
+	return compilePriceTable(ctx, tx, rows)
+}
+
+// 调用方先校验或展开关联，再用同一批行构建不可变价格表。
+func compilePriceTable(ctx context.Context, tx *gorm.DB, rows []models.ModelPrice) (*pricing.Table, error) {
 	rules := make([]pricing.Rule, 0, len(rows))
 	for _, row := range rows {
 		rule, err := persistedPriceRule(row)
@@ -74,6 +99,9 @@ func loadPriceTable(
 func persistedPriceRule(
 	row models.ModelPrice,
 ) (pricing.Rule, error) {
+	if row.SourcePriceID != nil && (*row.SourcePriceID == 0 || *row.SourcePriceID == row.ID || row.IsManual) {
+		return pricing.Rule{}, fmt.Errorf("invalid model price reference")
+	}
 	identity, err := PriceIdentityForChannelModel(row.ChannelID, row.ModelID)
 	if err != nil {
 		return pricing.Rule{}, err

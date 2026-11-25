@@ -123,7 +123,7 @@ func (s *Service) migrateLegacyProxyOverrides(ctx context.Context) error {
 			}
 		}
 		if !changedAny {
-			// Roll back the read-only transaction before the revision bump.
+			// Roll back the revision bump when no proxy changed.
 			return noChanges
 		}
 		return nil

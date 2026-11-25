@@ -15,7 +15,6 @@ import (
 	"gpt-load/internal/platform/canonicaljson"
 	"gpt-load/internal/platform/epochms"
 	app_errors "gpt-load/internal/platform/errors"
-	"gpt-load/internal/pricing"
 	stateloader "gpt-load/internal/state/loader"
 	"gpt-load/internal/storage/models"
 )
@@ -382,11 +381,7 @@ func (s *Service) recoverOperationLocked(
 		var stageErr error
 		switch stage {
 		case operationStagePricesPublished:
-			var table *pricing.Table
-			table, stageErr = loadPriceTable(ctx, s.db)
-			if stageErr == nil {
-				s.priceRuntime.Publish(table)
-			}
+			stageErr = s.publishCommittedPriceTable(ctx)
 		case operationStageRegistryApplied:
 			stageErr = s.recoverRegistryOperation(ctx, operation)
 		case operationStageSnapshotPublished:

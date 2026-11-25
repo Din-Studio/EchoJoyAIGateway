@@ -42,6 +42,7 @@ type ModelPriceDTO struct {
 	UpdatedAtMS         int64                  `json:"updated_at_ms"`
 	CanReset            bool                   `json:"can_reset"`
 	CanDelete           bool                   `json:"can_delete"`
+	SourcePriceID       *uint                  `json:"source_price_id,omitempty"`
 }
 
 type ModelPriceScheduleDTO struct {
@@ -93,11 +94,7 @@ func (s *Service) UpdateModelPrice(
 	if err := request.validate(); err != nil {
 		return ModelPriceDTO{}, err
 	}
-	contextTiers, err := buildContextPriceTiersJSON(request.ContextTiers.tiers)
-	if err != nil {
-		return ModelPriceDTO{}, err
-	}
-	modeSchedules, err := buildModePriceSchedulesJSON(request.ModeSchedules.schedules)
+	values, err := modelPriceRequestValues(request)
 	if err != nil {
 		return ModelPriceDTO{}, err
 	}
@@ -115,15 +112,11 @@ func (s *Service) UpdateModelPrice(
 		catalogSnapshot = s.catalogRuntime.Load()
 	}
 
-	var table *pricing.Table
 	var result ModelPriceDTO
 	err = s.withControlTransaction(ctx, func(tx *gorm.DB) error {
 		var row models.ModelPrice
 		if err := tx.First(&row, id).Error; err != nil {
 			return fmt.Errorf("load model price: %w", app_errors.ParseDBError(err))
-		}
-		if err := validateModeScheduleUpdate(row, request.ModeSchedules.schedules); err != nil {
-			return err
 		}
 		references, err := loadPriceReferenceSnapshot(tx)
 		if err != nil {
@@ -136,39 +129,11 @@ func (s *Service) UpdateModelPrice(
 			)
 		}
 
-		desired := row
-		desired.InputPriceNanoUSDPerMillionTokens = cloneModelPriceValue(request.Input.nanoUSD)
-		desired.OutputPriceNanoUSDPerMillionTokens = cloneModelPriceValue(request.Output.nanoUSD)
-		desired.CacheReadPriceNanoUSDPerMillionTokens = cloneModelPriceValue(request.CacheRead.nanoUSD)
-		desired.CacheWritePriceNanoUSDPerMillionTokens = cloneModelPriceValue(request.CacheWrite.nanoUSD)
-		desired.ContextPriceTiers = contextTiers
-		desired.ModePriceSchedules = modeSchedules
-		desired.IsManual = true
-		if !modelPriceMutableValuesEqual(row, desired) {
-			updatedAtMS, err := safeEpochMilliseconds(s.now())
-			if err != nil {
-				return fmt.Errorf("timestamp model price update: %w", app_errors.ErrInternalServer)
-			}
-			if err := tx.Model(&models.ModelPrice{}).
-				Where("id = ?", id).
-				Updates(map[string]any{
-					"input_price_nano_usd_per_million_tokens":       desired.InputPriceNanoUSDPerMillionTokens,
-					"output_price_nano_usd_per_million_tokens":      desired.OutputPriceNanoUSDPerMillionTokens,
-					"cache_read_price_nano_usd_per_million_tokens":  desired.CacheReadPriceNanoUSDPerMillionTokens,
-					"cache_write_price_nano_usd_per_million_tokens": desired.CacheWritePriceNanoUSDPerMillionTokens,
-					"context_price_tiers":                           desired.ContextPriceTiers,
-					"mode_price_schedules":                          desired.ModePriceSchedules,
-					"is_manual":                                     true,
-					"updated_at_ms":                                 updatedAtMS,
-				}).Error; err != nil {
-				return fmt.Errorf("update model price: %w", app_errors.ParseDBError(err))
-			}
-			desired.UpdatedAtMS = updatedAtMS
-			row = desired
-		}
-
-		table, err = loadPriceTable(ctx, tx)
+		row, err = s.saveModelPriceValues(tx, row, values)
 		if err != nil {
+			return err
+		}
+		if err := refreshPriceTable(ctx, tx); err != nil {
 			return err
 		}
 		record, err := projectModelPriceRow(row, references, catalogSnapshot)
@@ -181,7 +146,9 @@ func (s *Service) UpdateModelPrice(
 	if err != nil {
 		return ModelPriceDTO{}, err
 	}
-	s.priceRuntime.Publish(table)
+	if err := s.publishCommittedPriceTable(ctx); err != nil {
+		return ModelPriceDTO{}, err
+	}
 	return result, nil
 }
 
@@ -206,7 +173,6 @@ func (s *Service) ResetModelPrice(
 		catalogSnapshot = s.catalogRuntime.Load()
 	}
 
-	var table *pricing.Table
 	var result ModelPriceDTO
 	err := s.withControlTransaction(ctx, func(tx *gorm.DB) error {
 		var row models.ModelPrice
@@ -225,37 +191,11 @@ func (s *Service) ResetModelPrice(
 		if err != nil {
 			return fmt.Errorf("normalize catalog model price: %w", app_errors.ErrInternalServer)
 		}
-		if !modelPriceMutableValuesEqual(row, desired) {
-			updatedAtMS, err := safeEpochMilliseconds(s.now())
-			if err != nil {
-				return fmt.Errorf("timestamp model price reset: %w", app_errors.ErrInternalServer)
-			}
-			if err := tx.Model(&models.ModelPrice{}).
-				Where("id = ?", id).
-				Updates(map[string]any{
-					"input_price_nano_usd_per_million_tokens":       desired.InputPriceNanoUSDPerMillionTokens,
-					"output_price_nano_usd_per_million_tokens":      desired.OutputPriceNanoUSDPerMillionTokens,
-					"cache_read_price_nano_usd_per_million_tokens":  desired.CacheReadPriceNanoUSDPerMillionTokens,
-					"cache_write_price_nano_usd_per_million_tokens": desired.CacheWritePriceNanoUSDPerMillionTokens,
-					"context_price_tiers":                           desired.ContextPriceTiers,
-					"mode_price_schedules":                          desired.ModePriceSchedules,
-					"is_manual":                                     false,
-					"updated_at_ms":                                 updatedAtMS,
-				}).Error; err != nil {
-				return fmt.Errorf("reset model price: %w", app_errors.ParseDBError(err))
-			}
-			row.InputPriceNanoUSDPerMillionTokens = desired.InputPriceNanoUSDPerMillionTokens
-			row.OutputPriceNanoUSDPerMillionTokens = desired.OutputPriceNanoUSDPerMillionTokens
-			row.CacheReadPriceNanoUSDPerMillionTokens = desired.CacheReadPriceNanoUSDPerMillionTokens
-			row.CacheWritePriceNanoUSDPerMillionTokens = desired.CacheWritePriceNanoUSDPerMillionTokens
-			row.ContextPriceTiers = desired.ContextPriceTiers
-			row.ModePriceSchedules = desired.ModePriceSchedules
-			row.IsManual = false
-			row.UpdatedAtMS = updatedAtMS
-		}
-
-		table, err = loadPriceTable(ctx, tx)
+		row, err = s.saveModelPriceValues(tx, row, desired)
 		if err != nil {
+			return err
+		}
+		if err := refreshPriceTable(ctx, tx); err != nil {
 			return err
 		}
 		record, err := projectModelPriceRow(row, references, catalogSnapshot)
@@ -268,7 +208,9 @@ func (s *Service) ResetModelPrice(
 	if err != nil {
 		return ModelPriceDTO{}, err
 	}
-	s.priceRuntime.Publish(table)
+	if err := s.publishCommittedPriceTable(ctx); err != nil {
+		return ModelPriceDTO{}, err
+	}
 	return result, nil
 }
 
@@ -294,7 +236,6 @@ func (s *Service) DeleteModelPrice(ctx context.Context, id uint) error {
 		return err
 	}
 
-	var table *pricing.Table
 	err := s.withControlTransaction(ctx, func(tx *gorm.DB) error {
 		var row models.ModelPrice
 		if err := tx.First(&row, id).Error; err != nil {
@@ -318,7 +259,14 @@ func (s *Service) DeleteModelPrice(ctx context.Context, id uint) error {
 				},
 			)
 		}
-		if !row.IsManual {
+		var dependents []models.ModelPrice
+		if err := tx.Where("source_price_id = ?", id).Find(&dependents).Error; err != nil {
+			return app_errors.ParseDBError(err)
+		}
+		if len(dependents) > 0 {
+			return modelPriceSourceInUse(row, dependents)
+		}
+		if !row.IsManual && row.SourcePriceID == nil {
 			return app_errors.NewAPIErrorWithData(
 				app_errors.ErrModelPriceAutomaticDeleteForbidden,
 				ModelPriceIDData{ID: id},
@@ -327,14 +275,12 @@ func (s *Service) DeleteModelPrice(ctx context.Context, id uint) error {
 		if err := tx.Where("id = ?", id).Delete(&models.ModelPrice{}).Error; err != nil {
 			return fmt.Errorf("delete model price: %w", app_errors.ParseDBError(err))
 		}
-		table, err = loadPriceTable(ctx, tx)
-		return err
+		return refreshPriceTable(ctx, tx)
 	})
 	if err != nil {
 		return err
 	}
-	s.priceRuntime.Publish(table)
-	return nil
+	return s.publishCommittedPriceTable(ctx)
 }
 
 func modelPriceUpdateAllNull(request ModelPriceUpdateRequest) bool {
@@ -387,28 +333,6 @@ func buildModePriceSchedulesJSON(
 	return normalized, nil
 }
 
-func validateModeScheduleUpdate(
-	row models.ModelPrice,
-	requested map[pricing.Mode]ModelPriceScheduleRequest,
-) error {
-	rule, err := persistedPriceRule(row)
-	if err != nil {
-		return fmt.Errorf("decode persisted model price: %w", app_errors.ErrInternalServer)
-	}
-	// Ultrafast 允许在目录尚无价格时手工配置；其他模式保留原有增删约束。
-	for mode := range rule.ModeSchedules {
-		if _, exists := requested[mode]; !exists && mode != pricing.ModeUltrafast {
-			return fmt.Errorf("model price mode schedule set cannot be changed: %w", app_errors.ErrValidation)
-		}
-	}
-	for mode := range requested {
-		if _, exists := rule.ModeSchedules[mode]; !exists && mode != pricing.ModeUltrafast {
-			return fmt.Errorf("model price mode schedule set cannot be changed: %w", app_errors.ErrValidation)
-		}
-	}
-	return nil
-}
-
 func cloneModelPriceValue(value *int64) *int64 {
 	if value == nil {
 		return nil
@@ -452,6 +376,24 @@ func contextPriceTierModels(tiers []ModelPriceContextTierRequest) []models.Conte
 	return encoded
 }
 
+// saveModelPriceValues preserves identity and only advances the timestamp when
+// an editable value changes. Single edits, resets and batch edits share it.
+func (s *Service) saveModelPriceValues(tx *gorm.DB, row, values models.ModelPrice) (models.ModelPrice, error) {
+	if modelPriceMutableValuesEqual(row, values) {
+		return row, nil
+	}
+	now, err := safeEpochMilliseconds(s.now())
+	if err != nil {
+		return models.ModelPrice{}, app_errors.ErrInternalServer
+	}
+	values.ID, values.ChannelID, values.ModelID = row.ID, row.ChannelID, row.ModelID
+	values.CreatedAtMS, values.UpdatedAtMS = row.CreatedAtMS, max(now, row.UpdatedAtMS+1)
+	if err := tx.Model(&models.ModelPrice{}).Where("id = ?", row.ID).Updates(modelPriceAssignments(values)).Error; err != nil {
+		return models.ModelPrice{}, app_errors.ParseDBError(err)
+	}
+	return values, nil
+}
+
 func modelPriceMutableValuesEqual(left, right models.ModelPrice) bool {
 	leftTiers, leftErr := models.NormalizeContextPriceTiers(left.ContextPriceTiers)
 	rightTiers, rightErr := models.NormalizeContextPriceTiers(right.ContextPriceTiers)
@@ -469,7 +411,8 @@ func modelPriceMutableValuesEqual(left, right models.ModelPrice) bool {
 		pricePointerEqual(left.CacheWritePriceNanoUSDPerMillionTokens, right.CacheWritePriceNanoUSDPerMillionTokens) &&
 		bytes.Equal(leftTiers, rightTiers) &&
 		bytes.Equal(leftSchedules, rightSchedules) &&
-		left.IsManual == right.IsManual
+		left.IsManual == right.IsManual &&
+		samePriceSource(left.SourcePriceID, right.SourcePriceID)
 }
 
 func (s *Service) ListModelPrices(
@@ -578,37 +521,35 @@ func projectModelPriceRow(
 	configured := modelPriceHasConfiguredValue(row)
 	var matchedProviderID *string
 	var matchSource *ModelPriceMatchSource
-	matchedAutomaticPrice := false
-	if !row.IsManual {
+	if !row.IsManual && row.SourcePriceID == nil {
 		match, matched := resolveAutomaticPriceForIdentity(catalogSnapshot, identity)
-		matchedAutomaticPrice = matched
-		if configured && matchedAutomaticPrice {
+		if configured && matched {
 			providerID := match.providerID
 			matchedProviderID = &providerID
 			source := match.source
 			matchSource = &source
-		} else {
-			matchedAutomaticPrice = false
 		}
 	}
 	dto := ModelPriceDTO{
 		ID: row.ID, ChannelID: row.ChannelID, ChannelName: descriptor.Name,
 		ChannelMark: descriptor.Mark, ChannelIcon: descriptor.Icon, ModelID: row.ModelID,
 		PriceSchedulesDTO: PriceSchedulesDTO{
+			Currency:      pricing.CurrencyUSD,
 			Prices:        prices,
 			ContextTiers:  projectContextPriceTiers(rule.ContextTiers),
 			ModeSchedules: projectModeSchedules(rule.ModeSchedules),
 		},
 		PricingStatus:       status,
-		Method:              modelPriceMethod(row, configured, matchedAutomaticPrice),
+		Method:              modelPriceMethod(row, configured),
 		MatchedProviderID:   matchedProviderID,
 		MatchSource:         matchSource,
 		Referenced:          reference.referenceCount > 0,
 		ReferenceCount:      reference.referenceCount,
 		ReferenceGroupCount: reference.referenceGroupCount(),
 		UpdatedAtMS:         row.UpdatedAtMS,
-		CanReset:            row.IsManual,
-		CanDelete:           row.IsManual && reference.referenceCount == 0,
+		CanReset:            row.IsManual || row.SourcePriceID != nil,
+		CanDelete:           (row.IsManual || row.SourcePriceID != nil) && reference.referenceCount == 0,
+		SourcePriceID:       row.SourcePriceID,
 	}
 	return modelPriceListRecord{dto: dto}, nil
 }
@@ -616,10 +557,13 @@ func projectModelPriceRow(
 func modelPriceMethod(
 	row models.ModelPrice,
 	configured bool,
-	matchedAutomaticPrice bool,
 ) *string {
+	if row.SourcePriceID != nil {
+		method := "model_reference"
+		return &method
+	}
 	if !row.IsManual {
-		if !configured || !matchedAutomaticPrice {
+		if !configured {
 			return nil
 		}
 		method := "auto_sync"

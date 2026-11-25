@@ -21,11 +21,7 @@ func (s *Server) handleListProjectModels(c *gin.Context) {
 		writeServiceError(c, "list_project_models", err)
 		return
 	}
-	currency, err := s.service.currentCurrency()
-	if err != nil {
-		writeServiceError(c, "list_project_models", err)
-		return
-	}
+	currency := result.displayCurrency
 	for itemIndex := range result.Items {
 		if price := result.Items[itemIndex].Price; price != nil {
 			converted, err := price.inCurrency(currency)

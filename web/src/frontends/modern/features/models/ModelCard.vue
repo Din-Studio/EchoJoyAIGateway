@@ -99,7 +99,7 @@ function hiddenGroupsLabel(source: ModelSource): string {
       }}</AppBadge>
     </AppButton>
     <AppButton
-      v-for="source in model.sources.slice(0, 2)"
+      v-for="source in admin ? model.sources : model.sources.slice(0, 2)"
       :key="source.price.id"
       variant="ghost"
       class="modern-model-mobile-source"
@@ -162,6 +162,9 @@ function hiddenGroupsLabel(source: ModelSource): string {
         <div class="modern-model-row">
           <span class="modern-model-client-price-name">
             <AppOverflowText :text="t('modelManager.clientPrice')" />
+            <AppBadge v-if="!admin && !model.price" tone="warning" size="xs">{{
+              t('modelManager.priceMethods.pending')
+            }}</AppBadge>
             <AppBadge
               v-if="model.price?.context_tiers.length"
               variant="plain"

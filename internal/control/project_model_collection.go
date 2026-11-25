@@ -78,7 +78,7 @@ type ProjectUpstreamModelDTO struct {
 }
 
 // ProjectModelDTO is one client model. Price is its unified outward price,
-// nil until configured; each upstream model's Price is that source's cost.
+// nil until configured. Only administrators see the cost of each source.
 type ProjectModelDTO struct {
 	ClientModel    string                    `json:"client_model"`
 	Price          *ClientModelPriceDTO      `json:"price"`
@@ -110,10 +110,13 @@ type ProjectModelPaginationDTO struct {
 }
 
 type ProjectModelListResponse struct {
-	Summary    ProjectModelSummaryDTO       `json:"summary"`
-	Catalog    ProjectModelCatalogStatusDTO `json:"catalog"`
-	Items      []ProjectModelDTO            `json:"items"`
-	Pagination ProjectModelPaginationDTO    `json:"pagination"`
+	// Apply the key multiplier to the quote, not to the individual rates.
+	AccessKeyPriceMultiplier string                       `json:"access_key_price_multiplier,omitempty"`
+	displayCurrency          pricing.Currency             // From the same read snapshot as the rates.
+	Summary                  ProjectModelSummaryDTO       `json:"summary"`
+	Catalog                  ProjectModelCatalogStatusDTO `json:"catalog"`
+	Items                    []ProjectModelDTO            `json:"items"`
+	Pagination               ProjectModelPaginationDTO    `json:"pagination"`
 }
 
 type UpstreamModelAssociationDTO struct {
@@ -141,13 +144,8 @@ type projectModelGroupRecord struct {
 }
 
 type projectModelUpstreamRecord struct {
-	modelID          string
-	aliasApplied     bool
-	price            ModelPriceDTO
-	routeGroups      []ProjectModelGroupDTO
-	affectedGroups   []ProjectModelGroupDTO
-	catalogReference *ProjectModelCatalogReferenceDTO
-	groupSeen        map[uint]struct{}
+	dto       ProjectUpstreamModelDTO
+	groupSeen map[uint]struct{}
 }
 
 type projectModelRecord struct {
@@ -160,6 +158,7 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 	if err := validateProjectModelListQuery(query); err != nil {
 		return ProjectModelListResponse{}, err
 	}
+	keyScoped := query.AccessKeyID != nil
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -168,10 +167,6 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 	}
 
 	s.writeMu.RLock()
-	var configSnapshot *state.ConfigSnapshot
-	if s.manager != nil {
-		configSnapshot = s.manager.Current()
-	}
 	var catalogSnapshot *catalog.Snapshot
 	if s.catalogRuntime != nil {
 		catalogSnapshot = s.catalogRuntime.Load()
@@ -179,30 +174,41 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 	var groups []models.Group
 	var prices []models.ModelPrice
 	var clientPrices []models.ClientModelPrice
+	var currency pricing.Currency
 	err := s.withReadSnapshot(ctx, func(tx *gorm.DB) error {
 		if err := tx.Order("id ASC").Find(&groups).Error; err != nil {
 			return fmt.Errorf("load groups for model collection: %w", app_errors.ParseDBError(err))
 		}
-		if err := tx.Order("id ASC").Find(&prices).Error; err != nil {
+		priceQuery := tx.Order("id ASC")
+		if keyScoped {
+			// The client needs stable source identities, not the upstream cost records.
+			priceQuery = priceQuery.Select("id", "channel_id", "model_id")
+		}
+		if err := priceQuery.Find(&prices).Error; err != nil {
 			return fmt.Errorf("load model prices for model collection: %w", app_errors.ParseDBError(err))
 		}
 		if err := tx.Order("id ASC").Find(&clientPrices).Error; err != nil {
 			return fmt.Errorf("load client model prices for model collection: %w", app_errors.ParseDBError(err))
 		}
 		groups = cloneGroupRows(groups)
-		return nil
+		var err error
+		currency, err = loadSettingsCurrency(tx)
+		return err
 	})
-	protocolOverrides := map[uint][]protocol.Protocol(nil)
-	if err == nil && query.AccessKeyID != nil {
-		if s.manager == nil {
+	var configSnapshot *state.ConfigSnapshot
+	if s.manager != nil {
+		configSnapshot = s.manager.Current()
+	}
+	var protocolOverrides map[uint][]protocol.Protocol
+	var keyMultiplier string
+	if err == nil && keyScoped {
+		if configSnapshot == nil {
 			err = app_errors.ErrInternalServer
+		} else if key, ok := configSnapshot.AccessKeysByID[*query.AccessKeyID]; !ok || key.Status != state.AccessKeyStatusActive {
+			err = app_errors.ErrUnauthorized
 		} else {
-			groups, protocolOverrides, err = scopeProjectModelGroups(
-				groups,
-				s.manager.Current(),
-				*query.AccessKeyID,
-				s.channelRegistry,
-			)
+			keyMultiplier = pricing.FormatPriceMultiplier(key.PriceMultiplier)
+			groups, protocolOverrides, err = scopeProjectModelGroups(groups, key, s.channelRegistry)
 		}
 	}
 	s.writeMu.RUnlock()
@@ -213,7 +219,7 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 		return ProjectModelListResponse{}, err
 	}
 
-	references, err := buildPriceReferenceSnapshot(groups)
+	references, err := buildPriceReferenceSnapshot(groups, nil)
 	if err != nil {
 		return ProjectModelListResponse{}, err
 	}
@@ -221,7 +227,7 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 		groups,
 		s.channelRegistry,
 		protocolOverrides,
-		query.AccessKeyID == nil,
+		!keyScoped,
 	)
 	if err != nil {
 		return ProjectModelListResponse{}, err
@@ -232,15 +238,18 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 		if err != nil {
 			return ProjectModelListResponse{}, fmt.Errorf("validate persisted price identity: %w", app_errors.ErrInternalServer)
 		}
-		if query.AccessKeyID != nil {
-			if _, referenced := references.references[identity]; !referenced {
-				continue
-			}
-		}
 		if _, duplicate := priceRecords[identity]; duplicate {
 			return ProjectModelListResponse{}, fmt.Errorf("duplicate persisted price identity: %w", app_errors.ErrInternalServer)
 		}
-		record, err := projectModelPriceRow(row, references, catalogSnapshot)
+		var record modelPriceListRecord
+		if keyScoped {
+			if _, visible := references.references[identity]; !visible {
+				continue
+			}
+			record.dto, err = projectAccessKeySourceIdentity(row.ID, identity)
+		} else {
+			record, err = projectModelPriceRow(row, references, catalogSnapshot)
+		}
 		if err != nil {
 			return ProjectModelListResponse{}, err
 		}
@@ -280,27 +289,35 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 			root.protocols = mergeProjectModelProtocols(root.protocols, group.dto.ClientProtocols)
 			upstream := root.upstreams[identity]
 			if upstream == nil {
-				affectedGroups, err := projectModelAffectedGroups(identity, references, groupDTOs)
-				if err != nil {
-					return ProjectModelListResponse{}, err
-				}
-				upstream = &projectModelUpstreamRecord{
-					modelID: model.ID, aliasApplied: strings.TrimSpace(model.Alias) != "",
-					price: priceRecord.dto, affectedGroups: affectedGroups,
-					catalogReference: projectModelCatalogReference(priceRecord.dto, identity, catalogSnapshot),
-					groupSeen:        make(map[uint]struct{}),
+				upstream = &projectModelUpstreamRecord{dto: ProjectUpstreamModelDTO{
+					ModelID: model.ID, AliasApplied: strings.TrimSpace(model.Alias) != "",
+					Price: priceRecord.dto, RouteGroups: []ProjectModelGroupDTO{}, AffectedGroups: []ProjectModelGroupDTO{},
+					CatalogReference: projectModelCatalogReference(priceRecord.dto, identity, catalogSnapshot),
+				}}
+				if !keyScoped {
+					upstream.dto.AffectedGroups, err = projectModelAffectedGroups(identity, references, groupDTOs)
+					if err != nil {
+						return ProjectModelListResponse{}, err
+					}
+					upstream.groupSeen = make(map[uint]struct{})
 				}
 				root.upstreams[identity] = upstream
 			}
+			if keyScoped {
+				continue
+			}
 			if _, duplicate := upstream.groupSeen[group.row.ID]; !duplicate {
 				upstream.groupSeen[group.row.ID] = struct{}{}
-				upstream.routeGroups = append(upstream.routeGroups, group.dto)
+				upstream.dto.RouteGroups = append(upstream.dto.RouteGroups, group.dto)
 			}
 		}
 	}
 
 	clientPriceDTOs := make(map[string]*ClientModelPriceDTO, len(clientPrices))
 	for _, row := range clientPrices {
+		if _, visible := records[row.ClientModel]; !visible {
+			continue
+		}
 		dto, err := projectClientModelPrice(row)
 		if err != nil {
 			return ProjectModelListResponse{}, err
@@ -308,47 +325,49 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 		clientPriceDTOs[row.ClientModel] = &dto
 	}
 
-	summary := projectModelSummary(records, priceRecords)
+	// Summary is for the visible scope, before price filters, search or pagination.
+	summary := ProjectModelSummaryDTO{ClientModelCount: len(records), PriceCount: len(records)}
+	if !keyScoped {
+		summary = projectModelSummary(records, priceRecords)
+	}
 	result := make([]ProjectModelDTO, 0, len(records))
 	for _, record := range records {
+		clientPrice := clientPriceDTOs[record.clientModel]
+		clientStatus := PricingStatusConfigured
+		if keyScoped {
+			summary.UpstreamModelCount += len(record.upstreams)
+			if clientPrice == nil {
+				clientStatus = PricingStatusPending
+				summary.PendingPriceCount++
+			}
+			if !projectModelPricingVisible(clientStatus, query.PricingStatus) {
+				continue
+			}
+		}
 		overrides := catalog.ClientModelOverrides{}
 		if configSnapshot != nil {
 			overrides = configSnapshot.ClientModelOverrides[record.clientModel]
 		}
 		dto := ProjectModelDTO{
 			ClientModel:    record.clientModel,
-			Price:          clientPriceDTOs[record.clientModel],
+			Price:          clientPrice,
 			HasOverrides:   !overrides.Metadata().IsEmpty(),
 			Protocols:      append([]protocol.Protocol(nil), record.protocols...),
 			UpstreamModels: []ProjectUpstreamModelDTO{},
 		}
 		for _, upstream := range record.upstreams {
-			if !projectModelPricingVisible(upstream.price.PricingStatus, query.PricingStatus) {
-				continue
+			source := upstream.dto
+			if keyScoped {
+				// Required by existing readers. It describes this client model, never its source cost.
+				source.Price.PricingStatus = clientStatus
+			} else {
+				if !projectModelPricingVisible(source.Price.PricingStatus, query.PricingStatus) ||
+					!projectModelPricingMethodVisible(source.Price, query.PricingMethod) {
+					continue
+				}
+				sortProjectModelGroups(source.RouteGroups)
 			}
-			sortProjectModelGroups(upstream.routeGroups)
-			// 分组信息只对管理员可见；访问密钥范围整条不发，而不是发一条
-			// 身份被抹空的占位记录——id=0/channel_id="" 这类占位值会违反
-			// 前端 projectSafeInteger/projectChannelID 的强校验，把整个
-			// 模型页判定为无效响应，比不发这条数据本身还糟。
-			routeGroups := []ProjectModelGroupDTO{}
-			affectedGroups := []ProjectModelGroupDTO{}
-			if query.AccessKeyID == nil {
-				routeGroups = append(routeGroups, upstream.routeGroups...)
-				affectedGroups = append(affectedGroups, upstream.affectedGroups...)
-			}
-			// 上游价格是网关的成本，访问密钥范围只保留来源身份，不发金额。
-			price := upstream.price
-			if query.AccessKeyID != nil {
-				price = withoutPriceAmounts(price)
-			}
-			upstreamDTO := ProjectUpstreamModelDTO{
-				ModelID: upstream.modelID, AliasApplied: upstream.aliasApplied,
-				Price: price, RouteGroups: routeGroups,
-				AffectedGroups:   affectedGroups,
-				CatalogReference: upstream.catalogReference,
-			}
-			dto.UpstreamModels = append(dto.UpstreamModels, upstreamDTO)
+			dto.UpstreamModels = append(dto.UpstreamModels, source)
 		}
 		sort.SliceStable(dto.UpstreamModels, func(left, right int) bool {
 			if dto.UpstreamModels[left].ModelID != dto.UpstreamModels[right].ModelID {
@@ -380,9 +399,11 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 		catalogStatus.ErrorCode = status.ErrorCode
 	}
 	return ProjectModelListResponse{
-		Summary: summary,
-		Catalog: catalogStatus,
-		Items:   items,
+		AccessKeyPriceMultiplier: keyMultiplier,
+		displayCurrency:          currency,
+		Summary:                  summary,
+		Catalog:                  catalogStatus,
+		Items:                    items,
 		Pagination: ProjectModelPaginationDTO{
 			Page: query.Page, PageSize: query.PageSize, TotalItems: totalItems,
 			TotalPages: projectModelTotalPages(totalItems, query.PageSize),
@@ -392,17 +413,9 @@ func (s *Service) ListProjectModels(ctx context.Context, query ProjectModelListQ
 
 func scopeProjectModelGroups(
 	groups []models.Group,
-	snapshot *state.ConfigSnapshot,
-	accessKeyID uint,
+	accessKey state.AccessKeyView,
 	registry *channel.Registry,
 ) ([]models.Group, map[uint][]protocol.Protocol, error) {
-	if snapshot == nil || accessKeyID == 0 {
-		return nil, nil, app_errors.ErrUnauthorized
-	}
-	accessKey, exists := snapshot.AccessKeysByID[accessKeyID]
-	if !exists || accessKey.Status != state.AccessKeyStatusActive {
-		return nil, nil, app_errors.ErrUnauthorized
-	}
 	result := make([]models.Group, 0, len(groups))
 	protocolsByGroup := make(map[uint][]protocol.Protocol, len(groups))
 	for _, group := range groups {
@@ -493,7 +506,7 @@ func (s *Service) GetUpstreamModelDetail(ctx context.Context, priceID uint) (Ups
 	}); err != nil {
 		return UpstreamModelDetailDTO{}, err
 	}
-	references, err := buildPriceReferenceSnapshot(groups)
+	references, err := buildPriceReferenceSnapshot(groups, nil)
 	if err != nil {
 		return UpstreamModelDetailDTO{}, err
 	}
@@ -630,7 +643,7 @@ func projectModelSummary(
 	for _, record := range records {
 		summary.UpstreamModelCount += len(record.upstreams)
 		for _, upstream := range record.upstreams {
-			seenPrices[upstream.price.ID] = upstream.price
+			seenPrices[upstream.dto.Price.ID] = upstream.dto.Price
 		}
 	}
 	summary.PriceCount = len(seenPrices)
@@ -649,6 +662,26 @@ func projectModelSummary(
 
 func projectModelGroupVisible(group models.Group, status ProjectModelGroupStatus) bool {
 	return status == ProjectModelGroupStatusAll || group.Enabled
+}
+
+// 方式描述价格维护来源，与是否已配置独立；手动标记未定价仍属于手动方式。
+func projectModelPricingMethodVisible(price ModelPriceDTO, filter ProjectModelPricingMethod) bool {
+	method := ""
+	if price.Method != nil {
+		method = *price.Method
+	}
+	switch filter {
+	case "", ProjectModelPricingMethodAll:
+		return true
+	case ProjectModelPricingMethodAutomatic:
+		return method == "" || method == "auto_sync"
+	case ProjectModelPricingMethodManual:
+		return method == "user_set" || method == "user_marked_unpriced"
+	case ProjectModelPricingMethodLinked:
+		return method == "model_reference"
+	default:
+		return false
+	}
 }
 
 func projectModelPricingVisible(status PricingStatus, filter ProjectModelPricingStatus) bool {
@@ -825,12 +858,18 @@ func projectModelTotalPages(total, pageSize int64) int64 {
 	return (total + pageSize - 1) / pageSize
 }
 
-// withoutPriceAmounts keeps a source's identity and pricing status but drops
-// every amount and how it was obtained.
-func withoutPriceAmounts(price ModelPriceDTO) ModelPriceDTO {
-	price.Prices = PriceSlotsDTO{}
-	price.ContextTiers = []ModelPriceContextTierDTO{}
-	price.ModeSchedules = map[pricing.Mode]ModelPriceScheduleDTO{}
-	price.Method, price.MatchedProviderID, price.MatchSource = nil, nil, nil
-	return price
+// Existing readers require a price-shaped source identity. Construct it from
+// identity alone: no cost state, relationship, timestamp or catalog price match.
+func projectAccessKeySourceIdentity(id uint, identity pricing.Identity) (ModelPriceDTO, error) {
+	descriptor, ok := modelPriceChannelRegistry.Get(channel.ID(identity.ChannelID))
+	if !ok || id == 0 || uint64(id) > uint64(maxSafeInteger) {
+		return ModelPriceDTO{}, fmt.Errorf("invalid model source identity: %w", app_errors.ErrInternalServer)
+	}
+	return ModelPriceDTO{
+		ID: id, ModelID: identity.ModelID, ChannelID: identity.ChannelID,
+		ChannelName: descriptor.Name, ChannelMark: descriptor.Mark, ChannelIcon: descriptor.Icon,
+		PriceSchedulesDTO: PriceSchedulesDTO{
+			Currency: pricing.CurrencyUSD, ContextTiers: []ModelPriceContextTierDTO{}, ModeSchedules: map[pricing.Mode]ModelPriceScheduleDTO{},
+		},
+	}, nil
 }

@@ -291,6 +291,7 @@ func TestAutoMigrateCreatesSchemaAndMigrationLedger(t *testing.T) {
 		"0030_request_log_client_ip",
 		"0031_group_priority",
 		"0032_request_body_recording",
+		"0033_model_price_reference",
 	}
 	if !reflect.DeepEqual(migrationIDs, wantMigrationIDs) {
 		t.Fatalf("schema_migrations IDs = %v, want %v", migrationIDs, wantMigrationIDs)

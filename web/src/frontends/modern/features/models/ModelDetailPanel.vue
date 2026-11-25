@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useMobileLayout } from '@modern/app/use-mobile-layout'
-import { Boxes, RotateCcw, Save } from '@lucide/vue'
+import { Boxes, PencilLine, RotateCcw, Save } from '@lucide/vue'
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { computed, nextTick, onScopeDispose, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -13,7 +13,6 @@ import {
   modelSourceKey,
   resetModelPrice,
   saveClientModelPrice,
-  saveModelPrice,
   type ModelFilters,
   type ModelPrice,
   type PriceSchedules,
@@ -42,6 +41,8 @@ import { useLoadingActivity } from '@modern/components/ui/loading'
 import AppDraftGuard from '@modern/components/AppDraftGuard.vue'
 import ModelPricingDetails from './ModelPricingDetails.vue'
 import ModelPriceForm from './ModelPriceForm.vue'
+import ModelPriceRelations from './ModelPriceRelations.vue'
+import ModelPriceSetupDialog from './ModelPriceSetupDialog.vue'
 
 const isMobile = useMobileLayout()
 const props = defineProps<{
@@ -49,8 +50,14 @@ const props = defineProps<{
   source: number
   groups: ModelFilters['groups']
   admin: boolean
+  callerPriceHelp: string
 }>()
-const emit = defineEmits<{ close: []; select: [source: number]; changed: [] }>()
+const emit = defineEmits<{
+  close: []
+  select: [source: number]
+  inspect: [model: string, id: number]
+  changed: []
+}>()
 const { t, n, locale } = useI18n()
 const client = useApiClient()
 const cache = useQueryClient()
@@ -100,7 +107,7 @@ const options = computed(() =>
 const sourceMap = computed(
   () => new Map(modelData.value?.sources.map((source) => [String(source.price.id), source])),
 )
-// 统一价属于对外模型本身，与当前查看的来源无关；两张价格表单都直接在详情里编辑，由底部「保存」一起提交。
+// 统一价属于对外模型本身；保留详情表单草稿，上游成本单独用批量对话框编辑。
 const clientPrice = computed(
   (): PriceSchedules =>
     modelData.value?.price ?? {
@@ -111,16 +118,21 @@ const clientPrice = computed(
     },
 )
 const clientForm = ref<InstanceType<typeof ModelPriceForm>>()
-const sourceForm = ref<InstanceType<typeof ModelPriceForm>>()
-// 表单按版本号挂载：保存成功、放弃修改或恢复自动价格后换新版本，从服务端数据重建草稿。
+// 保存成功或放弃修改后，从服务端数据重建统一价草稿。
 const clientVersion = ref(0)
-const sourceVersion = ref(0)
 const clientDirty = ref(false)
-const sourceDirty = ref(false)
-const dirty = computed(() => clientDirty.value || sourceDirty.value)
-const canSave = computed(() => Boolean(clientForm.value?.canSave || sourceForm.value?.canSave))
+const canSave = computed(() => Boolean(clientForm.value?.canSave))
 const saving = ref(false)
-const unpricedOpen = ref(false)
+const priceSetupOpen = ref(false)
+function pricesConfigured(): void {
+  priceSetupOpen.value = false
+  emit('changed')
+}
+async function inspect(model: string, id: number): Promise<void> {
+  if (busy.value || !(await guard.value?.confirm())) return
+  clientVersion.value++
+  emit('inspect', model, id)
+}
 const resetting = ref(false)
 const resetOpen = ref(false)
 const resetError = ref('')
@@ -136,8 +148,8 @@ const modalityText = (values: string[]) =>
   values
     .map((value) => (knownModalities.includes(value) ? t('modelManager.modality.' + value) : value))
     .join(' / ')
-const busy = computed(() => saving.value || resetting.value)
-useLoadingActivity(busy)
+const busy = computed(() => saving.value || resetting.value || priceSetupOpen.value)
+useLoadingActivity(() => saving.value || resetting.value)
 useMessageSource(() =>
   (context.isError.value && context.data.value) ||
   (props.source && detail.isError.value && detail.data.value)
@@ -156,6 +168,7 @@ watch(
 watch(
   () => props.source,
   () => {
+    priceSetupOpen.value = false
     resetOpen.value = false
     resetError.value = ''
     void nextTick(() => body.value?.scrollTo({ top: 0 }))
@@ -179,41 +192,24 @@ function cacheSource(updated: ModelPrice): void {
   if (detail.data.value)
     cache.setQueryData(modelSourceKey(updated.id), { ...detail.data.value, price: updated })
 }
-// 先校验两张表单再依次提交；任一失败时已成功的那张保留结果，失败的那张保留草稿。
-async function save(confirmed = false): Promise<void> {
-  const forms = [clientForm.value, sourceForm.value].filter((form) => form?.canSave)
-  if (busy.value || !forms.length) return
-  if (!forms.map((form) => form!.validate()).every(Boolean)) {
+// 统一价保存与上游成本批量写入相互独立；失败时保留统一价草稿。
+async function save(): Promise<void> {
+  const form = clientForm.value
+  if (busy.value || !form?.canSave) return
+  if (!form.validate()) {
     await nextTick()
     body.value?.querySelector<HTMLInputElement>('[aria-invalid="true"]')?.focus()
     return
   }
-  if (!confirmed && sourceForm.value?.canSave && sourceForm.value.unpricedRequested) {
-    unpricedOpen.value = true
-    return
-  }
   saving.value = true
   try {
-    if (clientForm.value?.canSave) {
-      const updated = await saveClientModelPrice(
-        client,
-        props.model,
-        clientForm.value.request,
-        controller.signal,
-      )
-      cache.setQueryData<RequestModel | null>(
-        modelContextKey(props.model, props.groups),
-        (current) => (current ? { ...current, price: updated } : current),
-      )
-      clientVersion.value++
-    }
-    if (sourceForm.value?.canSave && price.value) {
-      cacheSource(
-        await saveModelPrice(client, price.value.id, sourceForm.value.request, controller.signal),
-      )
-      sourceVersion.value++
-    }
+    const updated = await saveClientModelPrice(client, props.model, form.request, controller.signal)
     if (controller.signal.aborted) return
+    cache.setQueryData<RequestModel | null>(
+      modelContextKey(props.model, props.groups),
+      (current) => (current ? { ...current, price: updated } : current),
+    )
+    clientVersion.value++
     messages.show({ tone: 'success', text: t('modelManager.saveSuccess') })
     emit('changed')
   } catch (cause) {
@@ -224,7 +220,6 @@ async function save(confirmed = false): Promise<void> {
       })
   } finally {
     saving.value = false
-    unpricedOpen.value = false
   }
 }
 async function reset(): Promise<void> {
@@ -235,7 +230,6 @@ async function reset(): Promise<void> {
     const updated = await resetModelPrice(client, price.value.id, controller.signal)
     if (controller.signal.aborted) return
     cacheSource(updated)
-    sourceVersion.value++
     resetOpen.value = false
     emit('changed')
     messages.show({ tone: 'success', text: t('modelManager.resetSuccess') })
@@ -294,7 +288,7 @@ async function reset(): Promise<void> {
         <template v-else>
           <AppFormSection
             :title="t('modelManager.clientPrice')"
-            :hint="t(admin ? 'modelManager.clientPriceImpact' : 'modelManager.readOnlyPriceHelp')"
+            :hint="admin ? t('modelManager.clientPriceImpact') : callerPriceHelp"
             compact
           >
             <template #actions>
@@ -402,15 +396,15 @@ async function reset(): Promise<void> {
                   >{{ t('modelManager.priceMethods.' + priceStatus(price)) }}</AppBadge
                 >
               </template>
-              <ModelPriceForm
-                ref="sourceForm"
-                :key="`${price.id}-${sourceVersion}`"
-                :price="price"
-                :unpriced-allowed="true"
-                :method="price.method"
+              <ModelPriceRelations :price="price" @inspect="inspect" />
+              <ModelPricingDetails :price="price" />
+              <AppButton
+                size="sm"
+                :icon="PencilLine"
                 :disabled="busy"
-                @dirty="sourceDirty = $event"
-              />
+                @click="priceSetupOpen = true"
+                >{{ t('modelManager.reuse.title') }}</AppButton
+              >
             </AppFormSection>
             <AppFormSection
               v-if="catalog"
@@ -551,7 +545,7 @@ async function reset(): Promise<void> {
             size="sm"
             variant="primary"
             :icon="Save"
-            :disabled="!canSave || resetting"
+            :disabled="!canSave || busy"
             :loading="saving"
             @click="save()"
           >
@@ -563,18 +557,9 @@ async function reset(): Promise<void> {
   </DialogRoot>
   <AppDraftGuard
     ref="guard"
-    :dirty="dirty"
+    :dirty="clientDirty"
     :pending="busy"
     :query-scope="['model', 'source', 'group_status']"
-  />
-  <AppConfirmDialog
-    :open="unpricedOpen"
-    :title="t('modelManager.unpricedTitle')"
-    :description="t('modelManager.unpricedDescription')"
-    :confirm-label="t('modelManager.confirmUnpriced')"
-    :pending="saving"
-    @confirm="save(true)"
-    @cancel="unpricedOpen = false"
   />
   <AppConfirmDialog
     :open="resetOpen"
@@ -586,6 +571,12 @@ async function reset(): Promise<void> {
     :error="resetError"
     @confirm="reset"
     @cancel="cancelReset"
+  />
+  <ModelPriceSetupDialog
+    v-if="admin && priceSetupOpen && chosen"
+    :target-id="chosen.price.id"
+    @close="priceSetupOpen = false"
+    @saved="pricesConfigured"
   />
 </template>
 

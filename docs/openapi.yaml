@@ -47,7 +47,9 @@ info:
     - 自动模型和护栏均关闭时，允许删除原 JEV 分组并保留未使用引用。
       客户端目录展示选择、访问密钥模型名过滤、护栏密钥范围不新增删除保护。
     - 访问密钥显式分组引用仍返回既有 `409 GROUP_IN_USE`，包括停用密钥。
-      上游价格引用仍返回既有 `409 MODEL_PRICE_REFERENCED`；本次不改变这些错误契约。
+      上游价格被分组引用时返回 `409 MODEL_PRICE_REFERENCED`。
+      删除价格来源或移除来源的最后一个分组模型时，如仍有模型跟随，返回
+      `409 MODEL_PRICE_SOURCE_REFERENCED`，`data` 为 `{source, dependents}`（均为展示字符串）。
 
     ## 幂等
     会生成或替换密钥明文的写操作，以及代理新增、修改、导入，要求 `Idempotency-Key` 请求头（小写规范 UUID v4）。
@@ -904,10 +906,13 @@ paths:
 
         **允许 `access_key` 身份调用**，此时：
         - `group_status` 固定为 `enabled`，合法的传入值被忽略；
+        - `pricing_status` 按客户端模型是否设置统一价筛选，不再按上游成本状态筛选；
+          显式零价属于 `configured`，无统一价属于 `pending`；`pricing_method` 的合法值被忽略；
         - 只包含该密钥 `filters` 允许访问的分组、协议与模型，`protocols` 也按密钥过滤；
         - `route_groups`、`affected_groups` 恒为空数组，只返回被分组引用的价格；
-        - 上游价格是网关成本：`upstream_models[].price` 只保留渠道与定价状态，`prices` 各项为 `null`，
-          `context_tiers` 为 `[]`，`mode_schedules` 为 `{}`，`method`、`matched_provider_id`、`match_source` 为 `null`。
+        - 保留可访问的上游模型和渠道身份，不提供真实的上游成本、定价状态、关联或维护信息；
+        - `price` 是系统币种下的客户端模型统一价，未乘倍率。调用费用按统一价计价，再乘响应中的
+          `access_key_price_multiplier`。未设置统一价时为未定价，不是免费，也不回退到上游成本。
       security:
         - adminBearer: []
         - accessKeyBearer: []
@@ -918,8 +923,15 @@ paths:
           schema: { type: string, enum: [enabled, all], default: enabled }
         - name: pricing_status
           in: query
-          description: 按上游模型的定价状态过滤；某客户端模型下的上游模型全部被过滤掉时，该客户端模型不出现。
+          description: 分页前筛选。管理员按上游成本状态筛选；全部上游被过滤时不返回该客户端模型。AccessKey 按客户端模型是否设置统一价筛选。
           schema: { type: string, enum: [pending, configured, all], default: all }
+        - name: pricing_method
+          in: query
+          description: |
+            仅管理员生效，与 `pricing_status` 同时在分页前筛选上游成本价。
+            `automatic` 包含尚未匹配的自动价；`manual` 包含手动标记为不计费；`linked` 为关联价。
+            AccessKey 忽略合法值，不根据成本维护方式过滤统一价或模型。非法值仍返回 400。
+          schema: { type: string, enum: [all, automatic, manual, linked], default: all }
         - name: q
           in: query
           description: |
@@ -1319,13 +1331,111 @@ paths:
         '429': { $ref: '#/components/responses/AuthLocked' }
         '500': { $ref: '#/components/responses/InternalError' }
 
+  /api/model-prices/sources:
+    get:
+      tags: [ModelPrices]
+      operationId: listModelPriceSources
+      summary: 查询价格来源与批量目标（仅 admin）
+      description: |
+        一次返回所有被分组使用的渠道模型价格，含停用分组与待定价条目，不分页。
+        `items[]` 包含 `price`、`groups`、去重排序的 `aliases`；按渠道 ID、模型 ID 排序。
+        金额按当前系统币种返回，`price.currency` 标识币种。目录参考不是来源列表的独立条目。
+        只有仍被分组使用且有有效价格的条目能作为 link 来源；关联价也可作为直接来源。
+        不接受查询参数或尾部空 `?`。AccessKey 返回 403，不增加只读白名单。
+      security:
+        - adminBearer: []
+      responses:
+        '200':
+          description: 全量价格来源
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/ModelPriceSourcesResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/model-prices/batch:
+    post:
+      tags: [ModelPrices]
+      operationId: batchModelPrices
+      summary: 批量完整设置或关联上游成本价（仅 admin）
+      description: |
+        `ids` 为 1–100 个价格 ID，数量上限在去重前检查；正整数且不超过安全整数上限。
+        服务端去重并按 ID 升序处理及返回。任一目标不存在则返回 404，全部修改在一个控制事务中保存。
+        不修改客户端模型统一价、收费、AccessKey 倍率或费用额度。
+
+        - `mode=copy`：必须提供 `price`，不得提供非 null 的 `reference`。
+          `price` 是完整替换，不是补丁：四个基础槽、`context_tiers`、`mode_schedules` 必须全部提供。
+          价格以当前系统币种输入并换算为 USD 保存；响应的金额按系统币种返回且带 `currency`。
+          未提供 `currency` 请求字段；币种取当前系统配置。
+          原关联被解除，目标变为手动价；可以完整替换模式集合。
+          全空价格必须同时传 `price.confirm_unpriced=true`。
+        - `mode=link`：必须提供 `reference: {price_id: <来源价格ID>}`，不得提供非 null 的 `price`。
+          来源和目标必须仍被分组使用，来源必须有有效价格。
+          保存用户选择的直接来源，展开完整基础价、阶梯价和模式价；后续来源更新向多级下游传播。
+          不允许自环或间接环。来源删除或失去最后一个分组时，仍有跟随模型则拒绝该操作。
+        - 不接受查询参数；不要求 `Idempotency-Key`。AccessKey 返回 403。
+          校验失败不保存部分结果；提交后发布失败时，重试前先查询当前价格。
+      security:
+        - adminBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModelPriceBatchRequest' }
+            examples:
+              copy:
+                value:
+                  ids: [11, 12]
+                  mode: copy
+                  price: { input: '3', output: '15', cache_read: null, cache_write: null, context_tiers: [], mode_schedules: {} }
+              link:
+                value: { ids: [11, 12], mode: link, reference: { price_id: 10 } }
+      responses:
+        '200':
+          description: 目标价格，按 ID 升序；data.items 不包含其他受传播影响的下游价格
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/ModelPriceBatchResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            `MODEL_PRICE_REFERENCE_CYCLE`：自环或间接环；
+            `MODEL_PRICE_SOURCE_UNAVAILABLE`：来源不存在、不再被分组使用或没有有效价格；
+            `MODEL_PRICE_UNPRICED_CONFIRMATION_REQUIRED`：全空价缺少确认，data 为 {id}。
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '413': { $ref: '#/components/responses/RequestTooLarge' }
+        '429': { $ref: '#/components/responses/AuthLocked' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/RecoveryPending' }
+
   /api/model-prices/sync:
     post:
       tags: [ModelPrices]
       operationId: syncModelPrices
       summary: 手动同步 models.dev 价格目录
       description: |
-        立即从 models.dev 拉取模型目录并对账自动价格（`method=auto_sync` 的条目），手工价格不受影响。
+        立即从 models.dev 拉取模型目录并对账自动价格（`method=auto_sync` 的条目），手工价格不受覆盖。
+        自动目录不可用、匹配消失或返回空价时保留最后有效价。关联价格跟随其直接来源，并向多级下游传播。
         手动触发不受「自动同步」开关限制；已有同步在进行时，等待并返回该次结果。
         不接受查询参数，不读取请求体。
       responses:
@@ -1389,13 +1499,14 @@ paths:
       operationId: updateModelPrice
       summary: 手工设置模型价格（整体替换）
       description: |
-        整体替换价格，保存后变为手工价格（`can_reset=true`），之后的目录同步不再覆盖它。
+        整体替换价格，解除原关联并变为手工价格（`can_reset=true`），之后的目录同步不再覆盖它。
+        基础价、阶梯价和模式价按系统币种输入；同事务传播给跟随该价格的模型。
 
         - `input`、`output`、`cache_read`、`cache_write`、`context_tiers`、`mode_schedules` 都必须出现；
           价格槽传 `null` 表示该项不计费，数组和对象不可为 `null`。
         - 四个价格槽、所有分档价格都为 `null` 且 `mode_schedules` 为空时，表示「标记为不计费」，
           必须同时传 `confirm_unpriced: true`，否则返回 `409 MODEL_PRICE_UNPRICED_CONFIRMATION_REQUIRED`。
-        - `mode_schedules` 的模式集合必须与现有价格一致，仅 `ultrafast` 可以新增或移除。
+        - `mode_schedules` 完整替换原模式集合，允许新增或移除模式。
         - 不接受查询参数。
       requestBody:
         required: true
@@ -1444,7 +1555,9 @@ paths:
       tags: [ModelPrices]
       operationId: deleteModelPrice
       summary: 删除模型价格
-      description: 只能删除未被任何分组引用的手工价格（即 `can_delete=true`）。不接受查询参数。
+      description: |
+        只能删除未被任何分组引用的手工价格或关联价格。自动价格不能手动删除。
+        即使 `can_delete=true`，仍有模型跟随时返回 `MODEL_PRICE_SOURCE_REFERENCED`。不接受查询参数。
       responses:
         '200':
           description: 删除成功，响应不含 `data`
@@ -1458,7 +1571,8 @@ paths:
         '409':
           description: |
             `MODEL_PRICE_REFERENCED`：仍被分组引用，`data` 为 `{id, reference_count, reference_group_count}`；
-            `MODEL_PRICE_AUTOMATIC_DELETE_FORBIDDEN`：自动价格不可手动删除，`data` 为 `{id}`
+            `MODEL_PRICE_AUTOMATIC_DELETE_FORBIDDEN`：自动价格不可手动删除，`data` 为 `{id}`；
+            `MODEL_PRICE_SOURCE_REFERENCED`：仍有模型跟随该来源，`data` 为 `{source, dependents}`
           content:
             application/json:
               schema:
@@ -1470,6 +1584,7 @@ paths:
                         anyOf:
                           - $ref: '#/components/schemas/ModelPriceReferenceData'
                           - $ref: '#/components/schemas/ModelPriceIDData'
+                          - $ref: '#/components/schemas/ModelPriceSourceReferencedData'
         '429': { $ref: '#/components/responses/AuthLocked' }
         '500': { $ref: '#/components/responses/InternalError' }
         '503': { $ref: '#/components/responses/RecoveryPending' }
@@ -1482,7 +1597,8 @@ paths:
       operationId: resetModelPrice
       summary: 恢复为目录自动价格
       description: |
-        丢弃手工价格，按当前 models.dev 目录重新匹配自动价格；目录中没有匹配项时，价格全部清空并变为待定价。
+        丢弃手工价格或解除关联，按当前 models.dev 目录重新匹配自动价格；目录中没有匹配项时，价格全部清空并变为待定价。
+        重置结果同事务传播给下游；这与自动同步时保留最后有效价不同。
         请求体可省略或为 `{}`，不接受查询参数。
       requestBody:
         required: false
@@ -1546,6 +1662,7 @@ paths:
         请求该名称时在所选凭据可用的模型之间轮询；客户端模型名与上游 ID 完全相同的重复条目会被去重。
         上游模型 ID 集合发生变化时，会在后台触发一次价格目录同步。
         若删除模型或修改别名破坏 JEV 路由、自动模型预设目标或名称约束，返回 `409 CONFIG_DEPENDENCY_CONFLICT`。
+        若移除价格来源的最后一个分组引用，但仍有分组模型跟随该来源，返回 `409 MODEL_PRICE_SOURCE_REFERENCED`。
       requestBody:
         required: true
         content:
@@ -1578,7 +1695,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/ConfigDependencyConflict' }
+        '409': { $ref: '#/components/responses/GroupModelConflict' }
         '413': { $ref: '#/components/responses/RequestTooLarge' }
         '429': { $ref: '#/components/responses/AuthLocked' }
         '500': { $ref: '#/components/responses/InternalError' }
@@ -1707,8 +1824,8 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
-    ConfigDependencyConflict:
-      description: '系统配置依赖冲突；数据库和运行态不提交本次变更。'
+    GroupModelConflict:
+      description: '配置依赖或价格来源冲突；本次变更不提交。'
       content:
         application/json:
           schema:
@@ -1717,8 +1834,11 @@ components:
               - type: object
                 required: [data]
                 properties:
-                  code: { type: string, const: CONFIG_DEPENDENCY_CONFLICT }
-                  data: { $ref: '#/components/schemas/ConfigDependencyData' }
+                  code: { type: string, enum: [CONFIG_DEPENDENCY_CONFLICT, MODEL_PRICE_SOURCE_REFERENCED] }
+                  data:
+                    oneOf:
+                      - $ref: '#/components/schemas/ConfigDependencyData'
+                      - $ref: '#/components/schemas/ModelPriceSourceReferencedData'
     BadRequest:
       description: '`BAD_REQUEST` / `INVALID_JSON` / `VALIDATION_FAILED`'
       content:
@@ -2325,7 +2445,7 @@ components:
       type: string
       description: |
         非标准计费模式名，如 `fast`、`ultrafast`；不可为 `standard`。`fast` 不支持分档价格。
-        上游价格（`PUT /api/model-prices/{id}`）的模式集合不可增删，`ultrafast` 除外；统一价不限。
+        上游价格的单个设置与批量 copy 都完整替换模式集合；统一价也可完整替换。
       minLength: 1
       maxLength: 64
       pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
@@ -2356,6 +2476,11 @@ components:
         - can_delete
       properties:
         id: { type: integer }
+        source_price_id:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          description: 关联价的直接来源价格 ID，不是最终根来源。未关联时省略，不返回 null；AccessKey 不返回。
         channel_id: { type: string, examples: [openai] }
         channel_name: { type: string }
         channel_mark:
@@ -2379,8 +2504,9 @@ components:
           type: [string, 'null']
           description: |
             `auto_sync` 来自 models.dev 目录自动匹配；`user_set` 手工设置；
-            `user_marked_unpriced` 手工标记为不计费；自动价格尚未匹配到目录时为 `null`。
-          enum: [auto_sync, user_set, user_marked_unpriced, null]
+            `user_marked_unpriced` 手工标记为不计费；`model_reference` 跟随另一模型的价格；
+            自动价格没有有效价格时为 `null`。
+          enum: [auto_sync, user_set, user_marked_unpriced, model_reference, null]
         matched_provider_id:
           type: [string, 'null']
           description: 自动价格匹配到的 models.dev 供应商 ID；手工价格或未匹配时为 `null`。
@@ -2403,10 +2529,82 @@ components:
         updated_at_ms: { type: integer }
         can_reset:
           type: boolean
-          description: 是否为手工价格，可恢复为目录自动价格。
+          description: 手工价或关联价为 true，可恢复为目录自动价格。
         can_delete:
           type: boolean
-          description: 手工价格且未被引用时为 `true`。
+          description: 手工价或关联价且未被分组引用时为 true；删除仍校验价格来源的跟随保护。
+
+    ModelPriceSourcesResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [price, groups, aliases]
+            properties:
+              price: { $ref: '#/components/schemas/ModelPrice' }
+              groups:
+                type: array
+                items:
+                  type: object
+                  required: [id, name, enabled]
+                  properties:
+                    id: { type: integer, minimum: 1 }
+                    name: { type: string }
+                    enabled: { type: boolean }
+              aliases:
+                type: array
+                uniqueItems: true
+                items: { type: string }
+
+    ModelPriceBatchIDs:
+      type: array
+      minItems: 1
+      maxItems: 100
+      description: 价格 ID，先限制数量再去重；重复 ID 仅更新一次。
+      items: { type: integer, minimum: 1, maximum: 9007199254740991 }
+
+    ModelPriceBatchRequest:
+      description: copy 与 link 互斥；未知字段拒绝。另一模式的字段可以省略或为 null。
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [ids, mode, price]
+          properties:
+            ids: { $ref: '#/components/schemas/ModelPriceBatchIDs' }
+            mode: { type: string, const: copy }
+            price: { $ref: '#/components/schemas/ModelPriceUpdateRequest' }
+            reference: { type: 'null' }
+        - type: object
+          additionalProperties: false
+          required: [ids, mode, reference]
+          properties:
+            ids: { $ref: '#/components/schemas/ModelPriceBatchIDs' }
+            mode: { type: string, const: link }
+            price: { type: 'null' }
+            reference:
+              type: object
+              additionalProperties: false
+              required: [price_id]
+              properties:
+                price_id: { type: integer, minimum: 1, maximum: 9007199254740991 }
+
+    ModelPriceBatchResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ModelPrice' }
+
+    ModelPriceSourceReferencedData:
+      type: object
+      required: [source, dependents]
+      properties:
+        source: { type: string, description: 来源的渠道与模型展示名 }
+        dependents: { type: string, description: 跟随模型的展示名，以逗号连接 }
 
     ModelPriceIDData:
       type: object
@@ -2799,15 +2997,22 @@ components:
       type: object
       required: [summary, catalog, items, pagination]
       properties:
+        access_key_price_multiplier:
+          $ref: '#/components/schemas/PriceMultiplier'
+          description: 仅 AccessKey 返回。调用费用的倍率，尚未计入条目的统一价。
         summary:
           type: object
-          description: 按 `group_status` 统计，不受 `pricing_status`、`q`、分页影响。
+          description: 按当前可见范围统计；不受价格筛选、搜索或分页影响。AccessKey 不统计上游成本定价状态。
           required: [client_model_count, upstream_model_count, price_count, pending_price_count, unreferenced_price_count]
           properties:
             client_model_count: { type: integer }
             upstream_model_count: { type: integer }
-            price_count: { type: integer }
-            pending_price_count: { type: integer }
+            price_count:
+              type: integer
+              description: 管理员统计可见的上游价格条目；AccessKey 统计可见客户端模型数（包含未定价模型）。
+            pending_price_count:
+              type: integer
+              description: 管理员统计待配置的上游价格；AccessKey 统计未设置统一价的可见客户端模型。
             unreferenced_price_count:
               type: integer
               description: 未被任何分组引用的价格数；AccessKey 身份下恒为 0。
@@ -3055,7 +3260,7 @@ components:
         pricing_status: { $ref: '#/components/schemas/PricingStatus' }
         pricing_source:
           type: [string, 'null']
-          description: 自动价格来源的目录供应商名称；手工价格或无目录价格时为 `null`。
+          description: 自动价格来源的目录供应商名称；手工价、关联价或无目录价格时为 `null`。
 
     ModelDiscoveryResult:
       type: object

@@ -22,8 +22,7 @@ type ClientModelPriceDTO struct {
 }
 
 // ClientModelPriceRequest creates or replaces the unified price of a client
-// model. Prices are in the system currency on the wire; the handler converts
-// them to USD before the service runs. Unlike an upstream price it cannot be
+// model. The write transaction converts system-currency amounts to USD. Unlike an upstream price it cannot be
 // marked unpriced: at least one base price is required.
 type ClientModelPriceRequest struct {
 	ClientModel string `json:"client_model"`
@@ -74,30 +73,6 @@ func (s *Service) PutClientModelPrice(ctx context.Context, request ClientModelPr
 	if err := request.validate(); err != nil {
 		return ClientModelPriceDTO{}, err
 	}
-	contextTiers, err := buildContextPriceTiersJSON(request.ContextTiers.tiers)
-	if err != nil {
-		return ClientModelPriceDTO{}, err
-	}
-	modeSchedules, err := buildModePriceSchedulesJSON(request.ModeSchedules.schedules)
-	if err != nil {
-		return ClientModelPriceDTO{}, err
-	}
-	desired := models.ClientModelPrice{
-		ClientModel:                            request.ClientModel,
-		InputPriceNanoUSDPerMillionTokens:      cloneModelPriceValue(request.Input.nanoUSD),
-		OutputPriceNanoUSDPerMillionTokens:     cloneModelPriceValue(request.Output.nanoUSD),
-		CacheReadPriceNanoUSDPerMillionTokens:  cloneModelPriceValue(request.CacheRead.nanoUSD),
-		CacheWritePriceNanoUSDPerMillionTokens: cloneModelPriceValue(request.CacheWrite.nanoUSD),
-		ContextPriceTiers:                      contextTiers,
-		ModePriceSchedules:                     modeSchedules,
-	}
-	rule, err := persistedClientPriceRule(desired)
-	if err != nil {
-		return ClientModelPriceDTO{}, fmt.Errorf("invalid client model price: %w", app_errors.ErrValidation)
-	}
-	if _, err := pricing.NewTableWithClientRules(nil, []pricing.ClientRule{rule}); err != nil {
-		return ClientModelPriceDTO{}, fmt.Errorf("invalid client model price: %w", app_errors.ErrValidation)
-	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -107,8 +82,39 @@ func (s *Service) PutClientModelPrice(ctx context.Context, request ClientModelPr
 	if err := s.enforceOperationRecoveryBarrierLocked(ctx, 0); err != nil {
 		return ClientModelPriceDTO{}, err
 	}
-	var table *pricing.Table
-	err = s.withControlTransaction(ctx, func(tx *gorm.DB) error {
+	var result ClientModelPriceDTO
+	err := s.withControlTransaction(ctx, func(tx *gorm.DB) error {
+		currency, err := loadSettingsCurrency(tx)
+		if err != nil {
+			return err
+		}
+		if err := request.convertToUSD(currency); err != nil {
+			return err
+		}
+		contextTiers, err := buildContextPriceTiersJSON(request.ContextTiers.tiers)
+		if err != nil {
+			return err
+		}
+		modeSchedules, err := buildModePriceSchedulesJSON(request.ModeSchedules.schedules)
+		if err != nil {
+			return err
+		}
+		desired := models.ClientModelPrice{
+			ClientModel:                            request.ClientModel,
+			InputPriceNanoUSDPerMillionTokens:      cloneModelPriceValue(request.Input.nanoUSD),
+			OutputPriceNanoUSDPerMillionTokens:     cloneModelPriceValue(request.Output.nanoUSD),
+			CacheReadPriceNanoUSDPerMillionTokens:  cloneModelPriceValue(request.CacheRead.nanoUSD),
+			CacheWritePriceNanoUSDPerMillionTokens: cloneModelPriceValue(request.CacheWrite.nanoUSD),
+			ContextPriceTiers:                      contextTiers,
+			ModePriceSchedules:                     modeSchedules,
+		}
+		rule, err := persistedClientPriceRule(desired)
+		if err != nil {
+			return fmt.Errorf("invalid client model price: %w", app_errors.ErrValidation)
+		}
+		if _, err := pricing.NewTableWithClientRules(nil, []pricing.ClientRule{rule}); err != nil {
+			return fmt.Errorf("invalid client model price: %w", app_errors.ErrValidation)
+		}
 		var existing []models.ClientModelPrice
 		if err := tx.Where("client_model = ?", desired.ClientModel).Limit(1).Find(&existing).Error; err != nil {
 			return fmt.Errorf("load client model price: %w", app_errors.ParseDBError(err))
@@ -119,14 +125,26 @@ func (s *Service) PutClientModelPrice(ctx context.Context, request ClientModelPr
 		if err := tx.Save(&desired).Error; err != nil {
 			return fmt.Errorf("save client model price: %w", app_errors.ParseDBError(err))
 		}
-		table, err = loadPriceTable(ctx, tx)
+		result, err = projectClientModelPrice(desired)
+		if err != nil {
+			return err
+		}
+		if currency != pricing.USDCurrency {
+			result, err = result.inCurrency(currency)
+			if err != nil {
+				return app_errors.ErrValidation
+			}
+		}
+		_, err = loadPriceTable(ctx, tx)
 		return err
 	})
 	if err != nil {
 		return ClientModelPriceDTO{}, err
 	}
-	s.priceRuntime.Publish(table)
-	return projectClientModelPrice(desired)
+	if err := s.publishCommittedPriceTable(ctx); err != nil {
+		return ClientModelPriceDTO{}, err
+	}
+	return result, nil
 }
 
 func (s *Server) handlePutClientModelPrice(c *gin.Context) {
@@ -140,28 +158,10 @@ func (s *Server) handlePutClientModelPrice(c *gin.Context) {
 		return
 	}
 	setMutationResourceLocator(c, "client-model-price:"+request.ClientModel)
-	if err := request.validate(); err != nil {
-		writeServiceError(c, operation, mapControlJSONError(err))
-		return
-	}
-	currency, err := s.service.currentCurrency()
-	if err != nil {
-		writeServiceError(c, operation, err)
-		return
-	}
-	if err := request.convertToUSD(currency); err != nil {
-		writeServiceError(c, operation, err)
-		return
-	}
 	result, err := s.service.PutClientModelPrice(c.Request.Context(), request)
 	if err != nil {
 		writeServiceError(c, operation, err)
 		return
 	}
-	converted, err := result.inCurrency(currency)
-	if err != nil {
-		writeServiceError(c, operation, err)
-		return
-	}
-	response.SuccessI18n(c, "common.success", converted)
+	response.SuccessI18n(c, "common.success", result)
 }
