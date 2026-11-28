@@ -51,13 +51,14 @@ export function logMoney(value: string, currency: string, locale: string): strin
 export function exactLogMoney(value: string, currency: string, locale: string): string {
   return exactMoneyNano(value, currency, locale)
 }
+// 日志里的数值与单位紧挨着显示，不留空格。
 export function logDuration(ms: number | null, locale: string): string {
   if (ms === null) return '—'
   return (
     numberFormatter(locale, {
       minimumFractionDigits: ms < 1000 ? 0 : 1,
       maximumFractionDigits: ms < 1000 ? 0 : 1,
-    }).format(ms < 1000 ? ms : ms / 1000) + (ms < 1000 ? ' ms' : ' s')
+    }).format(ms < 1000 ? ms : ms / 1000) + (ms < 1000 ? 'ms' : 's')
   )
 }
 export function logOutputRate(row: LogEntry, locale: string): string {
@@ -74,7 +75,7 @@ export function logOutputRate(row: LogEntry, locale: string): string {
   if (!Number.isSafeInteger(row.duration_ms) || row.duration_ms <= 0) return '—'
   const rate = tokens / (row.duration_ms / 1000)
   return Number.isFinite(rate)
-    ? numberFormatter(locale, { maximumFractionDigits: 1 }).format(rate) + ' t/s'
+    ? numberFormatter(locale, { maximumFractionDigits: 1 }).format(rate) + 't/s'
     : '—'
 }
 export function logTime(ms: number, locale: string, full = false): string {

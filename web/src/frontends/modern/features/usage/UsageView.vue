@@ -704,8 +704,8 @@ const bucketLabel = computed(() => {
   flex: none;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--modern-space-3);
-  padding: var(--modern-space-5) 0 var(--modern-space-3);
+  gap: var(--modern-page-toolbar-gap);
+  padding: var(--modern-page-toolbar-top) 0 var(--modern-page-toolbar-bottom);
 }
 .modern-usage-date {
   flex: 2 1 240px;
@@ -806,12 +806,6 @@ const bucketLabel = computed(() => {
   .modern-usage-report {
     flex: none;
     overflow: visible;
-  }
-  .modern-usage-filters {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--modern-space-2);
-    padding-top: var(--modern-space-3);
   }
   .modern-usage-date,
   .modern-usage-model {

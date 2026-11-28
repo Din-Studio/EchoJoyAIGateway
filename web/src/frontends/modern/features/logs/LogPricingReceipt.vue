@@ -27,7 +27,7 @@ function lineLabel(line: LogPricingLine): string {
 function rate(line: LogPricingLine): string {
   return line.rate_nano_per_million === null
     ? t('logs.values.unpriced')
-    : exact(line.rate_nano_per_million) + ' / 1M'
+    : exact(line.rate_nano_per_million) + '/1M'
 }
 function adjustment(line: LogPricingLine): string | undefined {
   return line.multiplier.numerator !== line.multiplier.denominator
